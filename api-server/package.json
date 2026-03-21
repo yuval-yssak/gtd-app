@@ -1,0 +1,34 @@
+{
+    "name": "api-server",
+    "version": "1.0.0",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "dev": "tsx watch src/index.ts",
+        "build": "tsc",
+        "start": "node build/index.js",
+        "check": "biome check src",
+        "fix": "biome check --write src",
+        "test": "vitest run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@hono/node-server": "latest",
+        "dayjs": "latest",
+        "dotenv": "latest",
+        "hono": "latest",
+        "jsonwebtoken": "latest",
+        "mongodb": "latest"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "latest",
+        "@types/jsonwebtoken": "latest",
+        "@types/node": "latest",
+        "tsx": "latest",
+        "typescript": "latest",
+        "vitest": "latest"
+    },
+    "engines": {
+        "node": ">=24"
+    }
+}

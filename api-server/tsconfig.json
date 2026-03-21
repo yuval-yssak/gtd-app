@@ -1,0 +1,25 @@
+{
+    "compilerOptions": {
+        "target": "ES2023",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "outDir": "build",
+        "rootDir": "src",
+        "strict": true,
+        "noUncheckedIndexedAccess": true,
+        "exactOptionalPropertyTypes": true,
+        "noPropertyAccessFromIndexSignature": true,
+        "noImplicitOverride": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitReturns": true,
+        "noFallthroughCasesInSwitch": true,
+        "useUnknownInCatchVariables": true,
+        "verbatimModuleSyntax": true,
+        "esModuleInterop": true,
+        // DOM needed for Hono's types that reference Web API globals (RequestInfo, BufferSource, etc.)
+        "lib": ["ES2023", "DOM"]
+    },
+    "include": ["src/**/*.ts"],
+    "exclude": ["node_modules"]
+}
