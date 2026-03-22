@@ -1,33 +1,33 @@
-import { MongoClient } from 'mongodb'
-import { mongoDBConfig } from '../config.js'
-import usersDAO from '../dataAccess/usersDAO.js'
-import itemsDAO from '../dataAccess/itemsDAO.js'
-import refreshTokensDAO from '../dataAccess/refreshTokensDAO.js'
+import { MongoClient } from 'mongodb';
+import { mongoDBConfig } from '../config.js';
+import itemsDAO from '../dataAccess/itemsDAO.js';
+import refreshTokensDAO from '../dataAccess/refreshTokensDAO.js';
+import usersDAO from '../dataAccess/usersDAO.js';
 
-let dbClient: MongoClient
+let dbClient: MongoClient;
 
 async function mongoConnect() {
-    const client = new MongoClient(mongoDBConfig.DBUrl)
-    await client.connect()
+    const client = new MongoClient(mongoDBConfig.DBUrl);
+    await client.connect();
 
     // Strip password from URL before logging
-    console.log('MongoDB: Connected successfully to server', mongoDBConfig.DBUrl.replace(/:\w+@/, '@'))
+    console.log('MongoDB: Connected successfully to server', mongoDBConfig.DBUrl.replace(/:\w+@/, '@'));
 
-    return client
+    return client;
 }
 
 async function loadDataAccess(customDBName?: string) {
-    const resolvedDBName = customDBName ?? mongoDBConfig.dbName
+    const resolvedDBName = customDBName ?? mongoDBConfig.dbName;
 
-    dbClient = await mongoConnect()
-    await usersDAO.init(dbClient, resolvedDBName)
-    await itemsDAO.init(dbClient, resolvedDBName)
-    await refreshTokensDAO.init(dbClient, resolvedDBName)
+    dbClient = await mongoConnect();
+    await usersDAO.init(dbClient, resolvedDBName);
+    await itemsDAO.init(dbClient, resolvedDBName);
+    await refreshTokensDAO.init(dbClient, resolvedDBName);
 }
 
 async function closeDataAccess() {
-    await dbClient.close()
-    console.log('MongoDB: Connection successfully closed')
+    await dbClient.close();
+    console.log('MongoDB: Connection successfully closed');
 }
 
-export { loadDataAccess, closeDataAccess }
+export { closeDataAccess, loadDataAccess };
