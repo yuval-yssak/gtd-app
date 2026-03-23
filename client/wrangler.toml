@@ -1,0 +1,6 @@
+name = "getting-things-done"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "dist"
+
+# VITE_API_SERVER must be set in the Cloudflare Pages dashboard
+# under Settings > Environment Variables (build-time variable)

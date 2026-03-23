@@ -1,24 +1,39 @@
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
-import { x } from "../loaders/axios";
+import { createFileRoute, redirect, Outlet } from '@tanstack/react-router'
+import AppBar from '@mui/material/AppBar'
+import Toolbar from '@mui/material/Toolbar'
+import Typography from '@mui/material/Typography'
+import Box from '@mui/material/Box'
+import { authClient } from '../lib/authClient'
+import { AccountSwitcher } from '../components/AccountSwitcher'
 
-async function checkAuth() {
-    try {
-        console.log("checking auth")
-        return await x.get<{ id: string }>("/auth/check");
-    } catch (e) {
-        console.log(e);
-        throw e;
-    }
-}
-
-export const Route = createFileRoute("/_authenticated")({
+export const Route = createFileRoute('/_authenticated')({
     beforeLoad: async () => {
-        try {
-            await checkAuth();
-        } catch (e) {
-            console.log("error in check auth", e);
-            throw redirect({ to: "/login" });
+        const { data: session } = await authClient.getSession()
+        if (!session) {
+            throw redirect({ to: '/login' })
         }
+        // Return session so child routes can access it via Route.useRouteContext()
+        return { session }
     },
-    component: () => <Outlet />,
-});
+    component: AuthenticatedLayout,
+})
+
+function AuthenticatedLayout() {
+    const { db } = Route.useRouteContext()
+
+    return (
+        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+            <AppBar position="static">
+                <Toolbar>
+                    <Typography variant="h6" sx={{ flexGrow: 1 }}>
+                        GTD
+                    </Typography>
+                    <AccountSwitcher db={db} />
+                </Toolbar>
+            </AppBar>
+            <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+                <Outlet />
+            </Box>
+        </Box>
+    )
+}
