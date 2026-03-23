@@ -14,6 +14,7 @@
     },
     "dependencies": {
         "@hono/node-server": "latest",
+        "better-auth": "^1.5.6",
         "dayjs": "latest",
         "dotenv": "latest",
         "hono": "latest",

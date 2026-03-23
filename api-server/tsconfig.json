@@ -6,6 +6,9 @@
         "outDir": "build",
         "rootDir": "src",
         "strict": true,
+        // better-auth's .d.mts files reference bun:sqlite, @cloudflare/workers-types, and
+        // a zod version conflict — all in node_modules, none of which affect our code
+        "skipLibCheck": true,
         "noUncheckedIndexedAccess": true,
         "exactOptionalPropertyTypes": true,
         "noPropertyAccessFromIndexSignature": true,

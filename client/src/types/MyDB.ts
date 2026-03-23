@@ -1,42 +1,26 @@
-import { Dayjs } from "dayjs";
-import { DBSchema } from "idb";
+import type { DBSchema } from 'idb'
 
-export type NumericBoolean = 0 | 1;
+export type OAuthProvider = 'google' | 'github'
 
-export type SyncOperation = {
-    uuid: string; // by timestamp
-    userId: string;
-    itemId: string;
-    action: "add" | "modify" | "delete";
-    payload: unknown;
-    synced: NumericBoolean;
-};
+export interface StoredAccount {
+    id: string // Better Auth user ID (UUID)
+    email: string
+    name: string
+    image: string | null // null (not undefined) to satisfy exactOptionalPropertyTypes
+    provider: OAuthProvider // last provider used to sign in to this account
+    addedAt: number // unix ms — used to preserve order in the switcher
+}
 
 export interface MyDB extends DBSchema {
-    localLoggedIn: {
-        key: string;
-        value: {
-            loggedInUsers: { id: string; email: string }[];
-            activeUser: string;
-        };
-    };
-    syncOperations: {
-        key: string;
-        value: SyncOperation;
-        indexes: { synced: NumericBoolean; uuid: string };
-    };
-    items: {
-        key: string;
-        value: {
-            id: string;
-            userId: string;
-            title: string;
-            createdTs: Dayjs;
-            type: "nextAction" | "calendar" | "waitingFor";
-            people?: string[];
-            workContexts?: string[];
-            expectedBy?: Dayjs;
-        };
-        indexes: { id: string; type: "nextAction" | "calendar" | "waitingFor" };
-    };
+    // All known accounts across all sign-ins
+    accounts: {
+        key: string // StoredAccount.id
+        value: StoredAccount
+        indexes: { email: string }
+    }
+    // Single-entry store: which account is currently active (matches the live Better Auth session)
+    activeAccount: {
+        key: 'active'
+        value: { userId: string }
+    }
 }

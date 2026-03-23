@@ -8,33 +8,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev          # Start dev server with ts-node-dev (hot reload) on port 4000
 npm run build        # Compile TypeScript to build/
 npm start            # Run compiled server (production)
-npm test             # Run Jest tests
+npm test             # Run Vitest tests
 npm run test:lint    # ESLint check
 npm run fix          # Auto-fix lint + prettier
 ```
 
-Run a single test file: `npx jest path/to/test.spec.ts`
+Run a single test file: `npx vitest run src/tests/auth.test.ts`
 
 ## Architecture
 
 ### Request Lifecycle
-`index.ts` calls `loadDataAccess()` (connects MongoDB, inits DAOs) → starts Express on `process.env.PORT` (default 4000).
+`index.ts` calls `loadDataAccess()` (connects MongoDB, inits DAOs, creates `auth`) → starts `@hono/node-server` on `process.env.PORT` (default 4000).
 
-`app.ts` middleware order: CORS → `express.json()` → `cookie-parser` → routes.
+The Hono app is built directly in `index.ts` (no separate `app.ts`). `AppType` is exported from `index.ts` for Hono RPC client type-safety.
 
 ### DAO Pattern
-`abstractDAO.ts` is a generic MongoDB wrapper. `UsersDAO` and `ItemsDAO` extend it and are exported as **singletons**. Each must have `.init(db)` called once (done in `loaders/mainLoader.ts`) before use. `UsersDAO` indexes on `email`; `ItemsDAO` indexes on `user`, `user+status`, `user+expectedBy`, `user+timeStart`.
+`abstractDAO.ts` is a generic MongoDB wrapper. `ItemsDAO` extends it and is exported as a **singleton**. It must have `.init(db)` called once (done in `loaders/mainLoader.ts`) before use. `ItemsDAO` indexes on `user`, `user+status`, `user+expectedBy`, `user+timeStart`.
+
+`UsersDAO` no longer exists — Better Auth manages users natively in its own MongoDB collections (`user`, `session`, `account`, `verification`).
 
 ### Auth
-Google OAuth 2.0 flow lives in `src/api/auth/google.ts`. On success, a JWT is signed and stored in an HTTP-only secure cookie (`jwtTokens`). JWT payload shape: `{ contents: UserPayload[] }` — an array to support future multi-user tokens, currently always length 1.
+Auth is handled by **Better Auth** (`src/auth/betterAuth.ts`). `createAuth(db)` is called in `loadDataAccess()` and exported as a live ESM binding (`auth`) from `mainLoader.ts`.
 
-`authenticateRequest` middleware (`src/auth/middleware.ts`) verifies the cookie and attaches `req.users` (typed as `RequestWithUsers`). Use this middleware on any protected route.
+All OAuth routes are handled by Better Auth: `GET|POST /auth/*` → `auth.handler(c.req.raw)` in `index.ts`.
+
+- **Providers**: Google and GitHub OAuth. Accounts with the same email are linked automatically to one user.
+- **Session**: Stored in MongoDB (`session` collection). HTTP-only cookie `better-auth.session_token`.
+- **Middleware**: `authenticateRequest` (`src/auth/middleware.ts`) calls `auth.api.getSession({ headers: c.req.raw.headers })` and attaches `session` to the Hono context via `c.set('session', session)`.
+- **User ID**: Access on protected routes via `c.get('session').user.id` — a string UUID (not `ObjectId`).
 
 ### Adding New Routes
-1. Create a router in `src/api/<feature>.ts`
-2. Register it in `app.ts` (e.g. `app.use('/feature', featureRouter)`)
+1. Create a router in `src/routes/<feature>.ts`
+2. Register it in `index.ts` with `.route('/feature', featureRouter)` on the Hono app
 
-The items router (`src/api/items.ts`) is fully implemented with POST and GET handlers but is **commented out** in `app.ts` — uncomment to activate.
+The items router (`src/routes/items.ts`) is active with `POST /items` and `GET /items` handlers.
 
 ## Environment Variables (`.env`)
 
@@ -43,12 +50,16 @@ MONGO_DB_URL=
 MONGO_DB_NAME=
 GOOGLE_OAUTH_APP_CLIENT_ID=
 GOOGLE_OAUTH_APP_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=
-JWT_SECRET=
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+BETTER_AUTH_URL=http://localhost:4000
+BETTER_AUTH_SECRET=
+CLIENT_URL=http://localhost:5173
 PORT=4000
 ```
 
 ## Key Types
 
-- `ItemInterface` (`src/types/entities.ts`) — `status` is `inbox | nextAction | calendar | waitingFor | done | trash`; optional GTD fields (`workContexts`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `timeStart`, `timeEnd`) vary by status
-- `RequestWithUsers` (`src/types/authTypes.ts`) — Express `Request` extended with `users: UsersPayload`
+- `ItemInterface` (`src/types/entities.ts`) — `status` is `inbox | nextAction | calendar | waitingFor | done | trash`; `user` is a `string` UUID (Better Auth ID, not `ObjectId`); optional GTD fields (`workContexts`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `timeStart`, `timeEnd`) vary by status
+- `AuthVariables` (`src/types/authTypes.ts`) — Hono context variables `{ session: Session }` for typed `c.get('session')`
+- `Session` — inferred from Better Auth via `Auth['$Infer']['Session']`

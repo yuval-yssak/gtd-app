@@ -1,10 +1,13 @@
-import { MongoClient } from 'mongodb';
+import { type Db, MongoClient } from 'mongodb';
+import { type Auth, createAuth } from '../auth/betterAuth.js';
 import { mongoDBConfig } from '../config.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
-import refreshTokensDAO from '../dataAccess/refreshTokensDAO.js';
-import usersDAO from '../dataAccess/usersDAO.js';
 
 let dbClient: MongoClient;
+
+// Exported as live ESM bindings — assigned inside loadDataAccess() before any requests are served
+export let auth!: Auth;
+export let db!: Db;
 
 async function mongoConnect() {
     const client = new MongoClient(mongoDBConfig.DBUrl);
@@ -20,9 +23,9 @@ async function loadDataAccess(customDBName?: string) {
     const resolvedDBName = customDBName ?? mongoDBConfig.dbName;
 
     dbClient = await mongoConnect();
-    await usersDAO.init(dbClient, resolvedDBName);
+    db = dbClient.db(resolvedDBName);
     await itemsDAO.init(dbClient, resolvedDBName);
-    await refreshTokensDAO.init(dbClient, resolvedDBName);
+    auth = createAuth(db);
 }
 
 async function closeDataAccess() {

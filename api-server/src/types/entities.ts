@@ -1,24 +1,5 @@
-import type { ObjectId } from 'mongodb';
-
-type ThirdPartyToken = {
-    provider: string;
-    accessToken: string;
-    refreshToken: string;
-    expireTs: string;
-};
-
-export interface UserInterface {
-    firstName: string;
-    lastName: string;
-    email: string;
-    picture: string;
-    createdTs: string;
-    updatedTs: string;
-    tokens: ThirdPartyToken[];
-}
-
 export interface ItemInterface {
-    user: ObjectId;
+    user: string; // Better Auth user ID (UUID string, not ObjectId)
     status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'done' | 'trash';
     title: string;
     createdTs: string;
