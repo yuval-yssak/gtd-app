@@ -54,7 +54,9 @@ function AuthenticatedLayout() {
 
         async function loadItems() {
             const account = await getActiveAccount(db);
-            if (!account || cancelled) return;
+            if (!account || cancelled) {
+                return;
+            }
 
             // Show cached items immediately so the UI is useful offline
             const local = await getItemsByUser(db, account.id);
@@ -62,7 +64,9 @@ function AuthenticatedLayout() {
 
             if (navigator.onLine) {
                 await seedItemsFromServer(db, account.id);
-                if (cancelled) return;
+                if (cancelled) {
+                    return;
+                }
                 const refreshed = await getItemsByUser(db, account.id);
                 if (!cancelled) setItems(refreshed);
             }
@@ -70,11 +74,15 @@ function AuthenticatedLayout() {
 
         async function handleOnline() {
             const account = await getActiveAccount(db);
-            if (!account || cancelled) return;
+            if (!account || cancelled) {
+                return;
+            }
             // Flush queued mutations first so the seed reflects our offline changes
             await flushSyncQueue(db);
             await seedItemsFromServer(db, account.id);
-            if (cancelled) return;
+            if (cancelled) {
+                return;
+            }
             const refreshed = await getItemsByUser(db, account.id);
             if (!cancelled) setItems(refreshed);
         }

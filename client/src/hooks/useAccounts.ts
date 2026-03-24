@@ -34,6 +34,7 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
                                     email: s.user.email,
                                     name: s.user.name,
                                     image: s.user.image ?? null,
+                                    // Better Auth's session type omits provider — cast to access the field persisted at sign-in
                                     provider: (s.user as { provider?: OAuthProvider }).provider ?? 'google',
                                     addedAt: new Date(s.session.createdAt).getTime(),
                                 },
@@ -99,6 +100,31 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
         [db, allAccounts],
     );
 
+    const switchToNextAndRevoke = useCallback(
+        async (next: StoredAccount, currentSessionToken: string | undefined, targetSessionToken: string) => {
+            // Switch first so we have an active session — multiSession.revoke validates
+            // ownership via the device multi-session cookie (not userId), so it can revoke
+            // the old session even though we're now authenticated as the next user.
+            await authClient.multiSession.setActive({ sessionToken: targetSessionToken });
+            await setActiveAccount(next.id, db);
+            if (currentSessionToken) {
+                await authClient.multiSession.revoke({ sessionToken: currentSessionToken });
+            }
+            window.location.href = '/';
+        },
+        [db],
+    );
+
+    const reauthAsNext = useCallback((next: StoredAccount) => {
+        // Session expired — sign out current session and re-authenticate via OAuth
+        void authClient.signOut().then(() => {
+            void authClient.signIn.social({
+                provider: next.provider,
+                callbackURL: `${window.location.origin}/auth/callback`,
+            });
+        });
+    }, []);
+
     const signOutCurrent = useCallback(async () => {
         const { data: sessions } = await authClient.multiSession.listDeviceSessions();
         const currentSession = sessions?.find((s) => s.user.id === activeAccount?.id);
@@ -109,31 +135,20 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
 
         const remaining = await getAllAccounts(db);
         const next = remaining[0];
-        if (next) {
-            const target = sessions?.find((s) => s.user.id === next.id);
-            if (target) {
-                // Switch first so we have an active session — multiSession.revoke validates
-                // ownership via the device multi-session cookie (not userId), so it can revoke
-                // the old session even though we're now authenticated as the next user.
-                await authClient.multiSession.setActive({ sessionToken: target.session.token });
-                await setActiveAccount(next.id, db);
-                if (currentSession) {
-                    await authClient.multiSession.revoke({ sessionToken: currentSession.session.token });
-                }
-                window.location.href = '/';
-            } else {
-                // Session expired — fall back to OAuth re-authentication
-                await authClient.signOut();
-                void authClient.signIn.social({
-                    provider: next.provider,
-                    callbackURL: `${window.location.origin}/auth/callback`,
-                });
-            }
-        } else {
+
+        if (!next) {
             await authClient.signOut();
             window.location.href = '/login';
+            return;
         }
-    }, [db, activeAccount]);
+
+        const targetSession = sessions?.find((s) => s.user.id === next.id);
+        if (targetSession) {
+            await switchToNextAndRevoke(next, currentSession?.session.token, targetSession.session.token);
+        } else {
+            reauthAsNext(next);
+        }
+    }, [db, activeAccount, switchToNextAndRevoke, reauthAsNext]);
 
     const signOutAll = useCallback(async () => {
         await authClient.signOut();

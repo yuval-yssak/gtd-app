@@ -4,6 +4,10 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import type { ItemInterface } from '../types/entities.js';
 
+// Works around MongoDB driver's InferIdType widening _id to ObjectId when _id is declared optional —
+// at runtime _id is always a UUID string. Extracted to avoid repeating as any in PUT and DELETE.
+const itemOwnerFilter = (id: string, userId: string) => ({ _id: id, user: userId }) as { _id: string; user: string };
+
 export const itemsRoutes = new Hono<{ Variables: AuthVariables }>()
     .post('/', authenticateRequest, async (c) => {
         const body = await c.req.json<{ _id: string; title: string; status?: ItemInterface['status']; createdTs?: string }>();
@@ -50,16 +54,14 @@ export const itemsRoutes = new Hono<{ Variables: AuthVariables }>()
         const body = await c.req.json<Partial<Omit<ItemInterface, '_id' | 'user'>>>();
 
         // Filter by user so one user can never overwrite another's item.
-        // `as any` works around MongoDB driver's InferIdType widening _id to ObjectId when _id is
-        // declared optional — at runtime _id is always a UUID string.
-        await itemsDAO.updateOne({ _id: id, user: user.id } as any, { $set: body });
+        await itemsDAO.updateOne(itemOwnerFilter(id, user.id), { $set: body });
         return c.json({ ok: true });
     })
     .delete('/:id', authenticateRequest, async (c) => {
         const { id } = c.req.param();
         const { user } = c.get('session');
 
-        // Filter by user so one user can never delete another's item. Same as any cast as PUT above.
-        await itemsDAO.collection.deleteOne({ _id: id, user: user.id } as any);
+        // Filter by user so one user can never delete another's item.
+        await itemsDAO.collection.deleteOne(itemOwnerFilter(id, user.id));
         return c.json({ ok: true });
     });

@@ -7,8 +7,10 @@
         "dev": "tsx watch src/index.ts",
         "build": "tsc",
         "start": "node build/index.js",
-        "check": "biome check src",
-        "fix": "biome check --write src",
+        "lint": "biome check",
+        "lint:fix": "biome check . --write",
+        "lint:fix:unsafe": "biome check --write --unsafe",
+        "typecheck": "tsc --noEmit",
         "test": "vitest run",
         "test:watch": "vitest"
     },
@@ -22,7 +24,7 @@
         "mongodb": "latest"
     },
     "devDependencies": {
-        "@biomejs/biome": "latest",
+        "@biomejs/biome": "2.4.8",
         "@types/jsonwebtoken": "latest",
         "@types/node": "latest",
         "tsx": "latest",

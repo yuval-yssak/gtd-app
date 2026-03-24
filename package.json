@@ -1,5 +1,11 @@
 {
     "name": "gtd",
     "private": true,
-    "workspaces": ["api-server", "client"]
+    "workspaces": [
+        "api-server",
+        "client"
+    ],
+    "dependencies": {
+        "@opentelemetry/api": "^1.9.0"
+    }
 }

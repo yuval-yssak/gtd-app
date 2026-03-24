@@ -34,8 +34,7 @@ class AbstractDAO<S extends Document> {
     }
 
     async bulkWrite(operations: AnyBulkWriteOperation<S>[], options?: BulkWriteOptions) {
-        if (options) return await this._collection.bulkWrite(operations, options);
-        else return await this._collection.bulkWrite(operations);
+        return await this._collection.bulkWrite(operations, options ?? {});
     }
 
     async deleteAll() {

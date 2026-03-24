@@ -19,7 +19,8 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, type: SyncOpType, item
     if (type === 'delete') {
         // Replace any prior ops for this item with a single 'delete'
         for (const op of existing) {
-            await db.delete('syncOperations', op.id!);
+            if (op.id === undefined) continue; // IDB auto-assigns id on insert; should never be undefined here
+            await db.delete('syncOperations', op.id);
         }
     }
 
@@ -30,12 +31,13 @@ export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
     const ops = await db.getAll('syncOperations');
 
     for (const op of ops) {
+        if (op.id === undefined) continue; // IDB auto-assigns id on insert; should never be undefined here
         try {
             if (op.type === 'create') {
                 const item = await db.get('items', op.itemId);
                 if (!item) {
                     // Item was deleted before sync — skip this create
-                    await db.delete('syncOperations', op.id!);
+                    await db.delete('syncOperations', op.id);
                     continue;
                 }
                 const { userId, ...body } = item;
@@ -49,7 +51,7 @@ export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
             } else if (op.type === 'update') {
                 const item = await db.get('items', op.itemId);
                 if (!item) {
-                    await db.delete('syncOperations', op.id!);
+                    await db.delete('syncOperations', op.id);
                     continue;
                 }
                 const { userId, _id, ...body } = item;
@@ -64,7 +66,7 @@ export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
                 const res = await fetch(`/items/${op.itemId}`, { method: 'DELETE', credentials: 'include' });
                 if (!res.ok) throw new Error(`DELETE /items/${op.itemId} ${res.status}`);
             }
-            await db.delete('syncOperations', op.id!);
+            await db.delete('syncOperations', op.id);
         } catch {
             // Stop on first failure — preserve remaining ops in order so they retry next time online
             break;

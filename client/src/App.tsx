@@ -9,9 +9,10 @@ import type { MyDB, StoredItem } from './types/MyDB';
 const router = createRouter({
     routeTree,
     context: {
-        db: undefined!,
-        items: undefined!,
-        setItems: undefined!,
+        // Stubs satisfy the type shape; real values are injected via RouterProvider on every render
+        db: null as unknown as IDBPDatabase<MyDB>,
+        items: [] as StoredItem[],
+        setItems: () => {},
     },
 });
 
