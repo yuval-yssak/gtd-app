@@ -78,17 +78,24 @@ const GITHUB_PROFILE = {
 
 const GITHUB_TOKEN = { access_token: 'gh-at', scope: 'user:email', token_type: 'bearer' };
 
-function mockOAuth({ googleToken = GOOGLE_TOKEN, googleProfile = GOOGLE_PROFILE, githubToken = GITHUB_TOKEN, githubProfile = GITHUB_PROFILE } = {}) {
+function mockGoogleOAuth({ token = GOOGLE_TOKEN, profile = GOOGLE_PROFILE } = {}) {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-        const url = input.toString();
-        if (url.startsWith('https://oauth2.googleapis.com/token')) return Response.json(googleToken);
+        const requestUrl = input.toString();
+        if (requestUrl.startsWith('https://oauth2.googleapis.com/token')) return Response.json(token);
         // Better Auth fetches Google userinfo from openidconnect endpoint
-        if (url.startsWith('https://openidconnect.googleapis.com/v1/userinfo')) return Response.json(googleProfile);
-        if (url.startsWith('https://www.googleapis.com/oauth2/v3/userinfo')) return Response.json(googleProfile);
-        if (url.startsWith('https://github.com/login/oauth/access_token')) return Response.json(githubToken);
-        if (url.startsWith('https://api.github.com/user/emails')) return Response.json([]);
-        if (url.startsWith('https://api.github.com/user')) return Response.json(githubProfile);
-        throw new Error(`Unexpected fetch to ${url}`);
+        if (requestUrl.startsWith('https://openidconnect.googleapis.com/v1/userinfo')) return Response.json(profile);
+        if (requestUrl.startsWith('https://www.googleapis.com/oauth2/v3/userinfo')) return Response.json(profile);
+        throw new Error(`Unexpected fetch to ${requestUrl}`);
+    });
+}
+
+function mockGitHubOAuth({ token = GITHUB_TOKEN, profile = GITHUB_PROFILE } = {}) {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const requestUrl = input.toString();
+        if (requestUrl.startsWith('https://github.com/login/oauth/access_token')) return Response.json(token);
+        if (requestUrl.startsWith('https://api.github.com/user/emails')) return Response.json([]);
+        if (requestUrl.startsWith('https://api.github.com/user')) return Response.json(profile);
+        throw new Error(`Unexpected fetch to ${requestUrl}`);
     });
 }
 
@@ -119,9 +126,9 @@ async function oauthLogin(provider: 'google' | 'github', profileOverrides: Recor
     const stateCookies = collectCookies(signInRes);
 
     if (provider === 'google') {
-        mockOAuth({ googleProfile: { ...GOOGLE_PROFILE, ...profileOverrides } });
+        mockGoogleOAuth({ profile: { ...GOOGLE_PROFILE, ...profileOverrides } });
     } else {
-        mockOAuth({ githubProfile: { ...GITHUB_PROFILE, ...profileOverrides } });
+        mockGitHubOAuth({ profile: { ...GITHUB_PROFILE, ...profileOverrides } });
     }
 
     const callbackRes = await app.fetch(
@@ -243,8 +250,8 @@ describe('Account linking', () => {
 
         expect(await db.collection('user').countDocuments()).toBe(1);
         const accounts = await db.collection('account').find({}).toArray();
-        expect(accounts.map((a) => a['providerId'])).toContain('google');
-        expect(accounts.map((a) => a['providerId'])).toContain('github');
+        expect(accounts.map((a) => a.providerId)).toContain('google');
+        expect(accounts.map((a) => a.providerId)).toContain('github');
     });
 
     it('GitHub login with different email → two separate user docs', async () => {

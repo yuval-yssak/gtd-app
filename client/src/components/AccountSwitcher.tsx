@@ -10,15 +10,17 @@ import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
-import { useState, useSyncExternalStore } from 'react';
+import { useState } from 'react';
 import { useAccounts } from '../hooks/useAccounts';
-import type { MyDB } from '../types/MyDB';
+import { useOnline } from '../hooks/useOnline';
+import type { MyDB, StoredAccount } from '../types/MyDB';
 
-// useSyncExternalStore ensures React re-renders on online/offline events without stale closure issues
-function useOnline() {
-    return useSyncExternalStore(
-        (cb) => { window.addEventListener('online', cb); window.addEventListener('offline', cb); return () => { window.removeEventListener('online', cb); window.removeEventListener('offline', cb); }; },
-        () => navigator.onLine,
+function AccountAvatar({ account, size }: { account: StoredAccount | undefined; size: number }) {
+    // fontSize: MUI Avatar default is 1.25rem on 40px = ~0.375 ratio; scale it with size
+    return (
+        <Avatar src={account?.image ?? undefined} alt={account?.name ?? 'Account'} sx={{ width: size, height: size, fontSize: size * 0.375 }}>
+            {!account?.image && (account?.name?.[0]?.toUpperCase() ?? '?')}
+        </Avatar>
     );
 }
 
@@ -41,10 +43,7 @@ export function AccountSwitcher({ db }: Props) {
     return (
         <>
             <IconButton onClick={openMenu} size="small" sx={{ ml: 1 }}>
-                <Avatar src={activeAccount?.image ?? undefined} alt={activeAccount?.name ?? 'Account'} sx={{ width: 32, height: 32 }}>
-                    {/* Fallback initial when no avatar image is set */}
-                    {!activeAccount?.image && (activeAccount?.name?.[0]?.toUpperCase() ?? '?')}
-                </Avatar>
+                <AccountAvatar account={activeAccount} size={32} />
             </IconButton>
 
             <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={closeMenu} onClick={closeMenu}>
@@ -58,9 +57,7 @@ export function AccountSwitcher({ db }: Props) {
                         }}
                     >
                         <ListItemIcon>
-                            <Avatar src={account.image ?? undefined} sx={{ width: 24, height: 24, fontSize: 12 }}>
-                                {!account.image && (account.name[0]?.toUpperCase() ?? '?')}
-                            </Avatar>
+                            <AccountAvatar account={account} size={24} />
                         </ListItemIcon>
                         <ListItemText
                             primary={account.name}

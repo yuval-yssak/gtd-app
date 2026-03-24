@@ -9,8 +9,8 @@ npm run dev          # Start dev server with ts-node-dev (hot reload) on port 40
 npm run build        # Compile TypeScript to build/
 npm start            # Run compiled server (production)
 npm test             # Run Vitest tests
-npm run test:lint    # ESLint check
-npm run fix          # Auto-fix lint + prettier
+npm run check        # Biome lint check
+npm run fix          # Auto-fix lint + format (Biome)
 ```
 
 Run a single test file: `npx vitest run src/tests/auth.test.ts`

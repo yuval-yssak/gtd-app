@@ -3,6 +3,7 @@ import { type Auth, createAuth } from '../auth/betterAuth.js';
 import { mongoDBConfig } from '../config.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 
+// Assigned in loadDataAccess(); kept as let so closeDataAccess() can close it
 let dbClient: MongoClient;
 
 // Exported as live ESM bindings — assigned inside loadDataAccess() before any requests are served
