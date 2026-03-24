@@ -1,6 +1,8 @@
-import type { IDBPDatabase } from 'idb'
-import type { MyDB } from './MyDB'
+import type { IDBPDatabase } from 'idb';
+import type { MyDB, StoredItem } from './MyDB';
 
 export interface RouterContext {
-    db: IDBPDatabase<MyDB>
+    db: IDBPDatabase<MyDB>;
+    items: StoredItem[];
+    setItems: React.Dispatch<React.SetStateAction<StoredItem[]>>;
 }

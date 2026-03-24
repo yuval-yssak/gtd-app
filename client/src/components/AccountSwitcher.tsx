@@ -1,42 +1,47 @@
-import { useState } from 'react'
-import type { IDBPDatabase } from 'idb'
-import type { MyDB } from '../types/MyDB'
-import { useAccounts } from '../hooks/useAccounts'
-import Avatar from '@mui/material/Avatar'
-import IconButton from '@mui/material/IconButton'
-import Menu from '@mui/material/Menu'
-import MenuItem from '@mui/material/MenuItem'
-import ListItemText from '@mui/material/ListItemText'
-import ListItemIcon from '@mui/material/ListItemIcon'
-import Divider from '@mui/material/Divider'
-import CheckIcon from '@mui/icons-material/Check'
-import AddIcon from '@mui/icons-material/Add'
-import LogoutIcon from '@mui/icons-material/Logout'
-import Typography from '@mui/material/Typography'
+import AddIcon from '@mui/icons-material/Add';
+import CheckIcon from '@mui/icons-material/Check';
+import LogoutIcon from '@mui/icons-material/Logout';
+import Avatar from '@mui/material/Avatar';
+import Divider from '@mui/material/Divider';
+import IconButton from '@mui/material/IconButton';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import Menu from '@mui/material/Menu';
+import MenuItem from '@mui/material/MenuItem';
+import Typography from '@mui/material/Typography';
+import type { IDBPDatabase } from 'idb';
+import { useState, useSyncExternalStore } from 'react';
+import { useAccounts } from '../hooks/useAccounts';
+import type { MyDB } from '../types/MyDB';
+
+// useSyncExternalStore ensures React re-renders on online/offline events without stale closure issues
+function useOnline() {
+    return useSyncExternalStore(
+        (cb) => { window.addEventListener('online', cb); window.addEventListener('offline', cb); return () => { window.removeEventListener('online', cb); window.removeEventListener('offline', cb); }; },
+        () => navigator.onLine,
+    );
+}
 
 interface Props {
-    db: IDBPDatabase<MyDB>
+    db: IDBPDatabase<MyDB>;
 }
 
 export function AccountSwitcher({ db }: Props) {
-    const [anchor, setAnchor] = useState<HTMLElement | null>(null)
-    const { activeAccount, allAccounts, addAnotherAccount, switchToAccount, signOutCurrent, signOutAll } = useAccounts(db)
+    const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+    const { activeAccount, allAccounts, addAnotherAccount, switchToAccount, signOutCurrent, signOutAll } = useAccounts(db);
+    const online = useOnline();
 
     function openMenu(e: React.MouseEvent<HTMLElement>) {
-        setAnchor(e.currentTarget)
+        setAnchor(e.currentTarget);
     }
     function closeMenu() {
-        setAnchor(null)
+        setAnchor(null);
     }
 
     return (
         <>
             <IconButton onClick={openMenu} size="small" sx={{ ml: 1 }}>
-                <Avatar
-                    src={activeAccount?.image ?? undefined}
-                    alt={activeAccount?.name ?? 'Account'}
-                    sx={{ width: 32, height: 32 }}
-                >
+                <Avatar src={activeAccount?.image ?? undefined} alt={activeAccount?.name ?? 'Account'} sx={{ width: 32, height: 32 }}>
                     {/* Fallback initial when no avatar image is set */}
                     {!activeAccount?.image && (activeAccount?.name?.[0]?.toUpperCase() ?? '?')}
                 </Avatar>
@@ -48,7 +53,7 @@ export function AccountSwitcher({ db }: Props) {
                         key={account.id}
                         onClick={() => {
                             if (account.id !== activeAccount?.id) {
-                                void switchToAccount(account.id)
+                                void switchToAccount(account.id);
                             }
                         }}
                     >
@@ -63,22 +68,20 @@ export function AccountSwitcher({ db }: Props) {
                             slotProps={{ primary: { variant: 'body2' }, secondary: { variant: 'caption' } }}
                         />
                         {/* Checkmark on the currently active account */}
-                        {account.id === activeAccount?.id && (
-                            <CheckIcon fontSize="small" sx={{ ml: 1, color: 'primary.main' }} />
-                        )}
+                        {account.id === activeAccount?.id && <CheckIcon fontSize="small" sx={{ ml: 1, color: 'primary.main' }} />}
                     </MenuItem>
                 ))}
 
                 <Divider />
 
-                <MenuItem onClick={() => addAnotherAccount('google')}>
+                <MenuItem disabled={!online} onClick={() => addAnotherAccount('google')}>
                     <ListItemIcon>
                         <AddIcon fontSize="small" />
                     </ListItemIcon>
                     <ListItemText primary={<Typography variant="body2">Add Google account</Typography>} />
                 </MenuItem>
 
-                <MenuItem onClick={() => addAnotherAccount('github')}>
+                <MenuItem disabled={!online} onClick={() => addAnotherAccount('github')}>
                     <ListItemIcon>
                         <AddIcon fontSize="small" />
                     </ListItemIcon>
@@ -87,14 +90,14 @@ export function AccountSwitcher({ db }: Props) {
 
                 <Divider />
 
-                <MenuItem onClick={() => void signOutCurrent()}>
+                <MenuItem disabled={!online} onClick={() => void signOutCurrent()}>
                     <ListItemIcon>
                         <LogoutIcon fontSize="small" />
                     </ListItemIcon>
                     <ListItemText primary={<Typography variant="body2">Sign out</Typography>} />
                 </MenuItem>
 
-                <MenuItem onClick={() => void signOutAll()}>
+                <MenuItem disabled={!online} onClick={() => void signOutAll()}>
                     <ListItemIcon>
                         <LogoutIcon fontSize="small" />
                     </ListItemIcon>
@@ -102,5 +105,5 @@ export function AccountSwitcher({ db }: Props) {
                 </MenuItem>
             </Menu>
         </>
-    )
+    );
 }

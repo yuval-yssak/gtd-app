@@ -1,17 +1,17 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
-import CircularProgress from '@mui/material/CircularProgress'
-import Box from '@mui/material/Box'
-import { authClient } from '../lib/authClient'
-import { upsertAccount, setActiveAccount } from '../db/accountHelpers'
-import type { OAuthProvider } from '../types/MyDB'
+import Box from '@mui/material/Box';
+import CircularProgress from '@mui/material/CircularProgress';
+import { createFileRoute, redirect } from '@tanstack/react-router';
+import { setActiveAccount, upsertAccount } from '../db/accountHelpers';
+import { authClient } from '../lib/authClient';
+import type { OAuthProvider } from '../types/MyDB';
 
 export const Route = createFileRoute('/auth/callback')({
     beforeLoad: async ({ context: { db } }) => {
-        const { data: session } = await authClient.getSession()
+        const { data: session } = await authClient.getSession();
 
         if (!session) {
             // OAuth failed or cookie was not set — send back to login
-            throw redirect({ to: '/login' })
+            throw redirect({ to: '/login' });
         }
 
         await upsertAccount(
@@ -27,18 +27,18 @@ export const Route = createFileRoute('/auth/callback')({
                 addedAt: Date.now(),
             },
             db,
-        )
-        await setActiveAccount(session.user.id, db)
+        );
+        await setActiveAccount(session.user.id, db);
 
-        throw redirect({ to: '/' })
+        throw redirect({ to: '/' });
     },
     component: CallbackPage,
-})
+});
 
 function CallbackPage() {
     return (
         <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <CircularProgress />
         </Box>
-    )
+    );
 }

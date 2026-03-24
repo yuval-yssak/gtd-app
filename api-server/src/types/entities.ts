@@ -1,4 +1,7 @@
 export interface ItemInterface {
+    // Client-generated UUID used as the MongoDB _id. Optional so MongoDB accepts documents
+    // created without one (e.g. in tests), but always present in practice.
+    _id?: string
     user: string; // Better Auth user ID (UUID string, not ObjectId)
     status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'done' | 'trash';
     title: string;

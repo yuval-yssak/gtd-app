@@ -109,7 +109,7 @@ async function oauthLogin(provider: 'google' | 'github', profileOverrides: Recor
         new Request('http://localhost:4000/auth/sign-in/social', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, callbackURL: 'http://localhost:5173' }),
+            body: JSON.stringify({ provider, callbackURL: 'http://localhost:4173' }),
         }),
     );
     expect(signInRes.status).toBe(200);
@@ -159,7 +159,7 @@ describe('POST /auth/sign-in/social — initiate', () => {
             new Request('http://localhost:4000/auth/sign-in/social', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: 'google', callbackURL: 'http://localhost:5173' }),
+                body: JSON.stringify({ provider: 'google', callbackURL: 'http://localhost:4173' }),
             }),
         );
         expect(res.status).toBe(200);
@@ -177,7 +177,7 @@ describe('POST /auth/sign-in/social — initiate', () => {
             new Request('http://localhost:4000/auth/sign-in/social', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ provider: 'github', callbackURL: 'http://localhost:5173' }),
+                body: JSON.stringify({ provider: 'github', callbackURL: 'http://localhost:4173' }),
             }),
         );
         expect(res.status).toBe(200);
@@ -193,7 +193,7 @@ describe('OAuth callback — new user', () => {
         const { res, sessionCookie } = await oauthLogin('google');
 
         expect(res.status).toBe(302);
-        expect(res.headers.get('location')).toBe('http://localhost:5173');
+        expect(res.headers.get('location')).toBe('http://localhost:4173');
         expect(sessionCookie).toBeTruthy();
 
         const users = await db.collection('user').find({ email: 'alice@example.com' }).toArray();
