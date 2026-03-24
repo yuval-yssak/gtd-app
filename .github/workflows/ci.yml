@@ -12,6 +12,13 @@ jobs:
         defaults:
             run:
                 working-directory: api-server
+        services:
+            mongodb:
+                image: mongo:8
+                ports:
+                    - 27017:27017
+        env:
+            MONGO_DB_URL: mongodb://localhost:27017
         steps:
             - uses: actions/checkout@v4
             - uses: actions/setup-node@v4
