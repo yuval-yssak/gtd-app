@@ -7,4 +7,4 @@ export const mongoDBConfig = {
 };
 
 // biome-ignore lint/complexity/useLiteralKeys: TS noPropertyAccessFromIndexSignature requires bracket notation here
-export const clientUrl = process.env['CLIENT_URL'] ?? 'http://localhost:5173';
+export const clientUrl = process.env['CLIENT_URL'] ?? 'http://localhost:4173';

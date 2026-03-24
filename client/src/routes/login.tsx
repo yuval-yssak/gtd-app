@@ -1,19 +1,19 @@
-import { createFileRoute, redirect } from '@tanstack/react-router'
-import Box from '@mui/material/Box'
-import Button from '@mui/material/Button'
-import Typography from '@mui/material/Typography'
-import Paper from '@mui/material/Paper'
-import { authClient } from '../lib/authClient'
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Paper from '@mui/material/Paper';
+import Typography from '@mui/material/Typography';
+import { createFileRoute, redirect } from '@tanstack/react-router';
+import { authClient } from '../lib/authClient';
 
 export const Route = createFileRoute('/login')({
     beforeLoad: async () => {
-        const { data: session } = await authClient.getSession()
+        const { data: session } = await authClient.getSession();
         if (session) {
-            throw redirect({ to: '/' })
+            throw redirect({ to: '/' });
         }
     },
     component: LoginPage,
-})
+});
 
 function LoginPage() {
     function signInWithGoogle() {
@@ -21,7 +21,7 @@ function LoginPage() {
         void authClient.signIn.social({
             provider: 'google',
             callbackURL: `${window.location.origin}/auth/callback`,
-        })
+        });
     }
 
     function signInWithGitHub() {
@@ -29,7 +29,7 @@ function LoginPage() {
         void authClient.signIn.social({
             provider: 'github',
             callbackURL: `${window.location.origin}/auth/callback`,
-        })
+        });
     }
 
     return (
@@ -51,5 +51,5 @@ function LoginPage() {
                 </Box>
             </Paper>
         </Box>
-    )
+    );
 }

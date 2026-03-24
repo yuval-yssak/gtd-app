@@ -11,7 +11,12 @@ export function createAuth(db: Db) {
             // transaction: false required for standalone MongoDB (dev uses a non-replica-set instance)
             transaction: false,
         }),
-        trustedOrigins: [process.env['CLIENT_URL'] ?? 'http://localhost:5173'],
+        trustedOrigins: [
+            process.env['CLIENT_URL'] ?? 'http://localhost:5173',
+            // vite preview serves on 4173; vite dev serves on 5173 — trust both in dev
+            'http://localhost:4173',
+            'http://localhost:5173',
+        ],
         secret: process.env['BETTER_AUTH_SECRET'] ?? 'dev_better_auth_secret_change_in_production',
         advanced: {
             useSecureCookies: process.env['NODE_ENV'] === 'production',
