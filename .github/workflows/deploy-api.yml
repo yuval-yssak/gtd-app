@@ -37,10 +37,10 @@ jobs:
             - run: gcloud auth configure-docker ${{ env.REGISTRY }}
 
             - name: Build and push
-              working-directory: api-server
               run: |
                   IMAGE=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/gtd/${{ env.SERVICE }}:${{ github.sha }}
-                  docker build -t $IMAGE .
+                  # Build from repo root so Docker can access the monorepo root package-lock.json
+                  docker build -f api-server/Dockerfile -t $IMAGE .
                   docker push $IMAGE
                   echo "IMAGE=$IMAGE" >> $GITHUB_ENV
 
