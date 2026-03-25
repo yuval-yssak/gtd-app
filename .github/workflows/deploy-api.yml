@@ -46,9 +46,22 @@ jobs:
 
             - name: Deploy to Cloud Run
               run: |
+                  # Write env vars to a YAML file to safely handle special characters in values
+                  cat > env.yaml << 'EOF'
+                  NODE_ENV: production
+                  MONGO_DB_URL: "${{ secrets.MONGO_DB_URL }}"
+                  MONGO_DB_NAME: "${{ secrets.MONGO_DB_NAME }}"
+                  GOOGLE_OAUTH_APP_CLIENT_ID: "${{ secrets.GOOGLE_OAUTH_APP_CLIENT_ID }}"
+                  GOOGLE_OAUTH_APP_CLIENT_SECRET: "${{ secrets.GOOGLE_OAUTH_APP_CLIENT_SECRET }}"
+                  GITHUB_CLIENT_ID: "${{ secrets.GH_OAUTH_CLIENT_ID }}"
+                  GITHUB_CLIENT_SECRET: "${{ secrets.GH_OAUTH_CLIENT_SECRET }}"
+                  BETTER_AUTH_SECRET: "${{ secrets.BETTER_AUTH_SECRET }}"
+                  BETTER_AUTH_URL: "${{ secrets.BETTER_AUTH_URL }}"
+                  CLIENT_URL: "${{ secrets.CLIENT_URL }}"
+                  EOF
                   gcloud run deploy ${{ env.SERVICE }} \
                     --image=$IMAGE \
                     --region=${{ env.REGION }} \
                     --platform=managed \
                     --allow-unauthenticated \
-                    --set-env-vars="NODE_ENV=production"
+                    --env-vars-file=env.yaml
