@@ -19,6 +19,8 @@
         "noFallthroughCasesInSwitch": true,
         "useUnknownInCatchVariables": true,
         "verbatimModuleSyntax": true,
+        // Disallow enums and namespaces — use `as const` objects instead (matches client tsconfig)
+        "erasableSyntaxOnly": true,
         "esModuleInterop": true,
         // DOM needed for Hono's types that reference Web API globals (RequestInfo, BufferSource, etc.)
         "lib": ["ES2023", "DOM"]

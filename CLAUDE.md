@@ -116,9 +116,56 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 - Flag anti-patterns: god functions, boolean traps, deeply nested conditionals, primitive obsession.
 
 ### Dates
-- Use `dayjs` for all date parsing, formatting, and manipulation. Do not use the native `Date` API or other date libraries.
+- Use `dayjs` for all date parsing, formatting, manipulation, duration arithmetic, and timestamp comparisons. Do not use the native `Date` API or other date libraries.
 
 ### CSS / Styling
 - Use CSS Modules for all custom styling. No inline styles, no `styled-components`, no Tailwind, no other CSS-in-JS.
 - MUI components are styled via the centralized MUI theme — use `sx` props only for layout-specific overrides on wrapper elements, not for component appearance.
 - Global CSS variables go in `client/src/index.css`.
+
+## Running Locally
+
+```bash
+# Terminal 1 — API server (port 4000)
+cd api-server && npm run dev
+
+# Terminal 2 — Frontend (port 4173)
+cd client && npm run dev
+```
+
+## Deployment
+
+### Environments
+
+| Environment | App URL | API URL |
+|---|---|---|
+| production | https://getting-things-done.app | https://api.getting-things-done.app |
+| staging | https://staging.getting-things-done.app | https://api-staging.getting-things-done.app |
+
+### How to Deploy
+
+- **Push-triggered**: push to the `staging` or `production` branch when `api-server/**` changes → auto-runs `.github/workflows/deploy-api.yml`
+- **Manual**: `./deploy.sh api staging|production` — triggers the same workflow via `gh workflow run`
+- Track progress: https://github.com/yuval-yssak/gtd-app/actions/workflows/deploy-api.yml
+
+### GitHub Environments
+
+Configured at https://github.com/yuval-yssak/gtd-app/settings/environments — two environments (`production`, `staging`), each holding its own GCP secrets and vars.
+
+### Infrastructure
+
+- **Backend**: Google Cloud Run — `gtd-api` (production) and `gtd-api-staging` (staging), region `us-central1`
+- **API proxy**: Cloudflare Worker (`api-proxy-worker/`) routes `api.getting-things-done.app` and `api-staging.getting-things-done.app` to the respective Cloud Run service
+- **Docker images**: built from `api-server/Dockerfile` and pushed to Google Artifact Registry
+
+### Service Worker (PWA)
+
+The client is a PWA using `vite-plugin-pwa` with Workbox (`registerType: 'autoUpdate'` in `client/vite.config.ts`). On each build, Workbox generates a new precache manifest with hashed filenames.
+
+When a new version is deployed, `vite-plugin-pwa` injects `skipWaiting()` + `clientsClaim()` into the generated `sw.js`, so the new SW activates immediately and takes over all open tabs. **Users need to reload their tab once** to start running the new JS/CSS.
+
+**Known risk (offline edge case):** if a user is offline when the new SW activates, the old JS may try to lazy-load code-split chunks whose hashed URLs are no longer in the new precache, resulting in a broken page until they reload. This is an inherent risk of `skipWaiting` in an offline-first app.
+
+**Recommended improvement:** switch to `registerType: 'prompt'` with a custom "Update available — reload?" toast. This delays SW activation until the user acknowledges, eliminating the mid-session breakage risk.
+
+For development/debugging: DevTools → Application → Service Workers → "Update on reload".

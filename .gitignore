@@ -40,5 +40,8 @@ coverage/
 # Cloudflare Wrangler local cache
 .wrangler/
 
+# TanStack Router dev tooling cache
+.tanstack/
+
 # Misc
 *.local

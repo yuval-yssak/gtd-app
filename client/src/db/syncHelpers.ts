@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB, StoredItem, SyncOpType } from '../types/MyDB';
 import { bulkPutItems, deleteItemById, getItemsByUser } from './itemHelpers';
@@ -24,7 +25,7 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, type: SyncOpType, item
         }
     }
 
-    await db.add('syncOperations', { type, itemId, queuedAt: new Date().toISOString() });
+    await db.add('syncOperations', { type, itemId, queuedAt: dayjs().toISOString() });
 }
 
 export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {

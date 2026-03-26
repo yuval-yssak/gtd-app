@@ -1,21 +1,10 @@
 import CircleIcon from '@mui/icons-material/Circle';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import { useEffect, useState } from 'react';
+import { useOnline } from '../hooks/useOnline';
 
 export function StatusBar() {
-    const [online, setOnline] = useState(navigator.onLine);
-
-    useEffect(() => {
-        const handleOnline = () => setOnline(true);
-        const handleOffline = () => setOnline(false);
-        window.addEventListener('online', handleOnline);
-        window.addEventListener('offline', handleOffline);
-        return () => {
-            window.removeEventListener('online', handleOnline);
-            window.removeEventListener('offline', handleOffline);
-        };
-    }, []);
+    const online = useOnline();
 
     return (
         <Box
