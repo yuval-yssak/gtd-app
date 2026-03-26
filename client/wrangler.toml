@@ -1,9 +1,14 @@
-name = "getting-things-done"
+name = "gtd-app"
 compatibility_date = "2025-01-01"
 pages_build_output_dir = "dist"
 
 # Build-time env vars — Vite replaces VITE_* at build time via import.meta.env.
 # When wrangler.toml is present, Cloudflare Pages ignores dashboard plain-text
 # variables, so these must be declared here instead.
+# [vars] applies to production; [env.preview.vars] applies to all non-production
+# branch deployments (e.g. the staging branch preview).
 [vars]
 VITE_API_SERVER = "https://api.getting-things-done.app"
+
+[env.preview.vars]
+VITE_API_SERVER = "https://api-staging.getting-things-done.app"
