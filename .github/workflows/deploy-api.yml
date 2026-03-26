@@ -29,7 +29,7 @@ jobs:
             id-token: write
 
         env:
-            PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+            PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
             # inputs.environment is set on manual dispatch; github.ref_name is used on push
             TARGET_ENV: ${{ inputs.environment || github.ref_name }}
 
@@ -62,14 +62,14 @@ jobs:
                   cat > env.yaml << 'EOF'
                   NODE_ENV: production
                   MONGO_DB_URL: "${{ secrets.MONGO_DB_URL }}"
-                  MONGO_DB_NAME: "${{ secrets.MONGO_DB_NAME }}"
+                  MONGO_DB_NAME: "${{ vars.MONGO_DB_NAME }}"
                   GOOGLE_OAUTH_APP_CLIENT_ID: "${{ secrets.GOOGLE_OAUTH_APP_CLIENT_ID }}"
                   GOOGLE_OAUTH_APP_CLIENT_SECRET: "${{ secrets.GOOGLE_OAUTH_APP_CLIENT_SECRET }}"
                   GITHUB_CLIENT_ID: "${{ secrets.GH_OAUTH_CLIENT_ID }}"
                   GITHUB_CLIENT_SECRET: "${{ secrets.GH_OAUTH_CLIENT_SECRET }}"
                   BETTER_AUTH_SECRET: "${{ secrets.BETTER_AUTH_SECRET }}"
-                  BETTER_AUTH_URL: "${{ secrets.BETTER_AUTH_URL }}"
-                  CLIENT_URL: "${{ secrets.CLIENT_URL }}"
+                  BETTER_AUTH_URL: "${{ vars.BETTER_AUTH_URL }}"
+                  CLIENT_URL: "${{ vars.CLIENT_URL }}"
                   EOF
                   gcloud run deploy $SERVICE \
                     --image=$IMAGE \
