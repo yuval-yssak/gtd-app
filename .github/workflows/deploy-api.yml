@@ -4,6 +4,15 @@ on:
     push:
         branches: [staging, production]
         paths: ['api-server/**']
+    # Allow manual deploys (e.g. to pick up secret changes without touching api-server code)
+    workflow_dispatch:
+        inputs:
+            environment:
+                description: Target environment
+                required: true
+                default: production
+                type: choice
+                options: [production, staging]
 
 env:
     REGION: us-central1
@@ -12,16 +21,17 @@ env:
 jobs:
     deploy:
         runs-on: ubuntu-latest
-        # Selects the GitHub Environment by branch name — each holds its own GCP secrets;
-        # the 'production' environment has Required reviewers set, which pauses the deploy until manually approved.
-        environment: ${{ github.ref_name }}
+        # Selects the GitHub Environment by branch name (push) or manual input (workflow_dispatch).
+        # Each environment holds its own GCP secrets; 'production' has Required reviewers set.
+        environment: ${{ inputs.environment || github.ref_name }}
         permissions:
             contents: read
             id-token: write
 
         env:
             PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-            SERVICE: ${{ github.ref_name == 'production' && 'gtd-api' || 'gtd-api-staging' }}
+            # inputs.environment is set on manual dispatch; github.ref_name is used on push
+            TARGET_ENV: ${{ inputs.environment || github.ref_name }}
 
         steps:
             - uses: actions/checkout@v6
@@ -38,11 +48,13 @@ jobs:
 
             - name: Build and push
               run: |
-                  IMAGE=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/gtd/${{ env.SERVICE }}:${{ github.sha }}
+                  SERVICE=${{ env.TARGET_ENV == 'production' && 'gtd-api' || 'gtd-api-staging' }}
+                  IMAGE=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/gtd/$SERVICE:${{ github.sha }}
                   # Build from repo root so Docker can access the monorepo root package-lock.json
                   docker build -f api-server/Dockerfile -t $IMAGE .
                   docker push $IMAGE
                   echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+                  echo "SERVICE=$SERVICE" >> $GITHUB_ENV
 
             - name: Deploy to Cloud Run
               run: |
@@ -59,7 +71,7 @@ jobs:
                   BETTER_AUTH_URL: "${{ secrets.BETTER_AUTH_URL }}"
                   CLIENT_URL: "${{ secrets.CLIENT_URL }}"
                   EOF
-                  gcloud run deploy ${{ env.SERVICE }} \
+                  gcloud run deploy $SERVICE \
                     --image=$IMAGE \
                     --region=${{ env.REGION }} \
                     --platform=managed \
