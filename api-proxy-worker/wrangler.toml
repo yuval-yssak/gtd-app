@@ -1,0 +1,8 @@
+name = "gtd-api-proxy"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+routes = [
+    { pattern = "api.getting-things-done.app/*", zone_name = "getting-things-done.app" },
+    { pattern = "api-staging.getting-things-done.app/*", zone_name = "getting-things-done.app" },
+]
