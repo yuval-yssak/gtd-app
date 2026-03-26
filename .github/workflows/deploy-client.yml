@@ -1,0 +1,36 @@
+name: Deploy Client
+
+on:
+    push:
+        branches: [production]
+        paths: ['client/**']
+    workflow_dispatch:
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        environment: production
+        defaults:
+            run:
+                working-directory: client
+
+        steps:
+            - uses: actions/checkout@v6
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: npm
+                  cache-dependency-path: client/package-lock.json
+
+            - run: npm ci
+
+            - run: npm run build
+
+            - name: Deploy to Cloudflare Pages
+              uses: cloudflare/wrangler-action@v3
+              with:
+                  apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+                  accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+                  command: pages deploy dist --project-name=gtd-app --branch=production
+                  workingDirectory: client
