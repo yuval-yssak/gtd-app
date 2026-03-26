@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useState } from 'react';
 import { clearAllAccounts, getActiveAccount, getAllAccounts, removeAccount, setActiveAccount } from '../db/accountHelpers';
@@ -36,7 +37,7 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
                                     image: s.user.image ?? null,
                                     // Better Auth's session type omits provider — cast to access the field persisted at sign-in
                                     provider: (s.user as { provider?: OAuthProvider }).provider ?? 'google',
-                                    addedAt: new Date(s.session.createdAt).getTime(),
+                                    addedAt: dayjs(s.session.createdAt).valueOf(),
                                 },
                                 db,
                             ),

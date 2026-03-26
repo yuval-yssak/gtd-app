@@ -1,8 +1,9 @@
+import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import type { ItemInterface } from '../types/entities.js';
+import { type ItemInterface, ItemStatus } from '../types/entities.js';
 
 // Works around MongoDB driver's InferIdType widening _id to ObjectId when _id is declared optional —
 // at runtime _id is always a UUID string. Extracted to avoid repeating as any in PUT and DELETE.
@@ -16,8 +17,8 @@ export const itemsRoutes = new Hono<{ Variables: AuthVariables }>()
         // _id is client-generated UUID so the same item can be created idempotently during sync replay
         await itemsDAO.insertOne({
             _id: body._id,
-            createdTs: body.createdTs ?? new Date().toISOString(),
-            status: body.status ?? 'inbox',
+            createdTs: body.createdTs ?? dayjs().toISOString(),
+            status: body.status ?? ItemStatus.inbox,
             title: body.title,
             user: user.id,
         });
@@ -38,7 +39,7 @@ export const itemsRoutes = new Hono<{ Variables: AuthVariables }>()
         const list = await itemsDAO.findArray(
             {
                 user: user.id,
-                ...(status && { status: { $in: status.split(',') as ItemInterface['status'][] } }),
+                ...(status && { status: { $in: status.split(',') as ItemStatus[] } }),
             },
             {
                 ...(sortObj && { sort: sortObj }),

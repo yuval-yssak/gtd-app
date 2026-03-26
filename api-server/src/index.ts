@@ -10,8 +10,7 @@ const app = new Hono()
     .use(
         cors({
             // Allow all origins in dev; restrict to clientUrl in production
-            // biome-ignore lint/complexity/useLiteralKeys: TS noPropertyAccessFromIndexSignature requires bracket notation here
-            origin: (origin) => (process.env['NODE_ENV'] !== 'production' ? origin : origin === clientUrl ? origin : null),
+            origin: (origin) => (process.env.NODE_ENV !== 'production' ? origin : origin === clientUrl ? origin : null),
             credentials: true, // required so browsers send cookies cross-origin
             allowHeaders: ['Content-Type'],
             allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -26,8 +25,7 @@ export type AppType = typeof app;
 
 async function start() {
     await loadDataAccess();
-    // biome-ignore lint/complexity/useLiteralKeys: TS noPropertyAccessFromIndexSignature requires bracket notation here
-    const port = Number(process.env['PORT'] ?? 4000);
+    const port = Number(process.env.PORT ?? 4000);
     serve({ fetch: app.fetch, port }, () => console.log(`Listening on port ${port}`));
 }
 

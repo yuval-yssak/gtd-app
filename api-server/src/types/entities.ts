@@ -1,9 +1,20 @@
+export const ItemStatus = {
+    inbox: 'inbox',
+    nextAction: 'nextAction',
+    calendar: 'calendar',
+    waitingFor: 'waitingFor',
+    done: 'done',
+    trash: 'trash',
+} as const;
+export type ItemStatus = (typeof ItemStatus)[keyof typeof ItemStatus];
+
 export interface ItemInterface {
-    // Client-generated UUID used as the MongoDB _id. Optional so MongoDB accepts documents
-    // created without one (e.g. in tests), but always present in practice.
+    /**
+     * Client-generated UUID used as the MongoDB _id. Optional so MongoDB accepts documents created without one (e.g. in tests) but always present in practice.
+     */
     _id?: string;
     user: string; // Better Auth user ID (UUID string, not ObjectId)
-    status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'done' | 'trash';
+    status: ItemStatus;
     title: string;
     createdTs: string;
     /**
