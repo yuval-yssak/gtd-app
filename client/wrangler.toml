@@ -2,5 +2,8 @@ name = "getting-things-done"
 compatibility_date = "2025-01-01"
 pages_build_output_dir = "dist"
 
-# VITE_API_SERVER must be set in the Cloudflare Pages dashboard
-# under Settings > Environment Variables (build-time variable)
+# Build-time env vars — Vite replaces VITE_* at build time via import.meta.env.
+# When wrangler.toml is present, Cloudflare Pages ignores dashboard plain-text
+# variables, so these must be declared here instead.
+[vars]
+VITE_API_SERVER = "https://api.getting-things-done.app"
