@@ -19,7 +19,7 @@ export const Route = createFileRoute('/login')({
 function LoginPage() {
     useEffect(() => {
         const previousTitle = document.title;
-        document.title = 'Login - Getting Things Done';
+        document.title = 'Login Page - Getting Things Done';
         return () => {
             document.title = previousTitle;
         };
