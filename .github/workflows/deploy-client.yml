@@ -2,17 +2,27 @@ name: Deploy Client
 
 on:
     push:
-        branches: [production]
+        branches: [staging, production]
         paths: ['client/**']
     workflow_dispatch:
+        inputs:
+            environment:
+                description: Target environment
+                required: true
+                default: production
+                type: choice
+                options: [production, staging]
 
 jobs:
     deploy:
         runs-on: ubuntu-latest
-        environment: production
+        environment: ${{ inputs.environment || github.ref_name }}
         defaults:
             run:
                 working-directory: client
+
+        env:
+            TARGET_ENV: ${{ inputs.environment || github.ref_name }}
 
         steps:
             - uses: actions/checkout@v6
@@ -23,12 +33,12 @@ jobs:
 
             - run: npm install
 
-            - run: npm run build
+            - run: VITE_API_SERVER=${{ secrets.VITE_API_SERVER }} npm run build
 
             - name: Deploy to Cloudflare Pages
               uses: cloudflare/wrangler-action@v3
               with:
                   apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
                   accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-                  command: pages deploy dist --project-name=gtd-app --branch=production
+                  command: pages deploy dist --project-name=gtd-app --branch=${{ env.TARGET_ENV }}
                   workingDirectory: client
