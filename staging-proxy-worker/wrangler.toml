@@ -1,0 +1,7 @@
+name = "staging-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+routes = [
+    { pattern = "staging.getting-things-done.app/*", zone_name = "getting-things-done.app" }
+]
