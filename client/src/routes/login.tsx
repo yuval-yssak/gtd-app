@@ -3,7 +3,6 @@ import Button from '@mui/material/Button';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { useEffect } from 'react';
 import { authClient } from '../lib/authClient';
 
 export const Route = createFileRoute('/login')({
@@ -17,14 +16,6 @@ export const Route = createFileRoute('/login')({
 });
 
 function LoginPage() {
-    useEffect(() => {
-        const previousTitle = document.title;
-        document.title = 'Login Page - Getting Things Done';
-        return () => {
-            document.title = previousTitle;
-        };
-    }, []);
-
     function signInWithGoogle() {
         // void: signIn.social() redirects the browser; we intentionally discard the promise
         void authClient.signIn.social({
