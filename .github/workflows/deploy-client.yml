@@ -33,7 +33,7 @@ jobs:
 
             - run: npm install
 
-            - run: VITE_API_SERVER=${{ secrets.VITE_API_SERVER }} npm run build
+            - run: VITE_API_SERVER=${{ vars.VITE_API_SERVER }} npm run build
 
             - name: Deploy to Cloudflare Pages
               uses: cloudflare/wrangler-action@v3

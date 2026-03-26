@@ -116,10 +116,10 @@ on:
       - main
 
 env:
-  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
   REGION: us-central1
   SERVICE: gtd-api
-  IMAGE: us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/gtd-repo/api-server
+  IMAGE: us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/gtd-repo/api-server
 
 jobs:
   deploy:
@@ -149,7 +149,7 @@ jobs:
             --region=$REGION \
             --platform=managed \
             --allow-unauthenticated \
-            --set-env-vars="NODE_ENV=production,MONGO_DB_NAME=${{ secrets.MONGO_DB_NAME }},MONGO_DB_URL=${{ secrets.MONGO_DB_URL }},GOOGLE_OAUTH_APP_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_APP_CLIENT_ID }},GOOGLE_OAUTH_APP_CLIENT_SECRET=${{ secrets.GOOGLE_OAUTH_APP_CLIENT_SECRET }},GOOGLE_REDIRECT_URI=https://gtd-api-HASH-uc.a.run.app/auth/google/callback,JWT_SECRET=${{ secrets.JWT_SECRET }}"
+            --set-env-vars="NODE_ENV=production,MONGO_DB_NAME=${{ vars.MONGO_DB_NAME }},MONGO_DB_URL=${{ secrets.MONGO_DB_URL }},GOOGLE_OAUTH_APP_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_APP_CLIENT_ID }},GOOGLE_OAUTH_APP_CLIENT_SECRET=${{ secrets.GOOGLE_OAUTH_APP_CLIENT_SECRET }},GOOGLE_REDIRECT_URI=https://gtd-api-HASH-uc.a.run.app/auth/google/callback,JWT_SECRET=${{ secrets.JWT_SECRET }}"
 ```
 
 ---
