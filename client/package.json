@@ -10,7 +10,10 @@
         "lint:fix": "biome check . --write",
         "lint:fix:unsafe": "biome check --write --unsafe",
         "typecheck": "tsc -b --noEmit",
-        "preview": "vite preview"
+        "preview": "vite preview",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@emotion/react": "^11.14.0",
@@ -31,10 +34,13 @@
         "@types/react": "^19.2.14",
         "@types/react-dom": "^19.2.3",
         "@vitejs/plugin-react": "^6.0.1",
+        "@vitest/coverage-v8": "^4.1.2",
         "concurrently": "^9.2.1",
+        "fake-indexeddb": "^6.2.5",
         "typescript": "~5.9.3",
         "vite": "^8.0.1",
         "vite-plugin-pwa": "^1.2.0",
+        "vitest": "^4.1.2",
         "workbox-core": "^7.4.0",
         "workbox-precaching": "^7.4.0",
         "wrangler": "^4.0.0"
