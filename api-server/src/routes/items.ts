@@ -15,9 +15,11 @@ export const itemsRoutes = new Hono<{ Variables: AuthVariables }>()
         const { user } = c.get('session');
 
         // _id is client-generated UUID so the same item can be created idempotently during sync replay
+        const now = dayjs().toISOString();
         await itemsDAO.insertOne({
             _id: body._id,
-            createdTs: body.createdTs ?? dayjs().toISOString(),
+            createdTs: body.createdTs ?? now,
+            updatedTs: now, // server sets updatedTs on creation; PUT requests supply their own
             status: body.status ?? ItemStatus.inbox,
             title: body.title,
             user: user.id,

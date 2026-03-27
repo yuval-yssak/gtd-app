@@ -9,6 +9,11 @@ export default defineConfig({
         TanStackRouterVite({ routesDirectory: './src/routes' }),
         react(),
         VitePWA({
+            // injectManifest lets us write a custom SW (src/sw.ts) while still having
+            // Workbox inject the hashed precache manifest at build time
+            strategies: 'injectManifest',
+            srcDir: 'src',
+            filename: 'sw.ts',
             registerType: 'autoUpdate',
             manifest: {
                 name: 'Getting Things Done',
@@ -20,7 +25,6 @@ export default defineConfig({
                 icons: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }],
             },
             workbox: {
-                // Cache all build output so the app shell loads offline
                 globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
             },
         }),
@@ -30,8 +34,20 @@ export default defineConfig({
             // Proxy /auth/* to the API server in dev so OAuth cookies are same-origin.
             // Exclude /auth/callback exactly — that's a client-side TanStack Router route.
             '^/auth/(?!callback($|\\?|#))': { target: 'http://localhost:4000', changeOrigin: true },
-            // Proxy /items so fetch('/items') works in dev without CORS or port issues
             '/items': { target: 'http://localhost:4000', changeOrigin: true },
+            '/sync': { target: 'http://localhost:4000', changeOrigin: true },
+            '/push': { target: 'http://localhost:4000', changeOrigin: true },
+            // /events is under /sync — already covered by the /sync proxy above
+        },
+    },
+    preview: {
+        // `npm run dev` uses `vite preview` (not `vite dev`), so proxy rules must be
+        // duplicated here — the `server` block above only applies to `vite dev`.
+        proxy: {
+            '^/auth/(?!callback($|\\?|#))': { target: 'http://localhost:4000', changeOrigin: true },
+            '/items': { target: 'http://localhost:4000', changeOrigin: true },
+            '/sync': { target: 'http://localhost:4000', changeOrigin: true },
+            '/push': { target: 'http://localhost:4000', changeOrigin: true },
         },
     },
 });

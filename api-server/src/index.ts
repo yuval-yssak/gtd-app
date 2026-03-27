@@ -5,6 +5,8 @@ import { cors } from 'hono/cors';
 import { clientUrl } from './config.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { itemsRoutes } from './routes/items.js';
+import { pushRoutes } from './routes/push.js';
+import { syncRoutes } from './routes/sync.js';
 
 const app = new Hono()
     .use(
@@ -18,7 +20,9 @@ const app = new Hono()
     )
     // auth is a live ESM binding — assigned in loadDataAccess() before serve() is called, so it's safe to reference lazily here
     .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
-    .route('/items', itemsRoutes);
+    .route('/items', itemsRoutes)
+    .route('/sync', syncRoutes)
+    .route('/push', pushRoutes);
 
 // Exported for Hono RPC — client imports this type to get a fully-typed fetch client
 export type AppType = typeof app;
