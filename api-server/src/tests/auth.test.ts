@@ -2,143 +2,10 @@
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
+import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 // Build the test app the same way as index.ts — auth is a live ESM binding, safe after loadDataAccess()
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw));
-
-// ─── Cookie helpers ────────────────────────────────────────────────────────────
-
-function getCookieValue(response: Response, name: string): string | undefined {
-    for (const header of response.headers.getSetCookie()) {
-        const [pair] = header.split(';');
-        const [key, value] = pair?.split('=') ?? [];
-        if (key?.trim() === name) return value?.trim();
-    }
-    return undefined;
-}
-
-/** Collect all Set-Cookie pairs as a single Cookie header string for use in follow-up requests. */
-function collectCookies(response: Response): string {
-    return response.headers
-        .getSetCookie()
-        .map((h) => h.split(';')[0])
-        .join('; ');
-}
-
-// No __Secure- prefix in dev (useSecureCookies is false when NODE_ENV !== 'production')
-const SESSION_COOKIE = 'better-auth.session_token';
-
-// ─── OAuth mock data ───────────────────────────────────────────────────────────
-
-/**
- * Build a structurally valid but unsigned JWT (jose's decodeJwt validates format,
- * not the signature). Better Auth's Google provider calls decodeJwt(id_token) at
- * callback time, so the id_token must be a real three-part base64url string.
- */
-function makeFakeIdToken(claims: Record<string, unknown>): string {
-    const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-    const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
-    return `${header}.${payload}.fake-sig`;
-}
-
-const GOOGLE_PROFILE = {
-    id: 'g1',
-    email: 'alice@example.com',
-    verified_email: true,
-    name: 'Alice Smith',
-    given_name: 'Alice',
-    family_name: 'Smith',
-    picture: 'https://pic.test/alice',
-};
-
-const GOOGLE_TOKEN = {
-    access_token: 'goog-at',
-    expires_in: 3600,
-    refresh_token: 'goog-rt',
-    scope: 'openid email profile',
-    token_type: 'Bearer',
-    id_token: makeFakeIdToken({
-        sub: 'g1',
-        email: 'alice@example.com',
-        email_verified: true,
-        name: 'Alice Smith',
-        picture: 'https://pic.test/alice',
-        iat: 1700000000,
-        exp: 9999999999,
-    }),
-};
-
-const GITHUB_PROFILE = {
-    id: 100,
-    login: 'alice-gh',
-    name: 'Alice GitHub',
-    email: 'alice-gh@example.com',
-    avatar_url: 'https://avatars.test/alice',
-};
-
-const GITHUB_TOKEN = { access_token: 'gh-at', scope: 'user:email', token_type: 'bearer' };
-
-function mockGoogleOAuth({ token = GOOGLE_TOKEN, profile = GOOGLE_PROFILE } = {}) {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-        const requestUrl = input.toString();
-        if (requestUrl.startsWith('https://oauth2.googleapis.com/token')) return Response.json(token);
-        // Better Auth fetches Google userinfo from openidconnect endpoint
-        if (requestUrl.startsWith('https://openidconnect.googleapis.com/v1/userinfo')) return Response.json(profile);
-        if (requestUrl.startsWith('https://www.googleapis.com/oauth2/v3/userinfo')) return Response.json(profile);
-        throw new Error(`Unexpected fetch to ${requestUrl}`);
-    });
-}
-
-function mockGitHubOAuth({ token = GITHUB_TOKEN, profile = GITHUB_PROFILE } = {}) {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-        const requestUrl = input.toString();
-        if (requestUrl.startsWith('https://github.com/login/oauth/access_token')) return Response.json(token);
-        if (requestUrl.startsWith('https://api.github.com/user/emails')) return Response.json([]);
-        if (requestUrl.startsWith('https://api.github.com/user')) return Response.json(profile);
-        throw new Error(`Unexpected fetch to ${requestUrl}`);
-    });
-}
-
-// ─── Login helper ──────────────────────────────────────────────────────────────
-
-/**
- * Full OAuth round-trip:
- *   1. POST /auth/sign-in/social → Better Auth returns JSON { url } + sets state cookies
- *   2. Extract state from the provider redirect URL in the response body
- *   3. Mock provider fetch calls
- *   4. GET /auth/callback/{provider}?code=...&state=... (carrying state cookies) → session cookie
- *
- * Better Auth stores OAuth state in a signed cookie + DB verification record, so the state
- * cookies from step 1 must be forwarded in step 4 or the callback will reject the state.
- */
-async function oauthLogin(provider: 'google' | 'github', profileOverrides: Record<string, unknown> = {}) {
-    const signInRes = await app.fetch(
-        new Request('http://localhost:4000/auth/sign-in/social', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, callbackURL: 'http://localhost:4173' }),
-        }),
-    );
-    expect(signInRes.status).toBe(200);
-
-    const { url } = (await signInRes.json()) as { url: string };
-    const state = new URL(url).searchParams.get('state')!;
-    const stateCookies = collectCookies(signInRes);
-
-    if (provider === 'google') {
-        mockGoogleOAuth({ profile: { ...GOOGLE_PROFILE, ...profileOverrides } });
-    } else {
-        mockGitHubOAuth({ profile: { ...GITHUB_PROFILE, ...profileOverrides } });
-    }
-
-    const callbackRes = await app.fetch(
-        new Request(`http://localhost:4000/auth/callback/${provider}?code=test-code&state=${state}`, {
-            headers: { Cookie: stateCookies },
-        }),
-    );
-
-    return { res: callbackRes, sessionCookie: getCookieValue(callbackRes, SESSION_COOKIE) };
-}
 
 // ─── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -197,7 +64,7 @@ describe('POST /auth/sign-in/social — initiate', () => {
 
 describe('OAuth callback — new user', () => {
     it('Google: creates user + account docs, sets session cookie, redirects to client', async () => {
-        const { res, sessionCookie } = await oauthLogin('google');
+        const { res, sessionCookie } = await oauthLogin(app, 'google');
 
         expect(res.status).toBe(302);
         expect(res.headers.get('location')).toBe('http://localhost:4173');
@@ -210,7 +77,7 @@ describe('OAuth callback — new user', () => {
     });
 
     it('GitHub: creates user + account docs, sets session cookie', async () => {
-        const { res, sessionCookie } = await oauthLogin('github');
+        const { res, sessionCookie } = await oauthLogin(app, 'github');
 
         expect(res.status).toBe(302);
         expect(sessionCookie).toBeTruthy();
@@ -221,9 +88,9 @@ describe('OAuth callback — new user', () => {
 
 describe('OAuth callback — existing user', () => {
     it('does not duplicate user on second Google login; same userId in both sessions', async () => {
-        const { sessionCookie: cookie1 } = await oauthLogin('google');
+        const { sessionCookie: cookie1 } = await oauthLogin(app, 'google');
         vi.restoreAllMocks();
-        const { sessionCookie: cookie2 } = await oauthLogin('google');
+        const { sessionCookie: cookie2 } = await oauthLogin(app, 'google');
 
         const s1 = await app.fetch(new Request('http://localhost:4000/auth/get-session', { headers: { Cookie: `${SESSION_COOKIE}=${cookie1}` } }));
         const s2 = await app.fetch(new Request('http://localhost:4000/auth/get-session', { headers: { Cookie: `${SESSION_COOKIE}=${cookie2}` } }));
@@ -238,9 +105,9 @@ describe('OAuth callback — existing user', () => {
 
 describe('Account linking', () => {
     it('GitHub login with same email as Google user → same userId, two account docs', async () => {
-        const { sessionCookie: googleCookie } = await oauthLogin('google');
+        const { sessionCookie: googleCookie } = await oauthLogin(app, 'google');
         vi.restoreAllMocks();
-        const { sessionCookie: githubCookie } = await oauthLogin('github', { email: 'alice@example.com' });
+        const { sessionCookie: githubCookie } = await oauthLogin(app, 'github', { email: 'alice@example.com' });
 
         const s1 = await app.fetch(new Request('http://localhost:4000/auth/get-session', { headers: { Cookie: `${SESSION_COOKIE}=${googleCookie}` } }));
         const s2 = await app.fetch(new Request('http://localhost:4000/auth/get-session', { headers: { Cookie: `${SESSION_COOKIE}=${githubCookie}` } }));
@@ -255,9 +122,9 @@ describe('Account linking', () => {
     });
 
     it('GitHub login with different email → two separate user docs', async () => {
-        await oauthLogin('google');
+        await oauthLogin(app, 'google');
         vi.restoreAllMocks();
-        await oauthLogin('github', { email: 'bob@example.com', login: 'bob-gh' });
+        await oauthLogin(app, 'github', { email: 'bob@example.com', login: 'bob-gh' });
 
         expect(await db.collection('user').countDocuments()).toBe(2);
     });
@@ -265,7 +132,7 @@ describe('Account linking', () => {
 
 describe('GET /auth/get-session', () => {
     it('returns user object when session cookie is valid', async () => {
-        const { sessionCookie } = await oauthLogin('google');
+        const { sessionCookie } = await oauthLogin(app, 'google');
         vi.restoreAllMocks();
 
         const res = await app.fetch(new Request('http://localhost:4000/auth/get-session', { headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` } }));
@@ -283,7 +150,7 @@ describe('GET /auth/get-session', () => {
 
 describe('POST /auth/sign-out', () => {
     it('clears session cookie and removes session from DB', async () => {
-        const { sessionCookie } = await oauthLogin('google');
+        const { sessionCookie } = await oauthLogin(app, 'google');
         vi.restoreAllMocks();
 
         expect(await db.collection('session').countDocuments()).toBe(1);

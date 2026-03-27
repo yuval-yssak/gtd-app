@@ -5,6 +5,7 @@
             "**",
             "!build",
             "!**/dist",
+            "!**/coverage",
             "!**/src/routeTree.gen.ts" // exclude generated route tree file (See https://tanstack.com/router/latest)
         ]
     },
