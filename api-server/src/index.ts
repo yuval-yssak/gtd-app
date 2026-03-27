@@ -27,6 +27,13 @@ export type AppType = typeof app;
 
 async function start() {
     await loadDataAccess();
+
+    // Dynamic import so the module (and its production guard) is never evaluated in production.
+    if (process.env.NODE_ENV !== 'production') {
+        const { devLoginRoutes } = await import('./routes/devLogin.js');
+        app.route('/dev', devLoginRoutes);
+    }
+
     const port = Number(process.env.PORT ?? 4000);
     serve({ fetch: app.fetch, port }, () => console.log(`Listening on port ${port}`));
 }
