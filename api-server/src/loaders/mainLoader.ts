@@ -4,7 +4,10 @@ import { mongoDBConfig } from '../config.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
+import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
+import routinesDAO from '../dataAccess/routinesDAO.js';
+import workContextsDAO from '../dataAccess/workContextsDAO.js';
 
 // Assigned in loadDataAccess(); kept as let so closeDataAccess() can close it
 let dbClient: MongoClient;
@@ -33,6 +36,9 @@ async function loadDataAccess(customDBName?: string) {
         operationsDAO.init(dbClient, resolvedDBName),
         deviceSyncStateDAO.init(dbClient, resolvedDBName),
         pushSubscriptionsDAO.init(dbClient, resolvedDBName),
+        routinesDAO.init(dbClient, resolvedDBName),
+        peopleDAO.init(dbClient, resolvedDBName),
+        workContextsDAO.init(dbClient, resolvedDBName),
     ]);
     auth = createAuth(db);
 }
