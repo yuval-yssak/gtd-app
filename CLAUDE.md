@@ -197,7 +197,7 @@ cd client && npm run dev
 ### How to Deploy
 
 - **Push-triggered**: push to the `staging` or `production` branch when `api-server/**` changes → auto-runs `.github/workflows/deploy-api.yml`
-- **Manual**: `./deploy.sh api staging|production` — triggers the same workflow via `gh workflow run`
+- **Manual**: `./scripts/deploy.sh api staging|production` — triggers the same workflow via `gh workflow run`
 - Track progress: https://github.com/yuval-yssak/gtd-app/actions/workflows/deploy-api.yml
 
 ### GitHub Environments
@@ -207,7 +207,7 @@ Configured at https://github.com/yuval-yssak/gtd-app/settings/environments — t
 ### Infrastructure
 
 - **Backend**: Google Cloud Run — `gtd-api` (production) and `gtd-api-staging` (staging), region `us-central1`
-- **API proxy**: Cloudflare Worker (`api-proxy-worker/`) routes `api.getting-things-done.app` and `api-staging.getting-things-done.app` to the respective Cloud Run service
+- **API proxy**: Cloudflare Worker (`workers/api-proxy/`) routes `api.getting-things-done.app` and `api-staging.getting-things-done.app` to the respective Cloud Run service
 - **Docker images**: built from `api-server/Dockerfile` and pushed to Google Artifact Registry
 
 ### Service Worker (PWA)
