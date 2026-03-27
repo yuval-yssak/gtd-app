@@ -8,7 +8,9 @@ import { AccountSwitcher } from '../components/AccountSwitcher';
 import { StatusBar } from '../components/StatusBar';
 import { getActiveAccount } from '../db/accountHelpers';
 import { getItemsByUser } from '../db/itemHelpers';
-import { flushSyncQueue, seedItemsFromServer } from '../db/syncHelpers';
+import { registerPushSubscription } from '../db/pushSubscription';
+import { closeSseConnection, openSseConnection } from '../db/sseClient';
+import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
 
 export const Route = createFileRoute('/_authenticated')({
@@ -52,47 +54,56 @@ function AuthenticatedLayout() {
     useEffect(() => {
         let cancelled = false;
 
-        async function loadItems() {
+        async function syncAndRefresh() {
             const account = await getActiveAccount(db);
-            if (!account || cancelled) {
-                return;
-            }
+            if (!account || cancelled) return;
 
-            // Show cached items immediately so the UI is useful offline
-            const local = await getItemsByUser(db, account.id);
-            if (!cancelled) setItems(local);
-
-            if (navigator.onLine) {
-                await seedItemsFromServer(db, account.id);
-                if (cancelled) {
-                    return;
-                }
-                const refreshed = await getItemsByUser(db, account.id);
-                if (!cancelled) setItems(refreshed);
-            }
-        }
-
-        async function handleOnline() {
-            const account = await getActiveAccount(db);
-            if (!account || cancelled) {
-                return;
-            }
-            // Flush queued mutations first so the seed reflects our offline changes
             await flushSyncQueue(db);
-            await seedItemsFromServer(db, account.id);
-            if (cancelled) {
-                return;
-            }
+            await pullFromServer(db);
+            if (cancelled) return;
+
             const refreshed = await getItemsByUser(db, account.id);
             if (!cancelled) setItems(refreshed);
         }
 
+        async function loadItems() {
+            const account = await getActiveAccount(db);
+            if (!account || cancelled) return;
+
+            // Show cached items immediately — works offline with no network round-trip
+            const local = await getItemsByUser(db, account.id);
+            if (!cancelled) setItems(local);
+
+            if (!navigator.onLine) return;
+
+            await syncAndRefresh();
+
+            // Open SSE so this tab receives real-time pushes from other devices
+            openSseConnection(() => { syncAndRefresh().catch(() => {}); });
+
+            // Register Web Push subscription so the SW can pull while the app is closed
+            registerPushSubscription(db).catch(() => {});
+        }
+
+        async function handleOnline() {
+            if (cancelled) return;
+            await syncAndRefresh();
+            openSseConnection(() => { syncAndRefresh().catch(() => {}); });
+        }
+
+        function handleOffline() {
+            // Close the SSE connection; it will be re-opened when online fires
+            closeSseConnection();
+        }
+
         loadItems();
         window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
         return () => {
-            // cancelled prevents stale async callbacks from calling setItems after unmount
             cancelled = true;
             window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+            closeSseConnection();
         };
     }, [db, setItems]);
 

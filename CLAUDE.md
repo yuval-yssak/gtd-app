@@ -8,23 +8,36 @@ Full-stack GTD (Getting Things Done) productivity app — monorepo with:
 - `api-server/` — Node.js/Hono/TypeScript backend on port 4000
 - `client/` — React/TypeScript/Vite frontend on port 4173
 
+Full data model reference: [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md)
+
+### GTD Workflow Phases
+
+| Phase | Description |
+|---|---|
+| **Collect** | Capture anything into the inbox without judgement |
+| **Clarify** | Process each inbox item: trash it, complete it, schedule it, delegate it, or turn it into a `nextAction` with metadata |
+| **Review** | Scan all buckets regularly (quick daily scan + deep weekly review) |
+| **Do** | Filter `nextAction` items by available energy, time, and work context |
+
 ## Commands
 
 ### API Server (`cd api-server`)
 ```bash
-npm run dev          # Start dev server with ts-node-dev (hot reload)
+npm run dev          # Start dev server with tsx watch (hot reload)
 npm run build        # Compile TypeScript to build/
 npm run test         # Run Vitest tests
-npm run check        # Biome lint check
-npm run fix          # Auto-fix lint + format (Biome)
+npm run lint         # Biome lint check
+npm run lint:fix     # Auto-fix lint + format (Biome)
+npm run typecheck    # tsc --noEmit
 ```
 
 ### Client (`cd client`)
 ```bash
 npm run dev          # Vite dev server
 npm run build        # tsc + vite build
-npm run check        # Biome lint check
-npm run fix          # Auto-fix lint + format (Biome)
+npm run lint         # Biome lint check
+npm run lint:fix     # Auto-fix lint + format (Biome)
+npm run typecheck    # tsc -b --noEmit
 npm run preview      # Preview production build
 ```
 
@@ -43,8 +56,47 @@ Uses `@tanstack/react-router` with file-based routing under `client/src/routes/`
 `abstractDAO.ts` wraps MongoDB — `ItemsDAO` extends it and is initialized in `loaders/mainLoader.ts` as a singleton. Better Auth owns the `user` collection; `UsersDAO` no longer exists.
 
 ### Key Types
-- **Item** (`GTD task`): categories are `inbox | nextAction | calendar | waitingFor | done | trash`, with optional GTD fields like `workContexts`, `energy`, `time`, `focus`, `urgent`
-- **IndexedDB schema**: `MyDB` type in `client/src/types/MyDB.ts`
+
+All server-side interfaces live in `api-server/src/types/entities.ts`. Client-side mirrors (prefixed `Stored*`) live in `client/src/types/MyDB.ts`.
+
+| Entity | Collection | Purpose |
+|---|---|---|
+| `ItemInterface` | `items` | Core GTD task. Status drives which optional fields apply. |
+| `RoutineInterface` | `routines` | Recurring task template. Generates `nextAction` items on a schedule. |
+| `PersonInterface` | `people` | Named contact. Referenced by `peopleIds` and `waitingForPersonId` on items. |
+| `WorkContextInterface` | `workContexts` | Condition tag (e.g. "near a phone"). Referenced by `workContextIds` on items. |
+| `OperationInterface` | `operations` | Server-side sync log entry. Stores full entity snapshot per change. |
+| `DeviceSyncStateInterface` | `deviceSyncState` | Per-device sync cursor. Drives operation log purging. |
+| `CalendarIntegrationInterface` | `calendarIntegrations` | OAuth credentials + calendar ID for Google Calendar sync. |
+
+**Item status → relevant fields:**
+- `inbox` — title only
+- `nextAction` — `workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`
+- `calendar` — `timeStart`, `timeEnd`, `calendarEventId`, `calendarIntegrationId`
+- `waitingFor` — `waitingForPersonId`, `peopleIds`, `expectedBy`, `ignoreBefore`
+- `done` / `trash` — no additional fields
+
+**Tickler pattern:** `ignoreBefore` (ISO date) on a `nextAction` or `waitingFor` item hides it from all lists until that date. Separate from calendar `timeStart` to avoid semantic overloading.
+
+### Sync Architecture
+
+All mutations are recorded as `OperationInterface` documents on the server. Each operation stores the **full entity snapshot** at the time of the change (not a diff), making last-write-wins conflict resolution trivial: the operation with the latest `ts` wins.
+
+Client-side flow:
+1. Change written to IndexedDB → `SyncOperation` queued with `entityType`, `entityId`, `opType`, and snapshot
+2. On reconnect → `flushSyncQueue()` replays ops to the server in `queuedAt` order
+3. Device pulls new ops from server since its `lastSyncedTs` and applies them locally
+
+**Purge rule:** operations older than `min(lastSyncedTs)` across all of a user's devices are safe to delete.
+
+All entities carry `updatedTs` (ISO datetime) as the conflict-resolution anchor. Client IDs are stable UUIDs generated on first launch (`deviceId` in `DeviceSyncStateInterface`).
+
+### Calendar Integration
+
+`CalendarIntegrationInterface` holds OAuth credentials (encrypted at rest) and a target `calendarId` for a Google Calendar account.
+
+- **Items:** a `calendar` item linked to Google Calendar carries `calendarEventId` + `calendarIntegrationId`. Changes sync bidirectionally.
+- **Routines:** a `fixedSchedule` routine can own or attach to a Google Calendar recurring event series via `calendarEventId`. The app can either create a new series or import an existing one.
 
 ### Backend Entry Points
 - `api-server/src/index.ts` — builds Hono app, starts server, loads DB and auth

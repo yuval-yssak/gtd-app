@@ -1,7 +1,10 @@
 import { type Db, MongoClient } from 'mongodb';
 import { type Auth, createAuth } from '../auth/betterAuth.js';
 import { mongoDBConfig } from '../config.js';
+import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import operationsDAO from '../dataAccess/operationsDAO.js';
+import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 
 // Assigned in loadDataAccess(); kept as let so closeDataAccess() can close it
 let dbClient: MongoClient;
@@ -25,7 +28,12 @@ async function loadDataAccess(customDBName?: string) {
 
     dbClient = await mongoConnect();
     db = dbClient.db(resolvedDBName);
-    await itemsDAO.init(dbClient, resolvedDBName);
+    await Promise.all([
+        itemsDAO.init(dbClient, resolvedDBName),
+        operationsDAO.init(dbClient, resolvedDBName),
+        deviceSyncStateDAO.init(dbClient, resolvedDBName),
+        pushSubscriptionsDAO.init(dbClient, resolvedDBName),
+    ]);
     auth = createAuth(db);
 }
 
