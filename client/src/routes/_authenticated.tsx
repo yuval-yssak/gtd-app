@@ -10,7 +10,7 @@ import { getActiveAccount } from '../db/accountHelpers';
 import { getItemsByUser } from '../db/itemHelpers';
 import { registerPushSubscription } from '../db/pushSubscription';
 import { closeSseConnection, openSseConnection } from '../db/sseClient';
-import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
+import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
 
 export const Route = createFileRoute('/_authenticated')({
@@ -59,7 +59,16 @@ function AuthenticatedLayout() {
             if (!account || cancelled) return;
 
             await flushSyncQueue(db);
-            await pullFromServer(db);
+
+            // Bootstrap instead of pull when the device has never synced — historical ops may
+            // have been purged before this device registered, so pull-from-epoch would miss data.
+            const syncState = await db.get('deviceSyncState', 'local');
+            if (!syncState) {
+                await bootstrapFromServer(db);
+            } else {
+                await pullFromServer(db);
+            }
+
             if (cancelled) return;
 
             const refreshed = await getItemsByUser(db, account.id);
@@ -79,7 +88,9 @@ function AuthenticatedLayout() {
             await syncAndRefresh();
 
             // Open SSE so this tab receives real-time pushes from other devices
-            openSseConnection(() => { syncAndRefresh().catch(() => {}); });
+            openSseConnection(() => {
+                syncAndRefresh().catch(() => {});
+            });
 
             // Register Web Push subscription so the SW can pull while the app is closed
             registerPushSubscription(db).catch(() => {});
@@ -88,7 +99,9 @@ function AuthenticatedLayout() {
         async function handleOnline() {
             if (cancelled) return;
             await syncAndRefresh();
-            openSseConnection(() => { syncAndRefresh().catch(() => {}); });
+            openSseConnection(() => {
+                syncAndRefresh().catch(() => {});
+            });
         }
 
         function handleOffline() {

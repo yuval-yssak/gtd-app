@@ -1,8 +1,11 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import type { EntityType, MyDB, OpType, StoredEntity, StoredItem } from '../types/MyDB';
-import { getOrCreateDeviceId, getLastSyncedTs, setLastSyncedTs } from './deviceId';
-import { deleteItemById } from './itemHelpers';
+import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
+import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
+import { deletePersonById, putPerson } from './personHelpers';
+import { deleteRoutineById, putRoutine } from './routineHelpers';
+import { deleteWorkContextById, putWorkContext } from './workContextHelpers';
 
 // Shape returned by GET /sync/pull — snapshot uses `user` (server field name)
 interface ServerOp {
@@ -10,6 +13,19 @@ interface ServerOp {
     entityId: string;
     opType: OpType;
     snapshot: (Record<string, unknown> & { user?: string }) | null;
+}
+
+interface BootstrapPayload {
+    items: (Record<string, unknown> & { user: string })[];
+    routines: (Record<string, unknown> & { user: string })[];
+    people: (Record<string, unknown> & { user: string })[];
+    workContexts: (Record<string, unknown> & { user: string })[];
+    serverTs: string;
+}
+
+function remapUser<T extends Record<string, unknown>>(doc: T & { user: string }): Omit<T, 'user'> & { userId: string } {
+    const { user, ...rest } = doc;
+    return { ...rest, userId: user } as Omit<T, 'user'> & { userId: string };
 }
 
 export async function queueSyncOp(
@@ -53,7 +69,9 @@ export async function queueSyncOp(
         // Background Sync API isn't in the standard TS DOM lib — cast through unknown
         navigator.serviceWorker.ready
             .then((reg) => (reg as unknown as { sync: { register(tag: string): Promise<void> } }).sync.register('gtd-sync-queue'))
-            .catch(() => { /* registration failure is non-fatal — online flush will still run */ });
+            .catch(() => {
+                /* registration failure is non-fatal — online flush will still run */
+            });
     }
 }
 
@@ -76,6 +94,39 @@ export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
     }
 }
 
+// bootstrapFromServer performs a full entity snapshot hydration for new devices.
+// New devices cannot rely on /sync/pull because historical operations may have been purged
+// before the device registered. Bootstrap reads from entity collections (permanent ground truth)
+// and sets lastSyncedTs = serverTs so the device starts incremental pull from now, not epoch.
+export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
+    const deviceId = await getOrCreateDeviceId(db);
+
+    const res = await fetch('/sync/bootstrap', { credentials: 'include' });
+    if (!res.ok) throw new Error(`GET /sync/bootstrap ${res.status}`);
+
+    const { items, routines, people, workContexts, serverTs } = (await res.json()) as BootstrapPayload;
+
+    const mappedItems = items.map((doc) => remapUser(doc) as unknown as StoredItem);
+    const mappedRoutines = routines.map((doc) => remapUser(doc) as unknown as StoredRoutine);
+    const mappedPeople = people.map((doc) => remapUser(doc) as unknown as StoredPerson);
+    const mappedWorkContexts = workContexts.map((doc) => remapUser(doc) as unknown as StoredWorkContext);
+
+    await bulkPutItems(db, mappedItems);
+
+    const routinesTx = db.transaction('routines', 'readwrite');
+    await Promise.all([...mappedRoutines.map((r) => routinesTx.store.put(r)), routinesTx.done]);
+
+    const peopleTx = db.transaction('people', 'readwrite');
+    await Promise.all([...mappedPeople.map((p) => peopleTx.store.put(p)), peopleTx.done]);
+
+    const workContextsTx = db.transaction('workContexts', 'readwrite');
+    await Promise.all([...mappedWorkContexts.map((wc) => workContextsTx.store.put(wc)), workContextsTx.done]);
+
+    // Register device cursor at serverTs — skips replaying all historical ops since bootstrap
+    // already gives us the current snapshot; incremental pull takes over from here.
+    await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: serverTs });
+}
+
 export async function pullFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
     const deviceId = await getOrCreateDeviceId(db);
     const since = await getLastSyncedTs(db);
@@ -95,22 +146,66 @@ export async function pullFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
 }
 
 async function applyServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
-    // Only items are synced today; other entity types will be wired up as their routes ship
-    if (op.entityType !== 'item') return;
+    switch (op.entityType) {
+        case 'item':
+            return applyItemServerOp(db, op);
+        case 'routine':
+            return applyRoutineServerOp(db, op);
+        case 'person':
+            return applyPersonServerOp(db, op);
+        case 'workContext':
+            return applyWorkContextServerOp(db, op);
+    }
+}
 
+async function applyItemServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
     if (op.opType === 'delete') {
         await deleteItemById(db, op.entityId);
         return;
     }
-
     if (!op.snapshot) return;
-    // Remap server field `user` → IndexedDB field `userId`
-    const { user, ...rest } = op.snapshot as Record<string, unknown> & { user: string };
-    const incoming = { ...rest, userId: user } as StoredItem;
-
-    // Last-write-wins: skip if we already have a newer local version
+    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredItem;
     const existing = await db.get('items', op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {
-        await db.put('items', incoming);
+        await putItem(db, incoming);
+    }
+}
+
+async function applyRoutineServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
+    if (op.opType === 'delete') {
+        await deleteRoutineById(db, op.entityId);
+        return;
+    }
+    if (!op.snapshot) return;
+    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredRoutine;
+    const existing = await db.get('routines', op.entityId);
+    if (!existing || existing.updatedTs <= incoming.updatedTs) {
+        await putRoutine(db, incoming);
+    }
+}
+
+async function applyPersonServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
+    if (op.opType === 'delete') {
+        await deletePersonById(db, op.entityId);
+        return;
+    }
+    if (!op.snapshot) return;
+    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredPerson;
+    const existing = await db.get('people', op.entityId);
+    if (!existing || existing.updatedTs <= incoming.updatedTs) {
+        await putPerson(db, incoming);
+    }
+}
+
+async function applyWorkContextServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
+    if (op.opType === 'delete') {
+        await deleteWorkContextById(db, op.entityId);
+        return;
+    }
+    if (!op.snapshot) return;
+    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredWorkContext;
+    const existing = await db.get('workContexts', op.entityId);
+    if (!existing || existing.updatedTs <= incoming.updatedTs) {
+        await putWorkContext(db, incoming);
     }
 }

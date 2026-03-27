@@ -2,8 +2,7 @@
 import { clientsClaim } from 'workbox-core';
 import { precacheAndRoute } from 'workbox-precaching';
 import { openAppDB } from './db/indexedDB';
-import { pullFromServer } from './db/syncHelpers';
-import { flushSyncQueue } from './db/syncHelpers';
+import { flushSyncQueue, pullFromServer } from './db/syncHelpers';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -27,9 +26,7 @@ clientsClaim();
 self.addEventListener('sync', (event) => {
     const syncEvent = event as SyncEvent;
     if (syncEvent.tag !== 'gtd-sync-queue') return;
-    syncEvent.waitUntil(
-        openAppDB().then((db) => flushSyncQueue(db)),
-    );
+    syncEvent.waitUntil(openAppDB().then((db) => flushSyncQueue(db)));
 });
 
 // ---------------------------------------------------------------------------
@@ -38,7 +35,5 @@ self.addEventListener('sync', (event) => {
 // open shows fresh data even if the device is offline again by then.
 // ---------------------------------------------------------------------------
 self.addEventListener('push', (event) => {
-    event.waitUntil(
-        openAppDB().then((db) => pullFromServer(db)),
-    );
+    event.waitUntil(openAppDB().then((db) => pullFromServer(db)));
 });

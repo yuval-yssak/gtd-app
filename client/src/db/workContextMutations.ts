@@ -1,0 +1,31 @@
+import dayjs from 'dayjs';
+import type { IDBPDatabase } from 'idb';
+import type { MyDB, StoredWorkContext } from '../types/MyDB';
+import { queueSyncOp } from './syncHelpers';
+import { deleteWorkContextById, putWorkContext } from './workContextHelpers';
+
+function nowIso(): string {
+    return dayjs().toISOString();
+}
+
+export type NewWorkContextFields = Omit<StoredWorkContext, '_id' | 'createdTs' | 'updatedTs'>;
+
+export async function createWorkContext(db: IDBPDatabase<MyDB>, fields: NewWorkContextFields): Promise<StoredWorkContext> {
+    const now = nowIso();
+    const workContext: StoredWorkContext = { ...fields, _id: crypto.randomUUID(), createdTs: now, updatedTs: now };
+    await putWorkContext(db, workContext);
+    await queueSyncOp(db, 'create', 'workContext', workContext._id, workContext);
+    return workContext;
+}
+
+export async function updateWorkContext(db: IDBPDatabase<MyDB>, workContext: StoredWorkContext): Promise<StoredWorkContext> {
+    const updated: StoredWorkContext = { ...workContext, updatedTs: nowIso() };
+    await putWorkContext(db, updated);
+    await queueSyncOp(db, 'update', 'workContext', updated._id, updated);
+    return updated;
+}
+
+export async function removeWorkContext(db: IDBPDatabase<MyDB>, workContextId: string): Promise<void> {
+    await deleteWorkContextById(db, workContextId);
+    await queueSyncOp(db, 'delete', 'workContext', workContextId, null);
+}

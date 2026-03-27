@@ -13,13 +13,15 @@ export async function registerPushSubscription(db: IDBPDatabase<MyDB>): Promise<
 
     const registration = await navigator.serviceWorker.ready;
     const existing = await registration.pushManager.getSubscription();
-    const subscription = existing ?? (await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        // PushManager requires the VAPID key as a Uint8Array, not a base64 string
-        // `Uint8Array.from` returns `Uint8Array<ArrayBufferLike>` but the API expects
-        // `ArrayBufferView<ArrayBuffer>` — safe cast because the buffer is always a plain ArrayBuffer
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
-    }));
+    const subscription =
+        existing ??
+        (await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            // PushManager requires the VAPID key as a Uint8Array, not a base64 string
+            // `Uint8Array.from` returns `Uint8Array<ArrayBufferLike>` but the API expects
+            // `ArrayBufferView<ArrayBuffer>` — safe cast because the buffer is always a plain ArrayBuffer
+            applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
+        }));
 
     const deviceId = await getOrCreateDeviceId(db);
     const json = subscription.toJSON();
