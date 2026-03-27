@@ -9,6 +9,10 @@ import { openAppDB } from './db/indexedDB';
 
 async function main() {
     const db = await openAppDB();
+
+    const { mountDevTools } = await import('./db/devTools');
+    mountDevTools(db);
+
     const rootEl = document.getElementById('root');
     if (!rootEl) throw new Error('Root element not found');
 
