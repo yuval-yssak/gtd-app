@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
-    testDir: 'e2e',
+    testDir: '.', // config lives in e2e/ — tests are in the same directory
     timeout: 30_000,
     retries: 1, // one retry on flake — E2E tests can be timing-sensitive
     use: {
