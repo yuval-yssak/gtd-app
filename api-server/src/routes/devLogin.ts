@@ -1,0 +1,120 @@
+import { createHmac } from 'node:crypto';
+import { generateId } from 'better-auth';
+import { Hono } from 'hono';
+import { auth, db } from '../loaders/mainLoader.js';
+
+// Guard: this module must never be loaded in production — throw immediately if it slips through.
+// The dynamic import in index.ts already prevents this; this is a belt-and-suspenders check.
+if (process.env.NODE_ENV === 'production') {
+    throw new Error('devLogin route must not be loaded in production');
+}
+
+const COOKIE_NAME = 'better-auth.session_token';
+const SESSION_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+// Replicates better-call's signCookieValue + encodeURIComponent wrapping.
+// Format: encodeURIComponent("rawToken.base64(HMAC-SHA256(rawToken, secret))")
+// Buffer.from(..., 'utf8') ensures encoding matches Web Crypto's TextEncoder used by Better Auth.
+function signSessionToken(rawToken: string, secret: string): string {
+    const sig = createHmac('sha256', Buffer.from(secret, 'utf8')).update(Buffer.from(rawToken, 'utf8')).digest('base64');
+    return encodeURIComponent(`${rawToken}.${sig}`);
+}
+
+// Auth options are set before any request is served (loadDataAccess runs first).
+function readAuthSecret(): string {
+    return (
+        (auth as unknown as { options: { secret?: string } }).options?.secret ?? process.env.BETTER_AUTH_SECRET ?? 'dev_better_auth_secret_change_in_production'
+    );
+}
+
+// Better Auth stores user and session _id as plain alphanumeric strings (via generateId),
+// not ObjectId — the MongoDB adapter falls back to raw string when ObjectId coercion fails.
+// We use `as never` on filter/insert args to work around MongoDB driver's InferIdType widening.
+type MongoFilter = Record<string, unknown>;
+
+// Shape of a user document as stored by the Better Auth MongoDB adapter.
+interface StoredUser {
+    _id: string;
+    email: string;
+}
+
+export const devLoginRoutes = new Hono()
+    // POST /dev/login — upsert a user by email and create a valid Better Auth session.
+    // Returns the signed cookie in both Set-Cookie (for browser-side use) and JSON body
+    // (easier for the Playwright helper to parse into context.addCookies() format).
+    .post('/login', async (c) => {
+        const { email } = await c.req.json<{ email: string }>();
+        const normalizedEmail = email.toLowerCase();
+
+        // Upsert user by email — reuse the existing ID so repeated logins share one user.
+        let userId: string;
+        const userDoc = await db.collection<StoredUser>('user').findOne({ email: normalizedEmail } as MongoFilter as never);
+        if (userDoc) {
+            userId = userDoc._id;
+        } else {
+            userId = generateId(32);
+            const now = new Date();
+            await db.collection('user').insertOne({
+                _id: userId,
+                name: normalizedEmail.split('@')[0],
+                email: normalizedEmail,
+                emailVerified: false,
+                image: null,
+                createdAt: now,
+                updatedAt: now,
+            } as never);
+        }
+
+        // Create a new session — rawToken is what goes into the signed cookie.
+        const rawToken = generateId(32);
+        const sessionId = generateId(32);
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + SESSION_EXPIRY_MS);
+
+        await db.collection('session').insertOne({
+            _id: sessionId,
+            userId,
+            token: rawToken,
+            expiresAt,
+            createdAt: now,
+            updatedAt: now,
+            ipAddress: '',
+            userAgent: 'playwright-e2e',
+        } as never);
+
+        const signedToken = signSessionToken(rawToken, readAuthSecret());
+
+        c.header('Set-Cookie', `${COOKIE_NAME}=${signedToken}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toUTCString()}`);
+
+        return c.json({
+            ok: true,
+            userId,
+            email: normalizedEmail,
+            // Playwright's BrowserContext.addCookies() format — returned to avoid parsing Set-Cookie.
+            cookie: {
+                name: COOKIE_NAME,
+                value: signedToken,
+                domain: 'localhost',
+                path: '/',
+                httpOnly: true,
+                secure: false,
+                sameSite: 'Lax' as const,
+                expires: Math.floor(expiresAt.getTime() / 1000), // Unix seconds
+            },
+        });
+    })
+
+    // DELETE /dev/reset — wipe all collections so tests can start with a clean slate.
+    .delete('/reset', async (c) => {
+        await Promise.all([
+            db.collection('user').deleteMany({}),
+            db.collection('session').deleteMany({}),
+            db.collection('items').deleteMany({}),
+            db.collection('operations').deleteMany({}),
+            db.collection('deviceSyncState').deleteMany({}),
+            db.collection('routines').deleteMany({}),
+            db.collection('people').deleteMany({}),
+            db.collection('workContexts').deleteMany({}),
+        ]);
+        return c.json({ ok: true });
+    });
