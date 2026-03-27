@@ -8,5 +8,9 @@ export default defineConfig({
         setupFiles: ['dotenv/config'],
         // Exclude compiled JS output — only run TypeScript sources
         exclude: ['**/node_modules/**', '**/build/**'],
+        // Run test files sequentially — all test files share the same gtd_test MongoDB
+        // database, so concurrent file execution causes beforeEach cleanup in one file
+        // to wipe OAuth state records that another file's in-flight login still needs.
+        fileParallelism: false,
     },
 });

@@ -6,8 +6,9 @@ const connections = new Map<string, Set<ReadableStreamDefaultController<Uint8Arr
 const encoder = new TextEncoder();
 
 export function addSseConnection(userId: string, controller: ReadableStreamDefaultController<Uint8Array>): void {
-    if (!connections.has(userId)) connections.set(userId, new Set());
-    connections.get(userId)!.add(controller);
+    const userSet = connections.get(userId) ?? new Set();
+    if (!connections.has(userId)) connections.set(userId, userSet);
+    userSet.add(controller);
 }
 
 export function removeSseConnection(userId: string, controller: ReadableStreamDefaultController<Uint8Array>): void {
