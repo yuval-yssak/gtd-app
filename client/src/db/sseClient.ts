@@ -7,7 +7,7 @@ export function openSseConnection(onUpdate: OnUpdateCallback): void {
     closeSseConnection();
 
     // withCredentials is required so the auth cookie is sent cross-origin in production
-    eventSource = new EventSource('/events', { withCredentials: true });
+    eventSource = new EventSource('/sync/events', { withCredentials: true });
 
     eventSource.onmessage = (event) => {
         try {
