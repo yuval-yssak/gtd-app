@@ -1,0 +1,8 @@
+# Cloudflare Pages header overrides.
+# SW scripts must not be cached — browsers compare the SW byte-for-byte to detect
+# updates, but only after the HTTP cache expires. A stale sw.js means a stale
+# precache manifest, which breaks offline mode after each deploy.
+/sw.js
+  Cache-Control: no-store
+/registerSW.js
+  Cache-Control: no-store

@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import { clientsClaim } from 'workbox-core';
-import { precacheAndRoute } from 'workbox-precaching';
+import { createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
+import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { openAppDB } from './db/indexedDB';
 import { flushSyncQueue, pullFromServer } from './db/syncHelpers';
 
@@ -13,6 +14,11 @@ interface SyncEvent extends ExtendableEvent {
 
 // Workbox injects the hashed precache manifest here at build time
 precacheAndRoute(self.__WB_MANIFEST);
+
+// Serve the cached index.html for all navigation requests (page loads and refreshes).
+// Without this, only exact precache URL matches are served offline — deep-link routes
+// like /inbox fall through to the network and show the browser's offline error page.
+registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html')));
 
 // Take over all open tabs immediately after activation so new code runs right away.
 // Matches the previous autoUpdate behaviour.
