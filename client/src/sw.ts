@@ -39,7 +39,61 @@ self.addEventListener('sync', (event) => {
 // Web Push — another device pushed changes while this app was closed.
 // Wake up, pull the new ops, and write them to IndexedDB so the next app
 // open shows fresh data even if the device is offline again by then.
+// Browsers require showNotification() to be called from a push handler;
+// omitting it can cause the browser to display a generic fallback notification.
 // ---------------------------------------------------------------------------
+
+interface PushOpSummary {
+    entityType: string;
+    opType: string;
+    name: string | null;
+}
+
+function opTypeVerb(opType: string): string {
+    return opType === 'create' ? 'Added' : opType === 'delete' ? 'Deleted' : 'Updated';
+}
+
+function formatOp({ opType, name }: PushOpSummary): string {
+    return name ? `${opTypeVerb(opType)}: ${name}` : `${opTypeVerb(opType)} item`;
+}
+
+function buildNotificationBody(ops: PushOpSummary[]): string {
+    if (ops.length === 0) {
+        return 'Your tasks have been updated from another device.';
+    }
+    if (ops.length === 1) {
+        return formatOp(ops[0]!);
+    }
+    const previews = ops.slice(0, 2).map(formatOp);
+    const tail = ops.length > 2 ? ` (+${ops.length - 2} more)` : '';
+    return previews.join(' · ') + tail;
+}
+
 self.addEventListener('push', (event) => {
-    event.waitUntil(openAppDB().then((db) => pullFromServer(db)));
+    // event.data may be absent if the push was sent without a payload (e.g. older server version)
+    const payload = (event.data?.json() as { ops?: PushOpSummary[] } | null) ?? null;
+
+    event.waitUntil(
+        openAppDB()
+            .then((db) => pullFromServer(db))
+            .then(() =>
+                self.registration.showNotification('Getting Things Done', {
+                    body: buildNotificationBody(payload?.ops ?? []),
+                    icon: '/icon.svg',
+                    // Collapse multiple rapid push events into one notification rather than stacking them
+                    tag: 'gtd-sync-update',
+                }),
+            ),
+    );
+});
+
+self.addEventListener('notificationclick', (event) => {
+    event.notification.close();
+    event.waitUntil(
+        self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+            const existing = clientList.find((c) => c.url.startsWith(self.location.origin));
+            // Focus the existing tab if the app is already open; otherwise open a new one
+            return existing ? existing.focus() : self.clients.openWindow('/');
+        }),
+    );
 });
