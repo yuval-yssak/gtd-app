@@ -25,6 +25,11 @@ interface ClientOp {
 
 type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface;
 
+// Items and routines use `title`; people and workContexts use `name`
+function entityDisplayName(snapshot: EntitySnapshot): string {
+    return 'title' in snapshot ? snapshot.title : snapshot.name;
+}
+
 // Cast filter/update objects to `never` to work around MongoDB driver's `InferIdType`
 // widening `_id` to `ObjectId` when the collection schema declares it optional.
 type MongoFilter = Record<string, unknown>;
@@ -177,9 +182,16 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         notifyUser(user.id, { type: 'update', ts: now });
 
-        // Web Push for devices that aren't currently connected via SSE (app closed)
+        // Web Push for devices that aren't currently connected via SSE (app closed).
+        // Include per-op summaries so the SW can show a meaningful notification body
+        // (e.g. "Updated: Call dentist") instead of a generic message.
+        const opSummaries = serverOps.map((op) => ({
+            entityType: op.entityType,
+            opType: op.opType,
+            name: op.snapshot ? entityDisplayName(op.snapshot) : null,
+        }));
         const pushSubs = await pushSubscriptionsDAO.findArray({ user: user.id, _id: { $ne: deviceId } } as MongoFilter as never);
-        await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now })));
+        await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
 
         return c.json({ ok: true }, 200);
     })
