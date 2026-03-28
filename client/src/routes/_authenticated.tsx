@@ -15,20 +15,21 @@ import { closeSseConnection, openSseConnection } from '../db/sseClient';
 import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
 
+// Wraps authClient.getSession() to distinguish a missing session from a network failure.
+// Returns networkError=true when the fetch throws (offline/DNS), false when the server responded.
+async function fetchSessionSafely() {
+    try {
+        const result = await authClient.getSession();
+        return { session: result.data, networkError: false };
+    } catch {
+        return { session: null, networkError: true };
+    }
+}
+
 export const Route = createFileRoute('/_authenticated')({
     beforeLoad: async ({ context }) => {
         const { db } = context;
-
-        let session = null;
-        let networkError = false;
-
-        try {
-            const result = await authClient.getSession();
-            session = result.data;
-        } catch {
-            // fetch threw — server is unreachable (offline or DNS failure)
-            networkError = true;
-        }
+        const { session, networkError } = await fetchSessionSafely();
 
         if (!networkError && !session) {
             // Server responded but session is gone — must re-authenticate
@@ -55,11 +56,13 @@ function AuthenticatedLayout() {
     const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
     useEffect(() => {
-        let cancelled = false;
-
+        // No cancellation flag needed: event listeners are removed on cleanup so they
+        // cannot fire after unmount, and React 19 silently ignores setState on unmounted components.
         async function syncAndRefresh() {
             const account = await getActiveAccount(db);
-            if (!account || cancelled) return;
+            if (!account) {
+                return;
+            }
 
             await flushSyncQueue(db);
 
@@ -72,21 +75,21 @@ function AuthenticatedLayout() {
                 await pullFromServer(db);
             }
 
-            if (cancelled) return;
-
-            const refreshed = await getItemsByUser(db, account.id);
-            if (!cancelled) setItems(refreshed);
+            setItems(await getItemsByUser(db, account.id));
         }
 
         async function loadItems() {
             const account = await getActiveAccount(db);
-            if (!account || cancelled) return;
+            if (!account) {
+                return;
+            }
 
             // Show cached items immediately — works offline with no network round-trip
-            const local = await getItemsByUser(db, account.id);
-            if (!cancelled) setItems(local);
+            setItems(await getItemsByUser(db, account.id));
 
-            if (!navigator.onLine) return;
+            if (!navigator.onLine) {
+                return;
+            }
 
             await syncAndRefresh();
 
@@ -100,7 +103,6 @@ function AuthenticatedLayout() {
         }
 
         async function handleOnline() {
-            if (cancelled) return;
             await syncAndRefresh();
             openSseConnection(() => {
                 syncAndRefresh().catch(() => {});
@@ -116,7 +118,6 @@ function AuthenticatedLayout() {
         window.addEventListener('online', handleOnline);
         window.addEventListener('offline', handleOffline);
         return () => {
-            cancelled = true;
             window.removeEventListener('online', handleOnline);
             window.removeEventListener('offline', handleOffline);
             closeSseConnection();

@@ -61,4 +61,10 @@ export const gtd = {
                 ).__gtd.clarifyToWaitingFor(i as StoredItem, m as WaitingForMeta),
             [item, meta] as const,
         ),
+
+    fetchBootstrap: (page: Page): Promise<{ items: StoredItem[] }> =>
+        page.evaluate(async () => {
+            const res = await fetch('http://localhost:4000/sync/bootstrap', { credentials: 'include' });
+            return res.json() as Promise<{ items: StoredItem[] }>;
+        }),
 };

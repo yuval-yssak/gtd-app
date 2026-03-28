@@ -35,7 +35,9 @@ async function applyItemOp(userId: string, entityId: string, opType: OpType, sna
         await itemsDAO.collection.deleteOne({ _id: entityId, user: userId } as never);
         return;
     }
-    if (!snapshot) return;
+    if (!snapshot) {
+        return;
+    }
 
     // Two-step last-write-wins: fetch current then replace only if incoming is newer or equal.
     // Simpler than a conditional upsert query; safe for the low-throughput GTD use case.
@@ -50,7 +52,9 @@ async function applyRoutineOp(userId: string, entityId: string, opType: OpType, 
         await routinesDAO.collection.deleteOne({ _id: entityId, user: userId } as never);
         return;
     }
-    if (!snapshot) return;
+    if (!snapshot) {
+        return;
+    }
 
     const existing = await routinesDAO.collection.findOne({ _id: entityId, user: userId } as never);
     if (!existing || existing.updatedTs <= snapshot.updatedTs) {
@@ -63,7 +67,9 @@ async function applyPersonOp(userId: string, entityId: string, opType: OpType, s
         await peopleDAO.collection.deleteOne({ _id: entityId, user: userId } as never);
         return;
     }
-    if (!snapshot) return;
+    if (!snapshot) {
+        return;
+    }
 
     const existing = await peopleDAO.collection.findOne({ _id: entityId, user: userId } as never);
     if (!existing || existing.updatedTs <= snapshot.updatedTs) {
@@ -76,7 +82,9 @@ async function applyWorkContextOp(userId: string, entityId: string, opType: OpTy
         await workContextsDAO.collection.deleteOne({ _id: entityId, user: userId } as never);
         return;
     }
-    if (!snapshot) return;
+    if (!snapshot) {
+        return;
+    }
 
     const existing = await workContextsDAO.collection.findOne({ _id: entityId, user: userId } as never);
     if (!existing || existing.updatedTs <= snapshot.updatedTs) {
@@ -100,7 +108,9 @@ function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {
 
 async function purgeOldOperations(userId: string): Promise<void> {
     const deviceStates = await deviceSyncStateDAO.findArray({ user: userId } as MongoFilter as never);
-    if (!deviceStates.length) return;
+    if (!deviceStates.length) {
+        return;
+    }
 
     // Only purge ops all registered devices have already pulled — the slowest device sets the floor.
     // reduce without an initial value uses the first element as the accumulator seed; TypeScript
@@ -161,7 +171,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         await deviceSyncStateDAO.updateOne(
             { _id: deviceId } as MongoFilter as never,
-            { $set: { lastSeenTs: now, user: user.id }, $setOnInsert: { lastSyncedTs: new Date(0).toISOString() } } as never,
+            { $set: { lastSeenTs: now, user: user.id }, $setOnInsert: { lastSyncedTs: dayjs(0).toISOString() } } as never,
             { upsert: true },
         );
 
@@ -179,7 +189,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     // ---------------------------------------------------------------------------
     .get('/pull', authenticateRequest, async (c) => {
         const { user } = c.get('session');
-        const since = c.req.query('since') ?? new Date(0).toISOString();
+        const since = c.req.query('since') ?? dayjs(0).toISOString();
         const deviceId = c.req.query('deviceId');
 
         const ops = await operationsDAO.findArray({ user: user.id, ts: { $gt: since } } as MongoFilter as never, { sort: { ts: 1 } });
