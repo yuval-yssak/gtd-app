@@ -63,15 +63,17 @@ export async function queueSyncOp(
 
     await db.add('syncOperations', { opType, entityType, entityId, queuedAt: dayjs().toISOString(), snapshot });
 
-    // Register a background sync so the SW can flush the queue even if the app is closed.
-    // No-op in browsers that don't support the Background Sync API (Firefox, Safari).
+    // Attempt an immediate flush. Safari and Firefox don't support the Background Sync API,
+    // so without this the op would sit in IDB until the next mount or online event.
+    // Fire-and-forget — errors are non-fatal; the online handler and mount effect will retry.
+    flushSyncQueue(db).catch(() => {});
+
+    // Also register a background sync so the SW can flush even when the app is closed (Chrome/Edge only).
     if ('serviceWorker' in navigator && 'sync' in ServiceWorkerRegistration.prototype) {
         // Background Sync API isn't in the standard TS DOM lib — cast through unknown
         navigator.serviceWorker.ready
             .then((reg) => (reg as unknown as { sync: { register(tag: string): Promise<void> } }).sync.register('gtd-sync-queue'))
-            .catch(() => {
-                /* registration failure is non-fatal — online flush will still run */
-            });
+            .catch(() => {});
     }
 }
 

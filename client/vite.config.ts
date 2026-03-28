@@ -37,7 +37,6 @@ export default defineConfig({
             '/items': { target: 'http://localhost:4000', changeOrigin: true },
             '/sync': { target: 'http://localhost:4000', changeOrigin: true },
             '/push': { target: 'http://localhost:4000', changeOrigin: true },
-            // /events is under /sync — already covered by the /sync proxy above
         },
     },
     preview: {
