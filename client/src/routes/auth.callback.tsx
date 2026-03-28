@@ -1,6 +1,7 @@
 import Box from '@mui/material/Box';
 import CircularProgress from '@mui/material/CircularProgress';
 import { createFileRoute, redirect } from '@tanstack/react-router';
+import dayjs from 'dayjs';
 import { setActiveAccount, upsertAccount } from '../db/accountHelpers';
 import { authClient } from '../lib/authClient';
 import type { OAuthProvider } from '../types/MyDB';
@@ -24,7 +25,7 @@ export const Route = createFileRoute('/auth/callback')({
                 // Better Auth doesn't expose the provider on the session user directly;
                 // derive it from accounts list if possible, default to 'google'
                 provider: (session.user as { provider?: OAuthProvider }).provider ?? 'google',
-                addedAt: Date.now(),
+                addedAt: dayjs().valueOf(),
             },
             db,
         );

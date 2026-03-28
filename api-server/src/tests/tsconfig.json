@@ -1,0 +1,17 @@
+{
+    // VS Code resolves the nearest tsconfig.json for each file. The parent api-server/tsconfig.json
+    // excludes src/tests, so VS Code falls back to loose mode where `node:*` imports are unresolved.
+    // This standalone tsconfig (not extending the parent to avoid rootDir conflicts) gives test
+    // files full Node.js and Vitest typings without affecting the compiled output.
+    "compilerOptions": {
+        "target": "ES2023",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "strict": true,
+        "skipLibCheck": true,
+        "verbatimModuleSyntax": true,
+        "types": ["node", "vitest/globals"],
+        "noEmit": true
+    },
+    "include": ["./**/*.ts"]
+}

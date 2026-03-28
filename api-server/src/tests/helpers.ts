@@ -1,11 +1,12 @@
-/** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
+import { Buffer } from 'node:buffer';
 import { expect, vi } from 'vitest';
-
 export const SESSION_COOKIE = 'better-auth.session_token';
 
-// Minimal interface so helpers work with any Hono app variant without importing Hono types
+// Minimal interface so helpers work with any Hono app variant without importing Hono types.
+// Hono's fetch() is typed as Response | Promise<Response>, so we mirror that here.
+// All call sites use await, which handles both cases transparently.
 interface FetchApp {
-    fetch: (request: Request) => Promise<Response>;
+    fetch: (request: Request) => Response | Promise<Response>;
 }
 
 /**
@@ -114,7 +115,7 @@ export async function oauthLogin(app: FetchApp, provider: 'google' | 'github', p
     expect(signInRes.status).toBe(200);
 
     const { url } = (await signInRes.json()) as { url: string };
-    const state = new URL(url).searchParams.get('state')!;
+    const state = new URL(url).searchParams.get('state');
     const stateCookies = collectCookies(signInRes);
 
     if (provider === 'google') {
@@ -132,8 +133,15 @@ export async function oauthLogin(app: FetchApp, provider: 'google' | 'github', p
     return { res: callbackRes, sessionCookie: getCookieValue(callbackRes, SESSION_COOKIE) };
 }
 
+interface AuthRequestOptions {
+    method: string;
+    path: string;
+    sessionCookie: string;
+    body?: unknown;
+}
+
 /** Convenience wrapper for making authenticated requests with a session cookie. */
-export async function authenticatedRequest(app: FetchApp, method: string, path: string, sessionCookie: string, body?: unknown): Promise<Response> {
+export async function authenticatedRequest(app: FetchApp, { method, path, sessionCookie, body }: AuthRequestOptions): Promise<Response> {
     return app.fetch(
         new Request(`http://localhost:4000${path}`, {
             method,

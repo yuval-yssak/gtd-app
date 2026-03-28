@@ -82,7 +82,9 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
             if (!target) {
                 // Session expired — fall back to OAuth re-authentication
                 const account = allAccounts.find((a) => a.id === userId);
-                if (!account) return;
+                if (!account) {
+                    return;
+                }
                 void authClient.signIn.social({
                     provider: account.provider,
                     callbackURL: `${window.location.origin}/auth/callback`,

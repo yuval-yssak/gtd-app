@@ -76,7 +76,7 @@ function makeItemSnapshot(entityId: string, updatedTs: string, overrides?: Recor
 }
 
 async function push(sessionCookie: string, deviceId: string, ops: ReturnType<typeof makeClientOp>[]) {
-    return authenticatedRequest(app, 'POST', '/sync/push', sessionCookie, { deviceId, ops });
+    return authenticatedRequest(app, { method: 'POST', path: '/sync/push', sessionCookie, body: { deviceId, ops } });
 }
 
 async function pull(sessionCookie: string, opts: { since?: string; deviceId?: string } = {}) {
@@ -84,7 +84,7 @@ async function pull(sessionCookie: string, opts: { since?: string; deviceId?: st
     if (opts.since !== undefined) params.set('since', opts.since);
     if (opts.deviceId !== undefined) params.set('deviceId', opts.deviceId);
     const query = params.toString() ? `?${params}` : '';
-    return authenticatedRequest(app, 'GET', `/sync/pull${query}`, sessionCookie);
+    return authenticatedRequest(app, { method: 'GET', path: `/sync/pull${query}`, sessionCookie });
 }
 
 /** Small delay to guarantee strictly-ordered ISO timestamps across sequential operations. */
@@ -317,7 +317,7 @@ describe('GET /sync/bootstrap', () => {
             db.collection('workContexts').insertOne({ _id: crypto.randomUUID(), user: userId, name: 'At desk', createdTs: ts, updatedTs: ts }),
         ]);
 
-        const res = await authenticatedRequest(app, 'GET', '/sync/bootstrap', cookie);
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: cookie });
 
         expect(res.status).toBe(200);
         const body = (await res.json()) as { items: unknown[]; routines: unknown[]; people: unknown[]; workContexts: unknown[]; serverTs: string };
@@ -341,7 +341,7 @@ describe('GET /sync/bootstrap', () => {
             .insertOne({ _id: crypto.randomUUID(), user: aliceId, status: 'inbox', title: "Alice's item", createdTs: ts, updatedTs: ts });
         await db.collection('items').insertOne({ _id: crypto.randomUUID(), user: bobId, status: 'inbox', title: "Bob's item", createdTs: ts, updatedTs: ts });
 
-        const res = await authenticatedRequest(app, 'GET', '/sync/bootstrap', aliceCookie);
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: aliceCookie });
         const { items } = (await res.json()) as { items: { title: string }[] };
 
         expect(items).toHaveLength(1);
@@ -351,7 +351,7 @@ describe('GET /sync/bootstrap', () => {
     it('new user with no data: bootstrap returns empty arrays and serverTs', async () => {
         const cookie = await loginAsAlice();
 
-        const res = await authenticatedRequest(app, 'GET', '/sync/bootstrap', cookie);
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: cookie });
 
         expect(res.status).toBe(200);
         const body = (await res.json()) as { items: unknown[]; routines: unknown[]; people: unknown[]; workContexts: unknown[]; serverTs: string };
@@ -488,7 +488,7 @@ describe('GET /sync/events', () => {
     it('authenticated request returns text/event-stream with initial connected frame', async () => {
         const cookie = await loginAsAlice();
 
-        const res = await authenticatedRequest(app, 'GET', '/sync/events', cookie);
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/events', sessionCookie: cookie });
 
         expect(res.headers.get('Content-Type')).toContain('text/event-stream');
 

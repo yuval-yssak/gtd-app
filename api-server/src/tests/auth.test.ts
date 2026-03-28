@@ -1,4 +1,3 @@
-/** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';

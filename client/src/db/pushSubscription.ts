@@ -3,13 +3,19 @@ import type { MyDB } from '../types/MyDB';
 import { getOrCreateDeviceId } from './deviceId';
 
 export async function registerPushSubscription(db: IDBPDatabase<MyDB>): Promise<void> {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        return;
+    }
 
     // Fetch the VAPID public key from the server — it's public so no auth needed
     const res = await fetch('/sync/config', { credentials: 'include' });
-    if (!res.ok) return;
+    if (!res.ok) {
+        return;
+    }
     const { vapidPublicKey } = (await res.json()) as { vapidPublicKey: string | null };
-    if (!vapidPublicKey) return; // server has no VAPID keys configured
+    if (!vapidPublicKey) {
+        return; // server has no VAPID keys configured
+    }
 
     const registration = await navigator.serviceWorker.ready;
     const existing = await registration.pushManager.getSubscription();

@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { generateId } from 'better-auth';
+import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { auth, db } from '../loaders/mainLoader.js';
 
@@ -38,6 +39,27 @@ interface StoredUser {
     email: string;
 }
 
+// Upsert user by email — reuse the existing ID so repeated logins share one user.
+async function getOrCreateUserId(normalizedEmail: string): Promise<string> {
+    const userDoc = await db.collection<StoredUser>('user').findOne({ email: normalizedEmail } as MongoFilter as never);
+    if (userDoc) {
+        return userDoc._id;
+    }
+
+    const userId = generateId(32);
+    const now = dayjs().toDate();
+    await db.collection('user').insertOne({
+        _id: userId,
+        name: normalizedEmail.split('@')[0],
+        email: normalizedEmail,
+        emailVerified: false,
+        image: null,
+        createdAt: now,
+        updatedAt: now,
+    } as never);
+    return userId;
+}
+
 export const devLoginRoutes = new Hono()
     // POST /dev/login — upsert a user by email and create a valid Better Auth session.
     // Returns the signed cookie in both Set-Cookie (for browser-side use) and JSON body
@@ -46,45 +68,29 @@ export const devLoginRoutes = new Hono()
         const { email } = await c.req.json<{ email: string }>();
         const normalizedEmail = email.toLowerCase();
 
-        // Upsert user by email — reuse the existing ID so repeated logins share one user.
-        let userId: string;
-        const userDoc = await db.collection<StoredUser>('user').findOne({ email: normalizedEmail } as MongoFilter as never);
-        if (userDoc) {
-            userId = userDoc._id;
-        } else {
-            userId = generateId(32);
-            const now = new Date();
-            await db.collection('user').insertOne({
-                _id: userId,
-                name: normalizedEmail.split('@')[0],
-                email: normalizedEmail,
-                emailVerified: false,
-                image: null,
-                createdAt: now,
-                updatedAt: now,
-            } as never);
-        }
+        const userId = await getOrCreateUserId(normalizedEmail);
 
         // Create a new session — rawToken is what goes into the signed cookie.
         const rawToken = generateId(32);
         const sessionId = generateId(32);
-        const now = new Date();
-        const expiresAt = new Date(now.getTime() + SESSION_EXPIRY_MS);
+        const now = dayjs();
+        const expiresAt = now.add(SESSION_EXPIRY_MS, 'ms');
 
         await db.collection('session').insertOne({
             _id: sessionId,
             userId,
             token: rawToken,
-            expiresAt,
-            createdAt: now,
-            updatedAt: now,
+            // MongoDB stores these as BSON Date — .toDate() converts from dayjs
+            expiresAt: expiresAt.toDate(),
+            createdAt: now.toDate(),
+            updatedAt: now.toDate(),
             ipAddress: '',
             userAgent: 'playwright-e2e',
         } as never);
 
         const signedToken = signSessionToken(rawToken, readAuthSecret());
 
-        c.header('Set-Cookie', `${COOKIE_NAME}=${signedToken}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toUTCString()}`);
+        c.header('Set-Cookie', `${COOKIE_NAME}=${signedToken}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toDate().toUTCString()}`);
 
         return c.json({
             ok: true,
@@ -99,7 +105,7 @@ export const devLoginRoutes = new Hono()
                 httpOnly: true,
                 secure: false,
                 sameSite: 'Lax' as const,
-                expires: Math.floor(expiresAt.getTime() / 1000), // Unix seconds
+                expires: expiresAt.unix(), // Unix seconds for Playwright
             },
         });
     })

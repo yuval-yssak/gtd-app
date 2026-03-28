@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Full-stack GTD (Getting Things Done) productivity app — monorepo with:
 - `api-server/` — Node.js/Hono/TypeScript backend on port 4000
-- `client/` — React/TypeScript/Vite frontend on port 4173
+- `client/` — React 19/TypeScript/Vite frontend on port 4173
 
 Full data model reference: [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md)
 

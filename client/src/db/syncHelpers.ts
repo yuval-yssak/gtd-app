@@ -77,7 +77,9 @@ export async function queueSyncOp(
 
 export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
     const ops = await db.getAll('syncOperations');
-    if (!ops.length) return;
+    if (!ops.length) {
+        return;
+    }
 
     const deviceId = await getOrCreateDeviceId(db);
     const res = await fetch('/sync/push', {
@@ -163,7 +165,9 @@ async function applyItemServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<
         await deleteItemById(db, op.entityId);
         return;
     }
-    if (!op.snapshot) return;
+    if (!op.snapshot) {
+        return;
+    }
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredItem;
     const existing = await db.get('items', op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {
@@ -176,7 +180,9 @@ async function applyRoutineServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promi
         await deleteRoutineById(db, op.entityId);
         return;
     }
-    if (!op.snapshot) return;
+    if (!op.snapshot) {
+        return;
+    }
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredRoutine;
     const existing = await db.get('routines', op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {
@@ -189,7 +195,9 @@ async function applyPersonServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promis
         await deletePersonById(db, op.entityId);
         return;
     }
-    if (!op.snapshot) return;
+    if (!op.snapshot) {
+        return;
+    }
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredPerson;
     const existing = await db.get('people', op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {
@@ -202,7 +210,9 @@ async function applyWorkContextServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): P
         await deleteWorkContextById(db, op.entityId);
         return;
     }
-    if (!op.snapshot) return;
+    if (!op.snapshot) {
+        return;
+    }
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredWorkContext;
     const existing = await db.get('workContexts', op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {
