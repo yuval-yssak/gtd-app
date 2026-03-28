@@ -1,11 +1,13 @@
+import MenuIcon from '@mui/icons-material/Menu';
 import AppBar from '@mui/material/AppBar';
 import Box from '@mui/material/Box';
+import IconButton from '@mui/material/IconButton';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, Outlet, redirect } from '@tanstack/react-router';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { AccountSwitcher } from '../components/AccountSwitcher';
-import { StatusBar } from '../components/StatusBar';
+import { AppNav, DRAWER_WIDTH } from '../components/AppNav';
 import { getActiveAccount } from '../db/accountHelpers';
 import { getItemsByUser } from '../db/itemHelpers';
 import { registerPushSubscription } from '../db/pushSubscription';
@@ -50,6 +52,7 @@ export const Route = createFileRoute('/_authenticated')({
 
 function AuthenticatedLayout() {
     const { db, setItems } = Route.useRouteContext();
+    const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
     useEffect(() => {
         let cancelled = false;
@@ -121,19 +124,44 @@ function AuthenticatedLayout() {
     }, [db, setItems]);
 
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-            <AppBar position="static">
+        <Box sx={{ display: 'flex', minHeight: '100vh' }}>
+            {/* Mobile AppBar — fixed at top, hidden on desktop where the sidebar takes over */}
+            <AppBar
+                position="fixed"
+                sx={{
+                    display: { md: 'none' },
+                    zIndex: (theme) => theme.zIndex.drawer + 1,
+                }}
+            >
                 <Toolbar>
+                    <IconButton color="inherit" edge="start" onClick={() => setMobileDrawerOpen(true)} sx={{ mr: 1 }} aria-label="open navigation">
+                        <MenuIcon />
+                    </IconButton>
                     <Typography variant="h6" sx={{ flexGrow: 1 }}>
                         GTD
                     </Typography>
                     <AccountSwitcher db={db} />
                 </Toolbar>
             </AppBar>
-            <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
+
+            <AppNav mobileDrawerOpen={mobileDrawerOpen} setMobileDrawerOpen={setMobileDrawerOpen} db={db} />
+
+            <Box
+                component="main"
+                sx={{
+                    flexGrow: 1,
+                    // Desktop: content sits to the right of the sidebar
+                    ml: { md: `${DRAWER_WIDTH}px` },
+                    width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
+                    // Mobile: push content below the fixed AppBar and above the bottom nav
+                    pt: { xs: 9, md: 3 },
+                    pb: { xs: 9, md: 3 },
+                    px: { xs: 2, md: 3 },
+                    overflow: 'auto',
+                }}
+            >
                 <Outlet />
             </Box>
-            <StatusBar />
         </Box>
     );
 }

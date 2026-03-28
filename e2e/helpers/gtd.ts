@@ -1,7 +1,6 @@
 import type { Page } from '@playwright/test';
-import type { StoredItem } from '../../client/src/types/MyDB';
 import type { NextActionMeta, WaitingForMeta } from '../../client/src/db/itemMutations';
-import type { SyncOperation, StoredDeviceSyncState } from '../../client/src/types/MyDB';
+import type { StoredDeviceSyncState, StoredItem, SyncOperation } from '../../client/src/types/MyDB';
 
 // Typed wrappers around window.__gtd.* that hide the page.evaluate() boilerplate.
 // All functions accept a Page as the first argument and run the corresponding __gtd
@@ -12,10 +11,7 @@ export const gtd = {
         page.evaluate(() => (window as unknown as { __gtd: { listItems(): Promise<StoredItem[]> } }).__gtd.listItems()),
 
     collect: (page: Page, title: string): Promise<StoredItem> =>
-        page.evaluate(
-            (t) => (window as unknown as { __gtd: { collect(t: string): Promise<StoredItem> } }).__gtd.collect(t),
-            title,
-        ),
+        page.evaluate((t) => (window as unknown as { __gtd: { collect(t: string): Promise<StoredItem> } }).__gtd.collect(t), title),
 
     clarifyToNextAction: (page: Page, item: StoredItem, meta: NextActionMeta = {}): Promise<StoredItem> =>
         page.evaluate(
@@ -39,16 +35,12 @@ export const gtd = {
             item,
         ),
 
-    flush: (page: Page): Promise<void> =>
-        page.evaluate(() => (window as unknown as { __gtd: { flush(): Promise<void> } }).__gtd.flush()),
+    flush: (page: Page): Promise<void> => page.evaluate(() => (window as unknown as { __gtd: { flush(): Promise<void> } }).__gtd.flush()),
 
-    pull: (page: Page): Promise<void> =>
-        page.evaluate(() => (window as unknown as { __gtd: { pull(): Promise<void> } }).__gtd.pull()),
+    pull: (page: Page): Promise<void> => page.evaluate(() => (window as unknown as { __gtd: { pull(): Promise<void> } }).__gtd.pull()),
 
     queuedOps: (page: Page): Promise<SyncOperation[]> =>
-        page.evaluate(() =>
-            (window as unknown as { __gtd: { queuedOps(): Promise<SyncOperation[]> } }).__gtd.queuedOps(),
-        ),
+        page.evaluate(() => (window as unknown as { __gtd: { queuedOps(): Promise<SyncOperation[]> } }).__gtd.queuedOps()),
 
     syncState: (page: Page): Promise<StoredDeviceSyncState | undefined> =>
         page.evaluate(() =>

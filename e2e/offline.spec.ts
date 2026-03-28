@@ -35,7 +35,9 @@ test.describe('offline behaviour', () => {
                     window as unknown as {
                         __gtd: { queuedOps(): Promise<unknown[]> };
                     }
-                ).__gtd.queuedOps().then((ops) => ops.length === 0),
+                ).__gtd
+                    .queuedOps()
+                    .then((ops) => ops.length === 0),
             undefined,
             { timeout: 15_000, polling: 300 },
         );
@@ -64,9 +66,7 @@ test.describe('offline behaviour', () => {
         await page.reload();
 
         // Wait for __gtd to be remounted after reload.
-        await page.waitForFunction(
-            () => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined',
-        );
+        await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
 
         // IDB survives the reload; the app renders cached items without any server round-trip.
         const items = await gtd.listItems(page);
