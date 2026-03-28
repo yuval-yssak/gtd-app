@@ -4,15 +4,14 @@ import Divider from '@mui/material/Divider';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
-import { useActiveAccount } from '../../hooks/useActiveAccount';
+import { useAppData } from '../../contexts/AppDataContext';
 
 export const Route = createFileRoute('/_authenticated/settings')({
     component: SettingsPage,
 });
 
 function SettingsPage() {
-    const { db } = Route.useRouteContext();
-    const account = useActiveAccount(db);
+    const { account } = useAppData();
 
     return (
         <Box sx={{ maxWidth: 560 }}>

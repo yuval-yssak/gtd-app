@@ -1,18 +1,15 @@
 import { createRouter, RouterProvider } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
-import { useState } from 'react';
 import { routeTree } from './routeTree.gen';
-import type { MyDB, StoredItem } from './types/MyDB';
+import type { MyDB } from './types/MyDB';
 
 // Router is created once at module level to avoid recreation on every render.
-// context values are stubs — the real values are injected via RouterProvider below.
+// The context stub is replaced with the real db on every render via RouterProvider.
 const router = createRouter({
     routeTree,
     context: {
-        // Stubs satisfy the type shape; real values are injected via RouterProvider on every render
+        // Stub satisfies the type shape; real value is injected via RouterProvider on every render
         db: null as unknown as IDBPDatabase<MyDB>,
-        items: [] as StoredItem[],
-        setItems: () => {},
     },
 });
 
@@ -27,7 +24,5 @@ interface Props {
 }
 
 export default function App({ db }: Props) {
-    const [items, setItems] = useState<StoredItem[]>([]);
-
-    return <RouterProvider router={router} context={{ db, items, setItems }} />;
+    return <RouterProvider router={router} context={{ db }} />;
 }

@@ -5,15 +5,19 @@ import IconButton from '@mui/material/IconButton';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, Outlet, redirect } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppNav, DRAWER_WIDTH } from '../components/AppNav';
+import { AppDataContext } from '../contexts/AppDataContext';
 import { getActiveAccount } from '../db/accountHelpers';
 import { getItemsByUser } from '../db/itemHelpers';
+import { getPeopleByUser } from '../db/personHelpers';
 import { registerPushSubscription } from '../db/pushSubscription';
 import { closeSseConnection, openSseConnection } from '../db/sseClient';
 import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
+import { getWorkContextsByUser } from '../db/workContextHelpers';
 import { authClient } from '../lib/authClient';
+import type { StoredAccount, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 
 // Wraps authClient.getSession() to distinguish a missing session from a network failure.
 // Returns networkError=true when the fetch throws (offline/DNS), false when the server responded.
@@ -52,17 +56,43 @@ export const Route = createFileRoute('/_authenticated')({
 });
 
 function AuthenticatedLayout() {
-    const { db, setItems } = Route.useRouteContext();
+    const { db } = Route.useRouteContext();
     const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+    const [account, setAccount] = useState<StoredAccount | null>(null);
+    const [items, setItems] = useState<StoredItem[]>([]);
+    const [workContexts, setWorkContexts] = useState<StoredWorkContext[]>([]);
+    const [people, setPeople] = useState<StoredPerson[]>([]);
+
+    // Refresh functions re-fetch account each call so they remain stable (only depend on db).
+    const refreshItems = useCallback(async () => {
+        const acct = await getActiveAccount(db);
+        if (!acct) return;
+        setItems(await getItemsByUser(db, acct.id));
+    }, [db]);
+
+    const refreshWorkContexts = useCallback(async () => {
+        const acct = await getActiveAccount(db);
+        if (!acct) return;
+        setWorkContexts(await getWorkContextsByUser(db, acct.id));
+    }, [db]);
+
+    const refreshPeople = useCallback(async () => {
+        const acct = await getActiveAccount(db);
+        if (!acct) return;
+        setPeople(await getPeopleByUser(db, acct.id));
+    }, [db]);
+
+    const appData = useMemo(
+        () => ({ account, items, workContexts, people, refreshItems, refreshWorkContexts, refreshPeople }),
+        [account, items, workContexts, people, refreshItems, refreshWorkContexts, refreshPeople],
+    );
 
     useEffect(() => {
         // No cancellation flag needed: event listeners are removed on cleanup so they
         // cannot fire after unmount, and React 19 silently ignores setState on unmounted components.
         async function syncAndRefresh() {
-            const account = await getActiveAccount(db);
-            if (!account) {
-                return;
-            }
+            const acct = await getActiveAccount(db);
+            if (!acct) return;
 
             await flushSyncQueue(db);
 
@@ -75,21 +105,20 @@ function AuthenticatedLayout() {
                 await pullFromServer(db);
             }
 
-            setItems(await getItemsByUser(db, account.id));
+            setItems(await getItemsByUser(db, acct.id));
         }
 
-        async function loadItems() {
-            const account = await getActiveAccount(db);
-            if (!account) {
-                return;
-            }
+        async function loadAll() {
+            const acct = await getActiveAccount(db);
+            if (!acct) return;
+            setAccount(acct);
 
-            // Show cached items immediately — works offline with no network round-trip
-            setItems(await getItemsByUser(db, account.id));
+            // Show cached data immediately — works offline with no network round-trip
+            setItems(await getItemsByUser(db, acct.id));
+            setWorkContexts(await getWorkContextsByUser(db, acct.id));
+            setPeople(await getPeopleByUser(db, acct.id));
 
-            if (!navigator.onLine) {
-                return;
-            }
+            if (!navigator.onLine) return;
 
             await syncAndRefresh();
 
@@ -114,7 +143,7 @@ function AuthenticatedLayout() {
             closeSseConnection();
         }
 
-        loadItems();
+        loadAll();
         window.addEventListener('online', handleOnline);
         window.addEventListener('offline', handleOffline);
         return () => {
@@ -122,7 +151,7 @@ function AuthenticatedLayout() {
             window.removeEventListener('offline', handleOffline);
             closeSseConnection();
         };
-    }, [db, setItems]);
+    }, [db]);
 
     return (
         <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -161,7 +190,9 @@ function AuthenticatedLayout() {
                     overflow: 'auto',
                 }}
             >
-                <Outlet />
+                <AppDataContext.Provider value={appData}>
+                    <Outlet />
+                </AppDataContext.Provider>
             </Box>
         </Box>
     );

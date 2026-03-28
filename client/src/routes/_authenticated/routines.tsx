@@ -10,8 +10,8 @@ import ListItemText from '@mui/material/ListItemText';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
+import { useAppData } from '../../contexts/AppDataContext';
 import { removeRoutine } from '../../db/routineMutations';
-import { useActiveAccount } from '../../hooks/useActiveAccount';
 import { useRoutines } from '../../hooks/useRoutines';
 import type { StoredRoutine } from '../../types/MyDB';
 import styles from './routines.module.css';
@@ -22,7 +22,7 @@ export const Route = createFileRoute('/_authenticated/routines')({
 
 function RoutinesPage() {
     const { db } = Route.useRouteContext();
-    const account = useActiveAccount(db);
+    const { account } = useAppData();
     const routines = useRoutines(db, account?.id ?? null);
 
     async function onDelete(routine: StoredRoutine) {

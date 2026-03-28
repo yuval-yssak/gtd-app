@@ -10,9 +10,8 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { getItemsByUser } from '../../db/itemHelpers';
+import { useAppData } from '../../contexts/AppDataContext';
 import { updateItem } from '../../db/itemMutations';
-import { useActiveAccount } from '../../hooks/useActiveAccount';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './tickler.module.css';
 
@@ -21,8 +20,8 @@ export const Route = createFileRoute('/_authenticated/tickler')({
 });
 
 function TicklerPage() {
-    const { db, items, setItems } = Route.useRouteContext();
-    const account = useActiveAccount(db);
+    const { db } = Route.useRouteContext();
+    const { items, refreshItems } = useAppData();
 
     const today = dayjs().format('YYYY-MM-DD');
     const ticklerItems = items
@@ -39,8 +38,7 @@ function TicklerPage() {
         // Remove ignoreBefore so the item becomes visible in its normal list immediately
         const { ignoreBefore: _ib, ...rest } = item;
         await updateItem(db, rest as StoredItem);
-        if (!account) return;
-        setItems(await getItemsByUser(db, account.id));
+        await refreshItems();
     }
 
     function dayLabel(dateStr: string): string {
