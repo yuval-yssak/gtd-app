@@ -13,10 +13,8 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
-import { getItemsByUser } from '../../db/itemHelpers';
+import { useAppData } from '../../contexts/AppDataContext';
 import { clarifyToDone } from '../../db/itemMutations';
-import { useActiveAccount } from '../../hooks/useActiveAccount';
-import { useWorkContexts } from '../../hooks/useWorkContexts';
 import type { EnergyLevel, StoredItem } from '../../types/MyDB';
 import styles from './next-actions.module.css';
 
@@ -43,10 +41,8 @@ function matchesFilters(item: StoredItem, energy: EnergyLevel | null, maxMinutes
 }
 
 function NextActionsPage() {
-    const { db, items, setItems } = Route.useRouteContext();
-    const account = useActiveAccount(db);
-    const workContexts = useWorkContexts(db, account?.id ?? null);
-
+    const { db } = Route.useRouteContext();
+    const { items, workContexts, refreshItems } = useAppData();
     const [energyFilter, setEnergyFilter] = useState<EnergyLevel | null>(null);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
     const [contextFilter, setContextFilter] = useState<string | null>(null);
@@ -60,11 +56,6 @@ function NextActionsPage() {
             if (!a.urgent && b.urgent) return 1;
             return (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '');
         });
-
-    async function refreshItems() {
-        if (!account) return;
-        setItems(await getItemsByUser(db, account.id));
-    }
 
     async function onDone(item: StoredItem) {
         await clarifyToDone(db, item);

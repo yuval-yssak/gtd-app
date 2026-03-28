@@ -19,11 +19,8 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useState } from 'react';
 import { ClarifyDialog } from '../../components/ClarifyDialog';
-import { getItemsByUser } from '../../db/itemHelpers';
+import { useAppData } from '../../contexts/AppDataContext';
 import { clarifyToDone, clarifyToNextAction, clarifyToTrash, collectItem } from '../../db/itemMutations';
-import { useActiveAccount } from '../../hooks/useActiveAccount';
-import { usePeople } from '../../hooks/usePeople';
-import { useWorkContexts } from '../../hooks/useWorkContexts';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './inbox.module.css';
 
@@ -34,21 +31,12 @@ export const Route = createFileRoute('/_authenticated/inbox')({
 });
 
 function InboxPage() {
-    const { db, items, setItems } = Route.useRouteContext();
-    const account = useActiveAccount(db);
+    const { db } = Route.useRouteContext();
+    const { account, items, workContexts, people, refreshItems } = useAppData();
     const [draft, setDraft] = useState('');
     const [clarifyOpen, setClarifyOpen] = useState(false);
-    const people = usePeople(db, account?.id ?? null);
-    const workContexts = useWorkContexts(db, account?.id ?? null);
 
-    console.log({ db, items, setItems, account, draft, clarifyOpen, people, workContexts });
     const inboxItems = items.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
-
-    async function refreshItems() {
-        if (!account) return;
-        const refreshed = await getItemsByUser(db, account.id);
-        setItems(refreshed);
-    }
 
     async function onCapture() {
         const title = draft.trim();

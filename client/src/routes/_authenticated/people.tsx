@@ -17,10 +17,9 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
-import { getPeopleByUser } from '../../db/personHelpers';
+import { useState } from 'react';
+import { useAppData } from '../../contexts/AppDataContext';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
-import { useActiveAccount } from '../../hooks/useActiveAccount';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './people.module.css';
 
@@ -38,23 +37,10 @@ const emptyForm: PersonFormState = { name: '', email: '', phone: '' };
 
 function PeoplePage() {
     const { db } = Route.useRouteContext();
-    const account = useActiveAccount(db);
-    const [people, setPeople] = useState<StoredPerson[]>([]);
+    const { account, people, refreshPeople } = useAppData();
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<StoredPerson | null>(null);
     const [form, setForm] = useState<PersonFormState>(emptyForm);
-
-    useEffect(() => {
-        if (!account) return;
-        getPeopleByUser(db, account.id)
-            .then(setPeople)
-            .catch(() => {});
-    }, [db, account]);
-
-    async function refreshPeople() {
-        if (!account) return;
-        setPeople(await getPeopleByUser(db, account.id));
-    }
 
     function openCreate() {
         setEditing(null);

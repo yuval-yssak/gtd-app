@@ -10,10 +10,8 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { getItemsByUser } from '../../db/itemHelpers';
+import { useAppData } from '../../contexts/AppDataContext';
 import { clarifyToDone } from '../../db/itemMutations';
-import { useActiveAccount } from '../../hooks/useActiveAccount';
-import { usePeople } from '../../hooks/usePeople';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './waiting-for.module.css';
 
@@ -22,9 +20,8 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 });
 
 function WaitingForPage() {
-    const { db, items, setItems } = Route.useRouteContext();
-    const account = useActiveAccount(db);
-    const people = usePeople(db, account?.id ?? null);
+    const { db } = Route.useRouteContext();
+    const { items, people, refreshItems } = useAppData();
 
     const waitingItems = items.filter((item) => item.status === 'waitingFor').sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
 
@@ -39,8 +36,7 @@ function WaitingForPage() {
 
     async function onReceived(item: StoredItem) {
         await clarifyToDone(db, item);
-        if (!account) return;
-        setItems(await getItemsByUser(db, account.id));
+        await refreshItems();
     }
 
     const isOverdue = (item: StoredItem) => item.expectedBy !== undefined && item.expectedBy < dayjs().format('YYYY-MM-DD');

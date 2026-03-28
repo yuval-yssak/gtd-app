@@ -17,10 +17,9 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
-import { getWorkContextsByUser } from '../../db/workContextHelpers';
+import { useState } from 'react';
+import { useAppData } from '../../contexts/AppDataContext';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
-import { useActiveAccount } from '../../hooks/useActiveAccount';
 import type { StoredWorkContext } from '../../types/MyDB';
 import styles from './work-contexts.module.css';
 
@@ -30,23 +29,10 @@ export const Route = createFileRoute('/_authenticated/work-contexts')({
 
 function WorkContextsPage() {
     const { db } = Route.useRouteContext();
-    const account = useActiveAccount(db);
-    const [workContexts, setWorkContexts] = useState<StoredWorkContext[]>([]);
+    const { account, workContexts, refreshWorkContexts } = useAppData();
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<StoredWorkContext | null>(null);
     const [nameInput, setNameInput] = useState('');
-
-    useEffect(() => {
-        if (!account) return;
-        getWorkContextsByUser(db, account.id)
-            .then(setWorkContexts)
-            .catch(() => {});
-    }, [db, account]);
-
-    async function refreshContexts() {
-        if (!account) return;
-        setWorkContexts(await getWorkContextsByUser(db, account.id));
-    }
 
     function openCreate() {
         setEditing(null);
@@ -68,12 +54,12 @@ function WorkContextsPage() {
             await createWorkContext(db, { userId: account.id, name: nameInput.trim() });
         }
         setDialogOpen(false);
-        await refreshContexts();
+        await refreshWorkContexts();
     }
 
     async function onDelete(ctx: StoredWorkContext) {
         await removeWorkContext(db, ctx._id);
-        await refreshContexts();
+        await refreshWorkContexts();
     }
 
     return (

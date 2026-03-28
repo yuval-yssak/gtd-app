@@ -7,6 +7,7 @@ import ListItemText from '@mui/material/ListItemText';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { useAppData } from '../../contexts/AppDataContext';
 import styles from './calendar.module.css';
 
 export const Route = createFileRoute('/_authenticated/calendar')({
@@ -14,7 +15,7 @@ export const Route = createFileRoute('/_authenticated/calendar')({
 });
 
 function CalendarPage() {
-    const { items } = Route.useRouteContext();
+    const { items } = useAppData();
 
     const calendarItems = items.filter((item) => item.status === 'calendar').sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''));
 
