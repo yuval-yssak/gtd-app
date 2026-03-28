@@ -24,6 +24,10 @@
         "mongodb": "latest",
         "web-push": "^3.6.7"
     },
+    "optionalDependencies": {
+        "@emnapi/core": "^1.7.1",
+        "@emnapi/runtime": "^1.7.1"
+    },
     "devDependencies": {
         "@biomejs/biome": "2.4.8",
         "@types/jsonwebtoken": "latest",
