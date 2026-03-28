@@ -70,19 +70,25 @@ test.describe('multi-device sync', () => {
         // Device-2 writes first — this timestamp is older and will lose.
         // Wait for the pulled item to land in IDB before reading it — pull() is async and the
         // write may not be visible yet when listItems() is called immediately after.
-        const item2 = await page2.waitForFunction(
-            (id) =>
-                (
-                    window as unknown as {
-                        __gtd: { listItems(): Promise<Array<{ _id: string; title: string }>> };
-                    }
-                ).__gtd
-                    .listItems()
-                    .then((its) => its.find((i) => i._id === id) ?? null),
-            inbox._id,
-            { timeout: 10_000, polling: 200 },
-        ).then((h) => h.jsonValue());
-        await gtd.clarifyToNextAction(page2, item2!, { energy: 'high' });
+        const item2 = await page2
+            .waitForFunction(
+                (id) =>
+                    (
+                        window as unknown as {
+                            __gtd: { listItems(): Promise<Array<{ _id: string; title: string }>> };
+                        }
+                    ).__gtd
+                        .listItems()
+                        .then((its) => its.find((i) => i._id === id) ?? null),
+                inbox._id,
+                { timeout: 10_000, polling: 200 },
+            )
+            .then((h) => h.jsonValue());
+
+        if (!item2) {
+            throw new Error('Item not found on device-2 after pull');
+        }
+        await gtd.clarifyToNextAction(page2, item2, { energy: 'high' });
         await gtd.flush(page2);
 
         // Device-1 writes after — newer updatedTs wins the conflict.

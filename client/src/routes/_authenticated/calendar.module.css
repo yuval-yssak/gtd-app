@@ -1,0 +1,16 @@
+.list {
+    border: 1px solid var(--mui-palette-divider);
+    border-radius: 4px;
+}
+
+.item {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    gap: 16px;
+}
+
+.timeCol {
+    min-width: 120px;
+    flex-shrink: 0;
+}

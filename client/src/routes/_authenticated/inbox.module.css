@@ -1,0 +1,9 @@
+.list {
+    border: 1px solid var(--mui-palette-divider);
+    border-radius: 4px;
+}
+
+.item {
+    padding: 8px 16px;
+    padding-right: 220px;
+}

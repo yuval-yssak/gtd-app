@@ -4,11 +4,13 @@ import { TanStackRouterDevtools } from '@tanstack/react-router-devtools';
 import type { RouterContext } from '../types/routerContext';
 
 function RootComponent() {
+    console.log('Rendering RootComponent', import.meta);
     return (
         <>
             <CssBaseline />
             <Outlet />
-            {import.meta.env.DEV && <TanStackRouterDevtools />}
+            {/* import.meta.env.DEV is false in preview builds; check URL so localhost gets devtools too */}
+            {(import.meta.env.DEV || window.location.hostname === 'localhost') && <TanStackRouterDevtools />}
         </>
     );
 }
