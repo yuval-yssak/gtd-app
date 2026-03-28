@@ -1,18 +1,16 @@
 FROM node:24-alpine AS builder
 WORKDIR /app
-# Copy root workspace manifests — the canonical lock file lives at the monorepo root
-COPY package*.json ./
-COPY api-server/package*.json ./api-server/
-# Install only api-server workspace deps (skips client)
-RUN npm ci --workspace=api-server
-COPY api-server/ ./api-server/
-RUN npm run build --workspace=api-server
+# Build context is repo root, so reference api-server/ paths explicitly
+COPY api-server/package*.json ./
+RUN npm ci
+COPY api-server/src/ ./src/
+COPY api-server/tsconfig.json ./
+RUN npm run build
 
 FROM node:24-alpine
 WORKDIR /app
-COPY package*.json ./
-COPY api-server/package*.json ./api-server/
-RUN npm ci --workspace=api-server --omit=dev
-COPY --from=builder /app/api-server/build ./build
+COPY api-server/package*.json ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/build ./build
 EXPOSE 8080
 CMD ["node", "build/index.js"]
