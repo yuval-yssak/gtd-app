@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { API_SERVER } from '../constants/globals';
 import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
 import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
@@ -84,7 +85,7 @@ export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
     }
 
     const deviceId = await getOrCreateDeviceId(db);
-    const res = await fetch('/sync/push', {
+    const res = await fetch(`${API_SERVER}/sync/push`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -105,7 +106,7 @@ export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
 export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
     const deviceId = await getOrCreateDeviceId(db);
 
-    const res = await fetch('/sync/bootstrap', { credentials: 'include' });
+    const res = await fetch(`${API_SERVER}/sync/bootstrap`, { credentials: 'include' });
     if (!res.ok) throw new Error(`GET /sync/bootstrap ${res.status}`);
 
     const { items, routines, people, workContexts, serverTs } = (await res.json()) as BootstrapPayload;
@@ -135,7 +136,7 @@ export async function pullFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
     const deviceId = await getOrCreateDeviceId(db);
     const since = await getLastSyncedTs(db);
 
-    const res = await fetch(`/sync/pull?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(deviceId)}`, {
+    const res = await fetch(`${API_SERVER}/sync/pull?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(deviceId)}`, {
         credentials: 'include',
     });
     if (!res.ok) throw new Error(`GET /sync/pull ${res.status}`);

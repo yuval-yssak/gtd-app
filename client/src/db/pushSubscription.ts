@@ -1,4 +1,5 @@
 import type { IDBPDatabase } from 'idb';
+import { API_SERVER } from '../constants/globals';
 import type { MyDB } from '../types/MyDB';
 import { getOrCreateDeviceId } from './deviceId';
 
@@ -8,7 +9,7 @@ export async function registerPushSubscription(db: IDBPDatabase<MyDB>): Promise<
     }
 
     // Fetch the VAPID public key from the server — it's public so no auth needed
-    const res = await fetch('/sync/config', { credentials: 'include' });
+    const res = await fetch(`${API_SERVER}/sync/config`, { credentials: 'include' });
     if (!res.ok) {
         return;
     }
@@ -31,7 +32,7 @@ export async function registerPushSubscription(db: IDBPDatabase<MyDB>): Promise<
 
     const deviceId = await getOrCreateDeviceId(db);
     const json = subscription.toJSON();
-    await fetch('/push/subscribe', {
+    await fetch(`${API_SERVER}/push/subscribe`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

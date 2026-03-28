@@ -1,3 +1,5 @@
+import { API_SERVER } from '../constants/globals';
+
 // Module-level singleton — only one SSE connection per page, shared across all components
 let eventSource: EventSource | null = null;
 
@@ -7,7 +9,7 @@ export function openSseConnection(onUpdate: OnUpdateCallback): void {
     closeSseConnection();
 
     // withCredentials is required so the auth cookie is sent cross-origin in production
-    eventSource = new EventSource('/sync/events', { withCredentials: true });
+    eventSource = new EventSource(`${API_SERVER}/sync/events`, { withCredentials: true });
 
     eventSource.onmessage = (event) => {
         try {
