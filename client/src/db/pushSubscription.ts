@@ -29,7 +29,14 @@ function isBrowserPushCapable(): boolean {
 // implicitly triggers Chrome's "quiet notification UI" (a small bell icon in the address
 // bar rather than a popup), which users routinely miss, leaving permission as 'default'
 // and causing subscribe() to fail with NotAllowedError.
+//
+// Check the existing state first: calling requestPermission() when already 'granted' or
+// 'denied' is a no-op on desktop, but mobile browsers (iOS Safari, some Android) may
+// re-show the dialog or behave erratically, causing the user to dismiss it and leaving
+// permission as 'default', which makes this function return false on every reload.
 async function hasNotificationPermission(): Promise<boolean> {
+    if (Notification.permission === 'granted') return true;
+    if (Notification.permission === 'denied') return false;
     return (await Notification.requestPermission()) === 'granted';
 }
 
