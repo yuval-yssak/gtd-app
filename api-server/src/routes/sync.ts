@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
+import type AbstractDAO from '../dataAccess/abstractDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
@@ -34,10 +35,19 @@ function entityDisplayName(snapshot: EntitySnapshot): string {
 // widening `_id` to `ObjectId` when the collection schema declares it optional.
 type MongoFilter = Record<string, unknown>;
 
-async function applyItemOp(userId: string, entityId: string, opType: OpType, snapshot: ItemInterface | null): Promise<void> {
+// Single generic helper replacing four near-identical applyXxxOp functions.
+// The DAO provides deleteByOwner / findByOwnerAndId / replaceById; the only
+// varying pieces are the DAO instance and the snapshot type.
+async function applyEntitySnapshotOp<T extends EntitySnapshot>(
+    dao: AbstractDAO<T>,
+    userId: string,
+    entityId: string,
+    opType: OpType,
+    snapshot: T | null,
+): Promise<void> {
     if (opType === 'delete') {
-        // userId guard ensures a user can never delete another user's item via a crafted op
-        await itemsDAO.collection.deleteOne({ _id: entityId, user: userId } as never);
+        // userId guard ensures a user can never delete another user's entity via a crafted op
+        await dao.deleteByOwner(entityId, userId);
         return;
     }
     if (!snapshot) {
@@ -46,54 +56,9 @@ async function applyItemOp(userId: string, entityId: string, opType: OpType, sna
 
     // Two-step last-write-wins: fetch current then replace only if incoming is newer or equal.
     // Simpler than a conditional upsert query; safe for the low-throughput GTD use case.
-    const existing = await itemsDAO.collection.findOne({ _id: entityId, user: userId } as never);
+    const existing = await dao.findByOwnerAndId(entityId, userId);
     if (!existing || existing.updatedTs <= snapshot.updatedTs) {
-        await itemsDAO.collection.replaceOne({ _id: entityId } as never, snapshot, { upsert: true });
-    }
-}
-
-async function applyRoutineOp(userId: string, entityId: string, opType: OpType, snapshot: RoutineInterface | null): Promise<void> {
-    if (opType === 'delete') {
-        await routinesDAO.collection.deleteOne({ _id: entityId, user: userId } as never);
-        return;
-    }
-    if (!snapshot) {
-        return;
-    }
-
-    const existing = await routinesDAO.collection.findOne({ _id: entityId, user: userId } as never);
-    if (!existing || existing.updatedTs <= snapshot.updatedTs) {
-        await routinesDAO.collection.replaceOne({ _id: entityId } as never, snapshot, { upsert: true });
-    }
-}
-
-async function applyPersonOp(userId: string, entityId: string, opType: OpType, snapshot: PersonInterface | null): Promise<void> {
-    if (opType === 'delete') {
-        await peopleDAO.collection.deleteOne({ _id: entityId, user: userId } as never);
-        return;
-    }
-    if (!snapshot) {
-        return;
-    }
-
-    const existing = await peopleDAO.collection.findOne({ _id: entityId, user: userId } as never);
-    if (!existing || existing.updatedTs <= snapshot.updatedTs) {
-        await peopleDAO.collection.replaceOne({ _id: entityId } as never, snapshot, { upsert: true });
-    }
-}
-
-async function applyWorkContextOp(userId: string, entityId: string, opType: OpType, snapshot: WorkContextInterface | null): Promise<void> {
-    if (opType === 'delete') {
-        await workContextsDAO.collection.deleteOne({ _id: entityId, user: userId } as never);
-        return;
-    }
-    if (!snapshot) {
-        return;
-    }
-
-    const existing = await workContextsDAO.collection.findOne({ _id: entityId, user: userId } as never);
-    if (!existing || existing.updatedTs <= snapshot.updatedTs) {
-        await workContextsDAO.collection.replaceOne({ _id: entityId } as never, snapshot, { upsert: true });
+        await dao.replaceById(entityId, snapshot);
     }
 }
 
@@ -101,13 +66,13 @@ function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {
     const { entityType, entityId, opType, snapshot } = op;
     switch (entityType) {
         case 'item':
-            return applyItemOp(userId, entityId, opType, snapshot as ItemInterface | null);
+            return applyEntitySnapshotOp(itemsDAO, userId, entityId, opType, snapshot as ItemInterface | null);
         case 'routine':
-            return applyRoutineOp(userId, entityId, opType, snapshot as RoutineInterface | null);
+            return applyEntitySnapshotOp(routinesDAO, userId, entityId, opType, snapshot as RoutineInterface | null);
         case 'person':
-            return applyPersonOp(userId, entityId, opType, snapshot as PersonInterface | null);
+            return applyEntitySnapshotOp(peopleDAO, userId, entityId, opType, snapshot as PersonInterface | null);
         case 'workContext':
-            return applyWorkContextOp(userId, entityId, opType, snapshot as WorkContextInterface | null);
+            return applyEntitySnapshotOp(workContextsDAO, userId, entityId, opType, snapshot as WorkContextInterface | null);
     }
 }
 
@@ -122,7 +87,22 @@ async function purgeOldOperations(userId: string): Promise<void> {
     // types this as returning the element type (not T | undefined), safe since we guard length above.
     const minLastSyncedTs = deviceStates.map((d) => d.lastSyncedTs).reduce((min, ts) => (ts < min ? ts : min));
 
-    await operationsDAO.collection.deleteMany({ user: userId, ts: { $lt: minLastSyncedTs } } as never);
+    await operationsDAO.deleteOlderThan(userId, minLastSyncedTs);
+}
+
+async function notifyViaWebPush(userId: string, excludeDeviceId: string, ops: OperationInterface[], now: string): Promise<void> {
+    const opSummaries = ops.map((op) => ({
+        entityType: op.entityType,
+        opType: op.opType,
+        name: op.snapshot ? entityDisplayName(op.snapshot) : null,
+    }));
+    const pushSubs = await pushSubscriptionsDAO.findArray({ user: userId, _id: { $ne: excludeDeviceId } } as MongoFilter as never);
+    const pushResults = await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
+    pushResults.forEach((result, i) => {
+        if (result.status === 'rejected') {
+            console.error(`[push] failed to notify device ${pushSubs[i]?._id}:`, result.reason);
+        }
+    });
 }
 
 export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -185,18 +165,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // Web Push for devices that aren't currently connected via SSE (app closed).
         // Include per-op summaries so the SW can show a meaningful notification body
         // (e.g. "Updated: Call dentist") instead of a generic message.
-        const opSummaries = serverOps.map((op) => ({
-            entityType: op.entityType,
-            opType: op.opType,
-            name: op.snapshot ? entityDisplayName(op.snapshot) : null,
-        }));
-        const pushSubs = await pushSubscriptionsDAO.findArray({ user: user.id, _id: { $ne: deviceId } } as MongoFilter as never);
-        const pushResults = await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
-        pushResults.forEach((result, i) => {
-            if (result.status === 'rejected') {
-                console.error(`[push] failed to notify device ${pushSubs[i]?._id}:`, result.reason);
-            }
-        });
+        await notifyViaWebPush(user.id, deviceId, serverOps, now);
 
         return c.json({ ok: true }, 200);
     })
@@ -217,7 +186,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             // Track per-device pull cursor so old operations can eventually be purged
             await deviceSyncStateDAO.updateOne(
                 { _id: deviceId } as MongoFilter as never,
-                { $set: { lastSyncedTs: serverTs, user: user.id }, $setOnInsert: { lastSeenTs: new Date(0).toISOString() } } as never,
+                { $set: { lastSyncedTs: serverTs, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
                 { upsert: true },
             );
 

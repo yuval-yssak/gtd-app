@@ -16,6 +16,10 @@ class PushSubscriptionsDAO extends AbstractDAO<PushSubscriptionRecord> {
         // Keyed by deviceId so re-subscribing (e.g. after token expiry) replaces the old record
         await this._collection.replaceOne({ _id: record._id }, record, { upsert: true });
     }
+
+    async deleteByDevice(deviceId: string, userId: string): Promise<void> {
+        await this._collection.deleteOne({ _id: deviceId, user: userId } as never);
+    }
 }
 
 export default new PushSubscriptionsDAO();

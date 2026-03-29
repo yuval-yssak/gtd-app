@@ -1,6 +1,9 @@
 import { Buffer } from 'node:buffer';
 import { expect, vi } from 'vitest';
-export const SESSION_COOKIE = 'better-auth.session_token';
+// Imported and re-exported under SESSION_COOKIE so call sites in this file and test files are unchanged
+import { SESSION_COOKIE_NAME as SESSION_COOKIE } from '../auth/constants.js';
+
+export { SESSION_COOKIE };
 
 // Minimal interface so helpers work with any Hono app variant without importing Hono types.
 // Hono's fetch() is typed as Response | Promise<Response>, so we mirror that here.

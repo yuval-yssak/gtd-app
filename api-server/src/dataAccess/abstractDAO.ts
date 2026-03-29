@@ -23,14 +23,16 @@ class AbstractDAO<S extends Document> {
     async init(client: MongoClient, dbName: string) {
         this.databaseName = dbName;
         this.dbClient = client;
+        await this.ensureCollectionExists(dbName);
+        this._collection = client.db(dbName).collection<S>(this.COLLECTION_NAME);
+    }
 
-        const existingCollections: Collection[] = await this.dbClient.db(dbName).collections();
-
-        const alreadyExisting: Collection | undefined = existingCollections.find((c) => c.collectionName === this.COLLECTION_NAME);
-        if (!alreadyExisting) {
+    private async ensureCollectionExists(dbName: string): Promise<void> {
+        const existing: Collection[] = await this.dbClient.db(dbName).collections();
+        const alreadyExists = existing.some((c) => c.collectionName === this.COLLECTION_NAME);
+        if (!alreadyExists) {
             await this.dbClient.db(dbName).createCollection(this.COLLECTION_NAME);
         }
-        this._collection = client.db(dbName).collection<S>(this.COLLECTION_NAME);
     }
 
     async bulkWrite(operations: AnyBulkWriteOperation<S>[], options?: BulkWriteOptions) {
@@ -57,11 +59,8 @@ class AbstractDAO<S extends Document> {
     }
 
     async *findSequence<T = S>(filter: Filter<S>, options: FindOptions = {}): AsyncGenerator<WithId<T>> {
-        const cursor = this._collection.find<WithId<T>>(filter, options);
-
-        while (await cursor.hasNext()) {
-            // Safe cast: hasNext() guarantees next() won't return null
-            yield await (cursor.next() as Promise<WithId<T>>);
+        for await (const doc of this._collection.find<WithId<T>>(filter, options)) {
+            yield doc;
         }
     }
 
@@ -71,11 +70,8 @@ class AbstractDAO<S extends Document> {
     }
 
     async *aggregateSequence<T extends Document = Document>(pipeline: Document[], options: AggregateOptions = {}): AsyncGenerator<T> {
-        const cursor = this._collection.aggregate<T>(pipeline, options);
-
-        while (await cursor.hasNext()) {
-            // Safe cast: hasNext() guarantees next() won't return null
-            yield await (cursor.next() as Promise<T>);
+        for await (const doc of this._collection.aggregate<T>(pipeline, options)) {
+            yield doc;
         }
     }
 
@@ -103,7 +99,25 @@ class AbstractDAO<S extends Document> {
         return this._collection.initializeUnorderedBulkOp();
     }
 
-    get collection() {
+    // Cast filter/update objects to `never` to work around MongoDB driver's `InferIdType`
+    // widening `_id` to `ObjectId` when the collection schema declares it optional.
+    // Centralized here so callers never need their own `as never` casts.
+
+    async deleteByOwner(entityId: string, userId: string): Promise<void> {
+        await this._collection.deleteOne({ _id: entityId, user: userId } as never);
+    }
+
+    async findByOwnerAndId(entityId: string, userId: string): Promise<WithId<S> | null> {
+        return this._collection.findOne({ _id: entityId, user: userId } as never);
+    }
+
+    async replaceById(entityId: string, doc: S): Promise<void> {
+        await this._collection.replaceOne({ _id: entityId } as never, doc, { upsert: true });
+    }
+
+    // protected so subclasses can still access the raw collection for operations not covered
+    // by the generic helpers above (e.g. custom indexes, upsert by non-_id key)
+    protected get collection() {
         return this._collection;
     }
 }

@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { generateId } from 'better-auth';
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
+import { SESSION_COOKIE_NAME } from '../auth/constants.js';
 import { auth, db } from '../loaders/mainLoader.js';
 
 // Guard: this module must never be loaded in production — throw immediately if it slips through.
@@ -10,7 +11,6 @@ if (process.env.NODE_ENV === 'production') {
     throw new Error('devLogin route must not be loaded in production');
 }
 
-const COOKIE_NAME = 'better-auth.session_token';
 const SESSION_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 // Replicates better-call's signCookieValue + encodeURIComponent wrapping.
@@ -90,7 +90,7 @@ export const devLoginRoutes = new Hono()
 
         const signedToken = signSessionToken(rawToken, readAuthSecret());
 
-        c.header('Set-Cookie', `${COOKIE_NAME}=${signedToken}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toDate().toUTCString()}`);
+        c.header('Set-Cookie', `${SESSION_COOKIE_NAME}=${signedToken}; Path=/; HttpOnly; SameSite=Lax; Expires=${expiresAt.toDate().toUTCString()}`);
 
         return c.json({
             ok: true,
@@ -98,7 +98,7 @@ export const devLoginRoutes = new Hono()
             email: normalizedEmail,
             // Playwright's BrowserContext.addCookies() format — returned to avoid parsing Set-Cookie.
             cookie: {
-                name: COOKIE_NAME,
+                name: SESSION_COOKIE_NAME,
                 value: signedToken,
                 domain: 'localhost',
                 path: '/',
