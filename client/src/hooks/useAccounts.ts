@@ -74,6 +74,27 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
             });
     }, []);
 
+    const refreshAccountState = useCallback(async () => {
+        const [all, active] = await Promise.all([getAllAccounts(db), getActiveAccount(db)]);
+        setAllAccounts(all);
+        setActiveAccountState(active);
+    }, [db]);
+
+    const reauthForUserId = useCallback(
+        (userId: string) => {
+            // Session expired — trigger OAuth re-authentication for the target account
+            const account = allAccounts.find((a) => a.id === userId);
+            if (!account) {
+                return;
+            }
+            void authClient.signIn.social({
+                provider: account.provider,
+                callbackURL: `${window.location.origin}/auth/callback`,
+            });
+        },
+        [allAccounts],
+    );
+
     const switchToAccount = useCallback(
         async (userId: string) => {
             const { data: sessions } = await authClient.multiSession.listDeviceSessions();
@@ -81,26 +102,16 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
 
             if (!target) {
                 // Session expired — fall back to OAuth re-authentication
-                const account = allAccounts.find((a) => a.id === userId);
-                if (!account) {
-                    return;
-                }
-                void authClient.signIn.social({
-                    provider: account.provider,
-                    callbackURL: `${window.location.origin}/auth/callback`,
-                });
+                reauthForUserId(userId);
                 return;
             }
 
             // Switch the active session cookie server-side — no OAuth redirect needed
             await authClient.multiSession.setActive({ sessionToken: target.session.token });
             await setActiveAccount(userId, db);
-
-            const [all, active] = await Promise.all([getAllAccounts(db), getActiveAccount(db)]);
-            setAllAccounts(all);
-            setActiveAccountState(active);
+            await refreshAccountState();
         },
-        [db, allAccounts],
+        [db, reauthForUserId, refreshAccountState],
     );
 
     const switchToNextAndRevoke = useCallback(
@@ -128,13 +139,20 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
         });
     }, []);
 
-    const signOutCurrent = useCallback(async () => {
+    const revokeCurrentFromIDB = useCallback(async () => {
+        // Fetches sessions and removes the current account from IDB in one step,
+        // returning both the session list (needed by the caller for transfer) and
+        // the current session token (needed to revoke it after switching).
         const { data: sessions } = await authClient.multiSession.listDeviceSessions();
         const currentSession = sessions?.find((s) => s.user.id === activeAccount?.id);
-
         if (activeAccount) {
             await removeAccount(activeAccount.id, db);
         }
+        return { currentSessionToken: currentSession?.session.token, sessions };
+    }, [db, activeAccount]);
+
+    const signOutCurrent = useCallback(async () => {
+        const { currentSessionToken, sessions } = await revokeCurrentFromIDB();
 
         const remaining = await getAllAccounts(db);
         const next = remaining[0];
@@ -147,11 +165,11 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
 
         const targetSession = sessions?.find((s) => s.user.id === next.id);
         if (targetSession) {
-            await switchToNextAndRevoke(next, currentSession?.session.token, targetSession.session.token);
+            await switchToNextAndRevoke(next, currentSessionToken, targetSession.session.token);
         } else {
             reauthAsNext(next);
         }
-    }, [db, activeAccount, switchToNextAndRevoke, reauthAsNext]);
+    }, [db, revokeCurrentFromIDB, switchToNextAndRevoke, reauthAsNext]);
 
     const signOutAll = useCallback(async () => {
         await authClient.signOut();

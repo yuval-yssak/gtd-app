@@ -14,18 +14,18 @@ export async function createPerson(db: IDBPDatabase<MyDB>, fields: NewPersonFiel
     const now = nowIso();
     const person: StoredPerson = { ...fields, _id: crypto.randomUUID(), createdTs: now, updatedTs: now };
     await putPerson(db, person);
-    await queueSyncOp(db, 'create', 'person', person._id, person);
+    await queueSyncOp(db, { opType: 'create', entityType: 'person', entityId: person._id, snapshot: person });
     return person;
 }
 
 export async function updatePerson(db: IDBPDatabase<MyDB>, person: StoredPerson): Promise<StoredPerson> {
     const updated: StoredPerson = { ...person, updatedTs: nowIso() };
     await putPerson(db, updated);
-    await queueSyncOp(db, 'update', 'person', updated._id, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'person', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
 export async function removePerson(db: IDBPDatabase<MyDB>, personId: string): Promise<void> {
     await deletePersonById(db, personId);
-    await queueSyncOp(db, 'delete', 'person', personId, null);
+    await queueSyncOp(db, { opType: 'delete', entityType: 'person', entityId: personId, snapshot: null });
 }

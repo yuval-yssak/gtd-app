@@ -24,6 +24,12 @@ export const Route = createFileRoute('/_authenticated/next-actions')({
 
 type TimeFilter = 5 | 30 | 60 | null;
 
+interface ActiveFilters {
+    energy: EnergyLevel | null;
+    maxMinutes: TimeFilter;
+    workContextId: string | null;
+}
+
 const energyLabels: Record<EnergyLevel, string> = { low: 'Low', medium: 'Medium', high: 'High' };
 const energyColors: Record<EnergyLevel, 'default' | 'success' | 'warning' | 'error'> = {
     low: 'success',
@@ -31,13 +37,18 @@ const energyColors: Record<EnergyLevel, 'default' | 'success' | 'warning' | 'err
     high: 'error',
 };
 
-function matchesFilters(item: StoredItem, energy: EnergyLevel | null, maxMinutes: TimeFilter, workContextId: string | null): boolean {
+function matchesFilters(item: StoredItem, filters: ActiveFilters): boolean {
     const today = dayjs().format('YYYY-MM-DD');
     if (item.ignoreBefore && item.ignoreBefore > today) return false;
-    if (energy && item.energy !== energy) return false;
-    if (maxMinutes && (item.time === undefined || item.time > maxMinutes)) return false;
-    if (workContextId && !item.workContextIds?.includes(workContextId)) return false;
+    if (filters.energy && item.energy !== filters.energy) return false;
+    if (filters.maxMinutes && (item.time === undefined || item.time > filters.maxMinutes)) return false;
+    if (filters.workContextId && !item.workContextIds?.includes(filters.workContextId)) return false;
     return true;
+}
+
+// Returns a toggle setter: clicking the same value again clears the filter.
+function makeToggle<T>(setter: React.Dispatch<React.SetStateAction<T | null>>) {
+    return (value: T) => setter((prev) => (prev === value ? null : value));
 }
 
 function NextActionsPage() {
@@ -47,9 +58,13 @@ function NextActionsPage() {
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
     const [contextFilter, setContextFilter] = useState<string | null>(null);
 
+    const toggleEnergy = makeToggle(setEnergyFilter);
+    const toggleTime = makeToggle(setTimeFilter);
+    const toggleContext = makeToggle(setContextFilter);
+
     const nextActions = items
         .filter((item) => item.status === 'nextAction')
-        .filter((item) => matchesFilters(item, energyFilter, timeFilter, contextFilter))
+        .filter((item) => matchesFilters(item, { energy: energyFilter, maxMinutes: timeFilter, workContextId: contextFilter }))
         .sort((a, b) => {
             // Urgent items first, then by expectedBy ascending (empty strings sort last)
             if (a.urgent && !b.urgent) return -1;
@@ -60,18 +75,6 @@ function NextActionsPage() {
     async function onDone(item: StoredItem) {
         await clarifyToDone(db, item);
         await refreshItems();
-    }
-
-    function toggleEnergy(e: EnergyLevel) {
-        setEnergyFilter((prev) => (prev === e ? null : e));
-    }
-
-    function toggleTime(t: TimeFilter) {
-        setTimeFilter((prev) => (prev === t ? null : t));
-    }
-
-    function toggleContext(id: string) {
-        setContextFilter((prev) => (prev === id ? null : id));
     }
 
     return (

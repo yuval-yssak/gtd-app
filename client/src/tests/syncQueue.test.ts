@@ -33,8 +33,8 @@ describe('queueSyncOp coalescing', () => {
         const original = makeItem(id);
         const updated = { ...original, title: 'Updated title' };
 
-        await queueSyncOp(db, 'create', 'item', id, original);
-        await queueSyncOp(db, 'update', 'item', id, updated);
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: id, snapshot: original });
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: id, snapshot: updated });
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(1);
@@ -45,8 +45,8 @@ describe('queueSyncOp coalescing', () => {
     it('create then delete drops everything (item never reached the server)', async () => {
         const id = 'item-b';
 
-        await queueSyncOp(db, 'create', 'item', id, makeItem(id));
-        await queueSyncOp(db, 'delete', 'item', id, null);
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: id, snapshot: makeItem(id) });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: id, snapshot: null });
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(0);
@@ -55,8 +55,8 @@ describe('queueSyncOp coalescing', () => {
     it('update then delete collapses into a single delete op', async () => {
         const id = 'item-c';
 
-        await queueSyncOp(db, 'update', 'item', id, makeItem(id));
-        await queueSyncOp(db, 'delete', 'item', id, null);
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: id, snapshot: makeItem(id) });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: id, snapshot: null });
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(1);
@@ -69,8 +69,8 @@ describe('queueSyncOp coalescing', () => {
         const v1 = makeItem(id);
         const v2 = { ...v1, title: 'v2' };
 
-        await queueSyncOp(db, 'update', 'item', id, v1);
-        await queueSyncOp(db, 'update', 'item', id, v2);
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: id, snapshot: v1 });
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: id, snapshot: v2 });
 
         // update+update coalescing is intentionally skipped: both snapshots are kept
         // so the server always sees the intermediate state if needed.
@@ -83,8 +83,8 @@ describe('queueSyncOp coalescing', () => {
         const itemA = makeItem('item-e');
         const itemB = makeItem('item-f');
 
-        await queueSyncOp(db, 'create', 'item', itemA._id, itemA);
-        await queueSyncOp(db, 'create', 'item', itemB._id, itemB);
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: itemA._id, snapshot: itemA });
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: itemB._id, snapshot: itemB });
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(2);

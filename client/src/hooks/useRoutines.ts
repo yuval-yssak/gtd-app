@@ -10,7 +10,7 @@ export function useRoutines(db: IDBPDatabase<MyDB>, userId: string | null): Stor
         if (!userId) return;
         getRoutinesByUser(db, userId)
             .then(setRoutines)
-            .catch(() => {});
+            .catch((err) => console.error('[routines] load failed:', err));
     }, [db, userId]);
 
     return routines;

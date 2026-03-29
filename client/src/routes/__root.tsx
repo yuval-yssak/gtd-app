@@ -4,7 +4,6 @@ import { TanStackRouterDevtools } from '@tanstack/react-router-devtools';
 import type { RouterContext } from '../types/routerContext';
 
 function RootComponent() {
-    console.log('Rendering RootComponent', import.meta);
     return (
         <>
             <CssBaseline />

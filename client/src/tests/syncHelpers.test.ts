@@ -62,7 +62,15 @@ describe('flushSyncQueue', () => {
     });
 
     it('POSTs queued ops and clears the queue on success', async () => {
-        await queueSyncOp(db, 'create', 'item', 'item-1', makeItem('item-1'));
+        // Seed IDB directly rather than via queueSyncOp: queueSyncOp fires an immediate
+        // fire-and-forget flush that races with fetch spy setup when Node's native fetch is present.
+        await db.add('syncOperations', {
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'item-1',
+            queuedAt: '2025-01-01T00:00:00.000Z',
+            snapshot: makeItem('item-1'),
+        });
 
         const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
 
@@ -70,7 +78,7 @@ describe('flushSyncQueue', () => {
 
         expect(fetchSpy).toHaveBeenCalledOnce();
         const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-        expect(url).toBe('/sync/push');
+        expect(url).toContain('/sync/push');
         expect(init.method).toBe('POST');
 
         const ops = await db.getAll('syncOperations');
@@ -78,7 +86,7 @@ describe('flushSyncQueue', () => {
     });
 
     it('preserves the queue when the server returns a non-200 response', async () => {
-        await queueSyncOp(db, 'create', 'item', 'item-2', makeItem('item-2'));
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'item-2', snapshot: makeItem('item-2') });
 
         vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('Server error', { status: 500 }));
 

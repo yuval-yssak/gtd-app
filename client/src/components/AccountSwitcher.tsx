@@ -29,15 +29,15 @@ interface Props {
 }
 
 export function AccountSwitcher({ db }: Props) {
-    const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+    const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
     const { activeAccount, allAccounts, addAnotherAccount, switchToAccount, signOutCurrent, signOutAll } = useAccounts(db);
     const online = useOnline();
 
     function openMenu(e: React.MouseEvent<HTMLElement>) {
-        setAnchor(e.currentTarget);
+        setMenuAnchor(e.currentTarget);
     }
     function closeMenu() {
-        setAnchor(null);
+        setMenuAnchor(null);
     }
 
     return (
@@ -46,7 +46,7 @@ export function AccountSwitcher({ db }: Props) {
                 <AccountAvatar account={activeAccount} size={32} />
             </IconButton>
 
-            <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={closeMenu} onClick={closeMenu}>
+            <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu} onClick={closeMenu}>
                 {allAccounts.map((account) => (
                     <MenuItem
                         key={account.id}

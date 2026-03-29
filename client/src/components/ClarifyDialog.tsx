@@ -75,9 +75,9 @@ interface Props {
 export function ClarifyDialog({ items, db, people, workContexts, onClose, onItemProcessed }: Props) {
     const [index, setIndex] = useState(0);
     const [destination, setDestination] = useState<Destination | null>(null);
-    const [naForm, setNaForm] = useState<NextActionForm>(emptyNextAction);
-    const [calForm, setCalForm] = useState<CalendarForm>(emptyCalendar);
-    const [wfForm, setWfForm] = useState<WaitingForForm>(emptyWaitingFor);
+    const [nextActionForm, setNextActionForm] = useState<NextActionForm>(emptyNextAction);
+    const [calendarForm, setCalendarForm] = useState<CalendarForm>(emptyCalendar);
+    const [waitingForForm, setWaitingForForm] = useState<WaitingForForm>(emptyWaitingFor);
     const [done, setDone] = useState(false);
 
     const currentItem = items[index];
@@ -85,9 +85,9 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
 
     function resetForms() {
         setDestination(null);
-        setNaForm(emptyNextAction);
-        setCalForm(emptyCalendar);
-        setWfForm(emptyWaitingFor);
+        setNextActionForm(emptyNextAction);
+        setCalendarForm(emptyCalendar);
+        setWaitingForForm(emptyWaitingFor);
     }
 
     function advanceOrFinish() {
@@ -123,31 +123,35 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
             // exactOptionalPropertyTypes requires we omit undefined keys entirely rather than
             // passing them explicitly, so we build the meta object incrementally.
             const meta = {
-                ...(naForm.workContextIds.length && { workContextIds: naForm.workContextIds }),
-                ...(naForm.energy && { energy: naForm.energy }),
-                ...(naForm.time && { time: Number(naForm.time) }),
-                ...(naForm.urgent && { urgent: naForm.urgent }),
-                ...(naForm.focus && { focus: naForm.focus }),
-                ...(naForm.expectedBy && { expectedBy: naForm.expectedBy }),
-                ...(naForm.ignoreBefore && { ignoreBefore: naForm.ignoreBefore }),
+                ...(nextActionForm.workContextIds.length && { workContextIds: nextActionForm.workContextIds }),
+                ...(nextActionForm.energy && { energy: nextActionForm.energy }),
+                ...(nextActionForm.time && { time: Number(nextActionForm.time) }),
+                ...(nextActionForm.urgent && { urgent: nextActionForm.urgent }),
+                ...(nextActionForm.focus && { focus: nextActionForm.focus }),
+                ...(nextActionForm.expectedBy && { expectedBy: nextActionForm.expectedBy }),
+                ...(nextActionForm.ignoreBefore && { ignoreBefore: nextActionForm.ignoreBefore }),
             };
             await clarifyToNextAction(db, item, meta);
             return;
         }
         if (dest === 'calendar') {
             // Combine date + time into ISO datetime; fall back to start of day if no time given
-            const startIso = calForm.date ? dayjs(`${calForm.date}${calForm.startTime ? `T${calForm.startTime}` : ''}`).toISOString() : dayjs().toISOString();
+            const startIso = calendarForm.date
+                ? dayjs(`${calendarForm.date}${calendarForm.startTime ? `T${calendarForm.startTime}` : ''}`).toISOString()
+                : dayjs().toISOString();
             const endIso =
-                calForm.date && calForm.endTime ? dayjs(`${calForm.date}T${calForm.endTime}`).toISOString() : dayjs(startIso).add(1, 'hour').toISOString();
+                calendarForm.date && calendarForm.endTime
+                    ? dayjs(`${calendarForm.date}T${calendarForm.endTime}`).toISOString()
+                    : dayjs(startIso).add(1, 'hour').toISOString();
             await clarifyToCalendar(db, item, startIso, endIso);
             return;
         }
         if (dest === 'waitingFor') {
             // exactOptionalPropertyTypes requires omitting undefined keys rather than passing them explicitly.
             const meta = {
-                waitingForPersonId: wfForm.waitingForPersonId,
-                ...(wfForm.expectedBy && { expectedBy: wfForm.expectedBy }),
-                ...(wfForm.ignoreBefore && { ignoreBefore: wfForm.ignoreBefore }),
+                waitingForPersonId: waitingForForm.waitingForPersonId,
+                ...(waitingForForm.expectedBy && { expectedBy: waitingForForm.expectedBy }),
+                ...(waitingForForm.ignoreBefore && { ignoreBefore: waitingForForm.ignoreBefore }),
             };
             await clarifyToWaitingFor(db, item, meta);
         }
@@ -155,8 +159,8 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
 
     function isConfirmDisabled(): boolean {
         if (!destination) return true;
-        if (destination === 'calendar' && !calForm.date) return true;
-        if (destination === 'waitingFor' && !wfForm.waitingForPersonId) return true;
+        if (destination === 'calendar' && !calendarForm.date) return true;
+        if (destination === 'waitingFor' && !waitingForForm.waitingForPersonId) return true;
         return false;
     }
 
@@ -200,7 +204,7 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
 
                 {/* Destination picker */}
                 <FormLabel sx={{ display: 'block', mb: 1 }}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    <Typography variant="caption" color="text.secondary" fontWeight={600} className={styles.sectionLabel}>
                         What is it?
                     </Typography>
                 </FormLabel>
@@ -258,10 +262,10 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                                             key={ctx._id}
                                             label={ctx.name}
                                             size="small"
-                                            variant={naForm.workContextIds.includes(ctx._id) ? 'filled' : 'outlined'}
-                                            color={naForm.workContextIds.includes(ctx._id) ? 'primary' : 'default'}
+                                            variant={nextActionForm.workContextIds.includes(ctx._id) ? 'filled' : 'outlined'}
+                                            color={nextActionForm.workContextIds.includes(ctx._id) ? 'primary' : 'default'}
                                             onClick={() =>
-                                                setNaForm((f) => ({
+                                                setNextActionForm((f) => ({
                                                     ...f,
                                                     workContextIds: f.workContextIds.includes(ctx._id)
                                                         ? f.workContextIds.filter((id) => id !== ctx._id)
@@ -283,8 +287,8 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                             <ToggleButtonGroup
                                 exclusive
                                 size="small"
-                                value={naForm.energy || null}
-                                onChange={(_e, val: EnergyLevel | null) => setNaForm((f) => ({ ...f, energy: val ?? '' }))}
+                                value={nextActionForm.energy || null}
+                                onChange={(_e, val: EnergyLevel | null) => setNextActionForm((f) => ({ ...f, energy: val ?? '' }))}
                                 sx={{ mt: 0.5, display: 'flex' }}
                             >
                                 <ToggleButton value="low">Low</ToggleButton>
@@ -295,8 +299,8 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
 
                         <TextField
                             label="Time estimate (min)"
-                            value={naForm.time}
-                            onChange={(e) => setNaForm((f) => ({ ...f, time: e.target.value }))}
+                            value={nextActionForm.time}
+                            onChange={(e) => setNextActionForm((f) => ({ ...f, time: e.target.value }))}
                             type="number"
                             size="small"
                             sx={{ width: 180 }}
@@ -306,13 +310,21 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                         <Stack direction="row" gap={2}>
                             <FormControlLabel
                                 control={
-                                    <Checkbox size="small" checked={naForm.urgent} onChange={(e) => setNaForm((f) => ({ ...f, urgent: e.target.checked }))} />
+                                    <Checkbox
+                                        size="small"
+                                        checked={nextActionForm.urgent}
+                                        onChange={(e) => setNextActionForm((f) => ({ ...f, urgent: e.target.checked }))}
+                                    />
                                 }
                                 label={<Typography variant="body2">Urgent</Typography>}
                             />
                             <FormControlLabel
                                 control={
-                                    <Checkbox size="small" checked={naForm.focus} onChange={(e) => setNaForm((f) => ({ ...f, focus: e.target.checked }))} />
+                                    <Checkbox
+                                        size="small"
+                                        checked={nextActionForm.focus}
+                                        onChange={(e) => setNextActionForm((f) => ({ ...f, focus: e.target.checked }))}
+                                    />
                                 }
                                 label={<Typography variant="body2">Needs focus</Typography>}
                             />
@@ -322,16 +334,16 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                             <TextField
                                 label="Expected by"
                                 type="date"
-                                value={naForm.expectedBy}
-                                onChange={(e) => setNaForm((f) => ({ ...f, expectedBy: e.target.value }))}
+                                value={nextActionForm.expectedBy}
+                                onChange={(e) => setNextActionForm((f) => ({ ...f, expectedBy: e.target.value }))}
                                 size="small"
                                 slotProps={{ inputLabel: { shrink: true } }}
                             />
                             <TextField
                                 label="Ignore before"
                                 type="date"
-                                value={naForm.ignoreBefore}
-                                onChange={(e) => setNaForm((f) => ({ ...f, ignoreBefore: e.target.value }))}
+                                value={nextActionForm.ignoreBefore}
+                                onChange={(e) => setNextActionForm((f) => ({ ...f, ignoreBefore: e.target.value }))}
                                 size="small"
                                 slotProps={{ inputLabel: { shrink: true } }}
                             />
@@ -345,8 +357,8 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                         <TextField
                             label="Date"
                             type="date"
-                            value={calForm.date}
-                            onChange={(e) => setCalForm((f) => ({ ...f, date: e.target.value }))}
+                            value={calendarForm.date}
+                            onChange={(e) => setCalendarForm((f) => ({ ...f, date: e.target.value }))}
                             size="small"
                             required
                             slotProps={{ inputLabel: { shrink: true } }}
@@ -355,16 +367,16 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                             <TextField
                                 label="Start time"
                                 type="time"
-                                value={calForm.startTime}
-                                onChange={(e) => setCalForm((f) => ({ ...f, startTime: e.target.value }))}
+                                value={calendarForm.startTime}
+                                onChange={(e) => setCalendarForm((f) => ({ ...f, startTime: e.target.value }))}
                                 size="small"
                                 slotProps={{ inputLabel: { shrink: true } }}
                             />
                             <TextField
                                 label="End time"
                                 type="time"
-                                value={calForm.endTime}
-                                onChange={(e) => setCalForm((f) => ({ ...f, endTime: e.target.value }))}
+                                value={calendarForm.endTime}
+                                onChange={(e) => setCalendarForm((f) => ({ ...f, endTime: e.target.value }))}
                                 size="small"
                                 slotProps={{ inputLabel: { shrink: true } }}
                             />
@@ -383,8 +395,8 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                             <TextField
                                 select
                                 label="Waiting for"
-                                value={wfForm.waitingForPersonId}
-                                onChange={(e) => setWfForm((f) => ({ ...f, waitingForPersonId: e.target.value }))}
+                                value={waitingForForm.waitingForPersonId}
+                                onChange={(e) => setWaitingForForm((f) => ({ ...f, waitingForPersonId: e.target.value }))}
                                 size="small"
                                 required
                                 sx={{ minWidth: 200 }}
@@ -400,16 +412,16 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                             <TextField
                                 label="Expected by"
                                 type="date"
-                                value={wfForm.expectedBy}
-                                onChange={(e) => setWfForm((f) => ({ ...f, expectedBy: e.target.value }))}
+                                value={waitingForForm.expectedBy}
+                                onChange={(e) => setWaitingForForm((f) => ({ ...f, expectedBy: e.target.value }))}
                                 size="small"
                                 slotProps={{ inputLabel: { shrink: true } }}
                             />
                             <TextField
                                 label="Ignore before"
                                 type="date"
-                                value={wfForm.ignoreBefore}
-                                onChange={(e) => setWfForm((f) => ({ ...f, ignoreBefore: e.target.value }))}
+                                value={waitingForForm.ignoreBefore}
+                                onChange={(e) => setWaitingForForm((f) => ({ ...f, ignoreBefore: e.target.value }))}
                                 size="small"
                                 slotProps={{ inputLabel: { shrink: true } }}
                             />
