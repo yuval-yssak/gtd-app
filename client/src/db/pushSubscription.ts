@@ -8,6 +8,15 @@ export async function registerPushSubscription(db: IDBPDatabase<MyDB>): Promise<
         return;
     }
 
+    // Must request permission explicitly — relying on pushManager.subscribe() to do it
+    // implicitly triggers Chrome's "quiet notification UI" (a small bell icon in the address
+    // bar rather than a popup), which users routinely miss, leaving permission as 'default'
+    // and causing subscribe() to fail with NotAllowedError.
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+        return;
+    }
+
     // Fetch the VAPID public key from the server — it's public so no auth needed
     const res = await fetch(`${API_SERVER}/sync/config`, { credentials: 'include' });
     if (!res.ok) {
