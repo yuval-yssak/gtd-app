@@ -1,52 +1,50 @@
 import type { IDBPDatabase } from 'idb';
-import { API_SERVER } from '../constants/globals';
+import { fetchVapidConfig, registerPushEndpoint } from '#api/syncClient';
 import type { MyDB } from '../types/MyDB';
 import { getOrCreateDeviceId } from './deviceId';
 
 export async function registerPushSubscription(db: IDBPDatabase<MyDB>): Promise<void> {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    if (!isBrowserPushCapable()) {
+        return;
+    }
+    if (!(await hasNotificationPermission())) {
         return;
     }
 
-    // Must request permission explicitly — relying on pushManager.subscribe() to do it
-    // implicitly triggers Chrome's "quiet notification UI" (a small bell icon in the address
-    // bar rather than a popup), which users routinely miss, leaving permission as 'default'
-    // and causing subscribe() to fail with NotAllowedError.
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-        return;
-    }
-
-    // Fetch the VAPID public key from the server — it's public so no auth needed
-    const res = await fetch(`${API_SERVER}/sync/config`, { credentials: 'include' });
-    if (!res.ok) {
-        return;
-    }
-    const { vapidPublicKey } = (await res.json()) as { vapidPublicKey: string | null };
+    const { vapidPublicKey } = await fetchVapidConfig();
     if (!vapidPublicKey) {
-        return; // server has no VAPID keys configured
+        return; // server has no VAPID keys configured (or request failed — fetchVapidConfig degrades gracefully)
     }
 
+    const subscription = await getOrCreatePushSubscription(vapidPublicKey);
+    const deviceId = await getOrCreateDeviceId(db);
+    await registerPushEndpoint(deviceId, subscription.toJSON());
+}
+
+function isBrowserPushCapable(): boolean {
+    return 'serviceWorker' in navigator && 'PushManager' in window;
+}
+
+// Must request permission explicitly — relying on pushManager.subscribe() to do it
+// implicitly triggers Chrome's "quiet notification UI" (a small bell icon in the address
+// bar rather than a popup), which users routinely miss, leaving permission as 'default'
+// and causing subscribe() to fail with NotAllowedError.
+async function hasNotificationPermission(): Promise<boolean> {
+    return (await Notification.requestPermission()) === 'granted';
+}
+
+async function getOrCreatePushSubscription(vapidPublicKey: string): Promise<PushSubscription> {
     const registration = await navigator.serviceWorker.ready;
-    const existing = await registration.pushManager.getSubscription();
-    const subscription =
-        existing ??
+    return (
+        (await registration.pushManager.getSubscription()) ??
         (await registration.pushManager.subscribe({
             userVisibleOnly: true,
-            // PushManager requires the VAPID key as a Uint8Array, not a base64 string
+            // PushManager requires a Uint8Array, not a base64 string.
             // `Uint8Array.from` returns `Uint8Array<ArrayBufferLike>` but the API expects
-            // `ArrayBufferView<ArrayBuffer>` — safe cast because the buffer is always a plain ArrayBuffer
+            // `ArrayBufferView<ArrayBuffer>` — safe cast because the buffer is always a plain ArrayBuffer.
             applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
-        }));
-
-    const deviceId = await getOrCreateDeviceId(db);
-    const json = subscription.toJSON();
-    await fetch(`${API_SERVER}/push/subscribe`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId, endpoint: json.endpoint, keys: json.keys }),
-    });
+        }))
+    );
 }
 
 // The VAPID public key is URL-safe base64; the browser PushManager requires a Uint8Array.

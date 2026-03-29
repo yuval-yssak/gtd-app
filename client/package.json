@@ -29,6 +29,12 @@
         "react": "^19.2.4",
         "react-dom": "^19.2.4"
     },
+    "imports": {
+        "#api/syncClient": {
+            "test": "./src/api/syncClient.mock.ts",
+            "default": "./src/api/syncClient.ts"
+        }
+    },
     "devDependencies": {
         "@biomejs/biome": "2.4.8",
         "@tanstack/react-router-devtools": "^1.166.11",

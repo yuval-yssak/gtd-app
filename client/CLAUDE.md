@@ -78,6 +78,30 @@ Database name: `gtd-app`. Defined in `db/indexedDB.ts`, typed via `types/MyDB.ts
 
 All entity stores index by `userId` so a single IDB database can hold data for multiple OAuth accounts simultaneously.
 
+## API Client
+
+All `fetch()` calls live in `src/api/`. Each file has a paired mock companion used in tests.
+
+| File | Mock | Alias |
+|---|---|---|
+| `src/api/syncClient.ts` | `src/api/syncClient.mock.ts` | `#api/syncClient` |
+
+The alias is declared in `package.json` `"imports"`:
+```json
+"#api/syncClient": {
+    "test": "./src/api/syncClient.mock.ts",
+    "default": "./src/api/syncClient.ts"
+}
+```
+
+In test files, `vi.mock` intercepts the alias before imports run:
+```ts
+vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
+import { fetchSyncOps } from '#api/syncClient'; // gets vi.fn() from mock
+```
+
+The mock companion exports `vi.fn()` instances. Tests configure per-test behaviour with `vi.mocked(fetchSyncOps).mockResolvedValueOnce(...)` and reset call history with `vi.clearAllMocks()` in `afterEach`.
+
 ## Sync Architecture
 
 ### Bootstrap (first-run)

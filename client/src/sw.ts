@@ -4,6 +4,7 @@ import { createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { openAppDB } from './db/indexedDB';
 import { flushSyncQueue, pullFromServer } from './db/syncHelpers';
+import { hasAtLeastOne } from './lib/typeUtils';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -58,11 +59,11 @@ function formatOp({ opType, name }: PushOpSummary): string {
 }
 
 function buildNotificationBody(ops: PushOpSummary[]): string {
-    if (ops.length === 0) {
+    if (!hasAtLeastOne(ops)) {
         return 'Your tasks have been updated from another device.';
     }
     if (ops.length === 1) {
-        return formatOp(ops[0]!);
+        return formatOp(ops[0]);
     }
     const previews = ops.slice(0, 2).map(formatOp);
     const tail = ops.length > 2 ? ` (+${ops.length - 2} more)` : '';

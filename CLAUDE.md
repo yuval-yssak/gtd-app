@@ -126,6 +126,7 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 - Prefer narrowly inferred types; avoid explicit annotations where inference is accurate.
 - Use generics, mapped types, conditional types, and template literal types where they produce more accurate and reusable types than `as` casts.
 - Type assertions (`as`) must be rare and justified.
+- Use `hasAtLeastOne(arr)` from `lib/typeUtils.ts` instead of `arr.length > 0` — it narrows `T[]` to `NonEmptyArray<T>`, eliminating `arr[0]!` assertions. Use `NonEmptyString` (same file) for strings known to be non-empty.
 
 ### Functions
 - ≤ 5 meaningful actions per function, typically ~5 lines.
