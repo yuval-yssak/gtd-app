@@ -13,7 +13,7 @@ export default defineConfig({
             // Workbox inject the hashed precache manifest at build time
             strategies: 'injectManifest',
             srcDir: 'src',
-            filename: 'sw.ts',
+            filename: 'serviceWorker.ts',
             registerType: 'autoUpdate',
             manifest: {
                 name: 'Getting Things Done',

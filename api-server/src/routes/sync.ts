@@ -9,10 +9,11 @@ import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
-import { addSseConnection, notifyUser, removeSseConnection } from '../lib/sseConnections.js';
+import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
 import { sendPushToSubscription, vapidPublicKey } from '../lib/webPush.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import type { EntityType, ItemInterface, OperationInterface, OpType, PersonInterface, RoutineInterface, WorkContextInterface } from '../types/entities.js';
+import { inspect } from 'node:util';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
 // Snapshot uses `userId` (IndexedDB field name); the server remaps it to `user`.
@@ -96,7 +97,10 @@ async function notifyViaWebPush(userId: string, excludeDeviceId: string, ops: Op
         opType: op.opType,
         name: op.snapshot ? entityDisplayName(op.snapshot) : null,
     }));
-    const pushSubs = await pushSubscriptionsDAO.findArray({ user: userId, _id: { $ne: excludeDeviceId } } as MongoFilter as never);
+    console.log(`[push] notifying ${userId} of ${ops.length} ops (excluding device ${excludeDeviceId}):`, opSummaries);
+    console.log(inspect(opSummaries, { depth: Infinity, colors: true, maxArrayLength: Infinity }));
+    const pushSubs = await pushSubscriptionsDAO.findArray({ user: userId, _id: { $ne: excludeDeviceId } });
+    console.log(`[push] found ${pushSubs.length} subscriptions for user ${userId}`);
     const pushResults = await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
     pushResults.forEach((result, i) => {
         if (result.status === 'rejected') {
@@ -132,11 +136,13 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     .post('/push', authenticateRequest, async (c) => {
         const { user } = c.get('session');
         const { deviceId, ops } = await c.req.json<{ deviceId: string; ops: ClientOp[] }>();
-        if (!ops.length) return c.json({ ok: true }, 200);
+        if (!ops.length) {
+            return c.json({ ok: true }, 200);
+        }
 
         const now = dayjs().toISOString();
 
-        const serverOps: OperationInterface[] = ops.map((op) => {
+        const serverOps = ops.map<OperationInterface>((op) => {
             // Strip client-side `userId` and inject server-authoritative `user` from session
             const { userId: _stripped, ...snapshotFields } = op.snapshot ?? {};
             const snapshot = op.snapshot ? ({ ...snapshotFields, user: user.id } as EntitySnapshot) : null;
@@ -160,7 +166,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             { upsert: true },
         );
 
-        notifyUser(user.id, { type: 'update', ts: now });
+        notifyUserViaSse(user.id, { type: 'update', ts: now });
 
         // Web Push for devices that aren't currently connected via SSE (app closed).
         // Include per-op summaries so the SW can show a meaningful notification body

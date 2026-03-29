@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { ServerOp } from '#api/syncClient';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
-import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
 import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
 import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
 import { deletePersonById, putPerson } from './personHelpers';
@@ -18,40 +18,60 @@ export interface SyncOpParams {
     snapshot: StoredEntity | null;
 }
 
-function remapUser<T extends Record<string, unknown>>(doc: T & { user: string }): Omit<T, 'user'> & { userId: string } {
+function remapUser<T extends Record<string, unknown>>(doc: T & { user: string }) {
     const { user, ...rest } = doc;
     return { ...rest, userId: user } as Omit<T, 'user'> & { userId: string };
 }
 
+// Update the snapshot on the pending 'create' rather than adding a second op.
+// The single create will carry the latest state to the server.
+async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOperation[], op: SyncOpParams) {
+    // id is always present on records fetched from IDB; the type reflects pre-insert optionality
+    const pendingCreates = existing.filter((q): q is SyncOperation & { id: number } => q.opType === 'create' && q.id !== undefined);
+    for (const queued of pendingCreates) {
+        await db.delete('syncOperations', queued.id);
+        await db.add('syncOperations', {
+            opType: 'create',
+            entityType: op.entityType,
+            entityId: op.entityId,
+            queuedAt: queued.queuedAt,
+            snapshot: op.snapshot,
+        });
+    }
+}
+
+async function clearExistingOps(db: IDBPDatabase<MyDB>, existing: SyncOperation[]) {
+    // id is always present on records fetched from IDB; the type reflects pre-insert optionality
+    const withId = existing.filter((q): q is SyncOperation & { id: number } => q.id !== undefined);
+    await Promise.all(withId.map((q) => db.delete('syncOperations', q.id)));
+}
+
+// Background Sync API isn't in the standard TS DOM lib — cast through unknown.
+// Chrome/Edge only; Safari/Firefox fall back to the immediate flush in queueSyncOp.
+function registerBackgroundSync(): void {
+    if (!('serviceWorker' in navigator) || !('sync' in ServiceWorkerRegistration.prototype)) {
+        return;
+    }
+    navigator.serviceWorker.ready
+        .then((reg) => (reg as unknown as { sync: { register(tag: string): Promise<void> } }).sync.register('gtd-sync-queue'))
+        .catch((e) => console.error('Failed to register background sync', e));
+}
+
 export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Promise<void> {
     const { opType, entityType, entityId, snapshot } = op;
-    const existing = (await db.getAll('syncOperations')).filter((queued) => queued.entityId === entityId);
+    const existing = (await db.getAll('syncOperations')).filter((q) => q.entityId === entityId);
+    const hasPendingCreate = existing.some((q) => q.opType === 'create');
 
-    if (opType === 'update' && existing.some((queued) => queued.opType === 'create')) {
-        // Update the snapshot on the pending 'create' rather than adding a second op.
-        // The single create will carry the latest state to the server.
-        for (const queued of existing) {
-            if (queued.opType !== 'create' || queued.id === undefined) {
-                continue;
-            }
-            await db.delete('syncOperations', queued.id);
-            await db.add('syncOperations', { opType: 'create', entityType, entityId, queuedAt: queued.queuedAt, snapshot });
-        }
+    if (opType === 'update' && hasPendingCreate) {
+        await mergeUpdateIntoCreate(db, existing, op);
         return;
     }
 
     if (opType === 'delete') {
-        // Collapse all prior ops into a single delete. If a 'create' was pending,
-        // the item never reached the server, so we can drop everything entirely.
-        const hadPendingCreate = existing.some((queued) => queued.opType === 'create');
-        for (const queued of existing) {
-            if (queued.id === undefined) {
-                continue;
-            }
-            await db.delete('syncOperations', queued.id);
-        }
-        if (hadPendingCreate) {
-            return; // item never reached server — nothing to send
+        // Collapse all prior ops. If a 'create' was pending, the item never reached the server — drop everything.
+        await clearExistingOps(db, existing);
+        if (hasPendingCreate) {
+            return;
         }
     }
 
@@ -60,15 +80,8 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
     // Attempt an immediate flush. Safari and Firefox don't support the Background Sync API,
     // so without this the op would sit in IDB until the next mount or online event.
     // Fire-and-forget — errors are non-fatal; the online handler and mount effect will retry.
-    flushSyncQueue(db).catch(() => {});
-
-    // Also register a background sync so the SW can flush even when the app is closed (Chrome/Edge only).
-    if ('serviceWorker' in navigator && 'sync' in ServiceWorkerRegistration.prototype) {
-        // Background Sync API isn't in the standard TS DOM lib — cast through unknown
-        navigator.serviceWorker.ready
-            .then((reg) => (reg as unknown as { sync: { register(tag: string): Promise<void> } }).sync.register('gtd-sync-queue'))
-            .catch(() => {});
-    }
+    void flushSyncQueue(db).catch((e) => console.warn('Failed to flush sync queue after adding op', e));
+    registerBackgroundSync();
 }
 
 export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
@@ -116,12 +129,12 @@ export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void>
     await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: serverTs });
 }
 
-export async function pullFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
+export async function pullFromServer(db: IDBPDatabase<MyDB>) {
     const deviceId = await getOrCreateDeviceId(db);
     const since = await getLastSyncedTs(db);
-
+    console.log({ deviceId, since });
     const { ops, serverTs } = await fetchSyncOps(since, deviceId);
-
+    console.log({ ops, serverTs });
     for (const op of ops) {
         await applyServerOp(db, op);
     }
@@ -177,6 +190,8 @@ async function applyEntityOp(op: ServerOp, handlers: EntityApplyHandlers): Promi
     }
     // Cast to the minimal shape needed here (updatedTs for conflict resolution);
     // handlers.put receives the full object as unknown and re-casts to the concrete type.
+
+    console.log("applyEntityOp", op, handlers)
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as { updatedTs: string };
     const existing = await handlers.getExisting(op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {

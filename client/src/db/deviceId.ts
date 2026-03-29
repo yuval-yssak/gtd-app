@@ -4,7 +4,9 @@ import type { MyDB } from '../types/MyDB';
 
 export async function getOrCreateDeviceId(db: IDBPDatabase<MyDB>): Promise<string> {
     const existing = await db.get('deviceSyncState', 'local');
-    if (existing) return existing.deviceId;
+    if (existing) {
+        return existing.deviceId;
+    }
 
     const deviceId = crypto.randomUUID();
     await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: dayjs(0).toISOString() });
