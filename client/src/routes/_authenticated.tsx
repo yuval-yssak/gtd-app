@@ -128,7 +128,7 @@ function AuthenticatedLayout() {
             });
 
             // Register Web Push subscription so the SW can pull while the app is closed
-            registerPushSubscription(db).catch(() => {});
+            registerPushSubscription(db).catch((err) => console.error('[push] registration failed:', err));
         }
 
         async function handleOnline() {
