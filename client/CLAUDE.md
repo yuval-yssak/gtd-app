@@ -133,7 +133,7 @@ EventSource reconnects automatically on error.
 2. Call `PushManager.subscribe()` with the VAPID key
 3. `POST /push/subscribe` with the push endpoint + stable device ID
 4. Server stores subscription; on any push, broadcasts a Web Push notification
-5. `sw.ts` Service Worker intercepts the `push` event and calls `pullFromServer(db)` to update IDB in the background
+5. `serviceWorker.ts` Service Worker intercepts the `push` event and calls `pullFromServer(db)` to update IDB in the background
 
 Degrades gracefully — returns early if the browser lacks Service Worker or PushManager support.
 
@@ -191,7 +191,7 @@ This layout route is the central orchestrator for all authenticated state.
 client/src/
 ├── main.tsx                     # opens IDB, mounts dev tools in dev, renders App
 ├── App.tsx                      # creates TanStack Router, injects db context
-├── sw.ts                        # Service Worker: background sync + push handler
+├── serviceWorker.ts             # Service Worker: background sync + push handler
 ├── routes/
 │   ├── __root.tsx               # root layout: MUI baseline, Outlet, router devtools
 │   ├── _authenticated.tsx        # protected layout: session guard, data boot, SSE

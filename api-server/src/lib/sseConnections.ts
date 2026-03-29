@@ -16,7 +16,7 @@ export function removeSseConnection(userId: string, controller: ReadableStreamDe
     if (connections.get(userId)?.size === 0) connections.delete(userId);
 }
 
-export function notifyUser(userId: string, payload: object): void {
+export function notifyUserViaSse(userId: string, payload: object): void {
     const chunk = encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
     for (const controller of connections.get(userId) ?? []) {
         try {

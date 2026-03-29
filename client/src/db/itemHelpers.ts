@@ -7,6 +7,7 @@ export async function getItemsByUser(db: IDBPDatabase<MyDB>, userId: string): Pr
 }
 
 export async function putItem(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<void> {
+    console.log('putting item', item);
     await db.put('items', item);
 }
 
