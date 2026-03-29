@@ -191,7 +191,12 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             name: op.snapshot ? entityDisplayName(op.snapshot) : null,
         }));
         const pushSubs = await pushSubscriptionsDAO.findArray({ user: user.id, _id: { $ne: deviceId } } as MongoFilter as never);
-        await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
+        const pushResults = await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
+        pushResults.forEach((result, i) => {
+            if (result.status === 'rejected') {
+                console.error(`[push] failed to notify device ${pushSubs[i]?._id}:`, result.reason);
+            }
+        });
 
         return c.json({ ok: true }, 200);
     })
