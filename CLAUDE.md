@@ -123,9 +123,8 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 
 ### TypeScript
 - No `any`. Use `unknown` when the type is genuinely unknown.
-- Prefer narrowly inferred types; avoid explicit annotations where inference is accurate.
-- Use generics, mapped types, conditional types, and template literal types where they produce more accurate and reusable types than `as` casts.
-- Type assertions (`as`) must be rare and justified.
+- Prefer inferred types over explicit annotations — including function return types. Only annotate when inference would produce `any` or an unacceptably wide type.
+- Prefer generics (`<T>`) and mapped/conditional/template literal types over `as` casts. Type assertions must be rare and justified.
 - Use `hasAtLeastOne(arr)` from `lib/typeUtils.ts` instead of `arr.length > 0` — it narrows `T[]` to `NonEmptyArray<T>`, eliminating `arr[0]!` assertions. Use `NonEmptyString` (same file) for strings known to be non-empty.
 
 ### Functions
