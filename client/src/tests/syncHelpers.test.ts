@@ -1,7 +1,14 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { bootstrapFromServer, flushSyncQueue, pullFromServer, queueSyncOp } from '../db/syncHelpers';
+
+// vi.mock is hoisted before imports by Vitest's transformer, so syncHelpers.ts's own
+// import of '#api/syncClient' is also intercepted — no resolve.conditions config needed.
+vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
+
+import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import type { MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+// StoredPerson/Routine/WorkContext are still needed for the db.put() casts below
 import { openTestDB } from './openTestDB';
 
 const USER_ID = 'user-1';
@@ -15,11 +22,14 @@ function serverItem(id: string, updatedTs = '2025-01-01T00:00:00.000Z') {
     return { _id: id, user: USER_ID, status: 'inbox', title: 'Item', createdTs: '2025-01-01T00:00:00.000Z', updatedTs };
 }
 
-function serverPerson(id: string): StoredPerson & { user: string } {
+// Return Record<string, unknown> & { user: string } so the objects satisfy the ServerOp.snapshot
+// and BootstrapPayload array types — TypeScript doesn't widen named types (StoredPerson, etc.)
+// to Record<string, unknown> because they lack an index signature.
+function serverPerson(id: string): Record<string, unknown> & { user: string } {
     return { _id: id, user: USER_ID, userId: USER_ID, name: 'Alice', createdTs: '2025-01-01T00:00:00.000Z', updatedTs: '2025-01-01T00:00:00.000Z' };
 }
 
-function serverRoutine(id: string): StoredRoutine & { user: string } {
+function serverRoutine(id: string): Record<string, unknown> & { user: string } {
     return {
         _id: id,
         user: USER_ID,
@@ -33,7 +43,7 @@ function serverRoutine(id: string): StoredRoutine & { user: string } {
     };
 }
 
-function serverWorkContext(id: string): StoredWorkContext & { user: string } {
+function serverWorkContext(id: string): Record<string, unknown> & { user: string } {
     return { _id: id, user: USER_ID, userId: USER_ID, name: 'At desk', createdTs: '2025-01-01T00:00:00.000Z', updatedTs: '2025-01-01T00:00:00.000Z' };
 }
 
@@ -46,7 +56,9 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-    vi.restoreAllMocks();
+    // clearAllMocks resets call history on vi.fn() instances while preserving their default
+    // implementations (unlike restoreAllMocks which is for vi.spyOn() spies).
+    vi.clearAllMocks();
     db.close();
 });
 
@@ -54,16 +66,14 @@ afterEach(() => {
 
 describe('flushSyncQueue', () => {
     it('does nothing when the queue is empty', async () => {
-        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
-
         await flushSyncQueue(db);
 
-        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(vi.mocked(pushSyncOps)).not.toHaveBeenCalled();
     });
 
-    it('POSTs queued ops and clears the queue on success', async () => {
+    it('sends queued ops and clears the queue on success', async () => {
         // Seed IDB directly rather than via queueSyncOp: queueSyncOp fires an immediate
-        // fire-and-forget flush that races with fetch spy setup when Node's native fetch is present.
+        // fire-and-forget flush that races with mock setup when Node's native fetch is present.
         await db.add('syncOperations', {
             opType: 'create',
             entityType: 'item',
@@ -72,23 +82,25 @@ describe('flushSyncQueue', () => {
             snapshot: makeItem('item-1'),
         });
 
-        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
-
         await flushSyncQueue(db);
 
-        expect(fetchSpy).toHaveBeenCalledOnce();
-        const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-        expect(url).toContain('/sync/push');
-        expect(init.method).toBe('POST');
+        expect(vi.mocked(pushSyncOps)).toHaveBeenCalledOnce();
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(0);
     });
 
-    it('preserves the queue when the server returns a non-200 response', async () => {
-        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'item-2', snapshot: makeItem('item-2') });
-
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('Server error', { status: 500 }));
+    it('preserves the queue when the server returns an error', async () => {
+        // Seed IDB directly (avoid queueSyncOp's fire-and-forget racing with the mock rejection).
+        // Configure rejection before seeding so the fire-and-forget also uses the rejecting mock.
+        vi.mocked(pushSyncOps).mockRejectedValueOnce(new Error('POST /sync/push 500'));
+        await db.add('syncOperations', {
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'item-2',
+            queuedAt: '2025-01-01T00:00:00.000Z',
+            snapshot: makeItem('item-2'),
+        });
 
         await expect(flushSyncQueue(db)).rejects.toThrow('POST /sync/push 500');
 
@@ -99,15 +111,12 @@ describe('flushSyncQueue', () => {
 
 // ── pullFromServer / applyServerOp ─────────────────────────────────────────────
 
-function makePullResponse(ops: unknown[], serverTs = '2025-06-01T00:00:00.000Z') {
-    return new Response(JSON.stringify({ ops, serverTs }), { status: 200 });
-}
-
 describe('pullFromServer — item ops', () => {
     it('create op writes the item to IndexedDB', async () => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-            makePullResponse([{ entityType: 'item', entityId: 'item-10', opType: 'create', snapshot: serverItem('item-10') }]),
-        );
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'item', entityId: 'item-10', opType: 'create', snapshot: serverItem('item-10') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -120,9 +129,10 @@ describe('pullFromServer — item ops', () => {
     it('update op with newer updatedTs replaces the local version', async () => {
         await db.put('items', makeItem('item-11', '2025-01-01T00:00:00.000Z'));
 
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-            makePullResponse([{ entityType: 'item', entityId: 'item-11', opType: 'update', snapshot: serverItem('item-11', '2025-06-01T00:00:00.000Z') }]),
-        );
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'item', entityId: 'item-11', opType: 'update', snapshot: serverItem('item-11', '2025-06-01T00:00:00.000Z') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -133,9 +143,10 @@ describe('pullFromServer — item ops', () => {
     it('update op with older updatedTs keeps the local version (last-write-wins)', async () => {
         await db.put('items', makeItem('item-12', '2025-06-01T00:00:00.000Z'));
 
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-            makePullResponse([{ entityType: 'item', entityId: 'item-12', opType: 'update', snapshot: serverItem('item-12', '2025-01-01T00:00:00.000Z') }]),
-        );
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'item', entityId: 'item-12', opType: 'update', snapshot: serverItem('item-12', '2025-01-01T00:00:00.000Z') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -147,7 +158,10 @@ describe('pullFromServer — item ops', () => {
     it('delete op removes the item from IndexedDB', async () => {
         await db.put('items', makeItem('item-13'));
 
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(makePullResponse([{ entityType: 'item', entityId: 'item-13', opType: 'delete', snapshot: null }]));
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'item', entityId: 'item-13', opType: 'delete', snapshot: null }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -157,7 +171,7 @@ describe('pullFromServer — item ops', () => {
 
     it('updates lastSyncedTs to serverTs after a successful pull', async () => {
         const serverTs = '2025-09-01T12:00:00.000Z';
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(makePullResponse([], serverTs));
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs });
 
         await pullFromServer(db);
 
@@ -166,7 +180,7 @@ describe('pullFromServer — item ops', () => {
     });
 
     it('throws and does not update lastSyncedTs when server returns non-200', async () => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('err', { status: 503 }));
+        vi.mocked(fetchSyncOps).mockRejectedValueOnce(new Error('GET /sync/pull 503'));
 
         await expect(pullFromServer(db)).rejects.toThrow('GET /sync/pull 503');
 
@@ -177,9 +191,10 @@ describe('pullFromServer — item ops', () => {
 
 describe('pullFromServer — routine/person/workContext ops', () => {
     it('routine create op writes to IndexedDB', async () => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-            makePullResponse([{ entityType: 'routine', entityId: 'routine-1', opType: 'create', snapshot: serverRoutine('routine-1') }]),
-        );
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'routine', entityId: 'routine-1', opType: 'create', snapshot: serverRoutine('routine-1') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -191,7 +206,10 @@ describe('pullFromServer — routine/person/workContext ops', () => {
     it('routine delete op removes from IndexedDB', async () => {
         await db.put('routines', serverRoutine('routine-2') as unknown as StoredRoutine);
 
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(makePullResponse([{ entityType: 'routine', entityId: 'routine-2', opType: 'delete', snapshot: null }]));
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'routine', entityId: 'routine-2', opType: 'delete', snapshot: null }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -199,9 +217,10 @@ describe('pullFromServer — routine/person/workContext ops', () => {
     });
 
     it('person create op writes to IndexedDB', async () => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-            makePullResponse([{ entityType: 'person', entityId: 'person-1', opType: 'create', snapshot: serverPerson('person-1') }]),
-        );
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'person', entityId: 'person-1', opType: 'create', snapshot: serverPerson('person-1') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -213,7 +232,10 @@ describe('pullFromServer — routine/person/workContext ops', () => {
     it('person delete op removes from IndexedDB', async () => {
         await db.put('people', serverPerson('person-2') as unknown as StoredPerson);
 
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(makePullResponse([{ entityType: 'person', entityId: 'person-2', opType: 'delete', snapshot: null }]));
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'person', entityId: 'person-2', opType: 'delete', snapshot: null }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -221,9 +243,10 @@ describe('pullFromServer — routine/person/workContext ops', () => {
     });
 
     it('workContext create op writes to IndexedDB', async () => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-            makePullResponse([{ entityType: 'workContext', entityId: 'wc-1', opType: 'create', snapshot: serverWorkContext('wc-1') }]),
-        );
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'workContext', entityId: 'wc-1', opType: 'create', snapshot: serverWorkContext('wc-1') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -235,7 +258,10 @@ describe('pullFromServer — routine/person/workContext ops', () => {
     it('workContext delete op removes from IndexedDB', async () => {
         await db.put('workContexts', serverWorkContext('wc-2') as unknown as StoredWorkContext);
 
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(makePullResponse([{ entityType: 'workContext', entityId: 'wc-2', opType: 'delete', snapshot: null }]));
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'workContext', entityId: 'wc-2', opType: 'delete', snapshot: null }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
 
         await pullFromServer(db);
 
@@ -248,18 +274,13 @@ describe('pullFromServer — routine/person/workContext ops', () => {
 describe('bootstrapFromServer', () => {
     it('writes all entity types and sets lastSyncedTs', async () => {
         const serverTs = '2025-07-01T00:00:00.000Z';
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-            new Response(
-                JSON.stringify({
-                    items: [serverItem('item-b1')],
-                    routines: [serverRoutine('routine-b1')],
-                    people: [serverPerson('person-b1')],
-                    workContexts: [serverWorkContext('wc-b1')],
-                    serverTs,
-                }),
-                { status: 200 },
-            ),
-        );
+        vi.mocked(fetchBootstrap).mockResolvedValueOnce({
+            items: [serverItem('item-b1')],
+            routines: [serverRoutine('routine-b1')],
+            people: [serverPerson('person-b1')],
+            workContexts: [serverWorkContext('wc-b1')],
+            serverTs,
+        });
 
         await bootstrapFromServer(db);
 
@@ -273,18 +294,13 @@ describe('bootstrapFromServer', () => {
     });
 
     it('remaps user → userId on all entities', async () => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-            new Response(
-                JSON.stringify({
-                    items: [serverItem('item-b2')],
-                    routines: [],
-                    people: [],
-                    workContexts: [],
-                    serverTs: '2025-07-01T00:00:00.000Z',
-                }),
-                { status: 200 },
-            ),
-        );
+        vi.mocked(fetchBootstrap).mockResolvedValueOnce({
+            items: [serverItem('item-b2')],
+            routines: [],
+            people: [],
+            workContexts: [],
+            serverTs: '2025-07-01T00:00:00.000Z',
+        });
 
         await bootstrapFromServer(db);
 
@@ -294,7 +310,7 @@ describe('bootstrapFromServer', () => {
     });
 
     it('throws when the server returns non-200, writing nothing', async () => {
-        vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('Unauthorized', { status: 401 }));
+        vi.mocked(fetchBootstrap).mockRejectedValueOnce(new Error('GET /sync/bootstrap 401'));
 
         await expect(bootstrapFromServer(db)).rejects.toThrow('GET /sync/bootstrap 401');
 

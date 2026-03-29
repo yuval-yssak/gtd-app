@@ -1,28 +1,13 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { API_SERVER } from '../constants/globals';
+import type { ServerOp } from '#api/syncClient';
+import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
 import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
 import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
 import { deletePersonById, putPerson } from './personHelpers';
 import { deleteRoutineById, putRoutine } from './routineHelpers';
 import { deleteWorkContextById, putWorkContext } from './workContextHelpers';
-
-// Shape returned by GET /sync/pull — snapshot uses `user` (server field name)
-interface ServerOp {
-    entityType: EntityType;
-    entityId: string;
-    opType: OpType;
-    snapshot: (Record<string, unknown> & { user?: string }) | null;
-}
-
-interface BootstrapPayload {
-    items: (Record<string, unknown> & { user: string })[];
-    routines: (Record<string, unknown> & { user: string })[];
-    people: (Record<string, unknown> & { user: string })[];
-    workContexts: (Record<string, unknown> & { user: string })[];
-    serverTs: string;
-}
 
 export interface SyncOpParams {
     opType: OpType;
@@ -93,13 +78,7 @@ export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
     }
 
     const deviceId = await getOrCreateDeviceId(db);
-    const res = await fetch(`${API_SERVER}/sync/push`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deviceId, ops }),
-    });
-    if (!res.ok) throw new Error(`POST /sync/push ${res.status}`);
+    await pushSyncOps(deviceId, ops);
 
     // Batch succeeded — remove all sent ops. If the request failed, they stay for retry.
     for (const op of ops) {
@@ -114,10 +93,7 @@ export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
 export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
     const deviceId = await getOrCreateDeviceId(db);
 
-    const res = await fetch(`${API_SERVER}/sync/bootstrap`, { credentials: 'include' });
-    if (!res.ok) throw new Error(`GET /sync/bootstrap ${res.status}`);
-
-    const { items, routines, people, workContexts, serverTs } = (await res.json()) as BootstrapPayload;
+    const { items, routines, people, workContexts, serverTs } = await fetchBootstrap();
 
     const mappedItems = items.map((doc) => remapUser(doc) as unknown as StoredItem);
     const mappedRoutines = routines.map((doc) => remapUser(doc) as unknown as StoredRoutine);
@@ -144,12 +120,7 @@ export async function pullFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
     const deviceId = await getOrCreateDeviceId(db);
     const since = await getLastSyncedTs(db);
 
-    const res = await fetch(`${API_SERVER}/sync/pull?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(deviceId)}`, {
-        credentials: 'include',
-    });
-    if (!res.ok) throw new Error(`GET /sync/pull ${res.status}`);
-
-    const { ops, serverTs } = (await res.json()) as { ops: ServerOp[]; serverTs: string };
+    const { ops, serverTs } = await fetchSyncOps(since, deviceId);
 
     for (const op of ops) {
         await applyServerOp(db, op);
