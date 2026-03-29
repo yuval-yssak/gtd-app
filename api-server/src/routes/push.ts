@@ -29,6 +29,6 @@ export const pushRoutes = new Hono<{ Variables: AuthVariables }>()
         const { user } = c.get('session');
         const { deviceId } = await c.req.json<{ deviceId: string }>();
 
-        await pushSubscriptionsDAO.collection.deleteOne({ _id: deviceId, user: user.id } as never);
+        await pushSubscriptionsDAO.deleteByDevice(deviceId, user.id);
         return c.json({ ok: true }, 200);
     });

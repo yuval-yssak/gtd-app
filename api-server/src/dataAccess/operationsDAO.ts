@@ -12,6 +12,10 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
             { key: { user: 1, entityType: 1, entityId: 1, ts: 1 } }, // entity history lookup
         ]);
     }
+
+    async deleteOlderThan(userId: string, ts: string): Promise<void> {
+        await this._collection.deleteMany({ user: userId, ts: { $lt: ts } } as never);
+    }
 }
 
 export default new OperationsDAO();
