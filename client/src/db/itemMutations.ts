@@ -25,7 +25,7 @@ function buildBaseItem(userId: string, title: string): StoredItem {
 export async function collectItem(db: IDBPDatabase<MyDB>, userId: string, title: string): Promise<StoredItem> {
     const item = buildBaseItem(userId, title);
     await putItem(db, item);
-    await queueSyncOp(db, 'create', 'item', item._id, item);
+    await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item });
     return item;
 }
 
@@ -47,7 +47,7 @@ export async function clarifyToNextAction(db: IDBPDatabase<MyDB>, item: StoredIt
     const { timeStart: _ts, timeEnd: _te, calendarEventId: _ce, calendarIntegrationId: _ci, waitingForPersonId: _wfp, ...rest } = item;
     const updated: StoredItem = { ...rest, status: 'nextAction', ...meta, updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, 'update', 'item', updated._id, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
@@ -56,7 +56,7 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
     const { workContextIds: _wc, energy: _e, time: _t, focus: _f, urgent: _u, waitingForPersonId: _wfp, ignoreBefore: _ib, ...rest } = item;
     const updated: StoredItem = { ...rest, status: 'calendar', timeStart, timeEnd, updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, 'update', 'item', updated._id, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
@@ -83,21 +83,21 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
     } = item;
     const updated: StoredItem = { ...rest, status: 'waitingFor', ...meta, updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, 'update', 'item', updated._id, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
 export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, 'update', 'item', updated._id, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
 export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'trash', updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, 'update', 'item', updated._id, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
@@ -106,7 +106,7 @@ export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): 
 export async function updateItem(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, 'update', 'item', updated._id, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
@@ -114,5 +114,5 @@ export async function updateItem(db: IDBPDatabase<MyDB>, item: StoredItem): Prom
 
 export async function removeItem(db: IDBPDatabase<MyDB>, itemId: string): Promise<void> {
     await deleteItemById(db, itemId);
-    await queueSyncOp(db, 'delete', 'item', itemId, null);
+    await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: itemId, snapshot: null });
 }

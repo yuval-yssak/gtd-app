@@ -40,7 +40,9 @@ function InboxPage() {
 
     async function onCapture() {
         const title = draft.trim();
-        if (!title || !account) return;
+        if (!title || !account) {
+            return;
+        }
         setDraft('');
         await collectItem(db, account.id, title);
         await refreshItems();
@@ -95,7 +97,7 @@ function InboxPage() {
                             ),
                         },
                     }}
-                    sx={{ '& .MuiOutlinedInput-notchedOutline': { border: 'none' } }}
+                    className={styles.captureField}
                 />
             </Paper>
 

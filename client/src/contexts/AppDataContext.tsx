@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { StoredAccount, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 
-interface AppData {
+export interface AppData {
     account: StoredAccount | null;
     items: StoredItem[];
     workContexts: StoredWorkContext[];

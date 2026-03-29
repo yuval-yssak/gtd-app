@@ -14,18 +14,18 @@ export async function createRoutine(db: IDBPDatabase<MyDB>, fields: NewRoutineFi
     const now = nowIso();
     const routine: StoredRoutine = { ...fields, _id: crypto.randomUUID(), createdTs: now, updatedTs: now };
     await putRoutine(db, routine);
-    await queueSyncOp(db, 'create', 'routine', routine._id, routine);
+    await queueSyncOp(db, { opType: 'create', entityType: 'routine', entityId: routine._id, snapshot: routine });
     return routine;
 }
 
 export async function updateRoutine(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<StoredRoutine> {
     const updated: StoredRoutine = { ...routine, updatedTs: nowIso() };
     await putRoutine(db, updated);
-    await queueSyncOp(db, 'update', 'routine', updated._id, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'routine', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
 export async function removeRoutine(db: IDBPDatabase<MyDB>, routineId: string): Promise<void> {
     await deleteRoutineById(db, routineId);
-    await queueSyncOp(db, 'delete', 'routine', routineId, null);
+    await queueSyncOp(db, { opType: 'delete', entityType: 'routine', entityId: routineId, snapshot: null });
 }

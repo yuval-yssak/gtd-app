@@ -4,3 +4,8 @@
     gap: 16px;
     padding-top: 4px;
 }
+
+.sectionLabel {
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}

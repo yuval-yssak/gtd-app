@@ -24,29 +24,33 @@ interface BootstrapPayload {
     serverTs: string;
 }
 
+export interface SyncOpParams {
+    opType: OpType;
+    entityType: EntityType;
+    entityId: string;
+    // Snapshot of the entity at the moment of the change; null for deletes.
+    // Stored at queue-time so flush can send it directly without re-reading IndexedDB.
+    snapshot: StoredEntity | null;
+}
+
 function remapUser<T extends Record<string, unknown>>(doc: T & { user: string }): Omit<T, 'user'> & { userId: string } {
     const { user, ...rest } = doc;
     return { ...rest, userId: user } as Omit<T, 'user'> & { userId: string };
 }
 
-export async function queueSyncOp(
-    db: IDBPDatabase<MyDB>,
-    opType: OpType,
-    entityType: EntityType,
-    entityId: string,
-    // Snapshot of the entity at the moment of the change; null for deletes.
-    // Stored at queue-time so flush can send it directly without re-reading IndexedDB.
-    snapshot: StoredEntity | null,
-): Promise<void> {
-    const existing = (await db.getAll('syncOperations')).filter((op) => op.entityId === entityId);
+export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Promise<void> {
+    const { opType, entityType, entityId, snapshot } = op;
+    const existing = (await db.getAll('syncOperations')).filter((queued) => queued.entityId === entityId);
 
-    if (opType === 'update' && existing.some((op) => op.opType === 'create')) {
+    if (opType === 'update' && existing.some((queued) => queued.opType === 'create')) {
         // Update the snapshot on the pending 'create' rather than adding a second op.
         // The single create will carry the latest state to the server.
-        for (const op of existing) {
-            if (op.opType !== 'create' || op.id === undefined) continue;
-            await db.delete('syncOperations', op.id);
-            await db.add('syncOperations', { opType: 'create', entityType, entityId, queuedAt: op.queuedAt, snapshot });
+        for (const queued of existing) {
+            if (queued.opType !== 'create' || queued.id === undefined) {
+                continue;
+            }
+            await db.delete('syncOperations', queued.id);
+            await db.add('syncOperations', { opType: 'create', entityType, entityId, queuedAt: queued.queuedAt, snapshot });
         }
         return;
     }
@@ -54,12 +58,16 @@ export async function queueSyncOp(
     if (opType === 'delete') {
         // Collapse all prior ops into a single delete. If a 'create' was pending,
         // the item never reached the server, so we can drop everything entirely.
-        const hadPendingCreate = existing.some((op) => op.opType === 'create');
-        for (const op of existing) {
-            if (op.id === undefined) continue;
-            await db.delete('syncOperations', op.id);
+        const hadPendingCreate = existing.some((queued) => queued.opType === 'create');
+        for (const queued of existing) {
+            if (queued.id === undefined) {
+                continue;
+            }
+            await db.delete('syncOperations', queued.id);
         }
-        if (hadPendingCreate) return; // item never reached server — nothing to send
+        if (hadPendingCreate) {
+            return; // item never reached server — nothing to send
+        }
     }
 
     await db.add('syncOperations', { opType, entityType, entityId, queuedAt: dayjs().toISOString(), snapshot });
@@ -150,75 +158,57 @@ export async function pullFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
     await setLastSyncedTs(db, serverTs);
 }
 
+// Handlers for each entity type used by applyEntityOp to stay DRY across entity types.
+// Each entry provides the three DB operations needed to apply a server op.
+interface EntityApplyHandlers {
+    getExisting: (id: string) => Promise<{ updatedTs: string } | undefined>;
+    put: (entity: unknown) => Promise<void>;
+    remove: (id: string) => Promise<void>;
+}
+
+function buildEntityHandlers(db: IDBPDatabase<MyDB>): Record<EntityType, EntityApplyHandlers> {
+    return {
+        item: {
+            getExisting: (id) => db.get('items', id),
+            put: (e) => putItem(db, e as StoredItem),
+            remove: (id) => deleteItemById(db, id),
+        },
+        routine: {
+            getExisting: (id) => db.get('routines', id),
+            put: (e) => putRoutine(db, e as StoredRoutine),
+            remove: (id) => deleteRoutineById(db, id),
+        },
+        person: {
+            getExisting: (id) => db.get('people', id),
+            put: (e) => putPerson(db, e as StoredPerson),
+            remove: (id) => deletePersonById(db, id),
+        },
+        workContext: {
+            getExisting: (id) => db.get('workContexts', id),
+            put: (e) => putWorkContext(db, e as StoredWorkContext),
+            remove: (id) => deleteWorkContextById(db, id),
+        },
+    };
+}
+
 async function applyServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
-    switch (op.entityType) {
-        case 'item':
-            return applyItemServerOp(db, op);
-        case 'routine':
-            return applyRoutineServerOp(db, op);
-        case 'person':
-            return applyPersonServerOp(db, op);
-        case 'workContext':
-            return applyWorkContextServerOp(db, op);
-    }
+    const handlers = buildEntityHandlers(db);
+    return applyEntityOp(op, handlers[op.entityType]);
 }
 
-async function applyItemServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
+async function applyEntityOp(op: ServerOp, handlers: EntityApplyHandlers): Promise<void> {
     if (op.opType === 'delete') {
-        await deleteItemById(db, op.entityId);
+        await handlers.remove(op.entityId);
         return;
     }
     if (!op.snapshot) {
         return;
     }
-    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredItem;
-    const existing = await db.get('items', op.entityId);
+    // Cast to the minimal shape needed here (updatedTs for conflict resolution);
+    // handlers.put receives the full object as unknown and re-casts to the concrete type.
+    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as { updatedTs: string };
+    const existing = await handlers.getExisting(op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {
-        await putItem(db, incoming);
-    }
-}
-
-async function applyRoutineServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
-    if (op.opType === 'delete') {
-        await deleteRoutineById(db, op.entityId);
-        return;
-    }
-    if (!op.snapshot) {
-        return;
-    }
-    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredRoutine;
-    const existing = await db.get('routines', op.entityId);
-    if (!existing || existing.updatedTs <= incoming.updatedTs) {
-        await putRoutine(db, incoming);
-    }
-}
-
-async function applyPersonServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
-    if (op.opType === 'delete') {
-        await deletePersonById(db, op.entityId);
-        return;
-    }
-    if (!op.snapshot) {
-        return;
-    }
-    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredPerson;
-    const existing = await db.get('people', op.entityId);
-    if (!existing || existing.updatedTs <= incoming.updatedTs) {
-        await putPerson(db, incoming);
-    }
-}
-
-async function applyWorkContextServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
-    if (op.opType === 'delete') {
-        await deleteWorkContextById(db, op.entityId);
-        return;
-    }
-    if (!op.snapshot) {
-        return;
-    }
-    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as StoredWorkContext;
-    const existing = await db.get('workContexts', op.entityId);
-    if (!existing || existing.updatedTs <= incoming.updatedTs) {
-        await putWorkContext(db, incoming);
+        await handlers.put(incoming);
     }
 }

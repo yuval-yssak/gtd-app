@@ -5,10 +5,11 @@ import IconButton from '@mui/material/IconButton';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, Outlet, redirect } from '@tanstack/react-router';
+import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppNav, DRAWER_WIDTH } from '../components/AppNav';
-import { AppDataContext } from '../contexts/AppDataContext';
+import { type AppData, AppDataContext } from '../contexts/AppDataContext';
 import { getActiveAccount } from '../db/accountHelpers';
 import { getItemsByUser } from '../db/itemHelpers';
 import { getPeopleByUser } from '../db/personHelpers';
@@ -17,7 +18,7 @@ import { closeSseConnection, openSseConnection } from '../db/sseClient';
 import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { getWorkContextsByUser } from '../db/workContextHelpers';
 import { authClient } from '../lib/authClient';
-import type { StoredAccount, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
+import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 
 // Wraps authClient.getSession() to distinguish a missing session from a network failure.
 // Returns networkError=true when the fetch throws (offline/DNS), false when the server responded.
@@ -28,6 +29,21 @@ async function fetchSessionSafely() {
     } catch {
         return { session: null, networkError: true };
     }
+}
+
+// Shared implementation for all three entity refresh functions — re-fetches the active
+// account and reloads the entity list into React state. Called inside useCallback so
+// db appears explicitly in each callback body (required for Biome's deps exhaustiveness check).
+async function refreshEntityList<T>(
+    db: IDBPDatabase<MyDB>,
+    getter: (db: IDBPDatabase<MyDB>, userId: string) => Promise<T[]>,
+    setter: React.Dispatch<React.SetStateAction<T[]>>,
+): Promise<void> {
+    const acct = await getActiveAccount(db);
+    if (!acct) {
+        return;
+    }
+    setter(await getter(db, acct.id));
 }
 
 export const Route = createFileRoute('/_authenticated')({
@@ -57,32 +73,18 @@ export const Route = createFileRoute('/_authenticated')({
 
 function AuthenticatedLayout() {
     const { db } = Route.useRouteContext();
-    const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+    const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
     const [account, setAccount] = useState<StoredAccount | null>(null);
     const [items, setItems] = useState<StoredItem[]>([]);
     const [workContexts, setWorkContexts] = useState<StoredWorkContext[]>([]);
     const [people, setPeople] = useState<StoredPerson[]>([]);
 
     // Refresh functions re-fetch account each call so they remain stable (only depend on db).
-    const refreshItems = useCallback(async () => {
-        const acct = await getActiveAccount(db);
-        if (!acct) return;
-        setItems(await getItemsByUser(db, acct.id));
-    }, [db]);
+    const refreshItems = useCallback(() => refreshEntityList(db, getItemsByUser, setItems), [db]);
+    const refreshWorkContexts = useCallback(() => refreshEntityList(db, getWorkContextsByUser, setWorkContexts), [db]);
+    const refreshPeople = useCallback(() => refreshEntityList(db, getPeopleByUser, setPeople), [db]);
 
-    const refreshWorkContexts = useCallback(async () => {
-        const acct = await getActiveAccount(db);
-        if (!acct) return;
-        setWorkContexts(await getWorkContextsByUser(db, acct.id));
-    }, [db]);
-
-    const refreshPeople = useCallback(async () => {
-        const acct = await getActiveAccount(db);
-        if (!acct) return;
-        setPeople(await getPeopleByUser(db, acct.id));
-    }, [db]);
-
-    const appData = useMemo(
+    const appData: AppData = useMemo(
         () => ({ account, items, workContexts, people, refreshItems, refreshWorkContexts, refreshPeople }),
         [account, items, workContexts, people, refreshItems, refreshWorkContexts, refreshPeople],
     );
@@ -92,7 +94,9 @@ function AuthenticatedLayout() {
         // cannot fire after unmount, and React 19 silently ignores setState on unmounted components.
         async function syncAndRefresh() {
             const acct = await getActiveAccount(db);
-            if (!acct) return;
+            if (!acct) {
+                return;
+            }
 
             await flushSyncQueue(db);
 
@@ -108,47 +112,50 @@ function AuthenticatedLayout() {
             setItems(await getItemsByUser(db, acct.id));
         }
 
-        async function loadAll() {
-            const acct = await getActiveAccount(db);
-            if (!acct) return;
+        async function initializeFromCache(acct: StoredAccount) {
             setAccount(acct);
-
             // Show cached data immediately — works offline with no network round-trip
             setItems(await getItemsByUser(db, acct.id));
             setWorkContexts(await getWorkContextsByUser(db, acct.id));
             setPeople(await getPeopleByUser(db, acct.id));
+        }
 
-            if (!navigator.onLine) return;
-
-            await syncAndRefresh();
-
+        function connectToRealtime(onUpdate: () => void) {
             // Open SSE so this tab receives real-time pushes from other devices
-            openSseConnection(() => {
-                syncAndRefresh().catch(() => {});
-            });
-
+            openSseConnection(onUpdate);
             // Register Web Push subscription so the SW can pull while the app is closed
             registerPushSubscription(db).catch((err) => console.error('[push] registration failed:', err));
         }
 
-        async function handleOnline() {
+        async function loadAll() {
+            const acct = await getActiveAccount(db);
+            if (!acct) {
+                return;
+            }
+            await initializeFromCache(acct);
+            if (!navigator.onLine) {
+                return;
+            }
             await syncAndRefresh();
-            openSseConnection(() => {
-                syncAndRefresh().catch(() => {});
-            });
+            connectToRealtime(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
         }
 
-        function handleOffline() {
+        async function onNetworkOnline() {
+            await syncAndRefresh();
+            openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
+        }
+
+        function onNetworkOffline() {
             // Close the SSE connection; it will be re-opened when online fires
             closeSseConnection();
         }
 
         loadAll();
-        window.addEventListener('online', handleOnline);
-        window.addEventListener('offline', handleOffline);
+        window.addEventListener('online', onNetworkOnline);
+        window.addEventListener('offline', onNetworkOffline);
         return () => {
-            window.removeEventListener('online', handleOnline);
-            window.removeEventListener('offline', handleOffline);
+            window.removeEventListener('online', onNetworkOnline);
+            window.removeEventListener('offline', onNetworkOffline);
             closeSseConnection();
         };
     }, [db]);
@@ -164,7 +171,7 @@ function AuthenticatedLayout() {
                 }}
             >
                 <Toolbar>
-                    <IconButton color="inherit" edge="start" onClick={() => setMobileDrawerOpen(true)} sx={{ mr: 1 }} aria-label="open navigation">
+                    <IconButton color="inherit" edge="start" onClick={() => setIsMobileDrawerOpen(true)} sx={{ mr: 1 }} aria-label="open navigation">
                         <MenuIcon />
                     </IconButton>
                     <Typography variant="h6" sx={{ flexGrow: 1 }}>
@@ -174,7 +181,7 @@ function AuthenticatedLayout() {
                 </Toolbar>
             </AppBar>
 
-            <AppNav mobileDrawerOpen={mobileDrawerOpen} setMobileDrawerOpen={setMobileDrawerOpen} db={db} />
+            <AppNav isMobileDrawerOpen={isMobileDrawerOpen} setIsMobileDrawerOpen={setIsMobileDrawerOpen} db={db} />
 
             <Box
                 component="main"

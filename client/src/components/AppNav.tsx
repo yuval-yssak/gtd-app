@@ -28,6 +28,7 @@ import { Link, useLocation, useNavigate } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB } from '../types/MyDB';
 import { AccountSwitcher } from './AccountSwitcher';
+import styles from './AppNav.module.css';
 import { StatusBar } from './StatusBar';
 
 export const DRAWER_WIDTH = 240;
@@ -80,7 +81,7 @@ function NavListItem({ item, isActive, onItemClick }: NavListItemProps) {
     return (
         <ListItem disablePadding>
             {/* Link wraps the button so the full row is a client-side navigation target */}
-            <Link to={item.to as never} style={{ display: 'block', width: '100%', textDecoration: 'none', color: 'inherit' }}>
+            <Link to={item.to as never} className={styles.navLink}>
                 <ListItemButton selected={isActive} onClick={onItemClick} dense>
                     <ListItemIcon sx={{ minWidth: 36 }}>{iconNode}</ListItemIcon>
                     <ListItemText primary={item.label} slotProps={{ primary: { variant: 'body2' } }} />
@@ -142,12 +143,12 @@ function DrawerContent({ onItemClick, db }: DrawerContentProps) {
 }
 
 interface AppNavProps {
-    mobileDrawerOpen: boolean;
-    setMobileDrawerOpen: (open: boolean) => void;
+    isMobileDrawerOpen: boolean;
+    setIsMobileDrawerOpen: (open: boolean) => void;
     db: IDBPDatabase<MyDB>;
 }
 
-export function AppNav({ mobileDrawerOpen, setMobileDrawerOpen, db }: AppNavProps) {
+export function AppNav({ isMobileDrawerOpen, setIsMobileDrawerOpen, db }: AppNavProps) {
     const { pathname } = useLocation();
     const navigate = useNavigate();
 
@@ -173,15 +174,15 @@ export function AppNav({ mobileDrawerOpen, setMobileDrawerOpen, db }: AppNavProp
             {/* Temporary drawer — mobile only (slides in from left) */}
             <Drawer
                 variant="temporary"
-                open={mobileDrawerOpen}
-                onClose={() => setMobileDrawerOpen(false)}
+                open={isMobileDrawerOpen}
+                onClose={() => setIsMobileDrawerOpen(false)}
                 ModalProps={{ keepMounted: true }}
                 sx={{
                     display: { xs: 'block', md: 'none' },
                     '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
                 }}
             >
-                <DrawerContent onItemClick={() => setMobileDrawerOpen(false)} db={db} />
+                <DrawerContent onItemClick={() => setIsMobileDrawerOpen(false)} db={db} />
             </Drawer>
 
             {/* Bottom navigation — mobile only */}
@@ -207,7 +208,7 @@ export function AppNav({ mobileDrawerOpen, setMobileDrawerOpen, db }: AppNavProp
                             onClick={() => void navigate({ to: item.to as never })}
                         />
                     ))}
-                    <BottomNavigationAction label="More" value="more" icon={<MenuIcon />} onClick={() => setMobileDrawerOpen(true)} />
+                    <BottomNavigationAction label="More" value="more" icon={<MenuIcon />} onClick={() => setIsMobileDrawerOpen(true)} />
                 </BottomNavigation>
             </Paper>
         </>
