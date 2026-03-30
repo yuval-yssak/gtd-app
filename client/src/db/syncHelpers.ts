@@ -84,7 +84,21 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
     registerBackgroundSync();
 }
 
-export async function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
+// Module-level guard so concurrent callers (queueSyncOp fire-and-forget, mount effect,
+// online handler, service worker message) collapse into a single in-flight POST.
+// Without this, two simultaneous flushes read the same queued ops and POST them twice,
+// causing the server to send duplicate push notifications for the same change.
+let flushInFlight: Promise<void> | null = null;
+
+export function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
+    if (flushInFlight) return flushInFlight;
+    flushInFlight = doFlush(db).finally(() => {
+        flushInFlight = null;
+    });
+    return flushInFlight;
+}
+
+async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
     const ops = await db.getAll('syncOperations');
     if (!ops.length) {
         return;
