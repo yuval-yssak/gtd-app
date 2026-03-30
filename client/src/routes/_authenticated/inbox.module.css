@@ -12,3 +12,48 @@
 .captureField :global(.MuiOutlinedInput-notchedOutline) {
     border: none;
 }
+
+.notesPreview {
+    min-height: 120px;
+    padding: 12px 14px;
+    border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
+    border-radius: 4px;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    overflow-y: auto;
+}
+
+.notesPreview :global(p) {
+    margin: 0 0 0.5em;
+}
+
+.notesPreview :global(ul),
+.notesPreview :global(ol) {
+    padding-left: 1.5em;
+    margin: 0 0 0.5em;
+}
+
+.notesPreview :global(code) {
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 3px;
+    padding: 0.1em 0.3em;
+    font-size: 0.9em;
+}
+
+.notesPreview :global(pre) {
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 4px;
+    padding: 0.75em 1em;
+    overflow-x: auto;
+    margin: 0 0 0.5em;
+}
+
+.notesPreview :global(pre code) {
+    background: none;
+    padding: 0;
+}
+
+.notesEmpty {
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    font-style: italic;
+}

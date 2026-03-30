@@ -1,6 +1,7 @@
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
+import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -12,6 +13,8 @@ import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -19,6 +22,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { ClarifyDialog } from '../../components/ClarifyDialog';
 import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataContext';
@@ -36,6 +40,9 @@ function InboxPage() {
     const { db } = Route.useRouteContext();
     const { account, items, workContexts, people, refreshItems } = useAppData();
     const [draft, setDraft] = useState('');
+    const [notes, setNotes] = useState('');
+    const [notesOpen, setNotesOpen] = useState(false);
+    const [notesTab, setNotesTab] = useState<0 | 1>(0);
     const [clarifyOpen, setClarifyOpen] = useState(false);
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
@@ -47,7 +54,10 @@ function InboxPage() {
             return;
         }
         setDraft('');
-        await collectItem(db, account.id, title);
+        setNotes('');
+        setNotesOpen(false);
+        setNotesTab(0);
+        await collectItem(db, account.id, { title, notes });
         await refreshItems();
     }
 
@@ -93,6 +103,12 @@ function InboxPage() {
                         input: {
                             endAdornment: (
                                 <InputAdornment position="end">
+                                    <Tooltip title={notesOpen ? 'Hide note' : 'Add note'}>
+                                        {/* color="primary" when notes have content so user knows a note is attached */}
+                                        <IconButton onClick={() => setNotesOpen((o) => !o)} color={notes.trim() ? 'primary' : 'default'}>
+                                            <NoteAddIcon />
+                                        </IconButton>
+                                    </Tooltip>
                                     <IconButton onClick={onCapture} disabled={!draft.trim()} edge="end">
                                         <AddIcon />
                                     </IconButton>
@@ -102,6 +118,29 @@ function InboxPage() {
                     }}
                     className={styles.captureField}
                 />
+                {notesOpen && (
+                    <Box sx={{ px: 1.5, pb: 1.5 }}>
+                        <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} sx={{ mb: 1 }}>
+                            <Tab label="Edit" value={0} />
+                            <Tab label="Preview" value={1} />
+                        </Tabs>
+                        {notesTab === 0 ? (
+                            <TextField
+                                label="Notes (Markdown)"
+                                value={notes}
+                                onChange={(e) => setNotes(e.target.value)}
+                                fullWidth
+                                multiline
+                                rows={5}
+                                placeholder="Supports **bold**, _italic_, `code`, lists, etc."
+                            />
+                        ) : (
+                            <div className={styles.notesPreview}>
+                                {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles.notesEmpty}>Nothing to preview.</span>}
+                            </div>
+                        )}
+                    </Box>
+                )}
             </Paper>
 
             {inboxItems.length === 0 ? (
