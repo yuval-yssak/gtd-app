@@ -1,5 +1,6 @@
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
@@ -13,6 +14,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
+import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataContext';
 import { clarifyToDone } from '../../db/itemMutations';
 import type { EnergyLevel, StoredItem } from '../../types/MyDB';
@@ -57,6 +59,7 @@ function NextActionsPage() {
     const [energyFilter, setEnergyFilter] = useState<EnergyLevel | null>(null);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
     const [contextFilter, setContextFilter] = useState<string | null>(null);
+    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const toggleEnergy = makeToggle(setEnergyFilter);
     const toggleTime = makeToggle(setTimeFilter);
@@ -137,11 +140,18 @@ function NextActionsPage() {
                                 disablePadding
                                 className={styles.item}
                                 secondaryAction={
-                                    <Tooltip title="Mark done">
-                                        <IconButton size="small" color="success" onClick={() => void onDone(item)}>
-                                            <CheckCircleOutlineIcon />
-                                        </IconButton>
-                                    </Tooltip>
+                                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                        <Tooltip title="Edit">
+                                            <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                <EditIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                        <Tooltip title="Mark done">
+                                            <IconButton size="small" color="success" onClick={() => void onDone(item)}>
+                                                <CheckCircleOutlineIcon />
+                                            </IconButton>
+                                        </Tooltip>
+                                    </Box>
                                 }
                             >
                                 <ListItemText
@@ -154,7 +164,7 @@ function NextActionsPage() {
                                         </Box>
                                     }
                                     secondary={item.expectedBy ? `Due ${dayjs(item.expectedBy).format('MMM D')}` : undefined}
-                                    sx={{ pr: 6 }}
+                                    sx={{ pr: 10 /* widened from 6 to accommodate the extra edit button */ }}
                                 />
                             </ListItem>
                             {idx < nextActions.length - 1 && <Divider />}
@@ -162,6 +172,7 @@ function NextActionsPage() {
                     ))}
                 </List>
             )}
+            {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
         </Box>
     );
 }

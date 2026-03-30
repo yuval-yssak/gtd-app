@@ -1,13 +1,19 @@
+import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
+import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { useState } from 'react';
+import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataContext';
+import type { StoredItem } from '../../types/MyDB';
 import styles from './calendar.module.css';
 
 export const Route = createFileRoute('/_authenticated/calendar')({
@@ -15,7 +21,9 @@ export const Route = createFileRoute('/_authenticated/calendar')({
 });
 
 function CalendarPage() {
-    const { items } = useAppData();
+    const { db } = Route.useRouteContext();
+    const { items, refreshItems } = useAppData();
+    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const calendarItems = items.filter((item) => item.status === 'calendar').sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''));
 
@@ -65,7 +73,17 @@ function CalendarPage() {
                     <List disablePadding className={styles.list}>
                         {groupItems.map((item, idx) => (
                             <Box key={item._id}>
-                                <ListItem disablePadding className={styles.item}>
+                                <ListItem
+                                    disablePadding
+                                    className={styles.item}
+                                    secondaryAction={
+                                        <Tooltip title="Edit">
+                                            <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                <EditIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                    }
+                                >
                                     <Box className={styles.timeCol}>
                                         {item.timeStart && (
                                             <Typography variant="caption" color="text.secondary">
@@ -74,7 +92,8 @@ function CalendarPage() {
                                             </Typography>
                                         )}
                                     </Box>
-                                    <ListItemText primary={item.title} />
+                                    {/* pr ensures text doesn't overlap the edit button in secondaryAction */}
+                                    <ListItemText primary={item.title} sx={{ pr: 6 }} />
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>
@@ -82,6 +101,7 @@ function CalendarPage() {
                     </List>
                 </Box>
             ))}
+            {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
         </Box>
     );
 }

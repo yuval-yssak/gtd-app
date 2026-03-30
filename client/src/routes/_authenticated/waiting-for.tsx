@@ -1,4 +1,5 @@
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
@@ -10,6 +11,8 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { useState } from 'react';
+import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataContext';
 import { clarifyToDone } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
@@ -22,6 +25,7 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
     const { items, people, refreshItems } = useAppData();
+    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const waitingItems = items.filter((item) => item.status === 'waitingFor').sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
 
@@ -72,11 +76,18 @@ function WaitingForPage() {
                                     disablePadding
                                     className={styles.item}
                                     secondaryAction={
-                                        <Tooltip title="Received">
-                                            <IconButton size="small" color="success" onClick={() => void onReceived(item)}>
-                                                <CheckCircleOutlineIcon />
-                                            </IconButton>
-                                        </Tooltip>
+                                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                            <Tooltip title="Edit">
+                                                <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                    <EditIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Received">
+                                                <IconButton size="small" color="success" onClick={() => void onReceived(item)}>
+                                                    <CheckCircleOutlineIcon />
+                                                </IconButton>
+                                            </Tooltip>
+                                        </Box>
                                     }
                                 >
                                     <ListItemText
@@ -89,7 +100,7 @@ function WaitingForPage() {
                                                 </Typography>
                                             ) : undefined
                                         }
-                                        sx={{ pr: 6 }}
+                                        sx={{ pr: 10 /* widened from 6 to accommodate the extra edit button */ }}
                                     />
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
@@ -98,6 +109,7 @@ function WaitingForPage() {
                     </List>
                 </Box>
             ))}
+            {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
         </Box>
     );
 }

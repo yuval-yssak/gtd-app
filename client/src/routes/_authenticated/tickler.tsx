@@ -1,3 +1,4 @@
+import EditIcon from '@mui/icons-material/Edit';
 import EventAvailableIcon from '@mui/icons-material/EventAvailable';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
@@ -10,6 +11,8 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { useState } from 'react';
+import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataContext';
 import { updateItem } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
@@ -22,6 +25,7 @@ export const Route = createFileRoute('/_authenticated/tickler')({
 function TicklerPage() {
     const { db } = Route.useRouteContext();
     const { items, refreshItems } = useAppData();
+    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const today = dayjs().format('YYYY-MM-DD');
     const ticklerItems = items
@@ -81,14 +85,25 @@ function TicklerPage() {
                                     disablePadding
                                     className={styles.item}
                                     secondaryAction={
-                                        <Tooltip title="Release now">
-                                            <IconButton size="small" onClick={() => void onRelease(item)}>
-                                                <EventAvailableIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
+                                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                            <Tooltip title="Edit">
+                                                <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                    <EditIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Release now">
+                                                <IconButton size="small" onClick={() => void onRelease(item)}>
+                                                    <EventAvailableIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                        </Box>
                                     }
                                 >
-                                    <ListItemText primary={item.title} secondary={`Status: ${item.status}`} sx={{ pr: 6 }} />
+                                    <ListItemText
+                                        primary={item.title}
+                                        secondary={`Status: ${item.status}`}
+                                        sx={{ pr: 10 /* widened from 6 to accommodate the extra edit button */ }}
+                                    />
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>
@@ -96,6 +111,7 @@ function TicklerPage() {
                     </List>
                 </Box>
             ))}
+            {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
         </Box>
     );
 }
