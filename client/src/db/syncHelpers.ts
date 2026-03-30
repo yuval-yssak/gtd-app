@@ -191,7 +191,7 @@ async function applyEntityOp(op: ServerOp, handlers: EntityApplyHandlers): Promi
     // Cast to the minimal shape needed here (updatedTs for conflict resolution);
     // handlers.put receives the full object as unknown and re-casts to the concrete type.
 
-    console.log("applyEntityOp", op, handlers)
+    console.log('applyEntityOp', op, handlers);
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as { updatedTs: string };
     const existing = await handlers.getExisting(op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {
