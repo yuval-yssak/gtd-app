@@ -42,16 +42,35 @@ async function hasNotificationPermission(): Promise<boolean> {
 
 async function getOrCreatePushSubscription(vapidPublicKey: string): Promise<PushSubscription> {
     const registration = await navigator.serviceWorker.ready;
-    return (
-        (await registration.pushManager.getSubscription()) ??
-        (await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            // PushManager requires a Uint8Array, not a base64 string.
-            // `Uint8Array.from` returns `Uint8Array<ArrayBufferLike>` but the API expects
-            // `ArrayBufferView<ArrayBuffer>` — safe cast because the buffer is always a plain ArrayBuffer.
-            applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
-        }))
-    );
+    const existing = await registration.pushManager.getSubscription();
+
+    if (existing) {
+        if (vapidKeyMatchesSubscription(existing, vapidPublicKey)) {
+            return existing;
+        }
+        // VAPID key has rotated (e.g. staging redeploy) — the existing subscription's auth
+        // was negotiated with the old key so the server can no longer authenticate pushes.
+        // Unsubscribe first; subscribe() below will create a fresh subscription.
+        await existing.unsubscribe();
+    }
+
+    return registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        // PushManager requires a Uint8Array, not a base64 string.
+        // `Uint8Array.from` returns `Uint8Array<ArrayBufferLike>` but the API expects
+        // `ArrayBufferView<ArrayBuffer>` — safe cast because the buffer is always a plain ArrayBuffer.
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,
+    });
+}
+
+// Compare the key bytes stored on the existing subscription against the current VAPID public key.
+// PushSubscription.options.applicationServerKey is an ArrayBuffer set when subscribe() was called.
+function vapidKeyMatchesSubscription(subscription: PushSubscription, vapidPublicKey: string): boolean {
+    const stored = subscription.options.applicationServerKey;
+    if (!stored) return false; // subscription predates applicationServerKey support — treat as stale
+    const current = urlBase64ToUint8Array(vapidPublicKey);
+    const storedBytes = new Uint8Array(stored);
+    return storedBytes.length === current.length && storedBytes.every((b, i) => b === current[i]);
 }
 
 // The VAPID public key is URL-safe base64; the browser PushManager requires a Uint8Array.
