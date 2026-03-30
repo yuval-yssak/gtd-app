@@ -43,7 +43,7 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         listOverdue: () => resolveUserId(db).then((uid) => getOverdueItems(db, uid)),
 
         // ── Collect ──────────────────────────────────────────────────────────
-        collect: (title: string) => resolveUserId(db).then((uid) => collectItem(db, uid, title)),
+        collect: (title: string) => resolveUserId(db).then((uid) => collectItem(db, uid, { title })),
 
         // ── Clarify ──────────────────────────────────────────────────────────
         clarifyToNextAction: (item: StoredItem, meta: NextActionMeta = {}) => clarifyToNextAction(db, item, meta),

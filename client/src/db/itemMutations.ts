@@ -22,8 +22,10 @@ function buildBaseItem(userId: string, title: string): StoredItem {
 
 // ── Collect ───────────────────────────────────────────────────────────────────
 
-export async function collectItem(db: IDBPDatabase<MyDB>, userId: string, title: string): Promise<StoredItem> {
-    const item = buildBaseItem(userId, title);
+export async function collectItem(db: IDBPDatabase<MyDB>, userId: string, { title, notes }: { title: string; notes?: string }): Promise<StoredItem> {
+    const base = buildBaseItem(userId, title);
+    // exactOptionalPropertyTypes: omit key rather than assigning undefined
+    const item = notes?.trim() ? { ...base, notes: notes.trim() } : base;
     await putItem(db, item);
     await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item });
     return item;

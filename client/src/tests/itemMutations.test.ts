@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe('collectItem', () => {
     it('writes an inbox item and queues a create op', async () => {
-        const item = await collectItem(db, USER_ID, 'Buy milk');
+        const item = await collectItem(db, USER_ID, { title: 'Buy milk' });
 
         expect(item.status).toBe('inbox');
         expect(item.title).toBe('Buy milk');
@@ -47,7 +47,7 @@ describe('collectItem', () => {
 
 describe('clarifyToNextAction', () => {
     it('updates status, merges meta, strips calendar/waitingFor fields, queues update op', async () => {
-        const item = await collectItem(db, USER_ID, 'Process inbox');
+        const item = await collectItem(db, USER_ID, { title: 'Process inbox' });
         // Use a known past updatedTs so we can detect that clarify refreshed it,
         // regardless of whether the call runs within the same millisecond as collectItem.
         const withCalendarFields = {
@@ -75,7 +75,7 @@ describe('clarifyToNextAction', () => {
     });
 
     it('queues update op separately when item was already synced (no pending create)', async () => {
-        const item = await collectItem(db, USER_ID, 'Process inbox');
+        const item = await collectItem(db, USER_ID, { title: 'Process inbox' });
         // Flush the queue manually to simulate item already on the server
         await db.clear('syncOperations');
 
@@ -90,7 +90,7 @@ describe('clarifyToNextAction', () => {
 
 describe('clarifyToCalendar', () => {
     it('sets timeStart/timeEnd, strips nextAction/waitingFor fields', async () => {
-        const item = await collectItem(db, USER_ID, 'Doctor appointment');
+        const item = await collectItem(db, USER_ID, { title: 'Doctor appointment' });
         await db.clear('syncOperations');
 
         const withNextActionFields = { ...item, workContextIds: ['ctx-1'], energy: 'high' as const, waitingForPersonId: 'p-1', ignoreBefore: '2025-06-01' };
@@ -108,7 +108,7 @@ describe('clarifyToCalendar', () => {
 
 describe('clarifyToWaitingFor', () => {
     it('sets waitingForPersonId, strips calendar/nextAction fields', async () => {
-        const item = await collectItem(db, USER_ID, 'Waiting on report');
+        const item = await collectItem(db, USER_ID, { title: 'Waiting on report' });
         await db.clear('syncOperations');
 
         const withMixedFields = {
@@ -134,7 +134,7 @@ describe('clarifyToWaitingFor', () => {
 
 describe('clarifyToDone', () => {
     it('sets status to done and refreshes updatedTs', async () => {
-        const item = await collectItem(db, USER_ID, 'Finish report');
+        const item = await collectItem(db, USER_ID, { title: 'Finish report' });
         await db.clear('syncOperations');
 
         // Seed a past updatedTs so the assertion detects the refresh even within the same ms.
@@ -150,7 +150,7 @@ describe('clarifyToDone', () => {
 
 describe('clarifyToTrash', () => {
     it('sets status to trash', async () => {
-        const item = await collectItem(db, USER_ID, 'Old idea');
+        const item = await collectItem(db, USER_ID, { title: 'Old idea' });
         await db.clear('syncOperations');
 
         const trashed = await clarifyToTrash(db, item);
@@ -163,7 +163,7 @@ describe('clarifyToTrash', () => {
 
 describe('updateItem', () => {
     it('refreshes updatedTs and queues update op', async () => {
-        const item = await collectItem(db, USER_ID, 'Original title');
+        const item = await collectItem(db, USER_ID, { title: 'Original title' });
         await db.clear('syncOperations');
 
         // Seed a past updatedTs so the assertion detects the refresh even within the same ms.
@@ -181,7 +181,7 @@ describe('updateItem', () => {
 
 describe('removeItem', () => {
     it('deletes the item from IndexedDB and queues a delete op', async () => {
-        const item = await collectItem(db, USER_ID, 'To delete');
+        const item = await collectItem(db, USER_ID, { title: 'To delete' });
         await db.clear('syncOperations');
 
         await removeItem(db, item._id);
