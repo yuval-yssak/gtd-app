@@ -1,5 +1,6 @@
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import EditIcon from '@mui/icons-material/Edit';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -19,6 +20,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useState } from 'react';
 import { ClarifyDialog } from '../../components/ClarifyDialog';
+import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataContext';
 import { clarifyToDone, clarifyToNextAction, clarifyToTrash, collectItem } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
@@ -35,6 +37,7 @@ function InboxPage() {
     const { account, items, workContexts, people, refreshItems } = useAppData();
     const [draft, setDraft] = useState('');
     const [clarifyOpen, setClarifyOpen] = useState(false);
+    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const inboxItems = items.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
 
@@ -114,6 +117,11 @@ function InboxPage() {
                                 className={styles.item}
                                 secondaryAction={
                                     <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                        <Tooltip title="Edit">
+                                            <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                <EditIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
                                         <Tooltip title="Done (< 2 min)">
                                             <IconButton size="small" onClick={() => void onQuickDone(item)}>
                                                 <PlaylistAddCheckIcon fontSize="small" />
@@ -130,7 +138,8 @@ function InboxPage() {
                                     </Box>
                                 }
                             >
-                                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} sx={{ pr: 18 }} />
+                                {/* pr widened from 18→22 to make room for the extra edit button */}
+                                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} sx={{ pr: 22 }} />
                             </ListItem>
                             {idx < inboxItems.length - 1 && <Divider />}
                         </Box>
@@ -147,6 +156,7 @@ function InboxPage() {
                     onItemProcessed={refreshItems}
                 />
             )}
+            {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
         </Box>
     );
 }

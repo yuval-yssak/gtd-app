@@ -35,6 +35,7 @@ export interface StoredItem {
     time?: number; // minutes
     focus?: boolean;
     urgent?: boolean;
+    notes?: string; // freeform markdown notes — applies to all statuses
 }
 
 export interface StoredRoutineTemplate {

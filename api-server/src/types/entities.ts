@@ -67,6 +67,7 @@ export interface ItemInterface {
     time?: number; // estimated duration in minutes — relevant for `nextAction` items
     focus?: boolean; // requires uninterrupted focus — relevant for `nextAction` items
     urgent?: boolean; // must be done very soon — relevant for `nextAction` items
+    notes?: string; // freeform markdown notes — applies to all statuses
 }
 
 export interface RoutineItemTemplate {
