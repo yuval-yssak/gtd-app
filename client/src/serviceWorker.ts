@@ -71,9 +71,6 @@ function buildNotificationBody(ops: PushOpSummary[]): string {
 }
 
 self.addEventListener('push', (event) => {
-    console.log('Received push event', event);
-    console.log('Event data:', event.data);
-    console.log('Event data JSON:', event.data?.json());
     // event.data may be absent if the push was sent without a payload (e.g. older server version)
     const payload = (event.data?.json() as { ops?: PushOpSummary[] } | null) ?? null;
 
@@ -84,7 +81,8 @@ self.addEventListener('push', (event) => {
                 self.registration.showNotification('Getting Things Done', {
                     body: buildNotificationBody(payload?.ops ?? []),
                     icon: '/icon.svg',
-                    // Collapse multiple rapid push events into one notification rather than stacking them
+                    // Unique tag per push so each notification is shown separately rather than
+                    // silently replacing the previous one.
                     tag: `gtd-sync-update${Date.now()}`,
                 }),
             ),

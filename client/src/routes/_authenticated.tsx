@@ -143,6 +143,8 @@ function AuthenticatedLayout() {
         async function onNetworkOnline() {
             await syncAndRefresh();
             openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
+            // Re-register push in case the subscription was lost or expired while offline.
+            registerPushSubscription(db).catch((err) => console.error('[push] registration failed:', err));
         }
 
         function onNetworkOffline() {
