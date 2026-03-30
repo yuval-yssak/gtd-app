@@ -9,11 +9,12 @@ import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppNav, DRAWER_WIDTH } from '../components/AppNav';
+import { NotificationNudge } from '../components/NotificationNudge';
 import { type AppData, AppDataContext } from '../contexts/AppDataContext';
 import { getActiveAccount } from '../db/accountHelpers';
 import { getItemsByUser } from '../db/itemHelpers';
 import { getPeopleByUser } from '../db/personHelpers';
-import { registerPushSubscription } from '../db/pushSubscription';
+import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { closeSseConnection, openSseConnection } from '../db/sseClient';
 import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { getWorkContextsByUser } from '../db/workContextHelpers';
@@ -124,7 +125,7 @@ function AuthenticatedLayout() {
             // Open SSE so this tab receives real-time pushes from other devices
             openSseConnection(onUpdate);
             // Register Web Push subscription so the SW can pull while the app is closed
-            registerPushSubscription(db).catch((err) => console.error('[push] registration failed:', err));
+            registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
         }
 
         async function loadAll() {
@@ -144,7 +145,7 @@ function AuthenticatedLayout() {
             await syncAndRefresh();
             openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
             // Re-register push in case the subscription was lost or expired while offline.
-            registerPushSubscription(db).catch((err) => console.error('[push] registration failed:', err));
+            registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
         }
 
         function onNetworkOffline() {
@@ -201,6 +202,7 @@ function AuthenticatedLayout() {
             >
                 <AppDataContext.Provider value={appData}>
                     <Outlet />
+                    <NotificationNudge db={db} />
                 </AppDataContext.Provider>
             </Box>
         </Box>
