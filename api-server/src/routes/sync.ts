@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
@@ -13,7 +14,6 @@ import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/
 import { sendPushToSubscription, vapidPublicKey } from '../lib/webPush.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import type { EntityType, ItemInterface, OperationInterface, OpType, PersonInterface, RoutineInterface, WorkContextInterface } from '../types/entities.js';
-import { inspect } from 'node:util';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
 // Snapshot uses `userId` (IndexedDB field name); the server remaps it to `user`.
