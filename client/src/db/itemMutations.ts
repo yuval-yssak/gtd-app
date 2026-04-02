@@ -89,6 +89,29 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
     return updated;
 }
 
+export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
+    // Strip all status-specific fields — inbox items carry only title, notes, peopleIds, and routineId
+    const {
+        workContextIds: _wc,
+        energy: _e,
+        time: _t,
+        focus: _f,
+        urgent: _u,
+        expectedBy: _eb,
+        ignoreBefore: _ib,
+        timeStart: _ts,
+        timeEnd: _te,
+        calendarEventId: _ce,
+        calendarIntegrationId: _ci,
+        waitingForPersonId: _wfp,
+        ...rest
+    } = item;
+    const updated: StoredItem = { ...rest, status: 'inbox', updatedTs: nowIso() };
+    await putItem(db, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    return updated;
+}
+
 export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
     await putItem(db, updated);

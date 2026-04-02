@@ -14,7 +14,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
-import { EditItemDialog } from '../../components/EditItemDialog';
+import { EditNextActionDialog } from '../../components/EditNextActionDialog';
 import { useAppData } from '../../contexts/AppDataContext';
 import { clarifyToDone } from '../../db/itemMutations';
 import type { EnergyLevel, StoredItem } from '../../types/MyDB';
@@ -55,7 +55,7 @@ function makeToggle<T>(setter: React.Dispatch<React.SetStateAction<T | null>>) {
 
 function NextActionsPage() {
     const { db } = Route.useRouteContext();
-    const { items, workContexts, refreshItems } = useAppData();
+    const { items, workContexts, people, refreshItems } = useAppData();
     const [energyFilter, setEnergyFilter] = useState<EnergyLevel | null>(null);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
     const [contextFilter, setContextFilter] = useState<string | null>(null);
@@ -172,7 +172,16 @@ function NextActionsPage() {
                     ))}
                 </List>
             )}
-            {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
+            {editingItem && (
+                <EditNextActionDialog
+                    item={editingItem}
+                    db={db}
+                    people={people}
+                    workContexts={workContexts}
+                    onClose={() => setEditingItem(null)}
+                    onSaved={refreshItems}
+                />
+            )}
         </Box>
     );
 }

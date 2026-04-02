@@ -1,7 +1,10 @@
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Divider from '@mui/material/Divider';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import Paper from '@mui/material/Paper';
+import Radio from '@mui/material/Radio';
+import RadioGroup from '@mui/material/RadioGroup';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
@@ -9,6 +12,10 @@ import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataContext';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
 import type { MyDB } from '../../types/MyDB';
+
+type InlineClarifyMode = 'dialog' | 'expand' | 'popover' | 'instant';
+
+const CLARIFY_MODE_KEY = 'gtd:inlineClarifyMode';
 
 export const Route = createFileRoute('/_authenticated/settings')({
     component: SettingsPage,
@@ -56,6 +63,9 @@ function SettingsPage() {
                 </Box>
             </Paper>
 
+            {/* Inbox preferences */}
+            <InboxSection />
+
             {/* Notifications section */}
             <NotificationsSection db={db} />
 
@@ -71,6 +81,81 @@ function SettingsPage() {
                 </Box>
             </Paper>
         </Box>
+    );
+}
+
+function InboxSection() {
+    const [mode, setMode] = useState<InlineClarifyMode>(() => (localStorage.getItem(CLARIFY_MODE_KEY) as InlineClarifyMode) ?? 'dialog');
+
+    function onChange(newMode: InlineClarifyMode) {
+        setMode(newMode);
+        localStorage.setItem(CLARIFY_MODE_KEY, newMode);
+        // storage event only fires in OTHER tabs by default — dispatch manually so the
+        // inbox page updates in real time without requiring a reload.
+        window.dispatchEvent(new StorageEvent('storage', { key: CLARIFY_MODE_KEY, newValue: newMode }));
+    }
+
+    return (
+        <Paper variant="outlined" sx={{ mb: 3 }}>
+            <Box sx={{ px: 2.5, py: 2 }}>
+                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                    Inbox
+                </Typography>
+                <Typography variant="body2" color="text.secondary" mb={2}>
+                    How extra fields appear when you tap Next Action, Calendar, or Waiting For on an inbox item.
+                </Typography>
+                <RadioGroup value={mode} onChange={(e) => onChange(e.target.value as InlineClarifyMode)}>
+                    <FormControlLabel
+                        value="dialog"
+                        control={<Radio size="small" />}
+                        label={
+                            <Box>
+                                <Typography variant="body2">Dialog</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    A focused dialog window
+                                </Typography>
+                            </Box>
+                        }
+                    />
+                    <FormControlLabel
+                        value="expand"
+                        control={<Radio size="small" />}
+                        label={
+                            <Box>
+                                <Typography variant="body2">Expand inline</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    The item row expands in place
+                                </Typography>
+                            </Box>
+                        }
+                    />
+                    <FormControlLabel
+                        value="popover"
+                        control={<Radio size="small" />}
+                        label={
+                            <Box>
+                                <Typography variant="body2">Popover</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    A floating panel near the button
+                                </Typography>
+                            </Box>
+                        }
+                    />
+                    <FormControlLabel
+                        value="instant"
+                        control={<Radio size="small" />}
+                        label={
+                            <Box>
+                                <Typography variant="body2">Instant</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    Moves immediately with no extra fields (Next Action only; Calendar and Waiting For always show a form)
+                                </Typography>
+                            </Box>
+                        }
+                    />
+                </RadioGroup>
+            </Box>
+        </Paper>
     );
 }
 

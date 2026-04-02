@@ -1,11 +1,15 @@
 import AddIcon from '@mui/icons-material/Add';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
+import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
+import Collapse from '@mui/material/Collapse';
 import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
@@ -13,6 +17,8 @@ import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
+import Popover from '@mui/material/Popover';
+import Snackbar from '@mui/material/Snackbar';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
@@ -21,16 +27,37 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { ClarifyDialog } from '../../components/ClarifyDialog';
+import { CalendarFields } from '../../components/clarify/CalendarFields';
+import { NextActionFields } from '../../components/clarify/NextActionFields';
+import {
+    buildCalendarTimes,
+    buildNextActionMeta,
+    buildWaitingForMeta,
+    type CalendarFormState,
+    type Destination,
+    emptyCalendar,
+    emptyNextAction,
+    emptyWaitingFor,
+    type NextActionFormState,
+    type WaitingForFormState,
+} from '../../components/clarify/types';
+import { WaitingForFields } from '../../components/clarify/WaitingForFields';
 import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataContext';
-import { clarifyToDone, clarifyToNextAction, clarifyToTrash, collectItem } from '../../db/itemMutations';
+import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, collectItem } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './inbox.module.css';
 
 dayjs.extend(relativeTime);
+
+type InlineClarifyMode = 'dialog' | 'expand' | 'popover' | 'instant';
+
+// Destinations that require a form (calendar needs a date, waitingFor needs a person).
+// In instant mode these fall back to dialog so required fields can be filled.
+type ActionableDest = 'nextAction' | 'calendar' | 'waitingFor';
 
 export const Route = createFileRoute('/_authenticated/inbox')({
     component: InboxPage,
@@ -43,10 +70,118 @@ function InboxPage() {
     const [notes, setNotes] = useState('');
     const [notesOpen, setNotesOpen] = useState(false);
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
-    const [clarifyOpen, setClarifyOpen] = useState(false);
+
+    // Batch "Process Inbox" wizard
+    const [batchClarifyOpen, setBatchClarifyOpen] = useState(false);
+
+    // Dialog mode: single-item ClarifyDialog with pre-selected destination
+    const [clarifyItem, setClarifyItem] = useState<StoredItem | null>(null);
+    const [clarifyDest, setClarifyDest] = useState<Destination | null>(null);
+
+    // Inline expand mode
+    const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
+    const [expandedDest, setExpandedDest] = useState<ActionableDest | null>(null);
+
+    // Popover mode
+    const [popoverAnchor, setPopoverAnchor] = useState<HTMLElement | null>(null);
+    const [popoverItem, setPopoverItem] = useState<StoredItem | null>(null);
+    const [popoverDest, setPopoverDest] = useState<ActionableDest | null>(null);
+
+    // Instant mode toast
+    const [toastOpen, setToastOpen] = useState(false);
+
+    // Shared form state for expand/popover modes
+    const [naForm, setNaForm] = useState<NextActionFormState>(emptyNextAction);
+    const [calForm, setCalForm] = useState<CalendarFormState>(emptyCalendar);
+    const [wfForm, setWfForm] = useState<WaitingForFormState>(emptyWaitingFor);
+
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
+    // Read preference from localStorage; update reactively when settings page changes it.
+    // The storage event normally fires only in other tabs, so settings.tsx dispatches it manually.
+    const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => (localStorage.getItem('gtd:inlineClarifyMode') as InlineClarifyMode) ?? 'dialog');
+    useEffect(() => {
+        function onStorage(e: StorageEvent) {
+            if (e.key === 'gtd:inlineClarifyMode' && e.newValue) {
+                setClarifyMode(e.newValue as InlineClarifyMode);
+            }
+        }
+        window.addEventListener('storage', onStorage);
+        return () => window.removeEventListener('storage', onStorage);
+    }, []);
+
     const inboxItems = items.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+
+    function resetForms() {
+        setNaForm(emptyNextAction);
+        setCalForm(emptyCalendar);
+        setWfForm(emptyWaitingFor);
+    }
+
+    function closeInlineForm() {
+        setExpandedItemId(null);
+        setExpandedDest(null);
+        setPopoverAnchor(null);
+        setPopoverItem(null);
+        setPopoverDest(null);
+        resetForms();
+    }
+
+    function isInlineConfirmDisabled(dest: ActionableDest): boolean {
+        if (dest === 'calendar') return !calForm.date;
+        if (dest === 'waitingFor') return !wfForm.waitingForPersonId;
+        return false;
+    }
+
+    async function onConfirmInlineForm(item: StoredItem, dest: ActionableDest) {
+        if (dest === 'nextAction') {
+            await clarifyToNextAction(db, item, buildNextActionMeta(naForm));
+        } else if (dest === 'calendar') {
+            const { startIso, endIso } = buildCalendarTimes(calForm);
+            await clarifyToCalendar(db, item, startIso, endIso);
+        } else if (dest === 'waitingFor') {
+            await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
+        }
+        await refreshItems();
+        closeInlineForm();
+    }
+
+    function onInlineAction(e: React.MouseEvent<HTMLElement>, item: StoredItem, dest: ActionableDest) {
+        // instant mode is only truly instant for nextAction — calendar and waitingFor require
+        // mandatory fields (date, person), so they fall back to dialog even in instant mode.
+        if (clarifyMode === 'instant' && dest === 'nextAction') {
+            void clarifyToNextAction(db, item, {}).then(async () => {
+                await refreshItems();
+            });
+            setToastOpen(true);
+            return;
+        }
+
+        if (clarifyMode === 'dialog' || (clarifyMode === 'instant' && dest !== 'nextAction')) {
+            setClarifyItem(item);
+            setClarifyDest(dest);
+            return;
+        }
+
+        if (clarifyMode === 'expand') {
+            // Toggle off if the same item+dest is already expanded
+            if (expandedItemId === item._id && expandedDest === dest) {
+                closeInlineForm();
+            } else {
+                resetForms();
+                setExpandedItemId(item._id);
+                setExpandedDest(dest);
+            }
+            return;
+        }
+
+        if (clarifyMode === 'popover') {
+            resetForms();
+            setPopoverAnchor(e.currentTarget);
+            setPopoverItem(item);
+            setPopoverDest(dest);
+        }
+    }
 
     async function onCapture() {
         const title = draft.trim();
@@ -70,11 +205,6 @@ function InboxPage() {
         await refreshItems();
     }
 
-    async function onNextAction(item: StoredItem) {
-        await clarifyToNextAction(db, item);
-        await refreshItems();
-    }
-
     async function onTrash(item: StoredItem) {
         await clarifyToTrash(db, item);
         await refreshItems();
@@ -87,7 +217,7 @@ function InboxPage() {
                     Inbox
                     {inboxItems.length > 0 && <Chip label={inboxItems.length} size="small" color="primary" sx={{ ml: 1.5, verticalAlign: 'middle' }} />}
                 </Typography>
-                <Button variant="outlined" size="small" disabled={inboxItems.length === 0} onClick={() => setClarifyOpen(true)}>
+                <Button variant="outlined" size="small" disabled={inboxItems.length === 0} onClick={() => setBatchClarifyOpen(true)}>
                     Process Inbox ({inboxItems.length})
                 </Button>
             </Box>
@@ -154,6 +284,7 @@ function InboxPage() {
                             <ListItem
                                 disablePadding
                                 className={styles.item}
+                                // 6 icon buttons fit within the 220px padding-right set in inbox.module.css
                                 secondaryAction={
                                     <Box sx={{ display: 'flex', gap: 0.5 }}>
                                         <Tooltip title="Edit">
@@ -167,7 +298,19 @@ function InboxPage() {
                                             </IconButton>
                                         </Tooltip>
                                         <Tooltip title="Next Action">
-                                            <Chip label="→ Next" size="small" onClick={() => void onNextAction(item)} sx={{ cursor: 'pointer' }} />
+                                            <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'nextAction')}>
+                                                <ArrowForwardIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                        <Tooltip title="Calendar">
+                                            <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'calendar')}>
+                                                <CalendarTodayIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                        <Tooltip title="Waiting For">
+                                            <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'waitingFor')}>
+                                                <HourglassEmptyIcon fontSize="small" />
+                                            </IconButton>
                                         </Tooltip>
                                         <Tooltip title="Trash">
                                             <IconButton size="small" color="error" onClick={() => void onTrash(item)}>
@@ -177,22 +320,115 @@ function InboxPage() {
                                     </Box>
                                 }
                             >
-                                {/* pr widened from 18→22 to make room for the extra edit button */}
-                                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} sx={{ pr: 22 }} />
+                                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} sx={{ pr: 28 }} />
                             </ListItem>
+
+                            {/* Inline expand mode: form appears below the item row */}
+                            {clarifyMode === 'expand' && expandedItemId === item._id && expandedDest && (
+                                <Collapse in>
+                                    <Box sx={{ px: 2, pt: 1, pb: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                                        {expandedDest === 'nextAction' && (
+                                            <NextActionFields
+                                                value={naForm}
+                                                onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))}
+                                                workContexts={workContexts}
+                                                people={people}
+                                            />
+                                        )}
+                                        {expandedDest === 'calendar' && (
+                                            <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} />
+                                        )}
+                                        {expandedDest === 'waitingFor' && (
+                                            <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
+                                        )}
+                                        <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+                                            <Button size="small" onClick={closeInlineForm}>
+                                                Cancel
+                                            </Button>
+                                            <Button
+                                                size="small"
+                                                variant="contained"
+                                                disabled={isInlineConfirmDisabled(expandedDest)}
+                                                onClick={() => void onConfirmInlineForm(item, expandedDest)}
+                                            >
+                                                Confirm
+                                            </Button>
+                                        </Box>
+                                    </Box>
+                                </Collapse>
+                            )}
+
                             {idx < inboxItems.length - 1 && <Divider />}
                         </Box>
                     ))}
                 </List>
             )}
-            {clarifyOpen && (
+
+            {/* Popover mode: floating panel anchored to the clicked button */}
+            <Popover
+                open={Boolean(popoverAnchor)}
+                anchorEl={popoverAnchor}
+                onClose={closeInlineForm}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+            >
+                {popoverItem && popoverDest && (
+                    <Box sx={{ p: 2, width: 320 }}>
+                        {popoverDest === 'nextAction' && (
+                            <NextActionFields
+                                value={naForm}
+                                onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))}
+                                workContexts={workContexts}
+                                people={people}
+                            />
+                        )}
+                        {popoverDest === 'calendar' && <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} />}
+                        {popoverDest === 'waitingFor' && (
+                            <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
+                        )}
+                        <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+                            <Button size="small" onClick={closeInlineForm}>
+                                Cancel
+                            </Button>
+                            <Button
+                                size="small"
+                                variant="contained"
+                                disabled={isInlineConfirmDisabled(popoverDest)}
+                                onClick={() => void onConfirmInlineForm(popoverItem, popoverDest)}
+                            >
+                                Confirm
+                            </Button>
+                        </Box>
+                    </Box>
+                )}
+            </Popover>
+
+            {/* Instant mode toast — prompts user to add details after the instant move */}
+            <Snackbar open={toastOpen} autoHideDuration={5000} onClose={() => setToastOpen(false)} message="Moved to Next Actions" />
+
+            {batchClarifyOpen && (
                 <ClarifyDialog
                     items={inboxItems}
                     db={db}
                     people={people}
                     workContexts={workContexts}
-                    onClose={() => setClarifyOpen(false)}
+                    onClose={() => setBatchClarifyOpen(false)}
                     onItemProcessed={refreshItems}
+                />
+            )}
+            {clarifyItem && (
+                <ClarifyDialog
+                    items={[clarifyItem]}
+                    db={db}
+                    people={people}
+                    workContexts={workContexts}
+                    onClose={() => {
+                        setClarifyItem(null);
+                        setClarifyDest(null);
+                    }}
+                    onItemProcessed={refreshItems}
+                    // exactOptionalPropertyTypes: omit the prop entirely rather than passing undefined
+                    {...(clarifyDest ? { initialDestination: clarifyDest } : {})}
                 />
             )}
             {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}

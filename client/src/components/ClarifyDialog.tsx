@@ -5,63 +5,34 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
 import Chip from '@mui/material/Chip';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
-import FormControlLabel from '@mui/material/FormControlLabel';
 import FormLabel from '@mui/material/FormLabel';
-import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
-import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor } from '../db/itemMutations';
-import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
+import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 import styles from './ClarifyDialog.module.css';
-
-type Destination = 'nextAction' | 'calendar' | 'waitingFor' | 'done' | 'trash';
-
-interface NextActionForm {
-    workContextIds: string[];
-    energy: EnergyLevel | '';
-    time: string;
-    urgent: boolean;
-    focus: boolean;
-    expectedBy: string;
-    ignoreBefore: string;
-}
-
-interface CalendarForm {
-    date: string;
-    startTime: string;
-    endTime: string;
-}
-
-interface WaitingForForm {
-    waitingForPersonId: string;
-    expectedBy: string;
-    ignoreBefore: string;
-}
-
-const emptyNextAction: NextActionForm = {
-    workContextIds: [],
-    energy: '',
-    time: '',
-    urgent: false,
-    focus: false,
-    expectedBy: '',
-    ignoreBefore: '',
-};
-
-const emptyCalendar: CalendarForm = { date: '', startTime: '', endTime: '' };
-const emptyWaitingFor: WaitingForForm = { waitingForPersonId: '', expectedBy: '', ignoreBefore: '' };
+import { CalendarFields } from './clarify/CalendarFields';
+import { NextActionFields } from './clarify/NextActionFields';
+import {
+    buildCalendarTimes,
+    buildNextActionMeta,
+    buildWaitingForMeta,
+    type CalendarFormState,
+    type Destination,
+    emptyCalendar,
+    emptyNextAction,
+    emptyWaitingFor,
+    type NextActionFormState,
+    type WaitingForFormState,
+} from './clarify/types';
+import { WaitingForFields } from './clarify/WaitingForFields';
 
 interface Props {
     items: StoredItem[];
@@ -70,18 +41,22 @@ interface Props {
     workContexts: StoredWorkContext[];
     onClose: () => void;
     onItemProcessed: () => Promise<void>;
+    // Pre-selects a destination chip on open — used when opening for a single item from inline buttons
+    initialDestination?: Destination;
 }
 
-export function ClarifyDialog({ items, db, people, workContexts, onClose, onItemProcessed }: Props) {
+export function ClarifyDialog({ items, db, people, workContexts, onClose, onItemProcessed, initialDestination }: Props) {
     const [index, setIndex] = useState(0);
-    const [destination, setDestination] = useState<Destination | null>(null);
-    const [nextActionForm, setNextActionForm] = useState<NextActionForm>(emptyNextAction);
-    const [calendarForm, setCalendarForm] = useState<CalendarForm>(emptyCalendar);
-    const [waitingForForm, setWaitingForForm] = useState<WaitingForForm>(emptyWaitingFor);
+    const [destination, setDestination] = useState<Destination | null>(initialDestination ?? null);
+    const [nextActionForm, setNextActionForm] = useState<NextActionFormState>(emptyNextAction);
+    const [calendarForm, setCalendarForm] = useState<CalendarFormState>(emptyCalendar);
+    const [waitingForForm, setWaitingForForm] = useState<WaitingForFormState>(emptyWaitingFor);
     const [done, setDone] = useState(false);
 
     const currentItem = items[index];
     const total = items.length;
+    // Single-item mode: opened from an inline button — hide progress counter and Skip
+    const isSingleItem = total === 1;
 
     function resetForms() {
         setDestination(null);
@@ -120,40 +95,16 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
             return;
         }
         if (dest === 'nextAction') {
-            // exactOptionalPropertyTypes requires we omit undefined keys entirely rather than
-            // passing them explicitly, so we build the meta object incrementally.
-            const meta = {
-                ...(nextActionForm.workContextIds.length && { workContextIds: nextActionForm.workContextIds }),
-                ...(nextActionForm.energy && { energy: nextActionForm.energy }),
-                ...(nextActionForm.time && { time: Number(nextActionForm.time) }),
-                ...(nextActionForm.urgent && { urgent: nextActionForm.urgent }),
-                ...(nextActionForm.focus && { focus: nextActionForm.focus }),
-                ...(nextActionForm.expectedBy && { expectedBy: nextActionForm.expectedBy }),
-                ...(nextActionForm.ignoreBefore && { ignoreBefore: nextActionForm.ignoreBefore }),
-            };
-            await clarifyToNextAction(db, item, meta);
+            await clarifyToNextAction(db, item, buildNextActionMeta(nextActionForm));
             return;
         }
         if (dest === 'calendar') {
-            // Combine date + time into ISO datetime; fall back to start of day if no time given
-            const startIso = calendarForm.date
-                ? dayjs(`${calendarForm.date}${calendarForm.startTime ? `T${calendarForm.startTime}` : ''}`).toISOString()
-                : dayjs().toISOString();
-            const endIso =
-                calendarForm.date && calendarForm.endTime
-                    ? dayjs(`${calendarForm.date}T${calendarForm.endTime}`).toISOString()
-                    : dayjs(startIso).add(1, 'hour').toISOString();
+            const { startIso, endIso } = buildCalendarTimes(calendarForm);
             await clarifyToCalendar(db, item, startIso, endIso);
             return;
         }
         if (dest === 'waitingFor') {
-            // exactOptionalPropertyTypes requires omitting undefined keys rather than passing them explicitly.
-            const meta = {
-                waitingForPersonId: waitingForForm.waitingForPersonId,
-                ...(waitingForForm.expectedBy && { expectedBy: waitingForForm.expectedBy }),
-                ...(waitingForForm.ignoreBefore && { ignoreBefore: waitingForForm.ignoreBefore }),
-            };
-            await clarifyToWaitingFor(db, item, meta);
+            await clarifyToWaitingFor(db, item, buildWaitingForMeta(waitingForForm));
         }
     }
 
@@ -191,18 +142,19 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                 <Typography variant="subtitle1" fontWeight={600}>
                     Clarify
                 </Typography>
-                <Typography variant="caption" color="text.secondary">
-                    {index + 1} of {total}
-                </Typography>
+                {/* Counter only meaningful in batch mode */}
+                {!isSingleItem && (
+                    <Typography variant="caption" color="text.secondary">
+                        {index + 1} of {total}
+                    </Typography>
+                )}
             </DialogTitle>
 
             <DialogContent dividers>
-                {/* Item title */}
                 <Typography variant="h6" fontWeight={500} mb={3}>
                     "{currentItem?.title}"
                 </Typography>
 
-                {/* Destination picker */}
                 <FormLabel sx={{ display: 'block', mb: 1 }}>
                     <Typography variant="caption" color="text.secondary" fontWeight={600} className={styles.sectionLabel}>
                         What is it?
@@ -246,196 +198,39 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                     />
                 </Stack>
 
-                {/* Next Action form */}
                 {destination === 'nextAction' && (
                     <Box className={styles.form}>
-                        {workContexts.length > 0 && (
-                            <Box>
-                                <FormLabel>
-                                    <Typography variant="caption" color="text.secondary">
-                                        Work contexts
-                                    </Typography>
-                                </FormLabel>
-                                <Stack direction="row" flexWrap="wrap" gap={0.75} mt={0.5}>
-                                    {workContexts.map((ctx) => (
-                                        <Chip
-                                            key={ctx._id}
-                                            label={ctx.name}
-                                            size="small"
-                                            variant={nextActionForm.workContextIds.includes(ctx._id) ? 'filled' : 'outlined'}
-                                            color={nextActionForm.workContextIds.includes(ctx._id) ? 'primary' : 'default'}
-                                            onClick={() =>
-                                                setNextActionForm((f) => ({
-                                                    ...f,
-                                                    workContextIds: f.workContextIds.includes(ctx._id)
-                                                        ? f.workContextIds.filter((id) => id !== ctx._id)
-                                                        : [...f.workContextIds, ctx._id],
-                                                }))
-                                            }
-                                        />
-                                    ))}
-                                </Stack>
-                            </Box>
-                        )}
-
-                        <Box>
-                            <FormLabel>
-                                <Typography variant="caption" color="text.secondary">
-                                    Energy
-                                </Typography>
-                            </FormLabel>
-                            <ToggleButtonGroup
-                                exclusive
-                                size="small"
-                                value={nextActionForm.energy || null}
-                                onChange={(_e, val: EnergyLevel | null) => setNextActionForm((f) => ({ ...f, energy: val ?? '' }))}
-                                sx={{ mt: 0.5, display: 'flex' }}
-                            >
-                                <ToggleButton value="low">Low</ToggleButton>
-                                <ToggleButton value="medium">Medium</ToggleButton>
-                                <ToggleButton value="high">High</ToggleButton>
-                            </ToggleButtonGroup>
-                        </Box>
-
-                        <TextField
-                            label="Time estimate (min)"
-                            value={nextActionForm.time}
-                            onChange={(e) => setNextActionForm((f) => ({ ...f, time: e.target.value }))}
-                            type="number"
-                            size="small"
-                            sx={{ width: 180 }}
-                            slotProps={{ htmlInput: { min: 1 } }}
+                        <NextActionFields
+                            value={nextActionForm}
+                            onChange={(patch) => setNextActionForm((f) => ({ ...f, ...patch }))}
+                            workContexts={workContexts}
+                            people={people}
                         />
-
-                        <Stack direction="row" gap={2}>
-                            <FormControlLabel
-                                control={
-                                    <Checkbox
-                                        size="small"
-                                        checked={nextActionForm.urgent}
-                                        onChange={(e) => setNextActionForm((f) => ({ ...f, urgent: e.target.checked }))}
-                                    />
-                                }
-                                label={<Typography variant="body2">Urgent</Typography>}
-                            />
-                            <FormControlLabel
-                                control={
-                                    <Checkbox
-                                        size="small"
-                                        checked={nextActionForm.focus}
-                                        onChange={(e) => setNextActionForm((f) => ({ ...f, focus: e.target.checked }))}
-                                    />
-                                }
-                                label={<Typography variant="body2">Needs focus</Typography>}
-                            />
-                        </Stack>
-
-                        <Stack direction={{ xs: 'column', sm: 'row' }} gap={2}>
-                            <TextField
-                                label="Expected by"
-                                type="date"
-                                value={nextActionForm.expectedBy}
-                                onChange={(e) => setNextActionForm((f) => ({ ...f, expectedBy: e.target.value }))}
-                                size="small"
-                                slotProps={{ inputLabel: { shrink: true } }}
-                            />
-                            <TextField
-                                label="Ignore before"
-                                type="date"
-                                value={nextActionForm.ignoreBefore}
-                                onChange={(e) => setNextActionForm((f) => ({ ...f, ignoreBefore: e.target.value }))}
-                                size="small"
-                                slotProps={{ inputLabel: { shrink: true } }}
-                            />
-                        </Stack>
                     </Box>
                 )}
 
-                {/* Calendar form */}
                 {destination === 'calendar' && (
                     <Box className={styles.form}>
-                        <TextField
-                            label="Date"
-                            type="date"
-                            value={calendarForm.date}
-                            onChange={(e) => setCalendarForm((f) => ({ ...f, date: e.target.value }))}
-                            size="small"
-                            required
-                            slotProps={{ inputLabel: { shrink: true } }}
-                        />
-                        <Stack direction="row" gap={2}>
-                            <TextField
-                                label="Start time"
-                                type="time"
-                                value={calendarForm.startTime}
-                                onChange={(e) => setCalendarForm((f) => ({ ...f, startTime: e.target.value }))}
-                                size="small"
-                                slotProps={{ inputLabel: { shrink: true } }}
-                            />
-                            <TextField
-                                label="End time"
-                                type="time"
-                                value={calendarForm.endTime}
-                                onChange={(e) => setCalendarForm((f) => ({ ...f, endTime: e.target.value }))}
-                                size="small"
-                                slotProps={{ inputLabel: { shrink: true } }}
-                            />
-                        </Stack>
+                        <CalendarFields value={calendarForm} onChange={(patch) => setCalendarForm((f) => ({ ...f, ...patch }))} />
                     </Box>
                 )}
 
-                {/* Waiting For form */}
                 {destination === 'waitingFor' && (
                     <Box className={styles.form}>
-                        {people.length === 0 ? (
-                            <Typography variant="body2" color="text.secondary">
-                                No people yet — add contacts in the People section first.
-                            </Typography>
-                        ) : (
-                            <TextField
-                                select
-                                label="Waiting for"
-                                value={waitingForForm.waitingForPersonId}
-                                onChange={(e) => setWaitingForForm((f) => ({ ...f, waitingForPersonId: e.target.value }))}
-                                size="small"
-                                required
-                                sx={{ minWidth: 200 }}
-                            >
-                                {people.map((p) => (
-                                    <MenuItem key={p._id} value={p._id}>
-                                        {p.name}
-                                    </MenuItem>
-                                ))}
-                            </TextField>
-                        )}
-                        <Stack direction={{ xs: 'column', sm: 'row' }} gap={2}>
-                            <TextField
-                                label="Expected by"
-                                type="date"
-                                value={waitingForForm.expectedBy}
-                                onChange={(e) => setWaitingForForm((f) => ({ ...f, expectedBy: e.target.value }))}
-                                size="small"
-                                slotProps={{ inputLabel: { shrink: true } }}
-                            />
-                            <TextField
-                                label="Ignore before"
-                                type="date"
-                                value={waitingForForm.ignoreBefore}
-                                onChange={(e) => setWaitingForForm((f) => ({ ...f, ignoreBefore: e.target.value }))}
-                                size="small"
-                                slotProps={{ inputLabel: { shrink: true } }}
-                            />
-                        </Stack>
+                        <WaitingForFields value={waitingForForm} onChange={(patch) => setWaitingForForm((f) => ({ ...f, ...patch }))} people={people} />
                     </Box>
                 )}
             </DialogContent>
 
             <DialogActions>
-                <Button onClick={() => void onSkip()} color="inherit">
-                    Skip
-                </Button>
+                {/* Skip hidden in single-item mode — there is nothing else to process */}
+                {!isSingleItem && (
+                    <Button onClick={() => void onSkip()} color="inherit">
+                        Skip
+                    </Button>
+                )}
                 <Button variant="contained" disabled={isConfirmDisabled()} onClick={() => void onConfirm()}>
-                    Confirm{index + 1 < total ? ' & next' : ' & finish'}
+                    {isSingleItem ? 'Confirm' : `Confirm${index + 1 < total ? ' & next' : ' & finish'}`}
                 </Button>
             </DialogActions>
         </Dialog>
