@@ -111,6 +111,8 @@ function AuthenticatedLayout() {
             }
 
             setItems(await getItemsByUser(db, acct.id));
+            setWorkContexts(await getWorkContextsByUser(db, acct.id));
+            setPeople(await getPeopleByUser(db, acct.id));
         }
 
         async function initializeFromCache(acct: StoredAccount) {
@@ -127,6 +129,15 @@ function AuthenticatedLayout() {
             // Register Web Push subscription so the SW can pull while the app is closed
             registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
         }
+
+        // When the SW handles a push event it updates IndexedDB and then messages open tabs.
+        // Without this listener the tab only sees fresh data after the next mount.
+        function onSwMessage(event: MessageEvent) {
+            if (event.data?.type === 'sync-complete') {
+                syncAndRefresh().catch((err) => console.error('[sw-push] sync failed:', err));
+            }
+        }
+        navigator.serviceWorker?.addEventListener('message', onSwMessage);
 
         async function loadAll() {
             const acct = await getActiveAccount(db);
@@ -160,6 +171,7 @@ function AuthenticatedLayout() {
             window.removeEventListener('online', onNetworkOnline);
             window.removeEventListener('offline', onNetworkOffline);
             closeSseConnection();
+            navigator.serviceWorker?.removeEventListener('message', onSwMessage);
         };
     }, [db]);
 

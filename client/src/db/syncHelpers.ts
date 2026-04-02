@@ -143,16 +143,30 @@ export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void>
     await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: serverTs });
 }
 
-export async function pullFromServer(db: IDBPDatabase<MyDB>) {
+// Module-level guard so concurrent callers (SSE callback and SW-message handler arriving
+// for the same server change) collapse into a single in-flight pull. Without this, two
+// simultaneous pulls can race on setLastSyncedTs and cause one of them to advance the
+// cursor past ops the other hasn't applied yet, silently dropping changes.
+let pullInFlight: Promise<void> | null = null;
+
+export function pullFromServer(db: IDBPDatabase<MyDB>) {
+    if (pullInFlight) return pullInFlight;
+    pullInFlight = doPull(db).finally(() => (pullInFlight = null));
+    return pullInFlight;
+}
+
+/**
+ * Fetches and applies server operations from the sync endpoint.
+ * Must not run concurrently — call through `pullFromServer()` which provides a guard.
+ * Parallel runs can race on `setLastSyncedTs` and silently drop ops from one run.
+ */
+async function doPull(db: IDBPDatabase<MyDB>): Promise<void> {
     const deviceId = await getOrCreateDeviceId(db);
     const since = await getLastSyncedTs(db);
-    console.log({ deviceId, since });
     const { ops, serverTs } = await fetchSyncOps(since, deviceId);
-    console.log({ ops, serverTs });
     for (const op of ops) {
         await applyServerOp(db, op);
     }
-
     await setLastSyncedTs(db, serverTs);
 }
 
