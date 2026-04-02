@@ -150,8 +150,8 @@ export function EditNextActionDialog({ item, db, people, workContexts, onClose, 
                             placeholder="Supports **bold**, _italic_, `code`, lists, etc."
                         />
                     ) : (
-                        <div className={styles['preview']}>
-                            {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles['empty']}>Nothing to preview.</span>}
+                        <div className={styles.preview}>
+                            {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles.empty}>Nothing to preview.</span>}
                         </div>
                     )}
                 </div>

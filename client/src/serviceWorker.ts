@@ -78,6 +78,16 @@ self.addEventListener('push', (event) => {
         openAppDB()
             .then((db) => pullFromServer(db))
             .then(() =>
+                // Notify any open tabs so they can refresh React state from IndexedDB —
+                // without this, the tab only sees the updated data after the next mount.
+                self.clients.matchAll({ type: 'window' }),
+            )
+            .then((clients) =>
+                clients.forEach((c) => {
+                    c.postMessage({ type: 'sync-complete' });
+                }),
+            )
+            .then(() =>
                 self.registration.showNotification('Getting Things Done', {
                     body: buildNotificationBody(payload?.ops ?? []),
                     icon: '/icon.svg',

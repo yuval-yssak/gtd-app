@@ -1,8 +1,8 @@
 declare const styles: {
+    readonly captureField: string;
     readonly item: string;
     readonly list: string;
-    readonly captureField: string;
-    readonly notesPreview: string;
     readonly notesEmpty: string;
+    readonly notesPreview: string;
 };
 export = styles;
