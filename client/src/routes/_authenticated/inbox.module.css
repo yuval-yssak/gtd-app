@@ -115,3 +115,53 @@
     /* pr: 28 — enough room for 6 icon buttons in secondaryAction */
     padding-right: 224px;
 }
+
+/* On mobile the inline buttons are hidden; remove the reserved padding so the
+   full row width is available for the item title. */
+@media (max-width: 899px) {
+    .item {
+        padding-right: 16px;
+    }
+
+    .listItemText {
+        padding-right: 0;
+    }
+}
+
+/* Swipe row wrapper — clips the row as it slides to reveal the action background */
+.swipeWrapper {
+    position: relative;
+    overflow: hidden;
+}
+
+/* Green background revealed on right-swipe (Next Action) */
+.revealRight {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    padding-left: 16px;
+    background: #2e7d32;
+    color: #fff;
+}
+
+/* Red background revealed on left-swipe (Trash) */
+.revealLeft {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding-right: 16px;
+    background: #d32f2f;
+    color: #fff;
+}
+
+/* Bottom sheet drag handle pill */
+.sheetHandle {
+    width: 32px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.2);
+    margin: 8px auto 12px;
+}

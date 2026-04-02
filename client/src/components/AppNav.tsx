@@ -26,6 +26,7 @@ import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { Link, useLocation, useNavigate } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
+import type { FileRouteTypes } from '../routeTree.gen';
 import type { MyDB } from '../types/MyDB';
 import { AccountSwitcher } from './AccountSwitcher';
 import styles from './AppNav.module.css';
@@ -36,7 +37,7 @@ export const DRAWER_WIDTH = 240;
 interface NavItemConfig {
     label: string;
     icon: React.ReactElement;
-    to: string;
+    to: FileRouteTypes['to'];
     badgeCount?: number;
 }
 
@@ -81,7 +82,7 @@ function NavListItem({ item, isActive, onItemClick }: NavListItemProps) {
     return (
         <ListItem disablePadding>
             {/* Link wraps the button so the full row is a client-side navigation target */}
-            <Link to={item.to as never} className={styles.navLink}>
+            <Link to={item.to} className={styles.navLink}>
                 <ListItemButton selected={isActive} onClick={onItemClick} dense>
                     <ListItemIcon className={styles.listItemIcon}>{iconNode}</ListItemIcon>
                     <ListItemText primary={item.label} slotProps={{ primary: { variant: 'body2' } }} />

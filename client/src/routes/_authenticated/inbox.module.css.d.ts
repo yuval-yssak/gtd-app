@@ -14,6 +14,10 @@ declare const styles: {
     readonly pageHeader: string;
     readonly popoverActions: string;
     readonly popoverContent: string;
+    readonly revealLeft: string;
+    readonly revealRight: string;
+    readonly sheetHandle: string;
+    readonly swipeWrapper: string;
     readonly tabs: string;
 };
 export = styles;
