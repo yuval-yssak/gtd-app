@@ -188,10 +188,24 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 - MUI components are styled via the centralized MUI theme — use `sx` props only for layout-specific overrides on wrapper elements, not for component appearance.
 - Global CSS variables go in `client/src/index.css`.
 - **Never concatenate classNames with array `.join(" ")`.** Use the `classnames` package instead: `import classNames from "classnames"`.
+- **Never use bracket notation for CSS Module classes** (`styles["preview"]`). Use dot notation (`styles.preview`) — `generate-typed-css-modules` ensures all classes are typed and accessible this way.
 
-## Code Review Requirement
+## Post-Change Checklist
 
-After completing any code change — bug fix, feature, or refactor — you **must** invoke the `code-reviewer` subagent before considering the task done. The reviewer checks for correctness, edge cases, coding standards violations, and test quality. Do not skip this step even for small changes.
+After any code change — bug fix, feature, or refactor — run the following sequence. If any step surfaces issues requiring further edits, repeat from step 1.
+
+**Client changes:**
+1. `cd client && npm run generate-typed-css-modules` — regenerates `.d.ts` files for CSS Modules
+2. `npm run lint:fix` — Biome format + lint
+3. `npm run typecheck`
+4. Invoke the `code-reviewer` subagent
+
+**API server changes:**
+1. `npm run lint:fix`
+2. `npm run typecheck`
+3. Invoke the `code-reviewer` subagent
+
+The `code-reviewer` subagent checks for correctness, edge cases, coding standards violations, and test quality. Do not skip this step even for small changes.
 
 ## Running Locally
 
