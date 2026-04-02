@@ -1,0 +1,20 @@
+.page {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--mui-palette-grey-100, #f5f5f5);
+}
+
+.card {
+    /* p: 6 = 48px, width: 360px fixed — matches original Paper sx values */
+    padding: 48px;
+    width: 360px;
+    text-align: center;
+}
+
+.buttonGroup {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}

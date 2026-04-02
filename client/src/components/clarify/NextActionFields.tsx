@@ -9,6 +9,7 @@ import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import type { EnergyLevel, StoredPerson, StoredWorkContext } from '../../types/MyDB';
+import styles from './NextActionFields.module.css';
 import type { NextActionFormState } from './types';
 
 interface Props {
@@ -106,7 +107,7 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                     size="small"
                     value={value.energy || null}
                     onChange={(_e, val: EnergyLevel | null) => onChange({ energy: val ?? '' })}
-                    sx={{ mt: 0.5, display: 'flex' }}
+                    className={styles.energyToggle}
                 >
                     <ToggleButton value="low">Low</ToggleButton>
                     <ToggleButton value="medium">Medium</ToggleButton>
@@ -120,7 +121,7 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                 onChange={(e) => onChange({ time: e.target.value })}
                 type="number"
                 size="small"
-                sx={{ width: 180 }}
+                className={styles.timeField}
                 slotProps={{ htmlInput: { min: 1 } }}
             />
 

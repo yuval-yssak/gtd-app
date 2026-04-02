@@ -40,10 +40,10 @@ export function EditItemDialog({ item, db, onClose, onSaved }: Props) {
     return (
         <Dialog open onClose={onClose} fullWidth maxWidth="sm">
             <DialogTitle>Edit item</DialogTitle>
-            <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: '16px !important' }}>
+            <DialogContent className={styles.dialogContent}>
                 <TextField label="Title" value={title} onChange={(e) => setTitle(e.target.value)} fullWidth required autoFocus />
                 <div>
-                    <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} sx={{ mb: 1 }}>
+                    <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} className={styles.tabs}>
                         <Tab label="Edit" value={0} />
                         <Tab label="Preview" value={1} />
                     </Tabs>

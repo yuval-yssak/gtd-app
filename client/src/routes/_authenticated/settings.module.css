@@ -1,0 +1,16 @@
+.pageWrapper {
+    max-width: 560px;
+}
+
+.section {
+    margin-bottom: 24px;
+}
+
+.sectionContent {
+    /* MUI spacing: py: 2 = 16px top/bottom, px: 2.5 = 20px left/right */
+    padding: 16px 20px;
+}
+
+.divider {
+    margin: 12px 0;
+}

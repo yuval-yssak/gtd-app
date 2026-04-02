@@ -1,3 +1,15 @@
+.dialogContent {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    /* biome-ignore lint/complexity/noImportantStyles: overrides MUI DialogContent's 20px default padding-top */
+    padding-top: 16px !important;
+}
+
+.tabs {
+    margin-bottom: 8px;
+}
+
 .preview {
     min-height: 120px;
     padding: 12px 14px;

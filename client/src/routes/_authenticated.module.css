@@ -1,0 +1,43 @@
+.appShell {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* Hidden on desktop — the permanent sidebar replaces it; shown on mobile as fixed top bar */
+.mobileAppBar {
+    display: flex;
+    z-index: calc(var(--mui-zIndex-drawer, 1200) + 1); /* fallback: MUI cssVariables is off by default; 1200 = MUI drawer default */
+}
+
+@media (min-width: 900px) {
+    .mobileAppBar {
+        display: none;
+    }
+}
+
+.menuButton {
+    margin-right: 8px;
+}
+
+.appBarTitle {
+    flex-grow: 1;
+}
+
+.mainContent {
+    flex-grow: 1;
+    overflow: auto;
+    /* Mobile: push content below fixed AppBar (9×8=72px) and above bottom nav */
+    padding-top: 72px;
+    padding-bottom: 72px;
+    padding-left: 16px;
+    padding-right: 16px;
+}
+
+@media (min-width: 900px) {
+    /* Desktop: offset content to the right of the permanent sidebar */
+    .mainContent {
+        margin-left: 240px; /* matches DRAWER_WIDTH constant in AppNav.tsx */
+        width: calc(100% - 240px);
+        padding: 24px;
+    }
+}

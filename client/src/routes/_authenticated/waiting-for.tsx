@@ -13,7 +13,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditItemDialog } from '../../components/EditItemDialog';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './waiting-for.module.css';
@@ -62,7 +62,7 @@ function WaitingForPage() {
         <Box>
             <Typography variant="h5" fontWeight={600} mb={3}>
                 Waiting For
-                <Chip label={waitingItems.length} size="small" color="primary" sx={{ ml: 1.5, verticalAlign: 'middle' }} />
+                <Chip label={waitingItems.length} size="small" color="primary" className={styles.countChip} />
             </Typography>
             {Object.entries(groups).map(([personId, groupItems]) => (
                 <Box key={personId} mb={3}>
@@ -76,7 +76,7 @@ function WaitingForPage() {
                                     disablePadding
                                     className={styles.item}
                                     secondaryAction={
-                                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                        <Box className={styles.actionButtons}>
                                             <Tooltip title="Edit">
                                                 <IconButton size="small" onClick={() => setEditingItem(item)}>
                                                     <EditIcon fontSize="small" />
@@ -100,7 +100,7 @@ function WaitingForPage() {
                                                 </Typography>
                                             ) : undefined
                                         }
-                                        sx={{ pr: 10 /* widened from 6 to accommodate the extra edit button */ }}
+                                        className={styles.listItemText}
                                     />
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}

@@ -1,0 +1,50 @@
+.pageWrapper {
+    max-width: 600px;
+}
+
+.headerRow {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 8px;
+}
+
+.progressSection {
+    margin-bottom: 24px;
+}
+
+.progressHeader {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 4px;
+}
+
+/* borderRadius: 1 = 4px — rounds the progress bar ends for a softer look */
+.progressBar {
+    border-radius: 4px;
+}
+
+.stepCard {
+    margin-bottom: 16px;
+    padding: 16px;
+}
+
+.stepTasks {
+    display: flex;
+    flex-direction: column;
+}
+
+.checkboxLabel {
+    align-items: flex-start;
+}
+
+/* pt: 0.5 in MUI sx = 4px — nudges the checkbox down to align with the first line of a multiline label */
+.checkboxLabel :global(.MuiCheckbox-root) {
+    padding-top: 4px;
+}
+
+.actionRow {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+}

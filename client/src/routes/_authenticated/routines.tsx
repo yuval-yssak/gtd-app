@@ -10,7 +10,7 @@ import ListItemText from '@mui/material/ListItemText';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import { removeRoutine } from '../../db/routineMutations';
 import { useRoutines } from '../../hooks/useRoutines';
 import type { StoredRoutine } from '../../types/MyDB';
@@ -40,10 +40,10 @@ function RoutinesPage() {
 
     return (
         <Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+            <Box className={styles.pageHeader}>
                 <Typography variant="h5" fontWeight={600}>
                     Routines
-                    {routines.length > 0 && <Chip label={routines.length} size="small" sx={{ ml: 1.5, verticalAlign: 'middle' }} />}
+                    {routines.length > 0 && <Chip label={routines.length} size="small" className={styles.countChip} />}
                 </Typography>
                 <Tooltip title="Create routine (coming soon)">
                     <span>
@@ -75,13 +75,13 @@ function RoutinesPage() {
                             >
                                 <ListItemText
                                     primary={
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        <Box className={styles.titleRow}>
                                             {routine.title}
                                             <Chip label={routine.active ? 'Active' : 'Paused'} size="small" color={routine.active ? 'success' : 'default'} />
                                         </Box>
                                     }
                                     secondary={triggerLabel(routine)}
-                                    sx={{ pr: 6 }}
+                                    className={styles.listItemText}
                                 />
                             </ListItem>
                             {idx < routines.length - 1 && <Divider />}

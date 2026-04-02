@@ -1,8 +1,37 @@
+.actionButtons {
+    display: flex;
+    gap: 4px; /* gap: 0.5 in MUI sx = 0.5 × 8px */
+}
+
 .list {
-    border: 1px solid var(--mui-palette-divider);
+    border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
     border-radius: 4px;
 }
 
 .item {
     padding: 10px 16px;
+}
+
+.pageHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+}
+
+.countChip {
+    margin-left: 12px;
+    vertical-align: middle;
+}
+
+/* pr: 10 — widened to accommodate two icon buttons in secondaryAction */
+.listItemText {
+    padding-right: 80px;
+}
+
+.personForm {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 8px;
 }

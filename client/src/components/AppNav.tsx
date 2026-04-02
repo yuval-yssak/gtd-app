@@ -83,7 +83,7 @@ function NavListItem({ item, isActive, onItemClick }: NavListItemProps) {
             {/* Link wraps the button so the full row is a client-side navigation target */}
             <Link to={item.to as never} className={styles.navLink}>
                 <ListItemButton selected={isActive} onClick={onItemClick} dense>
-                    <ListItemIcon sx={{ minWidth: 36 }}>{iconNode}</ListItemIcon>
+                    <ListItemIcon className={styles.listItemIcon}>{iconNode}</ListItemIcon>
                     <ListItemText primary={item.label} slotProps={{ primary: { variant: 'body2' } }} />
                 </ListItemButton>
             </Link>
@@ -100,40 +100,40 @@ function DrawerContent({ onItemClick, db }: DrawerContentProps) {
     const { pathname } = useLocation();
 
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <Box className={styles.drawerContent}>
             {/* Logo row — desktop only (mobile has the AppBar) */}
-            <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', px: 2, py: 1.5 }}>
+            <Box className={styles.logoRow}>
                 <Typography variant="h6" fontWeight={700} color="primary">
                     GTD
                 </Typography>
             </Box>
 
             {/* Spacer on mobile so nav list starts below the fixed AppBar */}
-            <Box sx={{ display: { xs: 'block', md: 'none' } }}>
+            <Box className={styles.toolbarSpacer}>
                 <Toolbar />
             </Box>
 
-            <Box sx={{ overflowY: 'auto', flexGrow: 1 }}>
+            <Box className={styles.navScrollArea}>
                 <List disablePadding>
                     {primaryItems.map((item) => (
                         <NavListItem key={item.to} item={item} isActive={pathname === item.to} onItemClick={onItemClick} />
                     ))}
-                    <Divider sx={{ my: 0.5 }} />
+                    <Divider className={styles.divider} />
                     {secondaryItems.map((item) => (
                         <NavListItem key={item.to} item={item} isActive={pathname === item.to} onItemClick={onItemClick} />
                     ))}
-                    <Divider sx={{ my: 0.5 }} />
+                    <Divider className={styles.divider} />
                     {tertiaryItems.map((item) => (
                         <NavListItem key={item.to} item={item} isActive={pathname === item.to} onItemClick={onItemClick} />
                     ))}
-                    <Divider sx={{ my: 0.5 }} />
+                    <Divider className={styles.divider} />
                     <NavListItem item={settingsNavItem} isActive={pathname === settingsNavItem.to} onItemClick={onItemClick} />
                 </List>
             </Box>
 
             {/* Account + status — pinned to sidebar bottom */}
-            <Box sx={{ borderTop: 1, borderColor: 'divider' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', px: 1, py: 0.5 }}>
+            <Box className={styles.drawerFooter}>
+                <Box className={styles.accountRow}>
                     <AccountSwitcher db={db} />
                 </Box>
                 <StatusBar />
@@ -159,15 +159,7 @@ export function AppNav({ isMobileDrawerOpen, setIsMobileDrawerOpen, db }: AppNav
     return (
         <>
             {/* Permanent sidebar — desktop only */}
-            <Drawer
-                variant="permanent"
-                sx={{
-                    display: { xs: 'none', md: 'block' },
-                    width: DRAWER_WIDTH,
-                    flexShrink: 0,
-                    '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
-                }}
-            >
+            <Drawer variant="permanent" className={styles.permanentDrawer}>
                 <DrawerContent onItemClick={() => {}} db={db} />
             </Drawer>
 
@@ -177,26 +169,13 @@ export function AppNav({ isMobileDrawerOpen, setIsMobileDrawerOpen, db }: AppNav
                 open={isMobileDrawerOpen}
                 onClose={() => setIsMobileDrawerOpen(false)}
                 ModalProps={{ keepMounted: true }}
-                sx={{
-                    display: { xs: 'block', md: 'none' },
-                    '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box' },
-                }}
+                className={styles.temporaryDrawer}
             >
                 <DrawerContent onItemClick={() => setIsMobileDrawerOpen(false)} db={db} />
             </Drawer>
 
             {/* Bottom navigation — mobile only */}
-            <Paper
-                elevation={3}
-                sx={{
-                    display: { xs: 'block', md: 'none' },
-                    position: 'fixed',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    zIndex: (theme) => theme.zIndex.appBar,
-                }}
-            >
+            <Paper elevation={3} className={styles.bottomNavPaper}>
                 <BottomNavigation value={bottomNavValue} showLabels>
                     {bottomNavItems.map((item) => (
                         <BottomNavigationAction

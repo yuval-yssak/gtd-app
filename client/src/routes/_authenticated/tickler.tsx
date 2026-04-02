@@ -13,7 +13,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditItemDialog } from '../../components/EditItemDialog';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import { updateItem } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './tickler.module.css';
@@ -71,7 +71,7 @@ function TicklerPage() {
         <Box>
             <Typography variant="h5" fontWeight={600} mb={3}>
                 Tickler
-                <Chip label={ticklerItems.length} size="small" sx={{ ml: 1.5, verticalAlign: 'middle' }} />
+                <Chip label={ticklerItems.length} size="small" className={styles.countChip} />
             </Typography>
             {Object.entries(groups).map(([dateKey, groupItems]) => (
                 <Box key={dateKey} mb={3}>
@@ -85,7 +85,7 @@ function TicklerPage() {
                                     disablePadding
                                     className={styles.item}
                                     secondaryAction={
-                                        <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                        <Box className={styles.actionButtons}>
                                             <Tooltip title="Edit">
                                                 <IconButton size="small" onClick={() => setEditingItem(item)}>
                                                     <EditIcon fontSize="small" />
@@ -99,11 +99,7 @@ function TicklerPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemText
-                                        primary={item.title}
-                                        secondary={`Status: ${item.status}`}
-                                        sx={{ pr: 10 /* widened from 6 to accommodate the extra edit button */ }}
-                                    />
+                                    <ListItemText primary={item.title} secondary={`Status: ${item.status}`} className={styles.listItemText} />
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>

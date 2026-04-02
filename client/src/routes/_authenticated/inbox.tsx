@@ -46,7 +46,7 @@ import {
 } from '../../components/clarify/types';
 import { WaitingForFields } from '../../components/clarify/WaitingForFields';
 import { EditItemDialog } from '../../components/EditItemDialog';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, collectItem } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './inbox.module.css';
@@ -212,17 +212,17 @@ function InboxPage() {
 
     return (
         <Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+            <Box className={styles.pageHeader}>
                 <Typography variant="h5" fontWeight={600}>
                     Inbox
-                    {inboxItems.length > 0 && <Chip label={inboxItems.length} size="small" color="primary" sx={{ ml: 1.5, verticalAlign: 'middle' }} />}
+                    {inboxItems.length > 0 && <Chip label={inboxItems.length} size="small" color="primary" className={styles.countChip} />}
                 </Typography>
                 <Button variant="outlined" size="small" disabled={inboxItems.length === 0} onClick={() => setBatchClarifyOpen(true)}>
                     Process Inbox ({inboxItems.length})
                 </Button>
             </Box>
 
-            <Paper variant="outlined" sx={{ mb: 3 }}>
+            <Paper variant="outlined" className={styles.captureCard}>
                 <TextField
                     fullWidth
                     placeholder="What's on your mind?"
@@ -249,8 +249,8 @@ function InboxPage() {
                     className={styles.captureField}
                 />
                 {notesOpen && (
-                    <Box sx={{ px: 1.5, pb: 1.5 }}>
-                        <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} sx={{ mb: 1 }}>
+                    <Box className={styles.captureNotes}>
+                        <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} className={styles.tabs}>
                             <Tab label="Edit" value={0} />
                             <Tab label="Preview" value={1} />
                         </Tabs>
@@ -286,7 +286,7 @@ function InboxPage() {
                                 className={styles.item}
                                 // 6 icon buttons fit within the 220px padding-right set in inbox.module.css
                                 secondaryAction={
-                                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                    <Box className={styles.actionButtons}>
                                         <Tooltip title="Edit">
                                             <IconButton size="small" onClick={() => setEditingItem(item)}>
                                                 <EditIcon fontSize="small" />
@@ -320,13 +320,13 @@ function InboxPage() {
                                     </Box>
                                 }
                             >
-                                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} sx={{ pr: 28 }} />
+                                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} className={styles.listItemText} />
                             </ListItem>
 
                             {/* Inline expand mode: form appears below the item row */}
                             {clarifyMode === 'expand' && expandedItemId === item._id && expandedDest && (
                                 <Collapse in>
-                                    <Box sx={{ px: 2, pt: 1, pb: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                                    <Box className={styles.expandedForm}>
                                         {expandedDest === 'nextAction' && (
                                             <NextActionFields
                                                 value={naForm}
@@ -341,7 +341,7 @@ function InboxPage() {
                                         {expandedDest === 'waitingFor' && (
                                             <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
                                         )}
-                                        <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+                                        <Box className={styles.expandedFormActions}>
                                             <Button size="small" onClick={closeInlineForm}>
                                                 Cancel
                                             </Button>
@@ -373,7 +373,7 @@ function InboxPage() {
                 transformOrigin={{ vertical: 'top', horizontal: 'right' }}
             >
                 {popoverItem && popoverDest && (
-                    <Box sx={{ p: 2, width: 320 }}>
+                    <Box className={styles.popoverContent}>
                         {popoverDest === 'nextAction' && (
                             <NextActionFields
                                 value={naForm}
@@ -386,7 +386,7 @@ function InboxPage() {
                         {popoverDest === 'waitingFor' && (
                             <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
                         )}
-                        <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+                        <Box className={styles.popoverActions}>
                             <Button size="small" onClick={closeInlineForm}>
                                 Cancel
                             </Button>

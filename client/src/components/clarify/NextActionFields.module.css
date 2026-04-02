@@ -1,0 +1,9 @@
+.energyToggle {
+    /* mt: 0.5 — small gap between FormLabel and the toggle group */
+    margin-top: 4px;
+    display: flex;
+}
+
+.timeField {
+    width: 180px;
+}

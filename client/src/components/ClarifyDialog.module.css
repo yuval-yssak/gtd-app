@@ -9,3 +9,30 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
+
+.completedContent {
+    text-align: center;
+    padding: 40px 24px;
+}
+
+.completedIcon {
+    font-size: 56px;
+    color: var(--mui-palette-success-main, #2e7d32);
+    margin-bottom: 16px;
+}
+
+.completedActions {
+    justify-content: center;
+    padding-bottom: 24px;
+}
+
+.dialogTitle {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.formLabel {
+    display: block;
+    margin-bottom: 8px;
+}

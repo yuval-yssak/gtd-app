@@ -8,6 +8,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
+import styles from './weekly-review.module.css';
 
 export const Route = createFileRoute('/_authenticated/weekly-review')({
     component: WeeklyReviewPage,
@@ -91,7 +92,7 @@ function WeeklyReviewPage() {
 
     function onComplete() {
         setState((prev) => {
-            const next: ReviewState = { ...prev, completedAt: dayjs().toISOString() };
+            const next: ReviewState = { ...prev, completedAt: dayjs().format() };
             saveState(next);
             return next;
         });
@@ -104,8 +105,8 @@ function WeeklyReviewPage() {
     }
 
     return (
-        <Box sx={{ maxWidth: 600 }}>
-            <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', mb: 1 }}>
+        <Box className={styles.pageWrapper}>
+            <Box className={styles.headerRow}>
                 <Typography variant="h5" fontWeight={600}>
                     Weekly Review
                 </Typography>
@@ -116,8 +117,8 @@ function WeeklyReviewPage() {
                 )}
             </Box>
 
-            <Box sx={{ mb: 3 }}>
-                <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+            <Box className={styles.progressSection}>
+                <Box className={styles.progressHeader}>
                     <Typography variant="caption" color="text.secondary">
                         {checkedCount} / {allTaskIds.length} tasks
                     </Typography>
@@ -125,28 +126,28 @@ function WeeklyReviewPage() {
                         {Math.round(progress)}%
                     </Typography>
                 </Box>
-                <LinearProgress variant="determinate" value={progress} sx={{ borderRadius: 1 }} />
+                <LinearProgress variant="determinate" value={progress} className={styles.progressBar} />
             </Box>
 
             {reviewSteps.map((step) => (
-                <Paper key={step.id} variant="outlined" sx={{ mb: 2, p: 2 }}>
+                <Paper key={step.id} variant="outlined" className={styles.stepCard}>
                     <Typography variant="subtitle2" fontWeight={700} color="primary" mb={1}>
                         {step.phase}
                     </Typography>
-                    <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+                    <Box className={styles.stepTasks}>
                         {step.tasks.map((task) => (
                             <FormControlLabel
                                 key={task.id}
                                 control={<Checkbox checked={!!state.checked[task.id]} onChange={() => toggleTask(task.id)} size="small" />}
                                 label={<Typography variant="body2">{task.label}</Typography>}
-                                sx={{ alignItems: 'flex-start', '& .MuiCheckbox-root': { pt: 0.5 } }}
+                                className={styles.checkboxLabel}
                             />
                         ))}
                     </Box>
                 </Paper>
             ))}
 
-            <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+            <Box className={styles.actionRow}>
                 {!state.completedAt && (
                     <Button variant="contained" disabled={!isComplete} onClick={onComplete}>
                         Mark review complete

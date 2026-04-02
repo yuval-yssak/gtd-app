@@ -1,5 +1,5 @@
 .list {
-    border: 1px solid var(--mui-palette-divider);
+    border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
     border-radius: 4px;
 }
 
@@ -56,4 +56,62 @@
 .notesEmpty {
     color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
     font-style: italic;
+}
+
+.actionButtons {
+    display: flex;
+    gap: 4px; /* gap: 0.5 in MUI sx = 0.5 × 8px */
+}
+
+.pageHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+}
+
+.captureCard {
+    margin-bottom: 24px;
+}
+
+.countChip {
+    margin-left: 12px;
+    vertical-align: middle;
+}
+
+.captureNotes {
+    padding: 12px 12px 12px;
+}
+
+.tabs {
+    margin-bottom: 8px;
+}
+
+/* Inline expand form that appears below a list item row */
+.expandedForm {
+    padding: 8px 16px 16px;
+    border-top: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+.expandedFormActions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+/* Popover form panel */
+.popoverContent {
+    padding: 16px;
+    width: 320px;
+}
+
+.popoverActions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.listItemText {
+    /* pr: 28 — enough room for 6 icon buttons in secondaryAction */
+    padding-right: 224px;
 }

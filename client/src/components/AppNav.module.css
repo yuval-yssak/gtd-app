@@ -1,6 +1,111 @@
+.drawerContent {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+/* Hidden on mobile — only shown on desktop via block display */
+.permanentDrawer {
+    display: none;
+    width: 240px;
+    flex-shrink: 0;
+}
+
+/* Targets the MUI internal paper element to set its width and box model */
+.permanentDrawer :global(.MuiDrawer-paper) {
+    width: 240px;
+    box-sizing: border-box;
+}
+
+@media (min-width: 900px) {
+    .permanentDrawer {
+        display: block;
+    }
+}
+
+/* Hidden on desktop — only shown on mobile; slides in as an overlay */
+.temporaryDrawer {
+    display: block;
+}
+
+.temporaryDrawer :global(.MuiDrawer-paper) {
+    width: 240px;
+    box-sizing: border-box;
+}
+
+@media (min-width: 900px) {
+    .temporaryDrawer {
+        display: none;
+    }
+}
+
+/* Fixed bottom navigation bar — mobile only */
+.bottomNavPaper {
+    display: block;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: var(--mui-zIndex-appBar, 1100); /* fallback: MUI cssVariables is off by default; 1100 = MUI appBar default */
+}
+
+@media (min-width: 900px) {
+    .bottomNavPaper {
+        display: none;
+    }
+}
+
 .navLink {
     display: block;
     width: 100%;
     text-decoration: none;
     color: inherit;
+}
+
+.listItemIcon {
+    min-width: 36px;
+}
+
+.divider {
+    margin: 4px 0;
+}
+
+/* Desktop: show logo row; hidden on mobile where AppBar takes over */
+.logoRow {
+    display: none;
+    align-items: center;
+    padding: 12px 16px;
+}
+
+@media (min-width: 900px) {
+    .logoRow {
+        display: flex;
+    }
+}
+
+/* Mobile: spacer pushes nav list below fixed AppBar; hidden on desktop */
+.toolbarSpacer {
+    display: block;
+}
+
+@media (min-width: 900px) {
+    .toolbarSpacer {
+        display: none;
+    }
+}
+
+.navScrollArea {
+    overflow-y: auto;
+    flex-grow: 1;
+}
+
+.drawerFooter {
+    border-top: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+.accountRow {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
 }

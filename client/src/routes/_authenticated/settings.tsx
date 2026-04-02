@@ -9,9 +9,10 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
 import type { MyDB } from '../../types/MyDB';
+import styles from './settings.module.css';
 
 type InlineClarifyMode = 'dialog' | 'expand' | 'popover' | 'instant';
 
@@ -26,14 +27,14 @@ function SettingsPage() {
     const { account } = useAppData();
 
     return (
-        <Box sx={{ maxWidth: 560 }}>
+        <Box className={styles.pageWrapper}>
             <Typography variant="h5" fontWeight={600} mb={3}>
                 Settings
             </Typography>
 
             {/* Account section */}
-            <Paper variant="outlined" sx={{ mb: 3 }}>
-                <Box sx={{ px: 2.5, py: 2 }}>
+            <Paper variant="outlined" className={styles.section}>
+                <Box className={styles.sectionContent}>
                     <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
                         Account
                     </Typography>
@@ -44,8 +45,8 @@ function SettingsPage() {
             </Paper>
 
             {/* Calendar sync section */}
-            <Paper variant="outlined" sx={{ mb: 3 }}>
-                <Box sx={{ px: 2.5, py: 2 }}>
+            <Paper variant="outlined" className={styles.section}>
+                <Box className={styles.sectionContent}>
                     <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
                         Calendar Sync
                     </Typography>
@@ -53,7 +54,7 @@ function SettingsPage() {
                         Connect a Google Calendar account to sync calendar items bidirectionally. Changes made here or in Google Calendar stay in sync
                         automatically.
                     </Typography>
-                    <Divider sx={{ my: 1.5 }} />
+                    <Divider className={styles.divider} />
                     <Typography variant="body2" color="text.secondary" fontStyle="italic" mb={2}>
                         No calendars connected.
                     </Typography>
@@ -71,7 +72,7 @@ function SettingsPage() {
 
             {/* App info */}
             <Paper variant="outlined">
-                <Box sx={{ px: 2.5, py: 2 }}>
+                <Box className={styles.sectionContent}>
                     <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
                         App
                     </Typography>
@@ -96,8 +97,8 @@ function InboxSection() {
     }
 
     return (
-        <Paper variant="outlined" sx={{ mb: 3 }}>
-            <Box sx={{ px: 2.5, py: 2 }}>
+        <Paper variant="outlined" className={styles.section}>
+            <Box className={styles.sectionContent}>
                 <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
                     Inbox
                 </Typography>
@@ -178,8 +179,8 @@ function NotificationsSection({ db }: { db: IDBPDatabase<MyDB> }) {
     }
 
     return (
-        <Paper variant="outlined" sx={{ mb: 3 }}>
-            <Box sx={{ px: 2.5, py: 2 }}>
+        <Paper variant="outlined" className={styles.section}>
+            <Box className={styles.sectionContent}>
                 <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
                     Notifications
                 </Typography>

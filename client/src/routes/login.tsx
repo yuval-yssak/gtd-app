@@ -1,9 +1,9 @@
-import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { authClient } from '../lib/authClient';
+import styles from './login.module.css';
 
 export const Route = createFileRoute('/login')({
     beforeLoad: async () => {
@@ -33,23 +33,23 @@ function LoginPage() {
     }
 
     return (
-        <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', bgcolor: 'grey.100' }}>
-            <Paper elevation={3} sx={{ p: 6, width: 360, textAlign: 'center' }}>
+        <div className={styles.page}>
+            <Paper elevation={3} className={styles.card}>
                 <Typography variant="h5" fontWeight={600} mb={1}>
                     Getting Things Done
                 </Typography>
                 <Typography variant="body2" color="text.secondary" mb={4}>
                     Sign in to your account
                 </Typography>
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div className={styles.buttonGroup}>
                     <Button variant="outlined" size="large" fullWidth onClick={signInWithGoogle}>
                         Sign in with Google
                     </Button>
                     <Button variant="outlined" size="large" fullWidth onClick={signInWithGitHub}>
                         Sign in with GitHub
                     </Button>
-                </Box>
+                </div>
             </Paper>
-        </Box>
+        </div>
     );
 }
