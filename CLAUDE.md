@@ -109,6 +109,7 @@ All entities carry `updatedTs` (ISO datetime) as the conflict-resolution anchor.
 - Biome: 160-char line width, 4-space indent, single quotes
 - TypeScript strict mode enabled
 - Production API CORS origin: `https://getting-things.done.app`
+- Biome handles all formatting and linting automatically (`npm run lint:fix`). Do not manually fix formatting, import order, or other issues that Biome enforces — just run `lint:fix`.
 
 ## Coding Standards
 
@@ -130,7 +131,7 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 ### Functions
 - ≤ 5 meaningful actions per function, typically ~5 lines.
 - Single level of abstraction per function — if a function orchestrates, it calls named helpers; it does not contain inline implementation details.
-- In functions longer than 4 lines, always wrap `return` or `continue` after a condition in curly braces for scannability. In functions of 4 lines or fewer, a single-line form is acceptable:
+- In any code block longer than 4 lines, always wrap `return`, `throw`, or `continue` after a condition in curly braces for scannability. In code blocks of 4 lines or fewer, the braceless single-line form is acceptable:
   ```ts
   // Good — longer function
   if (condition) {
@@ -170,10 +171,27 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 ### Dates
 - Use `dayjs` for all date parsing, formatting, manipulation, duration arithmetic, and timestamp comparisons. Do not use the native `Date` API or other date libraries.
 
+### React
+
+- Prefer co-locating state as close as possible to where it is used; only lift state when two sibling components genuinely need to share it.
+- Custom hooks are the extraction unit for reusable stateful logic — not utility functions with `use*` names for logic that doesn't touch React state or refs.
+- Avoid `useEffect` for derived state; compute it inline or with `useMemo`.
+- Never read from a ref during render — refs are for imperative escape hatches, not rendering logic.
+
+### Test IDs
+
+- `data-testid` values are camelCase: `inboxItem`, `clarifyButton`
+- Prefer `data-testid` over selecting by text or CSS class — text changes break tests, class names are implementation details
+
 ### CSS / Styling
 - Use CSS Modules for all custom styling. No inline styles, no `styled-components`, no Tailwind, no other CSS-in-JS.
 - MUI components are styled via the centralized MUI theme — use `sx` props only for layout-specific overrides on wrapper elements, not for component appearance.
 - Global CSS variables go in `client/src/index.css`.
+- **Never concatenate classNames with array `.join(" ")`.** Use the `classnames` package instead: `import classNames from "classnames"`.
+
+## Code Review Requirement
+
+After completing any code change — bug fix, feature, or refactor — you **must** invoke the `code-reviewer` subagent before considering the task done. The reviewer checks for correctness, edge cases, coding standards violations, and test quality. Do not skip this step even for small changes.
 
 ## Running Locally
 
