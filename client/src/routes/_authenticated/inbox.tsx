@@ -15,15 +15,20 @@ import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
+import ListItemButton from '@mui/material/ListItemButton';
+import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
 import Popover from '@mui/material/Popover';
 import Snackbar from '@mui/material/Snackbar';
+import SwipeableDrawer from '@mui/material/SwipeableDrawer';
+import { useTheme } from '@mui/material/styles';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -48,12 +53,22 @@ import { WaitingForFields } from '../../components/clarify/WaitingForFields';
 import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, collectItem } from '../../db/itemMutations';
+import { useSwipeGesture } from '../../hooks/useSwipeGesture';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './inbox.module.css';
 
 dayjs.extend(relativeTime);
 
 type InlineClarifyMode = 'dialog' | 'expand' | 'popover' | 'instant';
+
+const CLARIFY_MODES = new Set<string>(['dialog', 'expand', 'popover', 'instant']);
+
+// Validates the raw localStorage value — an invalid or missing value falls back to 'dialog'
+// rather than reaching onInlineAction with an unrecognised mode and silently doing nothing.
+function parseClarifyMode(raw: string | null): InlineClarifyMode {
+    if (raw !== null && CLARIFY_MODES.has(raw)) return raw as InlineClarifyMode;
+    return 'dialog';
+}
 
 // Destinations that require a form (calendar needs a date, waitingFor needs a person).
 // In instant mode these fall back to dialog so required fields can be filled.
@@ -63,9 +78,162 @@ export const Route = createFileRoute('/_authenticated/inbox')({
     component: InboxPage,
 });
 
+// --- Mobile swipe row ---
+
+interface InboxSwipeItemProps {
+    item: StoredItem;
+    onTap: (item: StoredItem) => void;
+    onSwipeNextAction: (item: StoredItem) => void;
+    onSwipeTrash: (item: StoredItem) => void;
+}
+
+function InboxSwipeItem({ item, onTap, onSwipeNextAction, onSwipeTrash }: InboxSwipeItemProps) {
+    const { touchHandlers, translateX, wasDragRef } = useSwipeGesture({
+        onSwipeRight: () => onSwipeNextAction(item),
+        onSwipeLeft: () => onSwipeTrash(item),
+    });
+
+    function handleClick() {
+        // wasDragRef is a ref (not state), so it always holds the current value when
+        // onClick fires synchronously after touchEnd — no stale-closure risk.
+        if (wasDragRef.current) return;
+        onTap(item);
+    }
+    // Show the reveal as soon as the finger moves at all (> 0), not at the tap-suppression
+    // threshold (10px) — using 10px here caused a blank frame during snap-back.
+    const showRight = translateX > 0;
+    const showLeft = translateX < 0;
+
+    // Destructure to avoid spreading touchHandlers and then overriding onTouchEnd, which
+    // is fragile — a reorder of the spread would silently drop the override.
+    const { onTouchStart, onTouchMove, onTouchEnd } = touchHandlers;
+
+    return (
+        <Box className={styles.swipeWrapper}>
+            {/* Reveal layer behind the row — colour and icon reflect direction */}
+            {showRight && (
+                <Box className={styles.revealRight}>
+                    <ArrowForwardIcon fontSize="small" />
+                    <Typography variant="body2" ml={1}>
+                        Next Action
+                    </Typography>
+                </Box>
+            )}
+            {showLeft && (
+                <Box className={styles.revealLeft}>
+                    <Typography variant="body2" mr={1}>
+                        Trash
+                    </Typography>
+                    <DeleteOutlineIcon fontSize="small" />
+                </Box>
+            )}
+            <ListItem
+                disablePadding
+                className={styles.item}
+                // Transition only on release so dragging feels direct; animate snap-back.
+                // isCommitted is not needed here — React 19 batches both setTranslateX(0) and
+                // setCommittedDirection in the same render, so translateX === 0 is sufficient.
+                style={{
+                    transform: `translateX(${translateX}px)`,
+                    transition: translateX === 0 ? 'transform 0.2s ease' : 'none',
+                }}
+                onTouchStart={onTouchStart}
+                onTouchMove={onTouchMove}
+                onTouchEnd={onTouchEnd}
+                onClick={handleClick}
+            >
+                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} />
+            </ListItem>
+        </Box>
+    );
+}
+
+// --- Mobile bottom sheet ---
+
+interface InboxBottomSheetProps {
+    item: StoredItem | null;
+    onClose: () => void;
+    onEdit: (item: StoredItem) => void;
+    onDone: (item: StoredItem) => void;
+    onNextAction: (item: StoredItem) => void;
+    onCalendar: (item: StoredItem) => void;
+    onWaitingFor: (item: StoredItem) => void;
+    onTrash: (item: StoredItem) => void;
+}
+
+function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalendar, onWaitingFor, onTrash }: InboxBottomSheetProps) {
+    if (!item) return null;
+
+    // TypeScript doesn't preserve narrowing of outer variables inside nested function
+    // declarations, so pin the narrowed value to a const that closures can reference safely.
+    const resolvedItem = item;
+
+    function action(fn: (i: StoredItem) => void) {
+        fn(resolvedItem);
+        onClose();
+    }
+
+    return (
+        // SwipeableDrawer lets users swipe the sheet down to dismiss — natural on mobile.
+        // onOpen is required by MUI's API but unused here because open state is driven externally.
+        <SwipeableDrawer anchor="bottom" open={Boolean(item)} onClose={onClose} onOpen={() => {}}>
+            <Box className={styles.sheetHandle} />
+            <Typography variant="subtitle1" fontWeight={600} px={2} pb={1}>
+                {item.title}
+            </Typography>
+            <Divider />
+            <List disablePadding>
+                <ListItemButton onClick={() => action(onEdit)}>
+                    <ListItemIcon>
+                        <EditIcon />
+                    </ListItemIcon>
+                    <ListItemText primary="Edit" />
+                </ListItemButton>
+                <ListItemButton onClick={() => action(onDone)}>
+                    <ListItemIcon>
+                        <PlaylistAddCheckIcon />
+                    </ListItemIcon>
+                    <ListItemText primary="Done (< 2 min)" />
+                </ListItemButton>
+                <ListItemButton onClick={() => action(onNextAction)}>
+                    <ListItemIcon>
+                        <ArrowForwardIcon />
+                    </ListItemIcon>
+                    <ListItemText primary="Next Action" />
+                </ListItemButton>
+                <ListItemButton onClick={() => action(onCalendar)}>
+                    <ListItemIcon>
+                        <CalendarTodayIcon />
+                    </ListItemIcon>
+                    <ListItemText primary="Calendar" />
+                </ListItemButton>
+                <ListItemButton onClick={() => action(onWaitingFor)}>
+                    <ListItemIcon>
+                        <HourglassEmptyIcon />
+                    </ListItemIcon>
+                    <ListItemText primary="Waiting For" />
+                </ListItemButton>
+                <ListItemButton onClick={() => action(onTrash)}>
+                    <ListItemIcon>
+                        <DeleteOutlineIcon color="error" />
+                    </ListItemIcon>
+                    <ListItemText primary="Trash" primaryTypographyProps={{ color: 'error' }} />
+                </ListItemButton>
+            </List>
+            <Box pb={2} />
+        </SwipeableDrawer>
+    );
+}
+
+// --- Page ---
+
 function InboxPage() {
     const { db } = Route.useRouteContext();
     const { account, items, workContexts, people, refreshItems } = useAppData();
+    const theme = useTheme();
+    // Hide inline buttons and switch to swipe+bottom-sheet on screens narrower than 900px
+    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+
     const [draft, setDraft] = useState('');
     const [notes, setNotes] = useState('');
     const [notesOpen, setNotesOpen] = useState(false);
@@ -97,13 +265,16 @@ function InboxPage() {
 
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
+    // Mobile bottom sheet
+    const [bottomSheetItem, setBottomSheetItem] = useState<StoredItem | null>(null);
+
     // Read preference from localStorage; update reactively when settings page changes it.
     // The storage event normally fires only in other tabs, so settings.tsx dispatches it manually.
-    const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => (localStorage.getItem('gtd:inlineClarifyMode') as InlineClarifyMode) ?? 'dialog');
+    const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem('gtd:inlineClarifyMode')));
     useEffect(() => {
         function onStorage(e: StorageEvent) {
-            if (e.key === 'gtd:inlineClarifyMode' && e.newValue) {
-                setClarifyMode(e.newValue as InlineClarifyMode);
+            if (e.key === 'gtd:inlineClarifyMode') {
+                setClarifyMode(parseClarifyMode(e.newValue));
             }
         }
         window.addEventListener('storage', onStorage);
@@ -181,6 +352,13 @@ function InboxPage() {
             setPopoverItem(item);
             setPopoverDest(dest);
         }
+    }
+
+    // Always open ClarifyDialog from the bottom sheet — expand/popover modes make no sense
+    // on touch (expand targets hidden rows; popover anchors to document.body nonsensically).
+    function onInlineActionFromSheet(item: StoredItem, dest: ActionableDest) {
+        setClarifyItem(item);
+        setClarifyDest(dest);
     }
 
     async function onCapture() {
@@ -281,47 +459,56 @@ function InboxPage() {
                 <List disablePadding className={styles.list}>
                     {inboxItems.map((item, idx) => (
                         <Box key={item._id}>
-                            <ListItem
-                                disablePadding
-                                className={styles.item}
-                                // 6 icon buttons fit within the 220px padding-right set in inbox.module.css
-                                secondaryAction={
-                                    <Box className={styles.actionButtons}>
-                                        <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => setEditingItem(item)}>
-                                                <EditIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                        <Tooltip title="Done (< 2 min)">
-                                            <IconButton size="small" onClick={() => void onQuickDone(item)}>
-                                                <PlaylistAddCheckIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                        <Tooltip title="Next Action">
-                                            <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'nextAction')}>
-                                                <ArrowForwardIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                        <Tooltip title="Calendar">
-                                            <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'calendar')}>
-                                                <CalendarTodayIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                        <Tooltip title="Waiting For">
-                                            <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'waitingFor')}>
-                                                <HourglassEmptyIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                        <Tooltip title="Trash">
-                                            <IconButton size="small" color="error" onClick={() => void onTrash(item)}>
-                                                <DeleteOutlineIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                    </Box>
-                                }
-                            >
-                                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} className={styles.listItemText} />
-                            </ListItem>
+                            {isMobile ? (
+                                <InboxSwipeItem
+                                    item={item}
+                                    onTap={setBottomSheetItem}
+                                    onSwipeNextAction={(i) => void clarifyToNextAction(db, i, {}).then(refreshItems)}
+                                    onSwipeTrash={(i) => void onTrash(i)}
+                                />
+                            ) : (
+                                <ListItem
+                                    disablePadding
+                                    className={styles.item}
+                                    // 6 icon buttons fit within the 220px padding-right set in inbox.module.css
+                                    secondaryAction={
+                                        <Box className={styles.actionButtons}>
+                                            <Tooltip title="Edit">
+                                                <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                    <EditIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Done (< 2 min)">
+                                                <IconButton size="small" onClick={() => void onQuickDone(item)}>
+                                                    <PlaylistAddCheckIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Next Action">
+                                                <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'nextAction')}>
+                                                    <ArrowForwardIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Calendar">
+                                                <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'calendar')}>
+                                                    <CalendarTodayIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Waiting For">
+                                                <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'waitingFor')}>
+                                                    <HourglassEmptyIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Trash">
+                                                <IconButton size="small" color="error" onClick={() => void onTrash(item)}>
+                                                    <DeleteOutlineIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                        </Box>
+                                    }
+                                >
+                                    <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} className={styles.listItemText} />
+                                </ListItem>
+                            )}
 
                             {/* Inline expand mode: form appears below the item row */}
                             {clarifyMode === 'expand' && expandedItemId === item._id && expandedDest && (
@@ -432,6 +619,17 @@ function InboxPage() {
                 />
             )}
             {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
+
+            <InboxBottomSheet
+                item={bottomSheetItem}
+                onClose={() => setBottomSheetItem(null)}
+                onEdit={(i) => setEditingItem(i)}
+                onDone={(i) => void onQuickDone(i)}
+                onNextAction={(i) => onInlineActionFromSheet(i, 'nextAction')}
+                onCalendar={(i) => onInlineActionFromSheet(i, 'calendar')}
+                onWaitingFor={(i) => onInlineActionFromSheet(i, 'waitingFor')}
+                onTrash={(i) => void onTrash(i)}
+            />
         </Box>
     );
 }
