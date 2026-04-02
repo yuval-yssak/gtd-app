@@ -18,7 +18,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './people.module.css';
@@ -78,10 +78,10 @@ function PeoplePage() {
 
     return (
         <Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+            <Box className={styles.pageHeader}>
                 <Typography variant="h5" fontWeight={600}>
                     People
-                    {people.length > 0 && <Chip label={people.length} size="small" sx={{ ml: 1.5, verticalAlign: 'middle' }} />}
+                    {people.length > 0 && <Chip label={people.length} size="small" className={styles.countChip} />}
                 </Typography>
                 <Button startIcon={<AddIcon />} variant="contained" size="small" onClick={openCreate}>
                     Add person
@@ -100,7 +100,7 @@ function PeoplePage() {
                                 disablePadding
                                 className={styles.item}
                                 secondaryAction={
-                                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                    <Box className={styles.actionButtons}>
                                         <Tooltip title="Edit">
                                             <IconButton size="small" onClick={() => openEdit(person)}>
                                                 <EditIcon fontSize="small" />
@@ -117,7 +117,7 @@ function PeoplePage() {
                                 <ListItemText
                                     primary={person.name}
                                     secondary={[person.email, person.phone].filter(Boolean).join(' · ') || undefined}
-                                    sx={{ pr: 10 }}
+                                    className={styles.listItemText}
                                 />
                             </ListItem>
                             {idx < people.length - 1 && <Divider />}
@@ -129,7 +129,7 @@ function PeoplePage() {
             <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
                 <DialogTitle>{editing ? 'Edit person' : 'Add person'}</DialogTitle>
                 <DialogContent>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
+                    <Box className={styles.personForm}>
                         <TextField
                             label="Name"
                             value={form.name}

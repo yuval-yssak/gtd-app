@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { ServerOp } from '#api/syncClient';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import { hasAtLeastOne } from '../lib/typeUtils';
 import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
 import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
 import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
@@ -28,16 +29,18 @@ function remapUser<T extends Record<string, unknown>>(doc: T & { user: string })
 async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOperation[], op: SyncOpParams) {
     // id is always present on records fetched from IDB; the type reflects pre-insert optionality
     const pendingCreates = existing.filter((q): q is SyncOperation & { id: number } => q.opType === 'create' && q.id !== undefined);
-    for (const queued of pendingCreates) {
-        await db.delete('syncOperations', queued.id);
-        await db.add('syncOperations', {
-            opType: 'create',
-            entityType: op.entityType,
-            entityId: op.entityId,
-            queuedAt: queued.queuedAt,
-            snapshot: op.snapshot,
-        });
-    }
+    // Invariant: at most one pending create per entity. Extra creates would be a queue
+    // corruption bug — ignore them to avoid producing duplicate server creates.
+    if (!hasAtLeastOne(pendingCreates)) return;
+    const [queued] = pendingCreates;
+    await db.delete('syncOperations', queued.id);
+    await db.add('syncOperations', {
+        opType: 'create',
+        entityType: op.entityType,
+        entityId: op.entityId,
+        queuedAt: queued.queuedAt,
+        snapshot: op.snapshot,
+    });
 }
 
 async function clearExistingOps(db: IDBPDatabase<MyDB>, existing: SyncOperation[]) {
@@ -219,7 +222,6 @@ async function applyEntityOp(op: ServerOp, handlers: EntityApplyHandlers): Promi
     // Cast to the minimal shape needed here (updatedTs for conflict resolution);
     // handlers.put receives the full object as unknown and re-casts to the concrete type.
 
-    console.log('applyEntityOp', op, handlers);
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as { updatedTs: string };
     const existing = await handlers.getExisting(op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {

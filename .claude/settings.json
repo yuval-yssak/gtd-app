@@ -1,0 +1,14 @@
+{
+    "hooks": {
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash /Users/yuvalyssak/gtd/scripts/post-change-checks.sh"
+                    }
+                ]
+            }
+        ]
+    }
+}

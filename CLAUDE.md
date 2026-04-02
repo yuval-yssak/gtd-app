@@ -171,41 +171,26 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 ### Dates
 - Use `dayjs` for all date parsing, formatting, manipulation, duration arithmetic, and timestamp comparisons. Do not use the native `Date` API or other date libraries.
 
-### React
-
-- Prefer co-locating state as close as possible to where it is used; only lift state when two sibling components genuinely need to share it.
-- Custom hooks are the extraction unit for reusable stateful logic — not utility functions with `use*` names for logic that doesn't touch React state or refs.
-- Avoid `useEffect` for derived state; compute it inline or with `useMemo`.
-- Never read from a ref during render — refs are for imperative escape hatches, not rendering logic.
-
-### Test IDs
-
-- `data-testid` values are camelCase: `inboxItem`, `clarifyButton`
-- Prefer `data-testid` over selecting by text or CSS class — text changes break tests, class names are implementation details
-
-### CSS / Styling
-- Use CSS Modules for all custom styling. No inline styles, no `styled-components`, no Tailwind, no other CSS-in-JS.
-- MUI components are styled via the centralized MUI theme — use `sx` props only for layout-specific overrides on wrapper elements, not for component appearance.
-- Global CSS variables go in `client/src/index.css`.
-- **Never concatenate classNames with array `.join(" ")`.** Use the `classnames` package instead: `import classNames from "classnames"`.
-- **Never use bracket notation for CSS Module classes** (`styles["preview"]`). Use dot notation (`styles.preview`) — `generate-typed-css-modules` ensures all classes are typed and accessible this way.
-
 ## Post-Change Checklist
 
-After any code change — bug fix, feature, or refactor — run the following sequence. If any step surfaces issues requiring further edits, repeat from step 1.
+After any code change — bug fix, feature, or refactor — run the following cycle for each affected project. **Repeat from step 1 until every step passes.**
 
 **Client changes:**
 1. `cd client && npm run generate-typed-css-modules` — regenerates `.d.ts` files for CSS Modules
-2. `npm run lint:fix` — Biome format + lint
+2. `npm run lint:fix` — Biome format + lint (may auto-correct files; subsequent steps run on the corrected state)
 3. `npm run typecheck`
-4. Invoke the `code-reviewer` subagent
+4. `npm run test`
+5. Invoke the `code-reviewer` subagent (`client/.claude/agents/code-reviewer.md`)
 
 **API server changes:**
-1. `npm run lint:fix`
+1. `cd api-server && npm run lint:fix` — Biome format + lint
 2. `npm run typecheck`
-3. Invoke the `code-reviewer` subagent
+3. `npm run test`
+4. Invoke the `code-reviewer` subagent (`api-server/.claude/agents/code-reviewer.md`)
 
-The `code-reviewer` subagent checks for correctness, edge cases, coding standards violations, and test quality. Do not skip this step even for small changes.
+A stop hook (`scripts/post-change-checks.sh`) runs steps 1–4 automatically after each Claude response and re-invokes Claude if any fail.
+
+**The code-reviewer subagent is mandatory and non-negotiable.** Never consider a task complete until it has been invoked and returned "Approved". If it returns "Changes requested", fix all issues and repeat the full cycle from step 1.
 
 ## Running Locally
 

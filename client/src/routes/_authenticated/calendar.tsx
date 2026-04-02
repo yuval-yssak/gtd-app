@@ -12,7 +12,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditItemDialog } from '../../components/EditItemDialog';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './calendar.module.css';
 
@@ -64,7 +64,7 @@ function CalendarPage() {
             </Typography>
             {Object.entries(groups).map(([dateKey, groupItems]) => (
                 <Box key={dateKey} mb={3}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+                    <Box className={styles.dateHeader}>
                         <Typography variant="subtitle2" color="text.secondary" fontWeight={600}>
                             {dateLabel(dateKey)}
                         </Typography>
@@ -93,7 +93,7 @@ function CalendarPage() {
                                         )}
                                     </Box>
                                     {/* pr ensures text doesn't overlap the edit button in secondaryAction */}
-                                    <ListItemText primary={item.title} sx={{ pr: 6 }} />
+                                    <ListItemText primary={item.title} className={styles.listItemText} />
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>

@@ -14,11 +14,13 @@ import { useState } from 'react';
 import { useAccounts } from '../hooks/useAccounts';
 import { useOnline } from '../hooks/useOnline';
 import type { MyDB, StoredAccount } from '../types/MyDB';
+import styles from './AccountSwitcher.module.css';
 
 function AccountAvatar({ account, size }: { account: StoredAccount | undefined; size: number }) {
     // fontSize: MUI Avatar default is 1.25rem on 40px = ~0.375 ratio; scale it with size
+    // Inline style used because width/height/fontSize are dynamic — computed from the size prop at runtime
     return (
-        <Avatar src={account?.image ?? undefined} alt={account?.name ?? 'Account'} sx={{ width: size, height: size, fontSize: size * 0.375 }}>
+        <Avatar src={account?.image ?? undefined} alt={account?.name ?? 'Account'} style={{ width: size, height: size, fontSize: size * 0.375 }}>
             {!account?.image && (account?.name?.[0]?.toUpperCase() ?? '?')}
         </Avatar>
     );
@@ -42,7 +44,7 @@ export function AccountSwitcher({ db }: Props) {
 
     return (
         <>
-            <IconButton onClick={openMenu} size="small" sx={{ ml: 1 }}>
+            <IconButton onClick={openMenu} size="small" className={styles.menuButton}>
                 <AccountAvatar account={activeAccount} size={32} />
             </IconButton>
 
@@ -65,7 +67,7 @@ export function AccountSwitcher({ db }: Props) {
                             slotProps={{ primary: { variant: 'body2' }, secondary: { variant: 'caption' } }}
                         />
                         {/* Checkmark on the currently active account */}
-                        {account.id === activeAccount?.id && <CheckIcon fontSize="small" sx={{ ml: 1, color: 'primary.main' }} />}
+                        {account.id === activeAccount?.id && <CheckIcon fontSize="small" className={styles.checkIcon} />}
                     </MenuItem>
                 ))}
 

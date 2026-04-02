@@ -1,0 +1,8 @@
+.menuButton {
+    margin-left: 8px;
+}
+
+.checkIcon {
+    margin-left: 8px;
+    color: var(--mui-palette-primary-main, #1976d2);
+}

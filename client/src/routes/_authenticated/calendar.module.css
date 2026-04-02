@@ -14,3 +14,14 @@
     min-width: 120px;
     flex-shrink: 0;
 }
+
+.dateHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.listItemText {
+    padding-right: 48px;
+}

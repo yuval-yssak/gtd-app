@@ -15,7 +15,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditNextActionDialog } from '../../components/EditNextActionDialog';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import type { EnergyLevel, StoredItem } from '../../types/MyDB';
 import styles from './next-actions.module.css';
@@ -84,7 +84,7 @@ function NextActionsPage() {
         <Box>
             <Typography variant="h5" fontWeight={600} mb={2}>
                 Next Actions
-                {nextActions.length > 0 && <Chip label={nextActions.length} size="small" color="primary" sx={{ ml: 1.5, verticalAlign: 'middle' }} />}
+                {nextActions.length > 0 && <Chip label={nextActions.length} size="small" color="primary" className={styles.countChip} />}
             </Typography>
 
             {/* Filter bar */}
@@ -140,7 +140,7 @@ function NextActionsPage() {
                                 disablePadding
                                 className={styles.item}
                                 secondaryAction={
-                                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                    <Box className={styles.actionButtons}>
                                         <Tooltip title="Edit">
                                             <IconButton size="small" onClick={() => setEditingItem(item)}>
                                                 <EditIcon fontSize="small" />
@@ -156,7 +156,7 @@ function NextActionsPage() {
                             >
                                 <ListItemText
                                     primary={
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                                        <Box className={styles.titleRow}>
                                             {item.urgent && <BoltIcon fontSize="small" color="error" />}
                                             <span>{item.title}</span>
                                             {item.energy && <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />}
@@ -164,7 +164,7 @@ function NextActionsPage() {
                                         </Box>
                                     }
                                     secondary={item.expectedBy ? `Due ${dayjs(item.expectedBy).format('MMM D')}` : undefined}
-                                    sx={{ pr: 10 /* widened from 6 to accommodate the extra edit button */ }}
+                                    className={styles.listItemText}
                                 />
                             </ListItem>
                             {idx < nextActions.length - 1 && <Divider />}

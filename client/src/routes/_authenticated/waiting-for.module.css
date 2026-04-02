@@ -1,8 +1,23 @@
+.actionButtons {
+    display: flex;
+    gap: 4px; /* gap: 0.5 in MUI sx = 0.5 × 8px */
+}
+
 .list {
-    border: 1px solid var(--mui-palette-divider);
+    border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
     border-radius: 4px;
 }
 
 .item {
     padding: 10px 16px;
+}
+
+.countChip {
+    margin-left: 12px;
+    vertical-align: middle;
+}
+
+/* pr: 10 — widened to accommodate the extra edit button in secondaryAction */
+.listItemText {
+    padding-right: 80px;
 }

@@ -25,7 +25,7 @@ Inside any route, access the db via `Route.useRouteContext()`.
 
 ## App Data Context
 
-`contexts/AppDataContext.tsx` is the shared-state layer for authenticated routes. It holds the current account and all entity lists read from IndexedDB.
+`contexts/AppDataProvider.tsx` is the shared-state layer for authenticated routes. It holds the current account and all entity lists read from IndexedDB.
 
 ```ts
 interface AppData {
@@ -182,7 +182,7 @@ This layout route is the central orchestrator for all authenticated state.
 4. Register push subscription
 
 **Provides:**
-- `AppDataContext` to all child routes
+- `AppDataProvider` to all child routes
 - `Outlet` inside MUI layout (sidebar nav + mobile AppBar)
 
 ## Directory Map
@@ -199,7 +199,7 @@ client/src/
 │   ├── login.tsx
 │   └── auth.callback.tsx        # writes account to IDB after OAuth redirect
 ├── contexts/
-│   └── AppDataContext.tsx        # shared state: account, items, people, workContexts
+│   └── AppDataProvider.tsx        # shared state: account, items, people, workContexts
 ├── db/
 │   ├── indexedDB.ts             # IDB schema + openAppDB()
 │   ├── deviceId.ts              # getOrCreateDeviceId(), sync cursor helpers
@@ -225,3 +225,24 @@ client/src/
 └── constants/
     └── globals.ts               # API_SERVER URL
 ```
+
+## Coding Standards
+
+### React
+
+- Prefer co-locating state as close as possible to where it is used; only lift state when two sibling components genuinely need to share it.
+- Custom hooks are the extraction unit for reusable stateful logic — not utility functions with `use*` names for logic that doesn't touch React state or refs.
+- Avoid `useEffect` for derived state; compute it inline or with `useMemo`.
+- Never read from a ref during render — refs are for imperative escape hatches, not rendering logic.
+
+### Test IDs
+
+- `data-testid` values are camelCase: `inboxItem`, `clarifyButton`
+- Prefer `data-testid` over selecting by text or CSS class — text changes break tests, class names are implementation details
+
+### CSS / Styling
+- Use CSS Modules for all custom styling. No inline styles, no `styled-components`, no Tailwind, no other CSS-in-JS.
+- MUI components are styled via the centralized MUI theme — use `sx` props only for layout-specific overrides on wrapper elements, not for component appearance.
+- Global CSS variables go in `client/src/index.css`.
+- **Never concatenate classNames with array `.join(" ")`.** Use the `classnames` package instead: `import classNames from "classnames"`.
+- **Never use bracket notation for CSS Module classes** (`styles["preview"]`). Use dot notation (`styles.preview`) — `generate-typed-css-modules` ensures all classes are typed and accessible this way.

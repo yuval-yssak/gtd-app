@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import { setActiveAccount, upsertAccount } from '../db/accountHelpers';
 import { authClient } from '../lib/authClient';
 import type { OAuthProvider } from '../types/MyDB';
+import styles from './auth.callback.module.css';
 
 export const Route = createFileRoute('/auth/callback')({
     beforeLoad: async ({ context: { db } }) => {
@@ -38,7 +39,7 @@ export const Route = createFileRoute('/auth/callback')({
 
 function CallbackPage() {
     return (
-        <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Box className={styles.callbackPage}>
             <CircularProgress />
         </Box>
     );

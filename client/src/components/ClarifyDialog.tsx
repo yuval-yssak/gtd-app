@@ -118,8 +118,8 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
     if (done) {
         return (
             <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
-                <DialogContent sx={{ textAlign: 'center', py: 5 }}>
-                    <AssignmentTurnedInIcon sx={{ fontSize: 56, color: 'success.main', mb: 2 }} />
+                <DialogContent className={styles.completedContent}>
+                    <AssignmentTurnedInIcon className={styles.completedIcon} />
                     <Typography variant="h6" fontWeight={600}>
                         Inbox clear!
                     </Typography>
@@ -127,7 +127,7 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                         All {total} item{total !== 1 ? 's' : ''} processed.
                     </Typography>
                 </DialogContent>
-                <DialogActions sx={{ justifyContent: 'center', pb: 3 }}>
+                <DialogActions className={styles.completedActions}>
                     <Button variant="contained" onClick={onClose}>
                         Done
                     </Button>
@@ -138,7 +138,7 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
 
     return (
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
-            <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <DialogTitle className={styles.dialogTitle}>
                 <Typography variant="subtitle1" fontWeight={600}>
                     Clarify
                 </Typography>
@@ -155,7 +155,7 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                     "{currentItem?.title}"
                 </Typography>
 
-                <FormLabel sx={{ display: 'block', mb: 1 }}>
+                <FormLabel className={styles.formLabel}>
                     <Typography variant="caption" color="text.secondary" fontWeight={600} className={styles.sectionLabel}>
                         What is it?
                     </Typography>

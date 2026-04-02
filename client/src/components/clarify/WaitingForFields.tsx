@@ -4,6 +4,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import type { StoredPerson } from '../../types/MyDB';
 import type { WaitingForFormState } from './types';
+import styles from './WaitingForFields.module.css';
 
 interface Props {
     value: WaitingForFormState;
@@ -29,7 +30,7 @@ export function WaitingForFields({ value, onChange, people }: Props) {
                 onChange={(e) => onChange({ waitingForPersonId: e.target.value })}
                 size="small"
                 required
-                sx={{ minWidth: 200 }}
+                className={styles.waitingForSelect}
             >
                 {people.map((p) => (
                     <MenuItem key={p._id} value={p._id}>

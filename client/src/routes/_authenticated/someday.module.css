@@ -1,0 +1,11 @@
+.emptyCard {
+    padding: 32px;
+    text-align: center;
+    max-width: 480px;
+}
+
+.icon {
+    font-size: 48px;
+    color: var(--mui-palette-text-disabled, rgba(0, 0, 0, 0.38));
+    margin-bottom: 16px;
+}

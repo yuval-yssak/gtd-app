@@ -4,6 +4,7 @@ import Button from '@mui/material/Button';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
+import styles from './someday.module.css';
 
 export const Route = createFileRoute('/_authenticated/someday')({
     component: SomedayPage,
@@ -15,8 +16,8 @@ function SomedayPage() {
             <Typography variant="h5" fontWeight={600} mb={3}>
                 Someday / Maybe
             </Typography>
-            <Paper variant="outlined" sx={{ p: 4, textAlign: 'center', maxWidth: 480 }}>
-                <BookmarkAddIcon sx={{ fontSize: 48, color: 'text.disabled', mb: 2 }} />
+            <Paper variant="outlined" className={styles.emptyCard}>
+                <BookmarkAddIcon className={styles.icon} />
                 <Typography variant="subtitle1" fontWeight={600} mb={1}>
                     Coming soon
                 </Typography>

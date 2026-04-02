@@ -18,7 +18,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
-import { useAppData } from '../../contexts/AppDataContext';
+import { useAppData } from '../../contexts/AppDataProvider';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
 import type { StoredWorkContext } from '../../types/MyDB';
 import styles from './work-contexts.module.css';
@@ -47,7 +47,9 @@ function WorkContextsPage() {
     }
 
     async function onSave() {
-        if (!account || !nameInput.trim()) return;
+        if (!account || !nameInput.trim()) {
+            return;
+        }
         if (editing) {
             await updateWorkContext(db, { ...editing, name: nameInput.trim() });
         } else {
@@ -64,10 +66,10 @@ function WorkContextsPage() {
 
     return (
         <Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+            <Box className={styles.pageHeader}>
                 <Typography variant="h5" fontWeight={600}>
                     Work Contexts
-                    {workContexts.length > 0 && <Chip label={workContexts.length} size="small" sx={{ ml: 1.5, verticalAlign: 'middle' }} />}
+                    {workContexts.length > 0 && <Chip label={workContexts.length} size="small" className={styles.countChip} />}
                 </Typography>
                 <Button startIcon={<AddIcon />} variant="contained" size="small" onClick={openCreate}>
                     Add context
@@ -86,7 +88,7 @@ function WorkContextsPage() {
                                 disablePadding
                                 className={styles.item}
                                 secondaryAction={
-                                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                    <Box className={styles.actionButtons}>
                                         <Tooltip title="Rename">
                                             <IconButton size="small" onClick={() => openEdit(ctx)}>
                                                 <EditIcon fontSize="small" />
@@ -100,7 +102,7 @@ function WorkContextsPage() {
                                     </Box>
                                 }
                             >
-                                <ListItemText primary={ctx.name} sx={{ pr: 10 }} />
+                                <ListItemText primary={ctx.name} className={styles.listItemText} />
                             </ListItem>
                             {idx < workContexts.length - 1 && <Divider />}
                         </Box>
@@ -118,7 +120,7 @@ function WorkContextsPage() {
                         onChange={(e) => setNameInput(e.target.value)}
                         fullWidth
                         autoFocus
-                        sx={{ mt: 1 }}
+                        className={styles.nameField}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') void onSave();
                         }}
