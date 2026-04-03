@@ -1,11 +1,11 @@
 .emptyCard {
-    padding: 32px;
+    padding: 2rem;
     text-align: center;
-    max-width: 480px;
+    max-width: 30rem;
 }
 
 .icon {
-    font-size: 48px;
+    font-size: 3rem;
     color: var(--mui-palette-text-disabled, rgba(0, 0, 0, 0.38));
-    margin-bottom: 16px;
+    margin-bottom: 1rem;
 }

@@ -1,9 +1,9 @@
 .alert {
-    margin-top: 16px;
+    margin-top: 1rem;
 }
 
 .alertAction {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 0.25rem;
 }

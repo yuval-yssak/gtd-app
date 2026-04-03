@@ -7,14 +7,14 @@
 }
 
 .card {
-    /* p: 6 = 48px, width: 360px fixed — matches original Paper sx values */
-    padding: 48px;
-    width: 360px;
+    /* p: 6 = 3rem, width: 22.5rem fixed — matches original Paper sx values */
+    padding: 3rem;
+    width: 22.5rem;
     text-align: center;
 }
 
 .buttonGroup {
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 1rem;
 }

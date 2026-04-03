@@ -8,17 +8,17 @@
 /* Hidden on mobile — only shown on desktop via block display */
 .permanentDrawer {
     display: none;
-    width: 240px;
+    width: 15rem;
     flex-shrink: 0;
 }
 
 /* Targets the MUI internal paper element to set its width and box model */
 .permanentDrawer :global(.MuiDrawer-paper) {
-    width: 240px;
+    width: 15rem;
     box-sizing: border-box;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25rem) {
     .permanentDrawer {
         display: block;
     }
@@ -30,11 +30,11 @@
 }
 
 .temporaryDrawer :global(.MuiDrawer-paper) {
-    width: 240px;
+    width: 15rem;
     box-sizing: border-box;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25rem) {
     .temporaryDrawer {
         display: none;
     }
@@ -50,7 +50,7 @@
     z-index: var(--mui-zIndex-appBar, 1100); /* fallback: MUI cssVariables is off by default; 1100 = MUI appBar default */
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25rem) {
     .bottomNavPaper {
         display: none;
     }
@@ -64,21 +64,21 @@
 }
 
 .listItemIcon {
-    min-width: 36px;
+    min-width: 2.25rem;
 }
 
 .divider {
-    margin: 4px 0;
+    margin: 0.25rem 0;
 }
 
 /* Desktop: show logo row; hidden on mobile where AppBar takes over */
 .logoRow {
     display: none;
     align-items: center;
-    padding: 12px 16px;
+    padding: 0.75rem 1rem;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25rem) {
     .logoRow {
         display: flex;
     }
@@ -89,7 +89,7 @@
     display: block;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25rem) {
     .toolbarSpacer {
         display: none;
     }
@@ -101,11 +101,11 @@
 }
 
 .drawerFooter {
-    border-top: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+    border-top: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
 }
 
 .accountRow {
     display: flex;
     align-items: center;
-    padding: 4px 8px;
+    padding: 0.25rem 0.5rem;
 }

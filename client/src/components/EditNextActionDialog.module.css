@@ -1,29 +1,29 @@
 .dialogContent {
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    /* biome-ignore lint/complexity/noImportantStyles: overrides MUI DialogContent's 20px default padding-top */
-    padding-top: 16px !important;
+    gap: 1rem;
+    /* biome-ignore lint/complexity/noImportantStyles: overrides MUI DialogContent's 1.25rem default padding-top */
+    padding-top: 1rem !important;
 }
 
 .tabs {
-    margin-bottom: 8px;
+    margin-bottom: 0.5rem;
 }
 
 .moveToLabel {
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.0313rem;
 }
 
 .subForm {
-    margin-top: 16px;
+    margin-top: 1rem;
 }
 
 .preview {
-    min-height: 120px;
-    padding: 12px 14px;
-    border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
-    border-radius: 4px;
+    min-height: 7.5rem;
+    padding: 0.75rem 0.875rem;
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
+    border-radius: 0.25rem;
     font-size: 0.875rem;
     line-height: 1.6;
     overflow-y: auto;
@@ -41,14 +41,14 @@
 
 .preview :global(code) {
     background: rgba(0, 0, 0, 0.06);
-    border-radius: 3px;
+    border-radius: 0.1875rem;
     padding: 0.1em 0.3em;
     font-size: 0.9em;
 }
 
 .preview :global(pre) {
     background: rgba(0, 0, 0, 0.06);
-    border-radius: 4px;
+    border-radius: 0.25rem;
     padding: 0.75em 1em;
     overflow-x: auto;
     margin: 0 0 0.5em;

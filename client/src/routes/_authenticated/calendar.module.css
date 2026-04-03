@@ -1,27 +1,27 @@
 .list {
-    border: 1px solid var(--mui-palette-divider);
-    border-radius: 4px;
+    border: 0.0625rem solid var(--mui-palette-divider);
+    border-radius: 0.25rem;
 }
 
 .item {
     display: flex;
     align-items: center;
-    padding: 10px 16px;
-    gap: 16px;
+    padding: 0.625rem 1rem;
+    gap: 1rem;
 }
 
 .timeCol {
-    min-width: 120px;
+    min-width: 7.5rem;
     flex-shrink: 0;
 }
 
 .dateHeader {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
 }
 
 .listItemText {
-    padding-right: 48px;
+    padding-right: 3rem;
 }
