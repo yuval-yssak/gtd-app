@@ -24,6 +24,7 @@ import { Route as AuthenticatedPeopleRouteImport } from './routes/_authenticated
 import { Route as AuthenticatedNextActionsRouteImport } from './routes/_authenticated/next-actions'
 import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated/inbox'
 import { Route as AuthenticatedCalendarRouteImport } from './routes/_authenticated/calendar'
+import { Route as AuthenticatedItemItemIdRouteImport } from './routes/_authenticated/item.$itemId'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -102,6 +103,11 @@ const AuthenticatedCalendarRoute = AuthenticatedCalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedItemItemIdRoute = AuthenticatedItemItemIdRouteImport.update({
+  id: '/item/$itemId',
+  path: '/item/$itemId',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
@@ -118,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/weekly-review': typeof AuthenticatedWeeklyReviewRoute
   '/work-contexts': typeof AuthenticatedWorkContextsRoute
   '/auth/callback': typeof AuthCallbackRoute
+  '/item/$itemId': typeof AuthenticatedItemItemIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -134,6 +141,7 @@ export interface FileRoutesByTo {
   '/work-contexts': typeof AuthenticatedWorkContextsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/': typeof AuthenticatedIndexRoute
+  '/item/$itemId': typeof AuthenticatedItemItemIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -152,6 +160,7 @@ export interface FileRoutesById {
   '/_authenticated/work-contexts': typeof AuthenticatedWorkContextsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/_authenticated/item/$itemId': typeof AuthenticatedItemItemIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -170,6 +179,7 @@ export interface FileRouteTypes {
     | '/weekly-review'
     | '/work-contexts'
     | '/auth/callback'
+    | '/item/$itemId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -186,6 +196,7 @@ export interface FileRouteTypes {
     | '/work-contexts'
     | '/auth/callback'
     | '/'
+    | '/item/$itemId'
   id:
     | '__root__'
     | '/_authenticated'
@@ -203,6 +214,7 @@ export interface FileRouteTypes {
     | '/_authenticated/work-contexts'
     | '/auth/callback'
     | '/_authenticated/'
+    | '/_authenticated/item/$itemId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -318,6 +330,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedCalendarRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/item/$itemId': {
+      id: '/_authenticated/item/$itemId'
+      path: '/item/$itemId'
+      fullPath: '/item/$itemId'
+      preLoaderRoute: typeof AuthenticatedItemItemIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
   }
 }
 
@@ -334,6 +353,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedWeeklyReviewRoute: typeof AuthenticatedWeeklyReviewRoute
   AuthenticatedWorkContextsRoute: typeof AuthenticatedWorkContextsRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedItemItemIdRoute: typeof AuthenticatedItemItemIdRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -349,6 +369,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedWeeklyReviewRoute: AuthenticatedWeeklyReviewRoute,
   AuthenticatedWorkContextsRoute: AuthenticatedWorkContextsRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedItemItemIdRoute: AuthenticatedItemItemIdRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

@@ -11,12 +11,13 @@ import ListItemText from '@mui/material/ListItemText';
 import Stack from '@mui/material/Stack';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditNextActionDialog } from '../../components/EditNextActionDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { EnergyLevel, StoredItem } from '../../types/MyDB';
 import styles from './next-actions.module.css';
 
@@ -41,10 +42,18 @@ const energyColors: Record<EnergyLevel, 'default' | 'success' | 'warning' | 'err
 
 function matchesFilters(item: StoredItem, filters: ActiveFilters): boolean {
     const today = dayjs().format('YYYY-MM-DD');
-    if (item.ignoreBefore && item.ignoreBefore > today) return false;
-    if (filters.energy && item.energy !== filters.energy) return false;
-    if (filters.maxMinutes && (item.time === undefined || item.time > filters.maxMinutes)) return false;
-    if (filters.workContextId && !item.workContextIds?.includes(filters.workContextId)) return false;
+    if (item.ignoreBefore && item.ignoreBefore > today) {
+        return false;
+    }
+    if (filters.energy && item.energy !== filters.energy) {
+        return false;
+    }
+    if (filters.maxMinutes && (item.time === undefined || item.time > filters.maxMinutes)) {
+        return false;
+    }
+    if (filters.workContextId && !item.workContextIds?.includes(filters.workContextId)) {
+        return false;
+    }
     return true;
 }
 
@@ -56,6 +65,7 @@ function makeToggle<T>(setter: React.Dispatch<React.SetStateAction<T | null>>) {
 function NextActionsPage() {
     const { db } = Route.useRouteContext();
     const { items, workContexts, people, refreshItems } = useAppData();
+    const navigate = useNavigate();
     const [energyFilter, setEnergyFilter] = useState<EnergyLevel | null>(null);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
     const [contextFilter, setContextFilter] = useState<string | null>(null);
@@ -142,7 +152,18 @@ function NextActionsPage() {
                                 secondaryAction={
                                     <Box className={styles.actionButtons}>
                                         <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                            <IconButton
+                                                size="small"
+                                                onClick={() => {
+                                                    // Read at click time — mode changes require a settings navigation
+                                                    // which remounts this component, so no reactive state needed.
+                                                    if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
+                                                        void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
+                                                    } else {
+                                                        setEditingItem(item);
+                                                    }
+                                                }}
+                                            >
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
