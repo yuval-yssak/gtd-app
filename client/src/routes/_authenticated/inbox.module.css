@@ -1,11 +1,11 @@
 .list {
-    border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
-    border-radius: 4px;
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+    border-radius: 0.25rem;
 }
 
 .item {
-    padding: 8px 16px;
-    padding-right: 220px;
+    padding: 0.5rem 1rem;
+    padding-right: 13.75rem;
 }
 
 /* Removes the default outlined border so the capture field blends into its Paper container */
@@ -14,10 +14,10 @@
 }
 
 .notesPreview {
-    min-height: 120px;
-    padding: 12px 14px;
-    border: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
-    border-radius: 4px;
+    min-height: 7.5rem;
+    padding: 0.75rem 0.875rem;
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
+    border-radius: 0.25rem;
     font-size: 0.875rem;
     line-height: 1.6;
     overflow-y: auto;
@@ -35,14 +35,14 @@
 
 .notesPreview :global(code) {
     background: rgba(0, 0, 0, 0.06);
-    border-radius: 3px;
+    border-radius: 0.1875rem;
     padding: 0.1em 0.3em;
     font-size: 0.9em;
 }
 
 .notesPreview :global(pre) {
     background: rgba(0, 0, 0, 0.06);
-    border-radius: 4px;
+    border-radius: 0.25rem;
     padding: 0.75em 1em;
     overflow-x: auto;
     margin: 0 0 0.5em;
@@ -60,67 +60,67 @@
 
 .actionButtons {
     display: flex;
-    gap: 4px; /* gap: 0.5 in MUI sx = 0.5 × 8px */
+    gap: 0.25rem; /* gap: 0.5 in MUI sx = 0.5 × 0.5rem */
 }
 
 .pageHeader {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 24px;
+    margin-bottom: 1.5rem;
 }
 
 .captureCard {
-    margin-bottom: 24px;
+    margin-bottom: 1.5rem;
 }
 
 .countChip {
-    margin-left: 12px;
+    margin-left: 0.75rem;
     vertical-align: middle;
 }
 
 .captureNotes {
-    padding: 12px 12px 12px;
+    padding: 0.75rem 0.75rem 0.75rem;
 }
 
 .tabs {
-    margin-bottom: 8px;
+    margin-bottom: 0.5rem;
 }
 
 /* Inline expand form that appears below a list item row */
 .expandedForm {
-    padding: 8px 16px 16px;
-    border-top: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+    padding: 0.5rem 1rem 1rem;
+    border-top: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
 }
 
 .expandedFormActions {
     display: flex;
-    gap: 8px;
-    margin-top: 16px;
+    gap: 0.5rem;
+    margin-top: 1rem;
 }
 
 /* Popover form panel */
 .popoverContent {
-    padding: 16px;
-    width: 320px;
+    padding: 1rem;
+    width: 20rem;
 }
 
 .popoverActions {
     display: flex;
-    gap: 8px;
-    margin-top: 16px;
+    gap: 0.5rem;
+    margin-top: 1rem;
 }
 
 .listItemText {
     /* pr: 28 — enough room for 6 icon buttons in secondaryAction */
-    padding-right: 224px;
+    padding-right: 14rem;
 }
 
 /* On mobile the inline buttons are hidden; remove the reserved padding so the
    full row width is available for the item title. */
-@media (max-width: 899px) {
+@media (max-width: 56.1875rem) {
     .item {
-        padding-right: 16px;
+        padding-right: 1rem;
     }
 
     .listItemText {
@@ -140,7 +140,7 @@
     inset: 0;
     display: flex;
     align-items: center;
-    padding-left: 16px;
+    padding-left: 1rem;
     background: #2e7d32;
     color: #fff;
 }
@@ -152,16 +152,16 @@
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    padding-right: 16px;
+    padding-right: 1rem;
     background: #d32f2f;
     color: #fff;
 }
 
 /* Bottom sheet drag handle pill */
 .sheetHandle {
-    width: 32px;
-    height: 4px;
-    border-radius: 2px;
+    width: 2rem;
+    height: 0.25rem;
+    border-radius: 0.125rem;
     background: rgba(0, 0, 0, 0.2);
-    margin: 8px auto 12px;
+    margin: 0.5rem auto 0.75rem;
 }

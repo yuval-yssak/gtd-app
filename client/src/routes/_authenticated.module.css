@@ -9,14 +9,14 @@
     z-index: calc(var(--mui-zIndex-drawer, 1200) + 1); /* fallback: MUI cssVariables is off by default; 1200 = MUI drawer default */
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25rem) {
     .mobileAppBar {
         display: none;
     }
 }
 
 .menuButton {
-    margin-right: 8px;
+    margin-right: 0.5rem;
 }
 
 .appBarTitle {
@@ -26,18 +26,18 @@
 .mainContent {
     flex-grow: 1;
     overflow: auto;
-    /* Mobile: push content below fixed AppBar (9×8=72px) and above bottom nav */
-    padding-top: 72px;
-    padding-bottom: 72px;
-    padding-left: 16px;
-    padding-right: 16px;
+    /* Mobile: push content below fixed AppBar (9×8=4.5rem) and above bottom nav */
+    padding-top: 4.5rem;
+    padding-bottom: 4.5rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 56.25rem) {
     /* Desktop: offset content to the right of the permanent sidebar */
     .mainContent {
-        margin-left: 240px; /* matches DRAWER_WIDTH constant in AppNav.tsx */
-        width: calc(100% - 240px);
-        padding: 24px;
+        margin-left: 15rem; /* matches DRAWER_WIDTH constant in AppNav.tsx */
+        width: calc(100% - 15rem);
+        padding: 1.5rem;
     }
 }
