@@ -10,20 +10,8 @@ import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppNav } from '../components/AppNav';
 import { NotificationNudge } from '../components/NotificationNudge';
 import { AppDataProvider } from '../contexts/AppDataProvider';
-import { authClient } from '../lib/authClient';
 import styles from './_authenticated.module.css';
 import { authenticatedRouteGuard } from './authenticatedRouteGuard';
-
-// Wraps authClient.getSession() to distinguish a missing session from a network failure.
-// Returns networkError=true when the fetch throws (offline/DNS), false when the server responded.
-export async function fetchSessionSafely() {
-    try {
-        const result = await authClient.getSession();
-        return { session: result.data, networkError: false };
-    } catch {
-        return { session: null, networkError: true };
-    }
-}
 
 export const Route = createFileRoute('/_authenticated')({
     beforeLoad: authenticatedRouteGuard,
