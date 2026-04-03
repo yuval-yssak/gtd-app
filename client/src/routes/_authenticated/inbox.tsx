@@ -29,10 +29,10 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { ClarifyDialog } from '../../components/ClarifyDialog';
 import { CalendarFields } from '../../components/clarify/CalendarFields';
@@ -54,21 +54,11 @@ import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, collectItem } from '../../db/itemMutations';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
+import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './inbox.module.css';
 
 dayjs.extend(relativeTime);
-
-type InlineClarifyMode = 'dialog' | 'expand' | 'popover' | 'instant';
-
-const CLARIFY_MODES = new Set<string>(['dialog', 'expand', 'popover', 'instant']);
-
-// Validates the raw localStorage value — an invalid or missing value falls back to 'dialog'
-// rather than reaching onInlineAction with an unrecognised mode and silently doing nothing.
-function parseClarifyMode(raw: string | null): InlineClarifyMode {
-    if (raw !== null && CLARIFY_MODES.has(raw)) return raw as InlineClarifyMode;
-    return 'dialog';
-}
 
 // Destinations that require a form (calendar needs a date, waitingFor needs a person).
 // In instant mode these fall back to dialog so required fields can be filled.
@@ -233,6 +223,7 @@ function InboxPage() {
     const theme = useTheme();
     // Hide inline buttons and switch to swipe+bottom-sheet on screens narrower than 900px
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const navigate = useNavigate();
 
     const [draft, setDraft] = useState('');
     const [notes, setNotes] = useState('');
@@ -257,6 +248,10 @@ function InboxPage() {
 
     // Instant mode toast
     const [toastOpen, setToastOpen] = useState(false);
+    const [isSubmittingInline, setIsSubmittingInline] = useState(false);
+    // Ref mirror of isSubmittingInline — state updates are async so a rapid double-swipe would
+    // read stale false from both closures; a ref is mutated synchronously and always current.
+    const isSubmittingInlineRef = useRef(false);
 
     // Shared form state for expand/popover modes
     const [naForm, setNaForm] = useState<NextActionFormState>(emptyNextAction);
@@ -270,10 +265,10 @@ function InboxPage() {
 
     // Read preference from localStorage; update reactively when settings page changes it.
     // The storage event normally fires only in other tabs, so settings.tsx dispatches it manually.
-    const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem('gtd:inlineClarifyMode')));
+    const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
     useEffect(() => {
         function onStorage(e: StorageEvent) {
-            if (e.key === 'gtd:inlineClarifyMode') {
+            if (e.key === CLARIFY_MODE_KEY) {
                 setClarifyMode(parseClarifyMode(e.newValue));
             }
         }
@@ -305,26 +300,50 @@ function InboxPage() {
     }
 
     async function onConfirmInlineForm(item: StoredItem, dest: ActionableDest) {
-        if (dest === 'nextAction') {
-            await clarifyToNextAction(db, item, buildNextActionMeta(naForm));
-        } else if (dest === 'calendar') {
-            const { startIso, endIso } = buildCalendarTimes(calForm);
-            await clarifyToCalendar(db, item, startIso, endIso);
-        } else if (dest === 'waitingFor') {
-            await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
+        if (isSubmittingInlineRef.current) {
+            return;
         }
-        await refreshItems();
-        closeInlineForm();
+        isSubmittingInlineRef.current = true;
+        setIsSubmittingInline(true);
+        try {
+            if (dest === 'nextAction') {
+                await clarifyToNextAction(db, item, buildNextActionMeta(naForm));
+            } else if (dest === 'calendar') {
+                const { startIso, endIso } = buildCalendarTimes(calForm);
+                await clarifyToCalendar(db, item, startIso, endIso);
+            } else if (dest === 'waitingFor') {
+                await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
+            }
+            await refreshItems();
+            closeInlineForm();
+        } finally {
+            isSubmittingInlineRef.current = false;
+            setIsSubmittingInline(false);
+        }
+    }
+
+    // Extracted to avoid duplication between desktop onInlineAction and mobile onInlineActionFromSheet.
+    // isSubmittingInlineRef guards against double-firing (e.g. rapid swipes before the first op resolves).
+    function instantNextAction(item: StoredItem) {
+        if (isSubmittingInlineRef.current) {
+            return;
+        }
+        isSubmittingInlineRef.current = true;
+        setIsSubmittingInline(true);
+        void clarifyToNextAction(db, item, {})
+            .then(refreshItems)
+            .finally(() => {
+                isSubmittingInlineRef.current = false;
+                setIsSubmittingInline(false);
+            });
+        setToastOpen(true);
     }
 
     function onInlineAction(e: React.MouseEvent<HTMLElement>, item: StoredItem, dest: ActionableDest) {
         // instant mode is only truly instant for nextAction — calendar and waitingFor require
         // mandatory fields (date, person), so they fall back to dialog even in instant mode.
         if (clarifyMode === 'instant' && dest === 'nextAction') {
-            void clarifyToNextAction(db, item, {}).then(async () => {
-                await refreshItems();
-            });
-            setToastOpen(true);
+            instantNextAction(item);
             return;
         }
 
@@ -351,12 +370,29 @@ function InboxPage() {
             setPopoverAnchor(e.currentTarget);
             setPopoverItem(item);
             setPopoverDest(dest);
+            return;
+        }
+
+        if (clarifyMode === 'page') {
+            // Pass `dest` as a search param so the item page pre-selects the chip the user clicked.
+            // `_authenticated` is a pathless layout — TanStack Router registers the route as `/item/$itemId`.
+            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest } });
         }
     }
 
-    // Always open ClarifyDialog from the bottom sheet — expand/popover modes make no sense
-    // on touch (expand targets hidden rows; popover anchors to document.body nonsensically).
+    // Respects clarify mode for mobile swipe and bottom-sheet actions.
+    // expand/popover fall back to dialog — expand targets hidden rows and popover anchors
+    // to document.body nonsensically on touch.
     function onInlineActionFromSheet(item: StoredItem, dest: ActionableDest) {
+        if (clarifyMode === 'instant' && dest === 'nextAction') {
+            instantNextAction(item);
+            return;
+        }
+        if (clarifyMode === 'page') {
+            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest } });
+            return;
+        }
+        // dialog, expand, popover all open ClarifyDialog on mobile
         setClarifyItem(item);
         setClarifyDest(dest);
     }
@@ -463,7 +499,7 @@ function InboxPage() {
                                 <InboxSwipeItem
                                     item={item}
                                     onTap={setBottomSheetItem}
-                                    onSwipeNextAction={(i) => void clarifyToNextAction(db, i, {}).then(refreshItems)}
+                                    onSwipeNextAction={(i) => onInlineActionFromSheet(i, 'nextAction')}
                                     onSwipeTrash={(i) => void onTrash(i)}
                                 />
                             ) : (
@@ -535,7 +571,7 @@ function InboxPage() {
                                             <Button
                                                 size="small"
                                                 variant="contained"
-                                                disabled={isInlineConfirmDisabled(expandedDest)}
+                                                disabled={isInlineConfirmDisabled(expandedDest) || isSubmittingInline}
                                                 onClick={() => void onConfirmInlineForm(item, expandedDest)}
                                             >
                                                 Confirm
@@ -580,7 +616,7 @@ function InboxPage() {
                             <Button
                                 size="small"
                                 variant="contained"
-                                disabled={isInlineConfirmDisabled(popoverDest)}
+                                disabled={isInlineConfirmDisabled(popoverDest) || isSubmittingInline}
                                 onClick={() => void onConfirmInlineForm(popoverItem, popoverDest)}
                             >
                                 Confirm

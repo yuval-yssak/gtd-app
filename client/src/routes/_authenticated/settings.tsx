@@ -11,12 +11,9 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
+import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import type { MyDB } from '../../types/MyDB';
 import styles from './settings.module.css';
-
-type InlineClarifyMode = 'dialog' | 'expand' | 'popover' | 'instant';
-
-const CLARIFY_MODE_KEY = 'gtd:inlineClarifyMode';
 
 export const Route = createFileRoute('/_authenticated/settings')({
     component: SettingsPage,
@@ -86,7 +83,7 @@ function SettingsPage() {
 }
 
 function InboxSection() {
-    const [mode, setMode] = useState<InlineClarifyMode>(() => (localStorage.getItem(CLARIFY_MODE_KEY) as InlineClarifyMode) ?? 'dialog');
+    const [mode, setMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
 
     function onChange(newMode: InlineClarifyMode) {
         setMode(newMode);
@@ -103,9 +100,9 @@ function InboxSection() {
                     Inbox
                 </Typography>
                 <Typography variant="body2" color="text.secondary" mb={2}>
-                    How extra fields appear when you tap Next Action, Calendar, or Waiting For on an inbox item.
+                    How you prefer to edit and clarify items — applies to the inbox and all other pages.
                 </Typography>
-                <RadioGroup value={mode} onChange={(e) => onChange(e.target.value as InlineClarifyMode)}>
+                <RadioGroup value={mode} onChange={(e) => onChange(parseClarifyMode(e.target.value))}>
                     <FormControlLabel
                         value="dialog"
                         control={<Radio size="small" />}
@@ -150,6 +147,18 @@ function InboxSection() {
                                 <Typography variant="body2">Instant</Typography>
                                 <Typography variant="caption" color="text.secondary">
                                     Moves immediately with no extra fields (Next Action only; Calendar and Waiting For always show a form)
+                                </Typography>
+                            </Box>
+                        }
+                    />
+                    <FormControlLabel
+                        value="page"
+                        control={<Radio size="small" />}
+                        label={
+                            <Box>
+                                <Typography variant="body2">Full Page</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    Opens a dedicated page for clarifying the item
                                 </Typography>
                             </Box>
                         }

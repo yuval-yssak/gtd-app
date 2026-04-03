@@ -1,0 +1,48 @@
+html {
+    font-size: 100%;
+    box-sizing: border-box;
+}
+
+/* Scale down rem units on very narrow screens so nothing clips */
+@media (max-width: 21.87em) {
+    html {
+        font-size: calc(100% / 1.25); /* ~80% */
+    }
+}
+
+@media (max-width: 18em) {
+    html {
+        font-size: calc(100% / 1.875); /* ~53% */
+    }
+}
+
+@media (max-width: 13em) {
+    html {
+        font-size: calc(100% / 2.5); /* 40% */
+    }
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    /* dvh accounts for mobile browser chrome (address bar shrinking) unlike vh */
+    height: 100dvh;
+}
+
+* {
+    box-sizing: inherit;
+    scrollbar-color: #aaa transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 0.25rem;
+}
+
+*::-webkit-scrollbar-thumb {
+    background: #aaa;
+    border-radius: 1rem;
+}
+
+#root {
+    height: 100%;
+}

@@ -9,12 +9,13 @@ import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditItemDialog } from '../../components/EditItemDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './waiting-for.module.css';
 
@@ -25,6 +26,7 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
     const { items, people, refreshItems } = useAppData();
+    const navigate = useNavigate();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const waitingItems = items.filter((item) => item.status === 'waitingFor').sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
@@ -78,7 +80,18 @@ function WaitingForPage() {
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
                                             <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={() => {
+                                                        // Read at click time — mode changes require a settings navigation
+                                                        // which remounts this component, so no reactive state needed.
+                                                        if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
+                                                            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
+                                                        } else {
+                                                            setEditingItem(item);
+                                                        }
+                                                    }}
+                                                >
                                                     <EditIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
