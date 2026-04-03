@@ -5,6 +5,7 @@ import FormControlLabel from '@mui/material/FormControlLabel';
 import Paper from '@mui/material/Paper';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
+import { useColorScheme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
@@ -40,6 +41,9 @@ function SettingsPage() {
                     </Typography>
                 </Box>
             </Paper>
+
+            {/* Appearance section */}
+            <AppearanceSection />
 
             {/* Calendar sync section */}
             <Paper variant="outlined" className={styles.section}>
@@ -82,11 +86,41 @@ function SettingsPage() {
     );
 }
 
+function AppearanceSection() {
+    const { mode, setMode } = useColorScheme();
+
+    return (
+        <Paper variant="outlined" className={styles.section}>
+            <Box className={styles.sectionContent}>
+                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                    Appearance
+                </Typography>
+                <RadioGroup value={mode ?? 'system'} onChange={(e) => setMode(e.target.value as 'light' | 'dark' | 'system')}>
+                    <FormControlLabel value="light" control={<Radio size="small" />} label={<Typography variant="body2">Light</Typography>} />
+                    <FormControlLabel
+                        value="system"
+                        control={<Radio size="small" />}
+                        label={
+                            <Box>
+                                <Typography variant="body2">System</Typography>
+                                <Typography variant="caption" color="text.secondary">
+                                    Follows your OS setting
+                                </Typography>
+                            </Box>
+                        }
+                    />
+                    <FormControlLabel value="dark" control={<Radio size="small" />} label={<Typography variant="body2">Dark</Typography>} />
+                </RadioGroup>
+            </Box>
+        </Paper>
+    );
+}
+
 function InboxSection() {
-    const [mode, setMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
+    const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
 
     function onChange(newMode: InlineClarifyMode) {
-        setMode(newMode);
+        setClarifyMode(newMode);
         localStorage.setItem(CLARIFY_MODE_KEY, newMode);
         // storage event only fires in OTHER tabs by default — dispatch manually so the
         // inbox page updates in real time without requiring a reload.
@@ -102,7 +136,7 @@ function InboxSection() {
                 <Typography variant="body2" color="text.secondary" mb={2}>
                     How you prefer to edit and clarify items — applies to the inbox and all other pages.
                 </Typography>
-                <RadioGroup value={mode} onChange={(e) => onChange(parseClarifyMode(e.target.value))}>
+                <RadioGroup value={clarifyMode} onChange={(e) => onChange(parseClarifyMode(e.target.value))}>
                     <FormControlLabel
                         value="dialog"
                         control={<Radio size="small" />}

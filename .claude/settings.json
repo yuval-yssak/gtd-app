@@ -5,7 +5,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "bash /Users/yuvalyssak/gtd/scripts/post-change-checks.sh"
+                        "command": "bash scripts/post-change-checks.sh"
                     }
                 ]
             }

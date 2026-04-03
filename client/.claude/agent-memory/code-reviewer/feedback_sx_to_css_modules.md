@@ -1,13 +1,17 @@
 ---
-name: MUI CSS variable usage without opt-in
-description: When moving sx props to CSS Modules, MUI CSS vars like --mui-zIndex-* require cssVariables:true in the theme
+name: MUI CSS variable usage — CssVarsProvider now active
+description: App switched to CssVarsProvider+extendTheme in __root.tsx; --mui-* CSS vars ARE emitted. Fallbacks on pre-existing vars are now harmless redundancy.
 type: feedback
 ---
 
-When converting MUI `sx` props to CSS Modules, `var(--mui-zIndex-drawer)` and `var(--mui-zIndex-appBar)` are MUI CSS variables that only exist at runtime when `cssVariables: true` is passed to `createTheme()`. This project does NOT opt in to MUI CSS variables.
+The app previously used `createTheme()` with `cssVariables: false` (the default), so `--mui-*` CSS variables were not emitted and any CSS Modules referencing them required hardcoded fallbacks.
 
-**Why:** The app uses `createTheme()` with default settings (`cssVariables: false`). MUI's CSS variables (all `--mui-*` tokens) are not emitted to the DOM unless explicitly opted in.
+**As of the dark-mode branch**, `__root.tsx` switched to `CssVarsProvider` + `extendTheme()`. MUI now emits all `--mui-palette-*`, `--mui-zIndex-*`, and other CSS variables at runtime. The pre-existing fallback values in CSS Modules (e.g. `var(--mui-palette-divider, rgba(0,0,0,0.12))`) are now harmless redundancy rather than safety nets.
 
-**How to apply:** When reviewing or writing CSS Modules that reference z-index or other MUI tokens, either add a hard-coded fallback (e.g., `var(--mui-zIndex-drawer, 1200)`) or use the raw MUI z-index values directly (appBar=1100, drawer=1200). Flag any `var(--mui-zIndex-*)` usage without a fallback as a critical bug in this codebase.
+**Why:** The dark-mode PR required `CssVarsProvider` so that `useColorScheme().setMode()` works and MUI generates dark-palette CSS variables for `[data-color-scheme="dark"]`.
 
-Pre-existing files already use `--mui-palette-divider` without fallback (acceptable legacy), but z-index is load-bearing (layout break) so it must have a fallback.
+**How to apply:**
+- New CSS Modules written after this change can safely omit fallbacks on `--mui-palette-*` and `--mui-zIndex-*` vars, but including them is still a good practice for defensive coding.
+- The z-index fallback rule from the previous memory is relaxed: z-index vars will be present at runtime, but the fallbacks are still recommended for explicitness.
+- Do NOT revert to `createTheme()` + `ThemeProvider` — that would silently break dark-mode and the `useColorScheme` hook.
+- `calendar.module.css` and `routines.module.css` use `--mui-palette-divider` without a fallback. This was previously a latent bug; it is now correct because the variable is guaranteed to exist.

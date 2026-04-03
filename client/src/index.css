@@ -35,12 +35,13 @@ body {
     --gtd-sheet-handle: rgba(0, 0, 0, 0.2);
 }
 
-@media (prefers-color-scheme: dark) {
-    :root {
-        --gtd-scrollbar-color: #555;
-        --gtd-code-bg: rgba(255, 255, 255, 0.1);
-        --gtd-sheet-handle: rgba(255, 255, 255, 0.3);
-    }
+/* Attribute selector matches the data-color-scheme="dark" that MUI sets on <html>.
+   Must align with colorSchemeSelector in __root.tsx — media query won't work here
+   because MUI manages mode via JS+attribute, not purely via CSS media query. */
+[data-color-scheme="dark"] {
+    --gtd-scrollbar-color: #555;
+    --gtd-code-bg: rgba(255, 255, 255, 0.1);
+    --gtd-sheet-handle: rgba(255, 255, 255, 0.3);
 }
 
 * {
