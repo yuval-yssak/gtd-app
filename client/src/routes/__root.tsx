@@ -4,9 +4,14 @@ import { createRootRouteWithContext, Outlet } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools';
 import type { RouterContext } from '../types/routerContext';
 
-// colorSchemeSelector: 'media' makes MUI switch palettes via prefers-color-scheme,
-// so the app follows the OS dark/light setting without a manual toggle.
-const theme = extendTheme({ colorSchemeSelector: 'media' });
+// colorSchemes: both light and dark must be listed so MUI generates dark CSS variables.
+// colorSchemeSelector: attribute-based (not 'media') so useColorScheme().setMode() works
+// for the manual toggle in Settings. CssVarsProvider defaults to defaultMode="system",
+// which reads the OS preference and falls back to localStorage on subsequent visits.
+const theme = extendTheme({
+    colorSchemes: { light: true, dark: true },
+    colorSchemeSelector: '[data-color-scheme="%s"]',
+});
 
 function RootComponent() {
     return (
