@@ -29,9 +29,23 @@ body {
     height: 100dvh;
 }
 
+:root {
+    --gtd-scrollbar-color: #aaa;
+    --gtd-code-bg: rgba(0, 0, 0, 0.06);
+    --gtd-sheet-handle: rgba(0, 0, 0, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --gtd-scrollbar-color: #555;
+        --gtd-code-bg: rgba(255, 255, 255, 0.1);
+        --gtd-sheet-handle: rgba(255, 255, 255, 0.3);
+    }
+}
+
 * {
     box-sizing: inherit;
-    scrollbar-color: #aaa transparent;
+    scrollbar-color: var(--gtd-scrollbar-color) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -39,7 +53,7 @@ body {
 }
 
 *::-webkit-scrollbar-thumb {
-    background: #aaa;
+    background: var(--gtd-scrollbar-color);
     border-radius: 1rem;
 }
 
