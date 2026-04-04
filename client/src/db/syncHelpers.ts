@@ -102,17 +102,20 @@ export function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
 }
 
 async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
-    const ops = await db.getAll('syncOperations');
-    if (!ops.length) {
-        return;
-    }
+    // Loop until empty: a fire-and-forget flush from queueSyncOp may have started before
+    // a subsequent mutation added more ops. Without the loop, those late-arriving ops
+    // stay in IDB because the in-flight flush already read its batch before they existed.
+    while (true) {
+        const ops = await db.getAll('syncOperations');
+        if (!ops.length) return;
 
-    const deviceId = await getOrCreateDeviceId(db);
-    await pushSyncOps(deviceId, ops);
+        const deviceId = await getOrCreateDeviceId(db);
+        await pushSyncOps(deviceId, ops);
 
-    // Batch succeeded — remove all sent ops. If the request failed, they stay for retry.
-    for (const op of ops) {
-        if (op.id !== undefined) await db.delete('syncOperations', op.id);
+        // Batch succeeded — remove all sent ops. If the request failed, they stay for retry.
+        for (const op of ops) {
+            if (op.id !== undefined) await db.delete('syncOperations', op.id);
+        }
     }
 }
 
