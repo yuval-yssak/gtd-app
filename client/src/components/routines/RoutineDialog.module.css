@@ -1,0 +1,22 @@
+.dialogContent {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    /* padding-top is set via sx prop on DialogContent to avoid !important */
+}
+
+.sectionLabel {
+    margin-bottom: 0.5rem;
+}
+
+.narrowInput {
+    width: 5rem;
+}
+
+.ticklerRow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+}

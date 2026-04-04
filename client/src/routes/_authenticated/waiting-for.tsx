@@ -13,6 +13,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditItemDialog } from '../../components/EditItemDialog';
+import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
@@ -25,7 +26,7 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
-    const { items, people, refreshItems } = useAppData();
+    const { items, people, routines, refreshItems } = useAppData();
     const navigate = useNavigate();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
@@ -104,7 +105,17 @@ function WaitingForPage() {
                                     }
                                 >
                                     <ListItemText
-                                        primary={item.title}
+                                        primary={
+                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                <span>{item.title}</span>
+                                                {item.routineId && (
+                                                    <RoutineIndicator
+                                                        routineId={item.routineId}
+                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                    />
+                                                )}
+                                            </Box>
+                                        }
                                         secondary={
                                             item.expectedBy ? (
                                                 <Typography component="span" variant="caption" color={isOverdue(item) ? 'error' : 'text.secondary'}>

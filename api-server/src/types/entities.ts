@@ -77,6 +77,11 @@ export interface RoutineItemTemplate {
     time?: number; // estimated minutes
     focus?: boolean;
     urgent?: boolean;
+    /**
+     * Days before expectedBy to set ignoreBefore (tickler). undefined = no tickler; 0 = show on due date.
+     */
+    ticklerLeadDays?: number;
+    notes?: string;
 }
 
 export interface RoutineInterface {
@@ -84,18 +89,24 @@ export interface RoutineInterface {
     user: string;
     title: string;
     /**
-     * afterCompletion: next instance is created only after the previous one is marked done.
-     * fixedSchedule: next instance is created on a calendar schedule regardless of completion.
+     * nextAction: next instance created after previous is done/trashed (all frequencies are after-completion).
+     * calendar: next instance created on a fixed rrule schedule.
      */
-    triggerMode: 'afterCompletion' | 'fixedSchedule';
+    routineType: 'nextAction' | 'calendar';
     /**
-     * Days after completion before the next instance is created. Used when triggerMode is 'afterCompletion'.
+     * RFC 5545 RRULE string (e.g. FREQ=WEEKLY;BYDAY=MO). Required for all routines.
+     * For nextAction routines, DTSTART is set dynamically to the completion date when computing the next occurrence.
+     * For calendar routines, DTSTART is the routine's creation date (fixed absolute schedule).
+     */
+    rrule: string;
+    /**
+     * @deprecated Use routineType instead.
+     */
+    triggerMode?: 'afterCompletion' | 'fixedSchedule';
+    /**
+     * @deprecated Use rrule instead.
      */
     afterCompletionDelayDays?: number;
-    /**
-     * RFC 5545 RRULE string (e.g. FREQ=WEEKLY;BYDAY=MO). Used when triggerMode is 'fixedSchedule'.
-     */
-    rrule?: string;
     /**
      * Google Calendar recurring event series ID. Set when the routine is linked to a calendar series.
      */

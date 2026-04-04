@@ -13,6 +13,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditItemDialog } from '../../components/EditItemDialog';
+import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updateItem } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
@@ -24,7 +25,7 @@ export const Route = createFileRoute('/_authenticated/tickler')({
 
 function TicklerPage() {
     const { db } = Route.useRouteContext();
-    const { items, refreshItems } = useAppData();
+    const { items, routines, refreshItems } = useAppData();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const today = dayjs().format('YYYY-MM-DD');
@@ -99,7 +100,21 @@ function TicklerPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemText primary={item.title} secondary={`Status: ${item.status}`} className={styles.listItemText} />
+                                    <ListItemText
+                                        primary={
+                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                <span>{item.title}</span>
+                                                {item.routineId && (
+                                                    <RoutineIndicator
+                                                        routineId={item.routineId}
+                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                    />
+                                                )}
+                                            </Box>
+                                        }
+                                        secondary={`Status: ${item.status}`}
+                                        className={styles.listItemText}
+                                    />
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>

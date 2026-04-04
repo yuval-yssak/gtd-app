@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
+import { getRoutineIndicatorStyle, type RoutineIndicatorStyle, setRoutineIndicatorStyle } from '../../lib/routineIndicatorStyle';
 import type { MyDB } from '../../types/MyDB';
 import styles from './settings.module.css';
 
@@ -64,6 +65,9 @@ function SettingsPage() {
                     </Button>
                 </Box>
             </Paper>
+
+            {/* Routine indicator style */}
+            <RoutineIndicatorSection />
 
             {/* Inbox preferences */}
             <InboxSection />
@@ -197,6 +201,34 @@ function InboxSection() {
                             </Box>
                         }
                     />
+                </RadioGroup>
+            </Box>
+        </Paper>
+    );
+}
+
+function RoutineIndicatorSection() {
+    const [style, setStyle] = useState<RoutineIndicatorStyle>(() => getRoutineIndicatorStyle());
+
+    function onChange(newStyle: RoutineIndicatorStyle) {
+        setStyle(newStyle);
+        setRoutineIndicatorStyle(newStyle);
+    }
+
+    return (
+        <Paper variant="outlined" className={styles.section}>
+            <Box className={styles.sectionContent}>
+                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                    Routine indicator
+                </Typography>
+                <Typography variant="body2" color="text.secondary" mb={1}>
+                    How items linked to a routine are marked in lists.
+                </Typography>
+                <RadioGroup value={style} onChange={(e) => onChange(e.target.value as RoutineIndicatorStyle)}>
+                    <FormControlLabel value="icon" control={<Radio size="small" />} label={<Typography variant="body2">Loop icon</Typography>} />
+                    <FormControlLabel value="colorAccent" control={<Radio size="small" />} label={<Typography variant="body2">Color dot</Typography>} />
+                    <FormControlLabel value="chip" control={<Radio size="small" />} label={<Typography variant="body2">Chip label</Typography>} />
+                    <FormControlLabel value="none" control={<Radio size="small" />} label={<Typography variant="body2">None</Typography>} />
                 </RadioGroup>
             </Box>
         </Paper>
