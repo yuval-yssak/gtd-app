@@ -200,6 +200,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             return;
         }
         if (isOnline) {
+            // Flush unconditionally — isSyncingRef may block syncAndRefresh if an SSE-triggered
+            // sync was in flight when the device went offline; a blocked syncAndRefresh would
+            // silently drop the flush and leave queued ops stranded. flushSyncQueue has its own
+            // concurrency guard (flushInFlight) so calling it here alongside syncAndRefresh is safe.
+            flushSyncQueue(db).catch((err) => console.error('[online] flush failed:', err));
             syncAndRefresh().catch((err) => console.error('[online] sync failed:', err));
             openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
             // Re-register push in case the subscription was lost or expired while offline.
@@ -208,9 +213,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // Close the SSE connection; it will be re-opened when online fires
             closeSseConnection();
         }
-        return () => {
-            isFirstOnlineRender.current = true; // reset so the boot effect skips correctly on Strict Mode remount
-        };
+        // No cleanup: the boot effect's cleanup already resets isFirstOnlineRender on unmount
+        // for Strict Mode remounts. If this effect returned a cleanup that also reset it, the
+        // offline→online transition would set the flag back to true (via the offline run's
+        // cleanup), making the online run skip entirely — silently dropping the reconnect flush.
     }, [isOnline, db, syncAndRefresh]);
 
     return <AppDataContext.Provider value={appData}>{children}</AppDataContext.Provider>;

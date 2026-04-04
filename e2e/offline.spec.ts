@@ -27,18 +27,21 @@ test.describe('offline behaviour', () => {
             await page1.context().setOffline(false);
 
             // Poll until the queue drains — no fixed sleep.
-            await page1.waitForFunction(
-                () =>
-                    (
-                        window as unknown as {
-                            __gtd: { queuedOps(): Promise<unknown[]> };
-                        }
-                    ).__gtd
-                        .queuedOps()
-                        .then((ops) => ops.length === 0),
-                undefined,
-                { timeout: 15_000, polling: 300 },
-            );
+            // evaluate() with an inline loop is required here: waitForFunction() resolves as soon
+            // as the predicate is truthy, but a Promise is always truthy, so it would return
+            // immediately without awaiting the IDB read (same caveat as waitForItemByIdOnDevice).
+            await page1.evaluate(async () => {
+                type Harness = { queuedOps(): Promise<unknown[]> };
+                const harness = (window as unknown as { __gtd: Harness }).__gtd;
+                // Date.now() is intentional — this closure runs in the browser context where dayjs is unavailable.
+                const deadline = Date.now() + 15_000;
+                while (Date.now() < deadline) {
+                    const ops = await harness.queuedOps();
+                    if (ops.length === 0) return true;
+                    await new Promise((r) => setTimeout(r, 300));
+                }
+                return false;
+            });
 
             // Verify device-2 can pull and see the item that was queued offline.
             await gtd.pull(page2);
