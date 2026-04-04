@@ -1,5 +1,6 @@
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
@@ -10,9 +11,11 @@ import ListItemText from '@mui/material/ListItemText';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
+import { useState } from 'react';
+import { RoutineDialog } from '../../components/routines/RoutineDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { removeRoutine } from '../../db/routineMutations';
-import { useRoutines } from '../../hooks/useRoutines';
+import { formatRrule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
 import styles from './routines.module.css';
 
@@ -22,20 +25,21 @@ export const Route = createFileRoute('/_authenticated/routines')({
 
 function RoutinesPage() {
     const { db } = Route.useRouteContext();
-    const { account } = useAppData();
-    const routines = useRoutines(db, account?.id ?? null);
+    const { account, routines, workContexts, people, refreshRoutines, refreshItems } = useAppData();
+    const [dialogRoutine, setDialogRoutine] = useState<StoredRoutine | 'new' | null>(null);
 
     async function onDelete(routine: StoredRoutine) {
         await removeRoutine(db, routine._id);
-        // Routines aren't in the router context, so reload to reflect the deletion
-        window.location.reload();
+        await refreshRoutines();
     }
 
-    function triggerLabel(routine: StoredRoutine): string {
-        if (routine.triggerMode === 'afterCompletion') {
-            return `${routine.afterCompletionDelayDays ?? 1}d after completion`;
-        }
-        return routine.rrule ?? 'Fixed schedule';
+    async function onSaved() {
+        await refreshRoutines();
+        await refreshItems();
+    }
+
+    function routineLabel(routine: StoredRoutine): string {
+        return formatRrule(routine.rrule);
     }
 
     return (
@@ -45,12 +49,10 @@ function RoutinesPage() {
                     Routines
                     {routines.length > 0 && <Chip label={routines.length} size="small" className={styles.countChip} />}
                 </Typography>
-                <Tooltip title="Create routine (coming soon)">
-                    <span>
-                        <IconButton disabled>
-                            <AddIcon />
-                        </IconButton>
-                    </span>
+                <Tooltip title="Create routine">
+                    <IconButton onClick={() => setDialogRoutine('new')}>
+                        <AddIcon />
+                    </IconButton>
                 </Tooltip>
             </Box>
 
@@ -66,11 +68,18 @@ function RoutinesPage() {
                                 disablePadding
                                 className={styles.item}
                                 secondaryAction={
-                                    <Tooltip title="Delete">
-                                        <IconButton size="small" color="error" onClick={() => void onDelete(routine)}>
-                                            <DeleteOutlineIcon fontSize="small" />
-                                        </IconButton>
-                                    </Tooltip>
+                                    <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                        <Tooltip title="Edit">
+                                            <IconButton size="small" onClick={() => setDialogRoutine(routine)}>
+                                                <EditIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                        <Tooltip title="Delete">
+                                            <IconButton size="small" color="error" onClick={() => void onDelete(routine)}>
+                                                <DeleteOutlineIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                    </Box>
                                 }
                             >
                                 <ListItemText
@@ -80,7 +89,7 @@ function RoutinesPage() {
                                             <Chip label={routine.active ? 'Active' : 'Paused'} size="small" color={routine.active ? 'success' : 'default'} />
                                         </Box>
                                     }
-                                    secondary={triggerLabel(routine)}
+                                    secondary={routineLabel(routine)}
                                     className={styles.listItemText}
                                 />
                             </ListItem>
@@ -88,6 +97,18 @@ function RoutinesPage() {
                         </Box>
                     ))}
                 </List>
+            )}
+
+            {dialogRoutine !== null && account !== null && (
+                <RoutineDialog
+                    db={db}
+                    userId={account.id}
+                    workContexts={workContexts}
+                    people={people}
+                    routine={dialogRoutine === 'new' ? undefined : dialogRoutine}
+                    onClose={() => setDialogRoutine(null)}
+                    onSaved={onSaved}
+                />
             )}
         </Box>
     );

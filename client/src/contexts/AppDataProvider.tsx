@@ -4,20 +4,23 @@ import { getActiveAccount } from '../db/accountHelpers';
 import { getItemsByUser } from '../db/itemHelpers';
 import { getPeopleByUser } from '../db/personHelpers';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
+import { getRoutinesByUser } from '../db/routineHelpers';
 import { closeSseConnection, openSseConnection } from '../db/sseClient';
 import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { getWorkContextsByUser } from '../db/workContextHelpers';
 import { useOnline } from '../hooks/useOnline';
-import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
+import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 
 export interface AppData {
     account: StoredAccount | null;
     items: StoredItem[];
     workContexts: StoredWorkContext[];
     people: StoredPerson[];
+    routines: StoredRoutine[];
     refreshItems: () => Promise<void>;
     refreshWorkContexts: () => Promise<void>;
     refreshPeople: () => Promise<void>;
+    refreshRoutines: () => Promise<void>;
 }
 
 // biome-ignore lint/style/noNonNullAssertion: Context is initialized with a non-null default value and only used within the provider, so this is safe.
@@ -43,6 +46,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     const [items, setItems] = useState<StoredItem[]>([]);
     const [workContexts, setWorkContexts] = useState<StoredWorkContext[]>([]);
     const [people, setPeople] = useState<StoredPerson[]>([]);
+    const [routines, setRoutines] = useState<StoredRoutine[]>([]);
     const isOnline = useOnline();
     const isFirstOnlineRender = useRef(true); // Skips the first render of the isOnline effect — mount-time handling is done in loadAll()
 
@@ -60,6 +64,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         const acct = await getActiveAccount(db);
         if (!acct) return;
         setPeople(await getPeopleByUser(db, acct.id));
+    }, [db]);
+    const refreshRoutines = useCallback(async () => {
+        const acct = await getActiveAccount(db);
+        if (!acct) return;
+        setRoutines(await getRoutinesByUser(db, acct.id));
     }, [db]);
 
     // Guards against concurrent invocations from three independent paths: boot effect,
@@ -92,6 +101,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             setItems(await getItemsByUser(db, acct.id));
             setWorkContexts(await getWorkContextsByUser(db, acct.id));
             setPeople(await getPeopleByUser(db, acct.id));
+            setRoutines(await getRoutinesByUser(db, acct.id));
         } finally {
             isSyncingRef.current = false;
         }
@@ -100,10 +110,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     const initializeFromCache = useCallback(
         async (acct: StoredAccount) => {
             // Show cached data immediately — works offline with no network round-trip
-            const [items, workContexts, people] = await Promise.all([
+            const [items, workContexts, people, routines] = await Promise.all([
                 getItemsByUser(db, acct.id),
                 getWorkContextsByUser(db, acct.id),
                 getPeopleByUser(db, acct.id),
+                getRoutinesByUser(db, acct.id),
             ]);
             // Skip setState if the component unmounted while the IDB reads were in flight.
             if (unmountedRef.current) {
@@ -113,6 +124,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             setItems(items);
             setWorkContexts(workContexts);
             setPeople(people);
+            setRoutines(routines);
         },
         [db],
     );
@@ -143,8 +155,8 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     }, [db, initializeFromCache, syncAndRefresh]);
 
     const appData: AppData = useMemo(
-        () => ({ account, items, workContexts, people, refreshItems, refreshWorkContexts, refreshPeople }),
-        [account, items, workContexts, people, refreshItems, refreshWorkContexts, refreshPeople],
+        () => ({ account, items, workContexts, people, routines, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines }),
+        [account, items, workContexts, people, routines, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines],
     );
 
     /**

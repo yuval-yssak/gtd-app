@@ -1,0 +1,32 @@
+.iconButton {
+    display: inline-flex;
+    align-items: center;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: var(--mui-palette-primary-main);
+    flex-shrink: 0;
+}
+
+.icon {
+    /* Icon color and size are set via the parent .iconButton */
+    vertical-align: middle;
+}
+
+.chip {
+    flex-shrink: 0;
+}
+
+/* A small filled circle shown inline as a color accent next to the item title */
+.colorAccent {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background-color: var(--mui-palette-primary-main);
+    cursor: pointer;
+    flex-shrink: 0;
+    border: none;
+    padding: 0;
+}

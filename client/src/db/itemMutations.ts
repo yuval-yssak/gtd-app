@@ -2,6 +2,8 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { EnergyLevel, MyDB, StoredItem } from '../types/MyDB';
 import { deleteItemById, putItem } from './itemHelpers';
+import { getRoutineById } from './routineHelpers';
+import { createNextRoutineItem } from './routineItemHelpers';
 import { queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
@@ -116,6 +118,7 @@ export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): P
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await maybeCreateNextRoutineItem(db, item);
     return updated;
 }
 
@@ -123,7 +126,29 @@ export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): 
     const updated: StoredItem = { ...item, status: 'trash', updatedTs: nowIso() };
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await maybeCreateNextRoutineItem(db, item);
     return updated;
+}
+
+/**
+ * If the item belongs to an active next-action routine, create the next scheduled item.
+ * Triggered on done/trash regardless of the item's current status so the routine continues
+ * even when the item was transformed (e.g. inbox → done) before being completed.
+ * Errors are caught and logged so a failed next-item creation never hides a successful status change.
+ */
+async function maybeCreateNextRoutineItem(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<void> {
+    if (!item.routineId) {
+        return;
+    }
+    const routine = await getRoutineById(db, item.routineId);
+    if (!routine?.active || routine.routineType !== 'nextAction') {
+        return;
+    }
+    try {
+        await createNextRoutineItem(db, item.userId, routine, dayjs().toDate());
+    } catch (err) {
+        console.error('[routine] failed to create next item:', err);
+    }
 }
 
 // ── Generic edit ──────────────────────────────────────────────────────────────

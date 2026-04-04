@@ -36,6 +36,7 @@ import {
     type WaitingForFormState,
 } from '../../components/clarify/types';
 import { WaitingForFields } from '../../components/clarify/WaitingForFields';
+import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToInbox, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, updateItem } from '../../db/itemMutations';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -289,6 +290,7 @@ interface NextActionEditProps {
 }
 
 function NextActionEditContent({ item, db, workContexts, people, refreshItems, onBack }: NextActionEditProps) {
+    const { routines } = useAppData();
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
@@ -404,6 +406,14 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
             <Paper variant="outlined" className={styles.card}>
                 <Box className={styles.form}>
                     <TextField label="Title" value={title} onChange={(e) => setTitle(e.target.value)} fullWidth required autoFocus />
+                    {item.routineId && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <Typography variant="caption" color="text.secondary">
+                                Part of routine:
+                            </Typography>
+                            <RoutineIndicator routineId={item.routineId} routineTitle={routines.find((r) => r._id === item.routineId)?.title} />
+                        </Box>
+                    )}
 
                     <div>
                         <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} className={styles.tabs}>

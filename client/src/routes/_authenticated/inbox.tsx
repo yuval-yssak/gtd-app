@@ -51,6 +51,7 @@ import {
 } from '../../components/clarify/types';
 import { WaitingForFields } from '../../components/clarify/WaitingForFields';
 import { EditItemDialog } from '../../components/EditItemDialog';
+import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, collectItem } from '../../db/itemMutations';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
@@ -72,12 +73,14 @@ export const Route = createFileRoute('/_authenticated/inbox')({
 
 interface InboxSwipeItemProps {
     item: StoredItem;
+    // exactOptionalPropertyTypes requires explicit `| undefined` to allow passing `.find()?.title`
+    routineTitle?: string | undefined;
     onTap: (item: StoredItem) => void;
     onSwipeNextAction: (item: StoredItem) => void;
     onSwipeTrash: (item: StoredItem) => void;
 }
 
-function InboxSwipeItem({ item, onTap, onSwipeNextAction, onSwipeTrash }: InboxSwipeItemProps) {
+function InboxSwipeItem({ item, routineTitle, onTap, onSwipeNextAction, onSwipeTrash }: InboxSwipeItemProps) {
     const { touchHandlers, translateX, wasDragRef } = useSwipeGesture({
         onSwipeRight: () => onSwipeNextAction(item),
         onSwipeLeft: () => onSwipeTrash(item),
@@ -132,7 +135,15 @@ function InboxSwipeItem({ item, onTap, onSwipeNextAction, onSwipeTrash }: InboxS
                 onTouchEnd={onTouchEnd}
                 onClick={handleClick}
             >
-                <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} />
+                <ListItemText
+                    primary={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            <span>{item.title}</span>
+                            {item.routineId && <RoutineIndicator routineId={item.routineId} routineTitle={routineTitle} />}
+                        </Box>
+                    }
+                    secondary={dayjs(item.createdTs).fromNow()}
+                />
             </ListItem>
         </Box>
     );
@@ -219,7 +230,7 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
 
 function InboxPage() {
     const { db } = Route.useRouteContext();
-    const { account, items, workContexts, people, refreshItems } = useAppData();
+    const { account, items, workContexts, people, routines, refreshItems } = useAppData();
     const theme = useTheme();
     // Hide inline buttons and switch to swipe+bottom-sheet on screens narrower than 900px
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -498,6 +509,7 @@ function InboxPage() {
                             {isMobile ? (
                                 <InboxSwipeItem
                                     item={item}
+                                    routineTitle={routines.find((r) => r._id === item.routineId)?.title}
                                     onTap={setBottomSheetItem}
                                     onSwipeNextAction={(i) => onInlineActionFromSheet(i, 'nextAction')}
                                     onSwipeTrash={(i) => void onTrash(i)}
@@ -542,7 +554,21 @@ function InboxPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemText primary={item.title} secondary={dayjs(item.createdTs).fromNow()} className={styles.listItemText} />
+                                    <ListItemText
+                                        primary={
+                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                <span>{item.title}</span>
+                                                {item.routineId && (
+                                                    <RoutineIndicator
+                                                        routineId={item.routineId}
+                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                    />
+                                                )}
+                                            </Box>
+                                        }
+                                        secondary={dayjs(item.createdTs).fromNow()}
+                                        className={styles.listItemText}
+                                    />
                                 </ListItem>
                             )}
 

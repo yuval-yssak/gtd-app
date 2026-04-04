@@ -12,6 +12,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditItemDialog } from '../../components/EditItemDialog';
+import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
@@ -23,7 +24,7 @@ export const Route = createFileRoute('/_authenticated/calendar')({
 
 function CalendarPage() {
     const { db } = Route.useRouteContext();
-    const { items, refreshItems } = useAppData();
+    const { items, routines, refreshItems } = useAppData();
     const navigate = useNavigate();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
@@ -112,7 +113,20 @@ function CalendarPage() {
                                         )}
                                     </Box>
                                     {/* pr ensures text doesn't overlap the edit button in secondaryAction */}
-                                    <ListItemText primary={item.title} className={styles.listItemText} />
+                                    <ListItemText
+                                        primary={
+                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                <span>{item.title}</span>
+                                                {item.routineId && (
+                                                    <RoutineIndicator
+                                                        routineId={item.routineId}
+                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                    />
+                                                )}
+                                            </Box>
+                                        }
+                                        className={styles.listItemText}
+                                    />
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>

@@ -15,6 +15,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { EditNextActionDialog } from '../../components/EditNextActionDialog';
+import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
@@ -64,7 +65,7 @@ function makeToggle<T>(setter: React.Dispatch<React.SetStateAction<T | null>>) {
 
 function NextActionsPage() {
     const { db } = Route.useRouteContext();
-    const { items, workContexts, people, refreshItems } = useAppData();
+    const { items, workContexts, people, routines, refreshItems } = useAppData();
     const navigate = useNavigate();
     const [energyFilter, setEnergyFilter] = useState<EnergyLevel | null>(null);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
@@ -182,6 +183,12 @@ function NextActionsPage() {
                                             <span>{item.title}</span>
                                             {item.energy && <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />}
                                             {item.time !== undefined && <Chip label={`${item.time} min`} size="small" variant="outlined" />}
+                                            {item.routineId && (
+                                                <RoutineIndicator
+                                                    routineId={item.routineId}
+                                                    routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                />
+                                            )}
                                         </Box>
                                     }
                                     secondary={item.expectedBy ? `Due ${dayjs(item.expectedBy).format('MMM D')}` : undefined}

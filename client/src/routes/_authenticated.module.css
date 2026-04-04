@@ -10,7 +10,9 @@
 }
 
 @media (min-width: 56.25rem) {
-    .mobileAppBar {
+    /* Doubled class raises specificity to (0,2,0), beating MUI's emotion class (0,1,0)
+       which is injected later in the cascade and would otherwise keep the AppBar visible. */
+    .mobileAppBar.mobileAppBar {
         display: none;
     }
 }
@@ -34,10 +36,9 @@
 }
 
 @media (min-width: 56.25rem) {
-    /* Desktop: offset content to the right of the permanent sidebar */
+    /* Desktop: the flex layout places mainContent after the 15rem permanentDrawer element;
+       no margin-left needed. Reset padding to desktop value. */
     .mainContent {
-        margin-left: 15rem; /* matches DRAWER_WIDTH constant in AppNav.tsx */
-        width: calc(100% - 15rem);
         padding: 1.5rem;
     }
 }

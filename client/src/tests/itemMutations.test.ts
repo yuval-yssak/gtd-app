@@ -10,6 +10,7 @@ import {
     removeItem,
     updateItem,
 } from '../db/itemMutations';
+import { createRoutine } from '../db/routineMutations';
 import type { MyDB } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -146,6 +147,48 @@ describe('clarifyToDone', () => {
         const stored = await db.get('items', done._id);
         expect(stored?.status).toBe('done');
     });
+
+    it('auto-creates next routine item when item belongs to an active nextAction routine', async () => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Daily review',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY;INTERVAL=1',
+            template: {},
+            active: true,
+        });
+        const item = await collectItem(db, USER_ID, { title: 'Daily review' });
+        const nextActionItem = { ...item, status: 'nextAction' as const, routineId: routine._id };
+        await db.clear('syncOperations');
+
+        await clarifyToDone(db, nextActionItem);
+
+        // The done item + 1 new next-action item created by the routine
+        const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const nextItems = allItems.filter((i) => i.status === 'nextAction' && i.routineId === routine._id);
+        expect(nextItems).toHaveLength(1);
+        expect(nextItems[0]?.expectedBy).toBeTruthy();
+    });
+
+    it('does not auto-create next item when routine is inactive', async () => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Paused task',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY;INTERVAL=1',
+            template: {},
+            active: false,
+        });
+        const item = await collectItem(db, USER_ID, { title: 'Paused task' });
+        const nextActionItem = { ...item, status: 'nextAction' as const, routineId: routine._id };
+        await db.clear('syncOperations');
+
+        await clarifyToDone(db, nextActionItem);
+
+        const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const nextItems = allItems.filter((i) => i.status === 'nextAction');
+        expect(nextItems).toHaveLength(0);
+    });
 });
 
 describe('clarifyToTrash', () => {
@@ -158,6 +201,26 @@ describe('clarifyToTrash', () => {
         expect(trashed.status).toBe('trash');
         const stored = await db.get('items', trashed._id);
         expect(stored?.status).toBe('trash');
+    });
+
+    it('auto-creates next routine item when trashing a routine-linked item', async () => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Weekly cleanup',
+            routineType: 'nextAction',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            template: {},
+            active: true,
+        });
+        const item = await collectItem(db, USER_ID, { title: 'Weekly cleanup' });
+        const nextActionItem = { ...item, status: 'nextAction' as const, routineId: routine._id };
+        await db.clear('syncOperations');
+
+        await clarifyToTrash(db, nextActionItem);
+
+        const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const nextItems = allItems.filter((i) => i.status === 'nextAction' && i.routineId === routine._id);
+        expect(nextItems).toHaveLength(1);
     });
 });
 

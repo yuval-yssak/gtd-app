@@ -45,15 +45,26 @@ export interface StoredRoutineTemplate {
     time?: number;
     focus?: boolean;
     urgent?: boolean;
+    /** Days before expectedBy to set ignoreBefore (tickler). undefined = no tickler; 0 = show on due date. */
+    ticklerLeadDays?: number;
+    notes?: string;
 }
 
 export interface StoredRoutine {
     _id: string;
     userId: string;
     title: string;
-    triggerMode: 'afterCompletion' | 'fixedSchedule';
+    /**
+     * nextAction: next instance created after previous is done/trashed (after-completion trigger).
+     * calendar: next instance created on a fixed rrule schedule.
+     */
+    routineType: 'nextAction' | 'calendar';
+    /** RFC 5545 RRULE string. Required for all routines. */
+    rrule: string;
+    /** @deprecated Use routineType instead. */
+    triggerMode?: 'afterCompletion' | 'fixedSchedule';
+    /** @deprecated Use rrule instead. */
     afterCompletionDelayDays?: number;
-    rrule?: string; // RFC 5545 RRULE string
     calendarEventId?: string;
     calendarIntegrationId?: string;
     template: StoredRoutineTemplate;
