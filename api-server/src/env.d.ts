@@ -13,5 +13,6 @@ declare namespace NodeJS {
         GOOGLE_OAUTH_APP_CLIENT_SECRET?: string;
         GITHUB_CLIENT_ID?: string;
         GITHUB_CLIENT_SECRET?: string;
+        CALENDAR_ENCRYPTION_KEY?: string;
     }
 }

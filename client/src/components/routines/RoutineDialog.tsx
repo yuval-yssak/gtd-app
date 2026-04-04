@@ -17,7 +17,7 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
-import { createNextRoutineItem } from '../../db/routineItemHelpers';
+import { createNextCalendarItem, createNextRoutineItem } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { FrequencyPicker } from './FrequencyPicker';
@@ -35,9 +35,12 @@ interface Props {
     onSaved: () => Promise<void>;
 }
 
+type EndsMode = 'never' | 'onDate' | 'afterN';
+
 interface FormState {
+    routineType: 'nextAction' | 'calendar';
     title: string;
-    rrule: string;
+    rrule: string; // base rrule without UNTIL/COUNT — those are stored in endsMode/endsDate/endsCount
     workContextIds: string[];
     peopleIds: string[];
     energy: EnergyLevel | '';
@@ -47,12 +50,53 @@ interface FormState {
     hasTickler: boolean;
     ticklerLeadDays: string;
     notes: string;
+    timeOfDay: string; // HH:MM — calendar routines only
+    duration: string; // minutes — calendar routines only
+    endsMode: EndsMode;
+    endsDate: string; // ISO date — used when endsMode === 'onDate'
+    endsCount: string; // positive integer string — used when endsMode === 'afterN'
+}
+
+/** Strip UNTIL and COUNT from an rrule string so FrequencyPicker can parse the base frequency. */
+function stripEndClauses(rruleStr: string): string {
+    return rruleStr.replace(/;UNTIL=[^;]*/g, '').replace(/;COUNT=\d+/g, '');
+}
+
+/** Parse UNTIL/COUNT from an existing rrule string into EndsMode fields. */
+function parseEndsFromRrule(rruleStr: string): { endsMode: EndsMode; endsDate: string; endsCount: string } {
+    const untilMatch = rruleStr.match(/UNTIL=([^;]+)/);
+    const countMatch = rruleStr.match(/COUNT=(\d+)/);
+    // noUncheckedIndexedAccess: capture group [1] is string | undefined; fall back to '' to satisfy types
+    if (untilMatch) {
+        return { endsMode: 'onDate', endsDate: dayjs(untilMatch[1] ?? '').format('YYYY-MM-DD'), endsCount: '' };
+    }
+    if (countMatch) {
+        return { endsMode: 'afterN', endsDate: '', endsCount: countMatch[1] ?? '' };
+    }
+    return { endsMode: 'never', endsDate: '', endsCount: '' };
+}
+
+/** Build the final rrule by appending UNTIL or COUNT to the base rrule from FrequencyPicker. */
+function buildFinalRrule(baseRrule: string, endsMode: EndsMode, endsDate: string, endsCount: string): string {
+    if (endsMode === 'onDate' && endsDate) {
+        // UNTIL must be in UTC datetime format per RFC 5545. Construct directly from the ISO date
+        // to avoid depending on the dayjs utc plugin (not loaded in this project).
+        const until = `${endsDate.replace(/-/g, '')}T235959Z`;
+        return `${baseRrule};UNTIL=${until}`;
+    }
+    if (endsMode === 'afterN' && endsCount) {
+        return `${baseRrule};COUNT=${endsCount}`;
+    }
+    return baseRrule;
 }
 
 function initFormState(routine?: StoredRoutine): FormState {
+    const ends = parseEndsFromRrule(routine?.rrule ?? '');
     return {
+        routineType: routine?.routineType ?? 'nextAction',
         title: routine?.title ?? '',
-        rrule: routine?.rrule ?? 'FREQ=DAILY;INTERVAL=1',
+        // Strip UNTIL/COUNT so FrequencyPicker only sees the base frequency parts
+        rrule: stripEndClauses(routine?.rrule ?? 'FREQ=DAILY;INTERVAL=1'),
         workContextIds: routine?.template.workContextIds ?? [],
         peopleIds: routine?.template.peopleIds ?? [],
         energy: routine?.template.energy ?? '',
@@ -62,6 +106,9 @@ function initFormState(routine?: StoredRoutine): FormState {
         hasTickler: routine?.template.ticklerLeadDays !== undefined,
         ticklerLeadDays: routine?.template.ticklerLeadDays?.toString() ?? '0',
         notes: routine?.template.notes ?? '',
+        timeOfDay: routine?.calendarItemTemplate?.timeOfDay ?? '09:00',
+        duration: routine?.calendarItemTemplate?.duration?.toString() ?? '60',
+        ...ends,
     };
 }
 
@@ -103,24 +150,53 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
 
         setIsSaving(true);
         try {
+            const finalRrule = buildFinalRrule(form.rrule, form.endsMode, form.endsDate, form.endsCount);
             const template = buildTemplate(form);
+            const calendarItemTemplate =
+                form.routineType === 'calendar' ? { timeOfDay: form.timeOfDay, duration: parseInt(form.duration, 10) || 60 } : undefined;
+
             if (isEdit) {
-                await updateRoutine(db, { ...routine, title: trimmedTitle, rrule: form.rrule, template });
+                await updateRoutine(db, {
+                    ...routine,
+                    routineType: form.routineType,
+                    title: trimmedTitle,
+                    rrule: finalRrule,
+                    template,
+                    ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                });
             } else {
-                const created = await createRoutine(db, { userId, routineType: 'nextAction', rrule: form.rrule, template, title: trimmedTitle, active: true });
-                // First-item creation is best-effort — a failure must not block saving the routine itself.
+                const created = await createRoutine(db, {
+                    userId,
+                    routineType: form.routineType,
+                    rrule: finalRrule,
+                    template,
+                    title: trimmedTitle,
+                    active: true,
+                    ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                });
+
+                // Auto-create the first item — best-effort so a failure doesn't block saving the routine
                 try {
-                    await createNextRoutineItem(db, userId, created, dayjs().toDate());
+                    if (form.routineType === 'calendar') {
+                        // refDate = just before start of today so the first occurrence on/after today is returned
+                        const refDate = dayjs().startOf('day').subtract(1, 'ms').toDate();
+                        await createNextCalendarItem(db, userId, created, refDate);
+                    } else {
+                        await createNextRoutineItem(db, userId, created, dayjs().toDate());
+                    }
                 } catch (err) {
                     console.error('[routine] failed to create first item:', err);
                 }
             }
+
             await onSaved();
             onClose();
         } finally {
             setIsSaving(false);
         }
     }
+
+    const isCalendar = form.routineType === 'calendar';
 
     return (
         <Dialog open onClose={onClose} fullWidth maxWidth="sm">
@@ -132,6 +208,25 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                 <Box>
                     <FormLabel>
                         <Typography variant="caption" color="text.secondary" className={styles.sectionLabel}>
+                            Type
+                        </Typography>
+                    </FormLabel>
+                    <ToggleButtonGroup
+                        exclusive
+                        size="small"
+                        value={form.routineType}
+                        onChange={(_e, val: 'nextAction' | 'calendar' | null) => {
+                            if (val) patch({ routineType: val });
+                        }}
+                    >
+                        <ToggleButton value="nextAction">Next Action</ToggleButton>
+                        <ToggleButton value="calendar">Calendar</ToggleButton>
+                    </ToggleButtonGroup>
+                </Box>
+
+                <Box>
+                    <FormLabel>
+                        <Typography variant="caption" color="text.secondary" className={styles.sectionLabel}>
                             Frequency
                         </Typography>
                     </FormLabel>
@@ -139,16 +234,23 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     <FrequencyPicker key={routine?._id ?? 'new'} value={form.rrule} onChange={(rrule) => patch({ rrule })} />
                 </Box>
 
-                <TemplateFields
-                    form={form}
-                    workContexts={workContexts}
-                    people={people}
-                    onPatch={patch}
-                    onToggleWorkContext={toggleWorkContext}
-                    onTogglePerson={togglePerson}
-                />
+                <EndsFields form={form} onPatch={patch} />
 
-                <TicklerFields form={form} onPatch={patch} />
+                {isCalendar ? (
+                    <CalendarFields form={form} onPatch={patch} />
+                ) : (
+                    <>
+                        <TemplateFields
+                            form={form}
+                            workContexts={workContexts}
+                            people={people}
+                            onPatch={patch}
+                            onToggleWorkContext={toggleWorkContext}
+                            onTogglePerson={togglePerson}
+                        />
+                        <TicklerFields form={form} onPatch={patch} />
+                    </>
+                )}
 
                 <TextField
                     label="Notes (template)"
@@ -170,6 +272,92 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
         </Dialog>
     );
 }
+
+// ── Calendar-specific fields ───────────────────────────────────────────────────
+
+function CalendarFields({ form, onPatch }: { form: FormState; onPatch: (patch: Partial<FormState>) => void }) {
+    return (
+        <Stack gap={1.5}>
+            <Typography variant="caption" color="text.secondary" fontWeight={600}>
+                Calendar event settings
+            </Typography>
+            <Stack direction="row" gap={2} alignItems="center">
+                <TextField
+                    label="Start time"
+                    type="time"
+                    value={form.timeOfDay}
+                    onChange={(e) => onPatch({ timeOfDay: e.target.value })}
+                    size="small"
+                    slotProps={{ inputLabel: { shrink: true } }}
+                />
+                <TextField
+                    label="Duration (min)"
+                    type="number"
+                    value={form.duration}
+                    onChange={(e) => onPatch({ duration: e.target.value })}
+                    size="small"
+                    className={styles.narrowInput}
+                    slotProps={{ htmlInput: { min: 1 } }}
+                />
+            </Stack>
+        </Stack>
+    );
+}
+
+// ── Ends section ──────────────────────────────────────────────────────────────
+
+function EndsFields({ form, onPatch }: { form: FormState; onPatch: (patch: Partial<FormState>) => void }) {
+    return (
+        <Box>
+            <FormLabel>
+                <Typography variant="caption" color="text.secondary" className={styles.sectionLabel}>
+                    Ends
+                </Typography>
+            </FormLabel>
+            <ToggleButtonGroup
+                exclusive
+                size="small"
+                value={form.endsMode}
+                onChange={(_e, val: EndsMode | null) => {
+                    if (val) onPatch({ endsMode: val });
+                }}
+            >
+                <ToggleButton value="never">Never</ToggleButton>
+                <ToggleButton value="onDate">On date</ToggleButton>
+                <ToggleButton value="afterN">After N</ToggleButton>
+            </ToggleButtonGroup>
+
+            {form.endsMode === 'onDate' && (
+                <TextField
+                    type="date"
+                    size="small"
+                    value={form.endsDate}
+                    onChange={(e) => onPatch({ endsDate: e.target.value })}
+                    sx={{ mt: 1, display: 'block' }}
+                    slotProps={{ inputLabel: { shrink: true } }}
+                    label="End date"
+                />
+            )}
+
+            {form.endsMode === 'afterN' && (
+                <div className={styles.ticklerRow}>
+                    <Typography variant="body2">After</Typography>
+                    <TextField
+                        type="number"
+                        size="small"
+                        className={styles.narrowInput}
+                        value={form.endsCount}
+                        onChange={(e) => onPatch({ endsCount: e.target.value })}
+                        slotProps={{ htmlInput: { min: 1 } }}
+                    />
+                    <Typography variant="body2">occurrences</Typography>
+                </div>
+            )}
+        </Box>
+    );
+}
+
+// ── Next-action template fields ────────────────────────────────────────────────
 
 interface TemplateFieldsProps {
     form: FormState;

@@ -18,7 +18,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
-import styles from './waiting-for.module.css';
+import styles from './-waiting-for.module.css';
 
 export const Route = createFileRoute('/_authenticated/waiting-for')({
     component: WaitingForPage,

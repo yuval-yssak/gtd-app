@@ -5,7 +5,7 @@
                 "hooks": [
                     {
                         "type": "command",
-                        "command": "bash scripts/post-change-checks.sh"
+                        "command": "bash -c 'bash \"$(git rev-parse --show-toplevel)/scripts/post-change-checks.sh\"'"
                     }
                 ]
             }

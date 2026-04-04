@@ -2,7 +2,7 @@
     "name": "gtd-e2e",
     "private": true,
     "scripts": {
-        "test": "playwright test"
+        "test": "playwright test --retries=0"
     },
     "devDependencies": {
         "@playwright/test": "^1.58.2"

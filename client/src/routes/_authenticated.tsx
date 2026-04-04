@@ -10,8 +10,8 @@ import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppNav } from '../components/AppNav';
 import { NotificationNudge } from '../components/NotificationNudge';
 import { AppDataProvider } from '../contexts/AppDataProvider';
-import styles from './_authenticated.module.css';
-import { authenticatedRouteGuard } from './authenticatedRouteGuard';
+import styles from './-_authenticated.module.css';
+import { authenticatedRouteGuard } from './-authenticatedRouteGuard';
 
 export const Route = createFileRoute('/_authenticated')({
     beforeLoad: authenticatedRouteGuard,

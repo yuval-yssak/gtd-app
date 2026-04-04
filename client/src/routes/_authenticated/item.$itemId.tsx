@@ -40,7 +40,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToInbox, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, updateItem } from '../../db/itemMutations';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
-import styles from './item.$itemId.module.css';
+import styles from './-item.$itemId.module.css';
 
 const VALID_DESTINATIONS = new Set<string>(['nextAction', 'calendar', 'waitingFor', 'done', 'trash']);
 

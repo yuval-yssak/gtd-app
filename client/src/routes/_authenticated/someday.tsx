@@ -4,7 +4,7 @@ import Button from '@mui/material/Button';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
-import styles from './someday.module.css';
+import styles from './-someday.module.css';
 
 export const Route = createFileRoute('/_authenticated/someday')({
     component: SomedayPage,

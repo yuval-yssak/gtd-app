@@ -1,9 +1,10 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import type { EnergyLevel, MyDB, StoredItem } from '../types/MyDB';
+import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { deleteItemById, putItem } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
-import { createNextRoutineItem } from './routineItemHelpers';
+import { createNextCalendarItem, createNextRoutineItem, getCalendarCompletionTiming, RruleExhaustedError } from './routineItemHelpers';
+import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
@@ -118,7 +119,7 @@ export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): P
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
-    await maybeCreateNextRoutineItem(db, item);
+    await maybeCreateNextRoutineItem(db, item, 'done');
     return updated;
 }
 
@@ -126,29 +127,74 @@ export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): 
     const updated: StoredItem = { ...item, status: 'trash', updatedTs: nowIso() };
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
-    await maybeCreateNextRoutineItem(db, item);
+    await maybeCreateNextRoutineItem(db, item, 'trash');
     return updated;
 }
 
 /**
- * If the item belongs to an active next-action routine, create the next scheduled item.
+ * If the item belongs to an active routine, create the next scheduled item.
  * Triggered on done/trash regardless of the item's current status so the routine continues
  * even when the item was transformed (e.g. inbox → done) before being completed.
- * Errors are caught and logged so a failed next-item creation never hides a successful status change.
+ * RruleExhaustedError means the series is over — deactivate the routine rather than log an error.
+ * Other errors are caught and logged so a failed next-item creation never hides a successful status change.
  */
-async function maybeCreateNextRoutineItem(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<void> {
+async function maybeCreateNextRoutineItem(db: IDBPDatabase<MyDB>, item: StoredItem, disposalKind: 'done' | 'trash'): Promise<void> {
     if (!item.routineId) {
         return;
     }
     const routine = await getRoutineById(db, item.routineId);
-    if (!routine?.active || routine.routineType !== 'nextAction') {
+    if (!routine?.active) {
         return;
     }
+
     try {
-        await createNextRoutineItem(db, item.userId, routine, dayjs().toDate());
+        if (routine.routineType === 'nextAction') {
+            await createNextRoutineItem(db, item.userId, routine, dayjs().toDate());
+        } else {
+            await createNextCalendarRoutineItem(db, item, routine, disposalKind);
+        }
     } catch (err) {
-        console.error('[routine] failed to create next item:', err);
+        if (err instanceof RruleExhaustedError) {
+            // Series is complete — mark the routine inactive so it stops generating items
+            await updateRoutine(db, { ...routine, active: false });
+        } else {
+            console.error('[routine] failed to create next item:', err);
+        }
     }
+}
+
+/** Add a 'skipped' exception for `date` to the routine, if not already present. Returns updated routine. */
+async function addCalendarException(db: IDBPDatabase<MyDB>, routine: StoredRoutine, date: string): Promise<StoredRoutine> {
+    const existing = routine.routineExceptions ?? [];
+    if (existing.some((e) => e.date === date)) {
+        return routine;
+    }
+    return updateRoutine(db, { ...routine, routineExceptions: [...existing, { date, type: 'skipped' as const }] });
+}
+
+/**
+ * Handle next-item generation for calendar routines.
+ * Before-due trash: record a skipped exception and advance from the item's timeStart
+ * (the exception ensures computeNextCalendarDate skips that occurrence).
+ * Done / late trash: use timing to decide whether to advance from timeStart (on-time)
+ * or from now (late — avoids generating a date in the past).
+ */
+async function createNextCalendarRoutineItem(db: IDBPDatabase<MyDB>, item: StoredItem, routine: StoredRoutine, disposalKind: 'done' | 'trash'): Promise<void> {
+    const now = dayjs();
+    // Destructure so TypeScript narrows timeStart to string inside the blocks below
+    const { timeStart } = item;
+
+    if (disposalKind === 'trash' && timeStart !== undefined && now.isBefore(dayjs(timeStart))) {
+        // Skip this occurrence; advance from its timeStart (now in exceptions, so the search jumps over it)
+        const routineWithException = await addCalendarException(db, routine, dayjs(timeStart).format('YYYY-MM-DD'));
+        await createNextCalendarItem(db, item.userId, routineWithException, dayjs(timeStart).toDate());
+        return;
+    }
+
+    // Guard before calling getCalendarCompletionTiming: timeStart may be absent (item re-clarified to inbox).
+    // Treat missing timeStart as 'late' so refDate falls back to now rather than passing an invalid empty string.
+    const refDate = timeStart !== undefined && getCalendarCompletionTiming(timeStart, now.toDate()) === 'onTime' ? dayjs(timeStart).toDate() : now.toDate();
+    await createNextCalendarItem(db, item.userId, routine, refDate);
 }
 
 // ── Generic edit ──────────────────────────────────────────────────────────────

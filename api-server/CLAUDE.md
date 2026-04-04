@@ -58,6 +58,10 @@ CLIENT_URL=http://localhost:4173
 PORT=4000
 ```
 
+## TypeScript
+
+**`noPropertyAccessFromIndexSignature`** — satisfy this rule via explicit property declarations in a `.d.ts` file, not bracket notation. For `process.env`, add the variable to `src/env.d.ts` and access it with dot notation (`process.env.MY_VAR`). See `src/env.d.ts` for the existing pattern.
+
 ## Key Types
 
 - `ItemInterface` (`src/types/entities.ts`) — `status` is `inbox | nextAction | calendar | waitingFor | done | trash`; `user` is a `string` UUID (Better Auth ID, not `ObjectId`); optional GTD fields (`workContexts`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `timeStart`, `timeEnd`) vary by status

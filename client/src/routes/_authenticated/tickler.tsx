@@ -17,7 +17,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updateItem } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
-import styles from './tickler.module.css';
+import styles from './-tickler.module.css';
 
 export const Route = createFileRoute('/_authenticated/tickler')({
     component: TicklerPage,

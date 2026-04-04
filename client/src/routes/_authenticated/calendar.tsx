@@ -16,7 +16,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
-import styles from './calendar.module.css';
+import styles from './-calendar.module.css';
 
 export const Route = createFileRoute('/_authenticated/calendar')({
     component: CalendarPage,

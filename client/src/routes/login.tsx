@@ -3,7 +3,7 @@ import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { authClient } from '../lib/authClient';
-import styles from './login.module.css';
+import styles from './-login.module.css';
 
 export const Route = createFileRoute('/login')({
     beforeLoad: async () => {

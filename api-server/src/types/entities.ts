@@ -122,6 +122,29 @@ export interface RoutineInterface {
     active: boolean;
     createdTs: string;
     updatedTs: string;
+    /**
+     * Present when routineType === 'calendar'. Defines time and duration for generated calendar items.
+     */
+    calendarItemTemplate?: {
+        timeOfDay: string; // HH:MM (24h) — start time
+        duration: number; // minutes
+    };
+    /**
+     * ISO date string of the most recently generated calendar item's date.
+     * Used to compute the next occurrence without scanning items.
+     */
+    lastGeneratedDate?: string;
+    /**
+     * Exception records: dates in the rrule series that have been overridden or deleted.
+     * When a user trashes a future calendar item, its date is recorded here as 'skipped'
+     * so the next-item generator skips that occurrence.
+     */
+    routineExceptions?: Array<{
+        date: string; // ISO date of the original rrule occurrence
+        type: 'skipped' | 'modified';
+        newTimeStart?: string; // ISO datetime — present when type === 'modified'
+        newTimeEnd?: string;
+    }>;
 }
 
 export interface PersonInterface {
