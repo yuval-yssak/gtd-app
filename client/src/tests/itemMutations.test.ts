@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -221,6 +222,146 @@ describe('clarifyToTrash', () => {
         const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
         const nextItems = allItems.filter((i) => i.status === 'nextAction' && i.routineId === routine._id);
         expect(nextItems).toHaveLength(1);
+    });
+});
+
+describe('calendar routine — clarifyToDone', () => {
+    it('creates the next calendar item on-time with correct timeStart for the following occurrence', async () => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Family time',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=TH',
+            template: {},
+            calendarItemTemplate: { timeOfDay: '18:00', duration: 180 },
+            active: true,
+        });
+
+        // The routine's createdTs is "now" (today), so DTSTART = today. We use the next Thursday
+        // from today as the item's timeStart so the rrule can find a following occurrence.
+        // 2026-04-09 is the first Thursday on or after the test run date of 2026-04-04.
+        const item = await collectItem(db, USER_ID, { title: 'Family time' });
+        const calItem = {
+            ...item,
+            status: 'calendar' as const,
+            routineId: routine._id,
+            timeStart: '2026-04-09T18:00:00',
+            timeEnd: '2026-04-09T21:00:00',
+        };
+        await db.clear('syncOperations');
+
+        await clarifyToDone(db, calItem);
+
+        const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
+        expect(nextItems).toHaveLength(1);
+        // On-time completion from 2026-04-09 (Thu) → next Thu is 2026-04-16
+        expect(nextItems[0]?.timeStart?.startsWith('2026-04-16')).toBe(true);
+        // timeEnd must use the same naive local-time format as timeStart (no Z suffix)
+        expect(nextItems[0]?.timeEnd?.startsWith('2026-04-16')).toBe(true);
+        expect(nextItems[0]?.timeEnd?.endsWith('Z')).toBe(false);
+    });
+
+    it('advances from now when completion is more than 24h late', async () => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Weekly sync',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            template: {},
+            calendarItemTemplate: { timeOfDay: '10:00', duration: 60 },
+            active: true,
+        });
+
+        const item = await collectItem(db, USER_ID, { title: 'Weekly sync' });
+        // timeStart far in the past (before DTSTART = today) — completion is definitely late
+        const calItem = {
+            ...item,
+            status: 'calendar' as const,
+            routineId: routine._id,
+            timeStart: '2020-01-06T10:00:00',
+            timeEnd: '2020-01-06T11:00:00',
+        };
+        await db.clear('syncOperations');
+
+        await clarifyToDone(db, calItem);
+
+        const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
+        expect(nextItems).toHaveLength(1);
+        // Late path uses now as refDate → next Monday on or after today (2026-04-06)
+        expect(nextItems[0]?.timeStart?.startsWith('2026-04-06')).toBe(true);
+    });
+});
+
+describe('calendar routine — clarifyToTrash', () => {
+    it('records a skipped exception and creates next item from the skipped date when trashed before due', async () => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Morning run',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=SA',
+            template: {},
+            calendarItemTemplate: { timeOfDay: '07:00', duration: 60 },
+            active: true,
+        });
+
+        const item = await collectItem(db, USER_ID, { title: 'Morning run' });
+        // timeStart in the future to simulate trashing before due
+        const futureStart = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        const calItem = {
+            ...item,
+            status: 'calendar' as const,
+            routineId: routine._id,
+            timeStart: `${futureStart}T07:00:00`,
+            timeEnd: `${futureStart}T08:00:00`,
+        };
+        await db.clear('syncOperations');
+
+        await clarifyToTrash(db, calItem);
+
+        // Exception should be recorded on the routine
+        const updatedRoutine = await db.get('routines', routine._id);
+        expect(updatedRoutine?.routineExceptions).toHaveLength(1);
+        expect(updatedRoutine?.routineExceptions?.[0]?.type).toBe('skipped');
+
+        // A new calendar item should be created (for the occurrence after the skipped one)
+        const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
+        expect(nextItems).toHaveLength(1);
+        // Next item must be AFTER the skipped date
+        // Parens required: ?? has lower precedence than > so without them the comparison is never reached
+        expect((nextItems[0]?.timeStart ?? '') > calItem.timeStart).toBe(true);
+    });
+
+    it('deactivates the routine when rrule series is exhausted', async () => {
+        // COUNT=1 means only one occurrence ever; completing it should exhaust the series
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'One-time event',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY;COUNT=1',
+            template: {},
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            active: true,
+        });
+
+        const item = await collectItem(db, USER_ID, { title: 'One-time event' });
+        // timeStart yesterday so it's in the past (on-time completion path)
+        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        const calItem = {
+            ...item,
+            status: 'calendar' as const,
+            routineId: routine._id,
+            timeStart: `${yesterday}T09:00:00`,
+            timeEnd: `${yesterday}T09:30:00`,
+        };
+        await db.clear('syncOperations');
+
+        await clarifyToDone(db, calItem);
+
+        const updatedRoutine = await db.get('routines', routine._id);
+        expect(updatedRoutine?.active).toBe(false);
     });
 });
 

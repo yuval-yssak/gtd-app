@@ -10,14 +10,19 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
+import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import { getRoutineIndicatorStyle, type RoutineIndicatorStyle, setRoutineIndicatorStyle } from '../../lib/routineIndicatorStyle';
 import type { MyDB } from '../../types/MyDB';
-import styles from './settings.module.css';
+import styles from './-settings.module.css';
 
 export const Route = createFileRoute('/_authenticated/settings')({
+    validateSearch: (search) => {
+        const { calendarConnected: raw } = search;
+        return { calendarConnected: typeof raw === 'string' ? raw : undefined };
+    },
     component: SettingsPage,
 });
 
@@ -57,12 +62,7 @@ function SettingsPage() {
                         automatically.
                     </Typography>
                     <Divider className={styles.divider} />
-                    <Typography variant="body2" color="text.secondary" fontStyle="italic" mb={2}>
-                        No calendars connected.
-                    </Typography>
-                    <Button variant="outlined" size="small" disabled>
-                        Connect Google Calendar (coming soon)
-                    </Button>
+                    <CalendarIntegrations />
                 </Box>
             </Paper>
 

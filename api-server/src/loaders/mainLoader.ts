@@ -1,6 +1,7 @@
 import { type Db, MongoClient } from 'mongodb';
 import { type Auth, createAuth } from '../auth/betterAuth.js';
 import { mongoDBConfig } from '../config.js';
+import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
@@ -39,6 +40,7 @@ async function loadDataAccess(customDBName?: string) {
         routinesDAO.init(dbClient, resolvedDBName),
         peopleDAO.init(dbClient, resolvedDBName),
         workContextsDAO.init(dbClient, resolvedDBName),
+        calendarIntegrationsDAO.init(dbClient, resolvedDBName),
     ]);
     auth = createAuth(db);
 }

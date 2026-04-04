@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { computeNextOccurrence, formatRrule } from '../lib/rruleUtils';
+import { computeNextOccurrence, formatCalendarRrule, formatRrule } from '../lib/rruleUtils';
+import type { StoredRoutine } from '../types/MyDB';
 
 describe('computeNextOccurrence', () => {
     it('returns the next daily occurrence strictly after afterDate', () => {
@@ -33,6 +34,14 @@ describe('computeNextOccurrence', () => {
         // UNTIL in the past guarantees rrule has no occurrence after afterDate
         expect(() => computeNextOccurrence('FREQ=DAILY;UNTIL=20230101T000000Z', new Date('2024-01-01T00:00:00Z'))).toThrow();
     });
+
+    it('preserves the DTSTART time of day in the returned occurrence', () => {
+        // Regression: RRule.fromString() without DTSTART inherits byhour/byminute/bysecond
+        // from the clock at parse time, so occurrences would land at the wrong time of day.
+        const after = new Date('2024-01-10T00:00:00Z');
+        const next = computeNextOccurrence('FREQ=DAILY;INTERVAL=1', after);
+        expect(next.toISOString()).toBe('2024-01-11T00:00:00.000Z');
+    });
 });
 
 describe('formatRrule', () => {
@@ -62,5 +71,38 @@ describe('formatRrule', () => {
 
     it('returns the raw string for unrecognised input', () => {
         expect(formatRrule('GARBAGE')).toBe('GARBAGE');
+    });
+});
+
+describe('formatCalendarRrule', () => {
+    const baseRoutine: StoredRoutine = {
+        _id: 'r1',
+        userId: 'u1',
+        title: 'Family time',
+        routineType: 'calendar',
+        rrule: 'FREQ=WEEKLY;BYDAY=TH',
+        template: {},
+        active: true,
+        createdTs: '2024-01-01T00:00:00Z',
+        updatedTs: '2024-01-01T00:00:00Z',
+    };
+
+    it('formats frequency + time + duration for full hours', () => {
+        const routine: StoredRoutine = { ...baseRoutine, calendarItemTemplate: { timeOfDay: '18:00', duration: 180 } };
+        expect(formatCalendarRrule(routine)).toBe('Every Thu at 18:00 for 3h');
+    });
+
+    it('formats mixed hours and minutes', () => {
+        const routine: StoredRoutine = { ...baseRoutine, calendarItemTemplate: { timeOfDay: '09:30', duration: 90 } };
+        expect(formatCalendarRrule(routine)).toBe('Every Thu at 09:30 for 1h 30m');
+    });
+
+    it('formats minutes-only duration', () => {
+        const routine: StoredRoutine = { ...baseRoutine, calendarItemTemplate: { timeOfDay: '14:00', duration: 45 } };
+        expect(formatCalendarRrule(routine)).toBe('Every Thu at 14:00 for 45m');
+    });
+
+    it('falls back to formatRrule when calendarItemTemplate is absent', () => {
+        expect(formatCalendarRrule(baseRoutine)).toBe('Every Thu');
     });
 });

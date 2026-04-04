@@ -8,7 +8,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
-import styles from './weekly-review.module.css';
+import styles from './-weekly-review.module.css';
 
 export const Route = createFileRoute('/_authenticated/weekly-review')({
     component: WeeklyReviewPage,

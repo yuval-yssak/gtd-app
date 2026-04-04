@@ -1,6 +1,10 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import { RRule, type Weekday } from 'rrule';
+import type { StoredRoutine } from '../types/MyDB';
 import { hasAtLeastOne } from './typeUtils';
+
+dayjs.extend(utc);
 
 /**
  * Parse an rrule string (without DTSTART) into an RRule instance anchored to a given date.
@@ -8,8 +12,12 @@ import { hasAtLeastOne } from './typeUtils';
  * to the completion date rather than using a fixed start.
  */
 function parseRrule(rruleStr: string, dtstart: Date): RRule {
-    const rule = RRule.fromString(rruleStr);
-    return new RRule({ ...rule.options, dtstart });
+    // Embed DTSTART in the rrule string rather than spreading rule.options.
+    // RRule.fromString() without a DTSTART inherits byhour/byminute/bysecond from the
+    // current clock time, so spreading those options produces occurrences at the wrong
+    // time of day (e.g. the test run's clock time instead of the intended anchor time).
+    const dtStartStr = `${dayjs(dtstart).utc().format('YYYYMMDDTHHmmss')}Z`;
+    return RRule.fromString(`DTSTART:${dtStartStr}\nRRULE:${rruleStr}`);
 }
 
 /**
@@ -19,7 +27,9 @@ function parseRrule(rruleStr: string, dtstart: Date): RRule {
 export function computeNextOccurrence(rruleStr: string, afterDate: Date): Date {
     const rule = parseRrule(rruleStr, afterDate);
     const next = rule.after(afterDate, false);
-    if (!next) throw new Error(`rrule "${rruleStr}" has no occurrence after ${dayjs(afterDate).toISOString()}`);
+    if (!next) {
+        throw new Error(`rrule "${rruleStr}" has no occurrence after ${dayjs(afterDate).toISOString()}`);
+    }
     return next;
 }
 
@@ -76,4 +86,26 @@ export function formatRrule(rruleStr: string): string {
     } catch {
         return rruleStr;
     }
+}
+
+/** Format duration in minutes as a human-readable string, e.g. 90 → "1h 30m", 60 → "1h", 45 → "45m". */
+function formatDuration(minutes: number): string {
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    if (h > 0 && m > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}h`;
+    return `${m}m`;
+}
+
+/**
+ * Format a calendar routine's schedule as a human-readable string combining frequency, time, and duration.
+ * Example: "Every Thu at 18:00 for 3h"
+ */
+export function formatCalendarRrule(routine: StoredRoutine): string {
+    const freqPart = formatRrule(routine.rrule);
+    const { calendarItemTemplate } = routine;
+    if (!calendarItemTemplate) return freqPart;
+    const timePart = `at ${calendarItemTemplate.timeOfDay}`;
+    const durationPart = `for ${formatDuration(calendarItemTemplate.duration)}`;
+    return `${freqPart} ${timePart} ${durationPart}`;
 }

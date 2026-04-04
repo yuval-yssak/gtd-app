@@ -1,5 +1,6 @@
 import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { listIntegrations, syncIntegration } from '../api/calendarApi';
 import { getActiveAccount } from '../db/accountHelpers';
 import { getItemsByUser } from '../db/itemHelpers';
 import { getPeopleByUser } from '../db/personHelpers';
@@ -21,6 +22,7 @@ export interface AppData {
     refreshWorkContexts: () => Promise<void>;
     refreshPeople: () => Promise<void>;
     refreshRoutines: () => Promise<void>;
+    syncAndRefresh: () => Promise<void>;
 }
 
 // biome-ignore lint/style/noNonNullAssertion: Context is initialized with a non-null default value and only used within the provider, so this is safe.
@@ -28,6 +30,12 @@ const AppDataContext = createContext<AppData>(undefined!);
 
 export function useAppData(): AppData {
     return useContext(AppDataContext);
+}
+
+async function syncAllCalendarIntegrations(): Promise<void> {
+    const integrations = await listIntegrations().catch(() => []);
+    // Fire-and-forget each integration — a single calendar failure shouldn't block the rest.
+    await Promise.allSettled(integrations.map((i) => syncIntegration(i._id)));
 }
 
 async function syncFromServerWithBootstrapFallback(db: IDBPDatabase<MyDB>) {
@@ -93,6 +101,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
 
             await flushSyncQueue(db);
             await syncFromServerWithBootstrapFallback(db);
+            // Pull GCal exceptions for all linked integrations. Runs after the main sync so
+            // the routine snapshots are up-to-date before we apply exception patches.
+            await syncAllCalendarIntegrations();
+            // Second pull: calendar sync creates server-side operations that weren't available
+            // during the first pull above — fetch them now so items appear in this cycle.
+            await pullFromServer(db);
 
             // Guard after the async work — component may have unmounted while awaiting network.
             if (unmountedRef.current) {
@@ -155,8 +169,8 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     }, [db, initializeFromCache, syncAndRefresh]);
 
     const appData: AppData = useMemo(
-        () => ({ account, items, workContexts, people, routines, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines }),
-        [account, items, workContexts, people, routines, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines],
+        () => ({ account, items, workContexts, people, routines, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines, syncAndRefresh }),
+        [account, items, workContexts, people, routines, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines, syncAndRefresh],
     );
 
     /**

@@ -20,7 +20,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { EnergyLevel, StoredItem } from '../../types/MyDB';
-import styles from './next-actions.module.css';
+import styles from './-next-actions.module.css';
 
 export const Route = createFileRoute('/_authenticated/next-actions')({
     component: NextActionsPage,

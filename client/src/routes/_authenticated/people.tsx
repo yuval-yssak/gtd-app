@@ -21,7 +21,7 @@ import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
 import type { StoredPerson } from '../../types/MyDB';
-import styles from './people.module.css';
+import styles from './-people.module.css';
 
 export const Route = createFileRoute('/_authenticated/people')({
     component: PeoplePage,

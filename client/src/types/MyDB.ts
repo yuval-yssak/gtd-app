@@ -71,6 +71,21 @@ export interface StoredRoutine {
     active: boolean;
     createdTs: string;
     updatedTs: string;
+    /** Present when routineType === 'calendar'. Defines time and duration for generated calendar items. */
+    calendarItemTemplate?: {
+        timeOfDay: string; // HH:MM (24h) — start time
+        duration: number; // minutes
+    };
+    /** ISO date of the most recently generated calendar item. Used to avoid scanning items for the next occurrence. */
+    lastGeneratedDate?: string;
+    /** Exception dates in the rrule series. 'skipped' when trashed; 'modified' when GCal moves the occurrence. */
+    routineExceptions?: Array<{
+        date: string; // ISO date of the original rrule occurrence
+        type: 'skipped' | 'modified';
+        itemId?: string;
+        newTimeStart?: string; // ISO datetime — present when type === 'modified'
+        newTimeEnd?: string;
+    }>;
 }
 
 export interface StoredPerson {

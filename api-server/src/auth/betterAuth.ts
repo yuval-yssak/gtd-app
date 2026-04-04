@@ -12,8 +12,8 @@ export function createAuth(db: Db) {
             transaction: false,
         }),
         trustedOrigins: [
-            process.env.CLIENT_URL ?? 'http://localhost:5173',
-            // vite preview serves on 4173; vite dev serves on 5173 — trust both in dev
+            process.env.CLIENT_URL ?? 'http://localhost:4173',
+            // vite preview serves on 4173; vite dev serves on 4173 — trust both in dev
             'http://localhost:4173',
             'http://localhost:5173',
         ],

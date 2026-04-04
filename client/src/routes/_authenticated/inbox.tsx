@@ -57,7 +57,7 @@ import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, 
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
-import styles from './inbox.module.css';
+import styles from './-inbox.module.css';
 
 dayjs.extend(relativeTime);
 

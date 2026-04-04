@@ -5,4 +5,9 @@ export default defineConfig({
         environment: 'node',
         setupFiles: ['src/tests/setup.ts'],
     },
+    resolve: {
+        // Apply the 'test' condition so package.json `imports` like `#api/syncClient`
+        // resolve to their mock companions (syncClient.mock.ts) without needing vi.mock().
+        conditions: ['test'],
+    },
 });

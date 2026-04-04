@@ -5,7 +5,7 @@ import dayjs from 'dayjs';
 import { setActiveAccount, upsertAccount } from '../db/accountHelpers';
 import { authClient } from '../lib/authClient';
 import type { OAuthProvider } from '../types/MyDB';
-import styles from './auth.callback.module.css';
+import styles from './-auth.callback.module.css';
 
 export const Route = createFileRoute('/auth/callback')({
     beforeLoad: async ({ context: { db } }) => {

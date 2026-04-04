@@ -21,7 +21,7 @@ import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
 import type { StoredWorkContext } from '../../types/MyDB';
-import styles from './work-contexts.module.css';
+import styles from './-work-contexts.module.css';
 
 export const Route = createFileRoute('/_authenticated/work-contexts')({
     component: WorkContextsPage,

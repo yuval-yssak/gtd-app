@@ -15,9 +15,9 @@ import { useState } from 'react';
 import { RoutineDialog } from '../../components/routines/RoutineDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { removeRoutine } from '../../db/routineMutations';
-import { formatRrule } from '../../lib/rruleUtils';
+import { formatCalendarRrule, formatRrule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
-import styles from './routines.module.css';
+import styles from './-routines.module.css';
 
 export const Route = createFileRoute('/_authenticated/routines')({
     component: RoutinesPage,
@@ -39,7 +39,7 @@ function RoutinesPage() {
     }
 
     function routineLabel(routine: StoredRoutine): string {
-        return formatRrule(routine.rrule);
+        return routine.routineType === 'calendar' ? formatCalendarRrule(routine) : formatRrule(routine.rrule);
     }
 
     return (
@@ -86,6 +86,12 @@ function RoutinesPage() {
                                     primary={
                                         <Box className={styles.titleRow}>
                                             {routine.title}
+                                            <Chip
+                                                label={routine.routineType === 'calendar' ? 'Calendar' : 'Next Action'}
+                                                size="small"
+                                                variant="outlined"
+                                                color={routine.routineType === 'calendar' ? 'info' : 'default'}
+                                            />
                                             <Chip label={routine.active ? 'Active' : 'Paused'} size="small" color={routine.active ? 'success' : 'default'} />
                                         </Box>
                                     }
