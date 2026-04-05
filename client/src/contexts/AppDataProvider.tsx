@@ -25,8 +25,9 @@ export interface AppData {
     syncAndRefresh: () => Promise<void>;
 }
 
+// Exported so Storybook stories can provide a mock AppData value directly.
 // biome-ignore lint/style/noNonNullAssertion: Context is initialized with a non-null default value and only used within the provider, so this is safe.
-const AppDataContext = createContext<AppData>(undefined!);
+export const AppDataContext = createContext<AppData>(undefined!);
 
 export function useAppData(): AppData {
     return useContext(AppDataContext);
