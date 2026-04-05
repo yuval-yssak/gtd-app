@@ -2,7 +2,7 @@
 name: code-reviewer
 description: "Reviews code for correctness, edge cases, race conditions, coding standards, and test quality in the GTD client — a React 19/MUI offline-first PWA."
 tools: Glob, Grep, Read, WebFetch, WebSearch, LSP, ToolSearch, Bash
-model: sonnet
+model: opus
 color: cyan
 memory: project
 ---
@@ -73,6 +73,17 @@ Include every section. Write "No issues found." for clean sections.
 - Always provide a concrete fix, not just identification.
 - Prioritize: correctness > safety > maintainability > style.
 - Do not flag items that are genuinely fine just to appear thorough.
+
+## Exhaustiveness Guarantee
+
+This is a one-shot review. There will be no follow-up round.
+
+Before writing your final output:
+1. Re-read every changed file from top to bottom.
+2. Cross-check each review dimension against what you already flagged — add anything missed.
+3. Only then write your verdict.
+
+Do not return until you are confident you have found every issue. A missed issue in this pass will cost more to fix later than catching it now.
 
 **Update agent memory** for things NOT derivable from reading the code:
 - Recurring mistakes the codebase repeatedly introduces
