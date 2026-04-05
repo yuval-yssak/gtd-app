@@ -28,11 +28,6 @@ function readAuthSecret(): string {
     );
 }
 
-// Better Auth stores user and session _id as plain alphanumeric strings (via generateId),
-// not ObjectId — the MongoDB adapter falls back to raw string when ObjectId coercion fails.
-// We use `as never` on filter/insert args to work around MongoDB driver's InferIdType widening.
-type MongoFilter = Record<string, unknown>;
-
 // Shape of a user document as stored by the Better Auth MongoDB adapter.
 interface StoredUser {
     _id: string;
@@ -41,7 +36,7 @@ interface StoredUser {
 
 // Upsert user by email — reuse the existing ID so repeated logins share one user.
 async function getOrCreateUserId(normalizedEmail: string): Promise<string> {
-    const userDoc = await db.collection<StoredUser>('user').findOne({ email: normalizedEmail } as MongoFilter as never);
+    const userDoc = await db.collection<StoredUser>('user').findOne({ email: normalizedEmail });
     if (userDoc) {
         return userDoc._id;
     }

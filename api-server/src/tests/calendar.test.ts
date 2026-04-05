@@ -4,6 +4,8 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
+import itemsDAO from '../dataAccess/itemsDAO.js';
+import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { calendarRoutes } from '../routes/calendar.js';
@@ -283,7 +285,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
         const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-1', calendarIntegrationId: 'int-1' });
-        await routinesDAO.insertOne(routine as never);
+        await routinesDAO.insertOne(routine);
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([{ originalDate: '2025-06-02', type: 'deleted' }]);
 
@@ -299,7 +301,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
         const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-1', calendarIntegrationId: 'int-1' });
-        await routinesDAO.insertOne(routine as never);
+        await routinesDAO.insertOne(routine);
 
         const newTimeStart = '2025-06-09T10:00:00Z';
         const newTimeEnd = '2025-06-09T10:30:00Z';
@@ -344,7 +346,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
 
         const now = dayjs().toISOString();
-        await db.collection('items').insertOne({
+        itemsDAO.insertOne({
             _id: 'item-1',
             user: userId,
             status: 'calendar',
@@ -363,7 +365,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
 
-        const item = await db.collection('items').findOne({ _id: 'item-1' });
+        const item = await itemsDAO.findOne({ _id: 'item-1' });
         expect(item?.status).toBe('trash');
     });
 });
@@ -465,7 +467,7 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
 
         const oldTs = dayjs().subtract(1, 'hour').toISOString();
         const newTs = dayjs().toISOString();
-        await db.collection('items').insertOne({
+        await itemsDAO.insertOne({
             _id: 'item-upd',
             user: userId,
             status: 'calendar',
@@ -485,7 +487,7 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
 
-        const item = await db.collection('items').findOne({ _id: 'item-upd' });
+        const item = await itemsDAO.findOne({ _id: 'item-upd' });
         expect(item?.title).toBe('New title');
     });
 
@@ -496,7 +498,7 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
 
         const localTs = dayjs().toISOString();
         const gcalTs = dayjs().subtract(1, 'hour').toISOString();
-        await db.collection('items').insertOne({
+        await itemsDAO.insertOne({
             _id: 'item-stale',
             user: userId,
             status: 'calendar',
@@ -516,7 +518,7 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
 
-        const item = await db.collection('items').findOne({ _id: 'item-stale' });
+        const item = await itemsDAO.findOne({ _id: 'item-stale' });
         // Local edit must be preserved — GCal event is older than local updatedTs.
         expect(item?.title).toBe('Local edit');
     });
@@ -528,7 +530,7 @@ describe('POST /calendar/integrations/:id/link-routine/:routineId', () => {
     it('returns 404 when integration not found', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
-        await routinesDAO.insertOne(makeRoutine(userId) as never);
+        await routinesDAO.insertOne(makeRoutine(userId));
 
         const res = await authenticatedRequest(app, {
             method: 'POST',
@@ -569,7 +571,7 @@ describe('POST /calendar/integrations/:id/link-routine/:routineId', () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
-        await routinesDAO.insertOne(makeRoutine(userId) as never);
+        await routinesDAO.insertOne(makeRoutine(userId));
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-new-event-id');
 
@@ -620,10 +622,10 @@ describe('DELETE /calendar/integrations/:id', () => {
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
         const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-del', calendarIntegrationId: 'int-1' });
-        await routinesDAO.insertOne(routine as never);
+        await routinesDAO.insertOne(routine);
 
         const now = dayjs().toISOString();
-        await db.collection('items').insertOne({
+        await itemsDAO.insertOne({
             _id: 'item-del',
             user: userId,
             status: 'calendar',
@@ -645,7 +647,7 @@ describe('DELETE /calendar/integrations/:id', () => {
         // GCal event must be deleted.
         expect(deleteSpy).toHaveBeenCalledWith('gcal-evt-del', 'primary');
         // The item must NOT be trashed — only the GCal event is removed.
-        const item = await db.collection('items').findOne({ _id: 'item-del' });
+        const item = await itemsDAO.findOne({ _id: 'item-del' });
         expect(item?.status).toBe('calendar');
         // The integration must be removed.
         expect(await calendarIntegrationsDAO.findByOwnerAndIdDecrypted('int-1', userId)).toBeNull();
@@ -656,10 +658,10 @@ describe('DELETE /calendar/integrations/:id', () => {
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
         const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-1', calendarIntegrationId: 'int-1' });
-        await routinesDAO.insertOne(routine as never);
+        await routinesDAO.insertOne(routine);
 
         const now = dayjs().toISOString();
-        await db.collection('items').insertOne({
+        await itemsDAO.insertOne({
             _id: 'item-r1',
             user: userId,
             status: 'calendar',
@@ -678,10 +680,10 @@ describe('DELETE /calendar/integrations/:id', () => {
         });
         expect(res.status).toBe(200);
 
-        const item = await db.collection('items').findOne({ _id: 'item-r1' });
+        const item = await itemsDAO.findOne({ _id: 'item-r1' });
         expect(item?.status).toBe('trash');
 
-        const ops = await db.collection('operations').find({ entityId: 'item-r1' }).toArray();
+        const ops = await operationsDAO.findArray({ entityId: 'item-r1' });
         expect(ops).toHaveLength(1);
         expect(ops[0]).toMatchObject({ opType: 'update', snapshot: expect.objectContaining({ status: 'trash' }) });
     });

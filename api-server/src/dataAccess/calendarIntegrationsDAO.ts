@@ -30,8 +30,8 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
         };
         // $setOnInsert preserves createdTs and _id on reconnect — only $set on mutable fields.
         await this.updateOne(
-            { user: integration.user, provider: integration.provider } as never,
-            { $set: encryptedRest, $setOnInsert: { _id, createdTs } } as never,
+            { user: integration.user, provider: integration.provider },
+            { $set: encryptedRest, $setOnInsert: { _id, createdTs } },
             { upsert: true },
         );
     }
@@ -47,7 +47,7 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
             accessToken: encrypt(integration.accessToken),
             refreshToken: encrypt(integration.refreshToken),
         };
-        await this.insertOne(encrypted as never);
+        await this.insertOne(encrypted);
     }
 
     /** Updates only the token fields (called after an OAuth token refresh).
@@ -66,7 +66,7 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
         tokenExpiry: string;
     }): Promise<void> {
         const result = await this.updateOne(
-            { _id: id, user: userId } as never,
+            { _id: id, user: userId },
             {
                 $set: {
                     accessToken: encrypt(accessToken),
@@ -74,7 +74,7 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
                     tokenExpiry,
                     updatedTs: dayjs().toISOString(),
                 },
-            } as never,
+            },
         );
         // Warn rather than throw — this is called from a fire-and-forget token event handler.
         // A miss means the integration was deleted between the provider being created and the
@@ -86,7 +86,7 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
 
     /** Fetches all integrations for a user with tokens decrypted. */
     async findByUserDecrypted(userId: string): Promise<CalendarIntegrationInterface[]> {
-        const docs = await this.findArray({ user: userId } as never);
+        const docs = await this.findArray({ user: userId });
         return docs.map(decryptIntegration);
     }
 
@@ -98,14 +98,14 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
 
     /** Updates the target calendarId (user-selected calendar to sync against). */
     async updateCalendarId(id: string, userId: string, calendarId: string): Promise<void> {
-        await this.updateOne({ _id: id, user: userId } as never, { $set: { calendarId, updatedTs: dayjs().toISOString() } } as never);
+        await this.updateOne({ _id: id, user: userId }, { $set: { calendarId, updatedTs: dayjs().toISOString() } });
     }
 
     /** Bumps lastSyncedTs to mark a successful pull from Google Calendar. */
     async bumpLastSyncedTs(id: string, userId: string, ts: string): Promise<void> {
         // updatedTs tracks when the document itself was modified — decouple from lastSyncedTs
         // so it always reflects wall-clock "now", not the sync cursor time.
-        await this.updateOne({ _id: id, user: userId } as never, { $set: { lastSyncedTs: ts, updatedTs: dayjs().toISOString() } } as never);
+        await this.updateOne({ _id: id, user: userId }, { $set: { lastSyncedTs: ts, updatedTs: dayjs().toISOString() } });
     }
 }
 
