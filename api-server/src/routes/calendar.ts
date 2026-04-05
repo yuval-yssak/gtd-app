@@ -166,7 +166,7 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
     }
 
     const provider = buildProvider(integration, userId);
-    const linkedRoutines = await routinesDAO.findArray({ user: userId, calendarIntegrationId: integrationId } as never);
+    const linkedRoutines = await routinesDAO.findArray({ user: userId, calendarIntegrationId: integrationId });
 
     if (action === 'deleteEvents' || action === 'deleteAll') {
         await Promise.all(
@@ -190,9 +190,9 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
         const routineIds = linkedRoutines.map((r) => r._id);
         if (routineIds.length > 0) {
             const trashNow = dayjs().toISOString();
-            await itemsDAO.updateMany({ user: userId, routineId: { $in: routineIds } } as never, { $set: { status: 'trash', updatedTs: trashNow } } as never);
+            await itemsDAO.updateMany({ user: userId, routineId: { $in: routineIds } }, { $set: { status: 'trash', updatedTs: trashNow } });
             // Fetch after the write so operation snapshots reflect the persisted state, not stale pre-update reads.
-            const trashedItems = await itemsDAO.findArray({ user: userId, routineId: { $in: routineIds } } as never);
+            const trashedItems = await itemsDAO.findArray({ user: userId, routineId: { $in: routineIds } });
             await Promise.all(
                 trashedItems.flatMap((item) => {
                     const itemId = item._id;
@@ -209,10 +209,7 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
     const now = dayjs().toISOString();
     await Promise.all(
         linkedRoutines.map((r) =>
-            routinesDAO.updateOne(
-                { _id: r._id, user: userId } as never,
-                { $unset: { calendarEventId: '', calendarIntegrationId: '' }, $set: { updatedTs: now } } as never,
-            ),
+            routinesDAO.updateOne({ _id: r._id, user: userId }, { $unset: { calendarEventId: '', calendarIntegrationId: '' }, $set: { updatedTs: now } }),
         ),
     );
     // Record the unlinked state so other devices learn about the cleared calendarEventId/calendarIntegrationId.
@@ -335,7 +332,7 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
             user: userId,
             calendarIntegrationId: integrationId,
             calendarEventId: { $exists: true },
-        } as never);
+        });
 
         const now = dayjs().toISOString();
         await Promise.all(linkedRoutines.map((routine) => syncRoutineExceptions(routine, provider, integration.calendarId, userId, since, now)));
@@ -362,7 +359,7 @@ async function importCalendarItems(integration: CalendarIntegrationInterface, pr
 
     const [events, linkedRoutines] = await Promise.all([
         provider.listEvents(integration.calendarId, since, until),
-        routinesDAO.findArray({ user: userId, calendarIntegrationId: integration._id, calendarEventId: { $exists: true } } as never),
+        routinesDAO.findArray({ user: userId, calendarIntegrationId: integration._id, calendarEventId: { $exists: true } }),
     ]);
 
     const routineEventIds = new Set(linkedRoutines.map((r) => r.calendarEventId).filter((id): id is string => Boolean(id)));
@@ -378,7 +375,7 @@ async function upsertCalendarItem(
     userId: string,
     now: string,
 ): Promise<void> {
-    const [existing] = await itemsDAO.findArray({ user: userId, calendarEventId: event.id } as never);
+    const [existing] = await itemsDAO.findArray({ user: userId, calendarEventId: event.id });
 
     if (event.status === 'cancelled') {
         if (existing && !existing.routineId) {
@@ -387,7 +384,7 @@ async function upsertCalendarItem(
             if (!itemId) {
                 return;
             }
-            await itemsDAO.updateOne({ _id: itemId, user: userId } as never, { $set: { status: 'trash', updatedTs: now } } as never);
+            await itemsDAO.updateOne({ _id: itemId, user: userId }, { $set: { status: 'trash', updatedTs: now } });
             await recordOperation(userId, {
                 entityType: 'item',
                 entityId: itemId,
@@ -430,7 +427,7 @@ async function upsertCalendarItem(
         createdTs: now,
         updatedTs: now,
     };
-    await itemsDAO.insertOne(newItem as never);
+    await itemsDAO.insertOne(newItem);
     await recordOperation(userId, { entityType: 'item', entityId: itemId, snapshot: newItem, opType: 'create', now });
 }
 
@@ -450,7 +447,7 @@ async function recordOperation(
         entityId: op.entityId,
         opType: op.opType,
         snapshot: op.snapshot,
-    } as never);
+    });
 }
 
 type RoutineException = NonNullable<RoutineInterface['routineExceptions']>[number];
@@ -492,14 +489,14 @@ async function updateItemsAndRecordOps(
     query: { filter: Record<string, unknown>; setFields: Record<string, unknown> },
     now: string,
 ): Promise<void> {
-    const before = await itemsDAO.findArray(query.filter as never);
+    const before = await itemsDAO.findArray(query.filter);
     const ids = before.map((item) => item._id).filter((id): id is string => Boolean(id));
     if (ids.length === 0) {
         return;
     }
-    await itemsDAO.updateMany(query.filter as never, { $set: query.setFields } as never);
+    await itemsDAO.updateMany(query.filter, { $set: query.setFields });
     // Re-fetch by stable ID so the snapshot reflects the post-write state.
-    const updated = await itemsDAO.findArray({ _id: { $in: ids }, user: userId } as never);
+    const updated = await itemsDAO.findArray({ _id: { $in: ids }, user: userId });
     await Promise.all(
         updated.flatMap((item) => {
             const itemId = item._id;

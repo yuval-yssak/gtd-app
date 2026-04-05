@@ -32,10 +32,6 @@ function entityDisplayName(snapshot: EntitySnapshot): string {
     return 'title' in snapshot ? snapshot.title : snapshot.name;
 }
 
-// Cast filter/update objects to `never` to work around MongoDB driver's `InferIdType`
-// widening `_id` to `ObjectId` when the collection schema declares it optional.
-type MongoFilter = Record<string, unknown>;
-
 // Single generic helper replacing four near-identical applyXxxOp functions.
 // The DAO provides deleteByOwner / findByOwnerAndId / replaceById; the only
 // varying pieces are the DAO instance and the snapshot type.
@@ -78,7 +74,7 @@ function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {
 }
 
 async function purgeOldOperations(userId: string): Promise<void> {
-    const deviceStates = await deviceSyncStateDAO.findArray({ user: userId } as MongoFilter as never);
+    const deviceStates = await deviceSyncStateDAO.findArray({ user: userId });
     if (!deviceStates.length) {
         return;
     }
@@ -121,10 +117,10 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         const { user } = c.get('session');
 
         const [items, routines, people, workContexts] = await Promise.all([
-            itemsDAO.findArray({ user: user.id } as MongoFilter as never),
-            routinesDAO.findArray({ user: user.id } as MongoFilter as never),
-            peopleDAO.findArray({ user: user.id } as MongoFilter as never),
-            workContextsDAO.findArray({ user: user.id } as MongoFilter as never),
+            itemsDAO.findArray({ user: user.id }),
+            routinesDAO.findArray({ user: user.id }),
+            peopleDAO.findArray({ user: user.id }),
+            workContextsDAO.findArray({ user: user.id }),
         ]);
 
         return c.json({ items, routines, people, workContexts, serverTs: dayjs().toISOString() });
@@ -161,8 +157,8 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         await Promise.all([operationsDAO.insertMany(serverOps), ...serverOps.map((op) => applyEntityOp(user.id, op))]);
 
         await deviceSyncStateDAO.updateOne(
-            { _id: deviceId } as MongoFilter as never,
-            { $set: { lastSeenTs: now, user: user.id }, $setOnInsert: { lastSyncedTs: dayjs(0).toISOString() } } as never,
+            { _id: deviceId },
+            { $set: { lastSeenTs: now, user: user.id }, $setOnInsert: { lastSyncedTs: dayjs(0).toISOString() } },
             { upsert: true },
         );
 
@@ -184,14 +180,14 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         const since = c.req.query('since') ?? dayjs(0).toISOString();
         const deviceId = c.req.query('deviceId');
 
-        const ops = await operationsDAO.findArray({ user: user.id, ts: { $gt: since } } as MongoFilter as never, { sort: { ts: 1 } });
+        const ops = await operationsDAO.findArray({ user: user.id, ts: { $gt: since } }, { sort: { ts: 1 } });
 
         const serverTs = dayjs().toISOString();
 
         if (deviceId) {
             // Track per-device pull cursor so old operations can eventually be purged
             await deviceSyncStateDAO.updateOne(
-                { _id: deviceId } as MongoFilter as never,
+                { _id: deviceId },
                 { $set: { lastSyncedTs: serverTs, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
                 { upsert: true },
             );

@@ -1,18 +1,4 @@
-import type {
-    AggregateOptions,
-    AnyBulkWriteOperation,
-    BulkWriteOptions,
-    Collection,
-    Document,
-    Filter,
-    FindOptions, // not generic in mongodb v7 — type param was removed
-    InsertOneOptions,
-    MongoClient,
-    OptionalUnlessRequiredId,
-    UpdateFilter,
-    UpdateOptions,
-    WithId,
-} from 'mongodb';
+import type { AggregateOptions, AnyBulkWriteOperation, Collection, Document, Filter, MongoClient, OptionalUnlessRequiredId, WithId } from 'mongodb';
 
 class AbstractDAO<S extends Document> {
     databaseName!: string;
@@ -35,7 +21,7 @@ class AbstractDAO<S extends Document> {
         }
     }
 
-    async bulkWrite(operations: AnyBulkWriteOperation<S>[], options?: BulkWriteOptions) {
+    async bulkWrite(operations: AnyBulkWriteOperation<S>[], options?: Parameters<Collection<S>['bulkWrite']>[1]) {
         return await this._collection.bulkWrite(operations, options ?? {});
     }
 
@@ -53,12 +39,16 @@ class AbstractDAO<S extends Document> {
         await this._collection.drop();
     }
 
+    async findOne(filter: Filter<S>, options?: Parameters<Collection<S>['findOne']>[1]) {
+        return await this._collection.findOne(filter, options);
+    }
+
     // this should only be used when the expected result can be contained in memory as one chunk
-    async findArray<T = S>(filter: Filter<S> = {}, options: FindOptions = {}) {
+    async findArray<T = S>(filter: Filter<S> = {}, options: Parameters<Collection<S>['find']>[1] = {}) {
         return await this._collection.find<WithId<T>>(filter, options).toArray();
     }
 
-    async *findSequence<T = S>(filter: Filter<S>, options: FindOptions = {}): AsyncGenerator<WithId<T>> {
+    async *findSequence<T = S>(filter: Filter<S>, options: Parameters<Collection<S>['find']>[1] = {}): AsyncGenerator<WithId<T>> {
         for await (const doc of this._collection.find<WithId<T>>(filter, options)) {
             yield doc;
         }
@@ -75,24 +65,24 @@ class AbstractDAO<S extends Document> {
         }
     }
 
-    async updateOne(filter: Filter<S>, update: UpdateFilter<S>, updateOptions?: UpdateOptions) {
+    async updateOne(filter: Filter<S>, update: Parameters<Collection<S>['updateOne']>[1], updateOptions?: Parameters<Collection<S>['updateOne']>[2]) {
         return await this._collection.updateOne(filter, update, updateOptions ?? {});
     }
 
-    async updateMany(filter: Filter<S>, update: UpdateFilter<S>, updateOptions?: UpdateOptions) {
+    async updateMany(filter: Filter<S>, update: Parameters<Collection<S>['updateMany']>[1], updateOptions?: Parameters<Collection<S>['updateMany']>[2]) {
         return await this._collection.updateMany(filter, update, updateOptions ?? {});
     }
 
-    async insertOne(doc: OptionalUnlessRequiredId<S>, options?: InsertOneOptions) {
+    async insertOne(doc: OptionalUnlessRequiredId<S>, options?: Parameters<Collection<S>['insertOne']>[1]) {
         return await this._collection.insertOne(doc, options ?? {});
     }
 
-    async insertMany(docs: OptionalUnlessRequiredId<S>[], options?: BulkWriteOptions) {
+    async insertMany(docs: OptionalUnlessRequiredId<S>[], options?: Parameters<Collection<S>['insertMany']>[1]) {
         return await this._collection.insertMany(docs, options ?? {});
     }
 
-    async countDocuments() {
-        return await this._collection.countDocuments();
+    async countDocuments(filter: Filter<S> = {}, options?: Parameters<Collection<S>['countDocuments']>[1]) {
+        return await this._collection.countDocuments(filter, options ?? {});
     }
 
     initializeUnorderedBulkOp() {

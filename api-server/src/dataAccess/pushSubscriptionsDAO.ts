@@ -18,7 +18,7 @@ class PushSubscriptionsDAO extends AbstractDAO<PushSubscriptionRecord> {
     }
 
     async deleteByDevice(deviceId: string, userId: string): Promise<void> {
-        await this._collection.deleteOne({ _id: deviceId, user: userId } as never);
+        await this._collection.deleteOne({ _id: deviceId, user: userId });
     }
 }
 
