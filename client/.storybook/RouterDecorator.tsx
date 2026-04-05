@@ -13,7 +13,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet
  *   parameters: { router: { initialPath: '/settings' } }
  */
 export const RouterDecorator: Decorator = (Story, context) => {
-    const initialPath: string = (context.parameters?.['router'] as { initialPath?: string } | undefined)?.initialPath ?? '/';
+    const initialPath = ((context.parameters || {}) as { router?: { initialPath?: string } }).router?.initialPath ?? '/';
 
     const rootRoute = createRootRoute({ component: Outlet });
     const catchAllRoute = createRoute({
@@ -40,7 +40,7 @@ export const RouterDecorator: Decorator = (Story, context) => {
  * useSearch({ from: '/_authenticated/settings' }) resolve correctly.
  */
 export const SettingsRouterDecorator: Decorator = (Story, context) => {
-    const calendarConnected = (context.parameters?.['router'] as { calendarConnected?: boolean } | undefined)?.calendarConnected;
+    const calendarConnected = ((context.parameters || {}) as { router?: { calendarConnected?: boolean } }).router?.calendarConnected;
 
     const rootRoute = createRootRoute({ component: Outlet });
     const authenticatedRoute = createRoute({
@@ -52,8 +52,8 @@ export const SettingsRouterDecorator: Decorator = (Story, context) => {
         getParentRoute: () => authenticatedRoute,
         path: '/settings',
         component: Story,
-        validateSearch: (search: Record<string, unknown>) => ({
-            calendarConnected: search['calendarConnected'] as boolean | undefined,
+        validateSearch: (search: { calendarConnected?: boolean }) => ({
+            calendarConnected: search.calendarConnected,
         }),
     });
     const routeTree = rootRoute.addChildren([authenticatedRoute.addChildren([settingsRoute])]);

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { fn } from '@storybook/test';
+import { fn } from 'storybook/test';
 import { useState } from 'react';
 import { emptyNextActionState, filledNextActionState, samplePeople, sampleWorkContexts } from '../../test-utils/storybookMocks';
 import { NextActionFields } from './NextActionFields';

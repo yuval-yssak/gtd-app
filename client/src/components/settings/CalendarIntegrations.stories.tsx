@@ -1,5 +1,5 @@
 import type { Decorator, Meta, StoryObj } from '@storybook/react';
-import { fn } from '@storybook/test';
+import { fn } from 'storybook/test';
 import { useEffect, useRef } from 'react';
 import { SettingsRouterDecorator } from '../../../.storybook/RouterDecorator';
 import type { CalendarIntegration } from '../../api/calendarApi';
