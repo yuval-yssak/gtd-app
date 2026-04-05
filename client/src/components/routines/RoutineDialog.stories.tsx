@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { fn } from '@storybook/test';
+import { fn } from 'storybook/test';
 import { mockDb, sampleCalendarRoutine, samplePeople, sampleRoutine, sampleWorkContexts } from '../../test-utils/storybookMocks';
 import { RoutineDialog } from './RoutineDialog';
 

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { fn } from '@storybook/test';
+import { fn } from 'storybook/test';
 import { mockDb, sampleInboxItem, samplePeople, sampleWorkContexts } from '../test-utils/storybookMocks';
 import type { StoredItem } from '../types/MyDB';
 import { ClarifyDialog } from './ClarifyDialog';

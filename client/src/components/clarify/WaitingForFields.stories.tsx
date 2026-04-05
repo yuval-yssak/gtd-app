@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { fn } from '@storybook/test';
+import { fn } from 'storybook/test';
 import { useState } from 'react';
 import { emptyWaitingForState, filledWaitingForState, samplePeople } from '../../test-utils/storybookMocks';
 import type { WaitingForFormState } from './types';

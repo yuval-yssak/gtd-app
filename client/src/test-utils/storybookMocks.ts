@@ -3,11 +3,17 @@ import type { CalendarFormState, NextActionFormState, WaitingForFormState } from
 import type { MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 
 /**
- * A typed stub for IDBPDatabase<MyDB>. Safe to pass to components whose internal
- * hooks are mocked or whose effects fail silently (e.g. useAccounts, which catches
- * all network/IDB errors and initialises from empty state).
+ * A typed stub for IDBPDatabase<MyDB>. Implements just the read/write primitives
+ * called by hooks like useAccounts so stories render without errors. Returns empty
+ * data for reads and no-ops for writes — no actual storage takes place.
  */
-export const mockDb = {} as IDBPDatabase<MyDB>;
+export const mockDb = {
+    getAll: async () => [],
+    get: async () => undefined,
+    put: async () => undefined,
+    delete: async () => undefined,
+    clear: async () => undefined,
+} as unknown as IDBPDatabase<MyDB>;
 
 // ── Sample entities ────────────────────────────────────────────────────────────
 
