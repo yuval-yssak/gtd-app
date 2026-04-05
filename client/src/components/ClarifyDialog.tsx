@@ -139,12 +139,13 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
     return (
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle className={styles.dialogTitle}>
-                <Typography variant="subtitle1" fontWeight={600}>
+                {/* component="span" prevents an h6 nested inside DialogTitle's h2, which is invalid HTML */}
+                <Typography component="span" variant="subtitle1" fontWeight={600}>
                     Clarify
                 </Typography>
                 {/* Counter only meaningful in batch mode */}
                 {!isSingleItem && (
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography component="span" variant="caption" color="text.secondary">
                         {index + 1} of {total}
                     </Typography>
                 )}
