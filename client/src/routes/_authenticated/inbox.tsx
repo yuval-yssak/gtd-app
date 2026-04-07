@@ -38,7 +38,7 @@ import { ClarifyDialog } from '../../components/ClarifyDialog';
 import { CalendarFields } from '../../components/clarify/CalendarFields';
 import { NextActionFields } from '../../components/clarify/NextActionFields';
 import {
-    buildCalendarTimes,
+    buildCalendarMeta,
     buildNextActionMeta,
     buildWaitingForMeta,
     type CalendarFormState,
@@ -54,6 +54,7 @@ import { EditItemDialog } from '../../components/EditItemDialog';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, collectItem } from '../../db/itemMutations';
+import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
@@ -231,6 +232,7 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
 function InboxPage() {
     const { db } = Route.useRouteContext();
     const { account, items, workContexts, people, routines, refreshItems } = useAppData();
+    const { options: calendarOptions } = useCalendarOptions();
     const theme = useTheme();
     // Hide inline buttons and switch to swipe+bottom-sheet on screens narrower than 900px
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -320,8 +322,7 @@ function InboxPage() {
             if (dest === 'nextAction') {
                 await clarifyToNextAction(db, item, buildNextActionMeta(naForm));
             } else if (dest === 'calendar') {
-                const { startIso, endIso } = buildCalendarTimes(calForm);
-                await clarifyToCalendar(db, item, startIso, endIso);
+                await clarifyToCalendar(db, item, buildCalendarMeta(calForm, calendarOptions));
             } else if (dest === 'waitingFor') {
                 await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
             }
@@ -585,7 +586,11 @@ function InboxPage() {
                                             />
                                         )}
                                         {expandedDest === 'calendar' && (
-                                            <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} />
+                                            <CalendarFields
+                                                value={calForm}
+                                                onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))}
+                                                calendarOptions={calendarOptions}
+                                            />
                                         )}
                                         {expandedDest === 'waitingFor' && (
                                             <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
@@ -631,7 +636,9 @@ function InboxPage() {
                                 people={people}
                             />
                         )}
-                        {popoverDest === 'calendar' && <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} />}
+                        {popoverDest === 'calendar' && (
+                            <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} calendarOptions={calendarOptions} />
+                        )}
                         {popoverDest === 'waitingFor' && (
                             <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
                         )}

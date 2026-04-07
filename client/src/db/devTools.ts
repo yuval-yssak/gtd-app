@@ -7,7 +7,7 @@ import type { MyDB, StoredItem } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import type { NextActionFilters } from './itemHelpers';
 import { getActiveNextActions, getItemsByUser, getOverdueItems, getUpcomingCalendarItems } from './itemHelpers';
-import type { NextActionMeta, WaitingForMeta } from './itemMutations';
+import type { CalendarMeta, NextActionMeta, WaitingForMeta } from './itemMutations';
 import {
     clarifyToCalendar,
     clarifyToDone,
@@ -20,7 +20,10 @@ import {
 } from './itemMutations';
 import type { NewPersonFields } from './personMutations';
 import { createPerson } from './personMutations';
-import { flushSyncQueue, pullFromServer } from './syncHelpers';
+import { getRoutinesByUser } from './routineHelpers';
+import type { NewRoutineFields } from './routineMutations';
+import { createRoutine, removeRoutine, updateRoutine } from './routineMutations';
+import { flushSyncQueue, forcePull, waitForPendingFlush } from './syncHelpers';
 import { createWorkContext } from './workContextMutations';
 
 async function resolveUserId(db: IDBPDatabase<MyDB>): Promise<string> {
@@ -47,7 +50,7 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
 
         // ── Clarify ──────────────────────────────────────────────────────────
         clarifyToNextAction: (item: StoredItem, meta: NextActionMeta = {}) => clarifyToNextAction(db, item, meta),
-        clarifyToCalendar: (item: StoredItem, timeStart: string, timeEnd: string) => clarifyToCalendar(db, item, timeStart, timeEnd),
+        clarifyToCalendar: (item: StoredItem, meta: CalendarMeta) => clarifyToCalendar(db, item, meta),
         clarifyToWaitingFor: (item: StoredItem, meta: WaitingForMeta) => clarifyToWaitingFor(db, item, meta),
         clarifyToDone: (item: StoredItem) => clarifyToDone(db, item),
         clarifyToTrash: (item: StoredItem) => clarifyToTrash(db, item),
@@ -58,9 +61,20 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         createPerson: (fields: Omit<NewPersonFields, 'userId'>) => resolveUserId(db).then((uid) => createPerson(db, { ...fields, userId: uid })),
         createWorkContext: (name: string) => resolveUserId(db).then((uid) => createWorkContext(db, { userId: uid, name })),
 
+        // ── Routines ─────────────────────────────────────────────────────────
+        listRoutines: () => resolveUserId(db).then((uid) => getRoutinesByUser(db, uid)),
+        createRoutine: (fields: Omit<NewRoutineFields, 'userId'>) => resolveUserId(db).then((uid) => createRoutine(db, { ...fields, userId: uid })),
+        updateRoutine: (routine: Parameters<typeof updateRoutine>[1]) => updateRoutine(db, routine),
+        removeRoutine: (routineId: string) => removeRoutine(db, routineId),
+
         // ── Sync controls ────────────────────────────────────────────────────
-        flush: () => flushSyncQueue(db),
-        pull: () => pullFromServer(db),
+        // Wait for any fire-and-forget flush that queueSyncOp kicked off, then flush any
+        // remaining ops. This guarantees ALL mutations are on the server when flush resolves.
+        flush: async () => {
+            await waitForPendingFlush();
+            await flushSyncQueue(db);
+        },
+        pull: () => forcePull(db),
     };
 
     (window as unknown as { __gtd: typeof gtd }).__gtd = gtd;

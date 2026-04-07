@@ -29,7 +29,7 @@ export const Empty: Story = {
 
 /** Only the date is set — start and end times still empty. */
 export const DateOnly: Story = {
-    render: () => <ControlledCalendarFields initial={{ date: '2024-04-15', startTime: '', endTime: '' }} />,
+    render: () => <ControlledCalendarFields initial={{ date: '2024-04-15', startTime: '', endTime: '', calendarSyncConfigId: '' }} />,
 };
 
 /** All fields filled — a complete calendar event time block. */

@@ -20,11 +20,12 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { clarifyToCalendar, clarifyToDone, clarifyToInbox, clarifyToTrash, clarifyToWaitingFor, updateItem } from '../db/itemMutations';
+import { useCalendarOptions } from '../hooks/useCalendarOptions';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 import { CalendarFields } from './clarify/CalendarFields';
 import { NextActionFields } from './clarify/NextActionFields';
 import {
-    buildCalendarTimes,
+    buildCalendarMeta,
     buildWaitingForMeta,
     type CalendarFormState,
     emptyCalendar,
@@ -47,6 +48,7 @@ interface Props {
 }
 
 export function EditNextActionDialog({ item, db, people, workContexts, onClose, onSaved }: Props) {
+    const { options: calendarOptions } = useCalendarOptions();
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
@@ -111,8 +113,7 @@ export function EditNextActionDialog({ item, db, people, workContexts, onClose, 
     }
 
     async function onConfirmCalendar() {
-        const { startIso, endIso } = buildCalendarTimes(calForm);
-        await clarifyToCalendar(db, item, startIso, endIso);
+        await clarifyToCalendar(db, item, buildCalendarMeta(calForm, calendarOptions));
         await onSaved();
         onClose();
     }
@@ -194,7 +195,7 @@ export function EditNextActionDialog({ item, db, people, workContexts, onClose, 
 
                     {moveDest === 'calendar' && (
                         <Box className={styles.subForm}>
-                            <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} />
+                            <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} calendarOptions={calendarOptions} />
                             <Stack direction="row" gap={1} mt={1.5}>
                                 <Button size="small" onClick={() => setMoveDest(null)}>
                                     Cancel

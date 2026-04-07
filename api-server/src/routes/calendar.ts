@@ -3,21 +3,27 @@ import dayjs from 'dayjs';
 import { google } from 'googleapis';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
-import type { GCalException } from '../calendarProviders/CalendarProvider.js';
+import type { EventSyncResult, GCalEvent, GCalException } from '../calendarProviders/CalendarProvider.js';
+import { SyncTokenInvalidError } from '../calendarProviders/CalendarProvider.js';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import { clientUrl } from '../config.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
+import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
-import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { recordOperation } from '../lib/operationHelpers.js';
+import { notifyUserViaSse } from '../lib/sseConnections.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
+import { notifyViaWebPush } from '../lib/webPush.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import type { CalendarIntegrationInterface, ItemInterface, RoutineInterface } from '../types/entities.js';
+import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 
 type UnlinkAction = 'keepEvents' | 'deleteEvents' | 'deleteAll';
-type SyncContext = { userId: string; now: string };
-type RoutineSyncCtx = { userId: string; since: string; now: string; calendarId: string };
+type SyncContext = { userId: string; now: string; ops: OperationInterface[] };
+type RoutineSyncCtx = { userId: string; since: string; now: string; calendarId: string; ops: OperationInterface[] };
 type UnlinkSideEffectCtx = { provider: GoogleCalendarProvider; calendarId: string; userId: string; now: string };
+/** Groups the integration + sync config identity needed by import/upsert functions. */
+type CalendarSource = { integration: CalendarIntegrationInterface; config: CalendarSyncConfigInterface };
 // Discriminated union to distinguish network failures from missing-token responses in the OAuth flow.
 type OAuthTokenResult =
     | { ok: true; accessToken: string; refreshToken: string; expiryDate: number | null | undefined }
@@ -25,6 +31,20 @@ type OAuthTokenResult =
 
 // ISO date string pattern — used to validate originalDate before building MongoDB queries.
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// 60 seconds accounts for clock skew between the app server and Google's servers,
+// plus GCal's internal processing delay before the `updated` field is stamped.
+const ECHO_WINDOW_SECONDS = 60;
+
+/** Returns true if the GCal event's `updated` timestamp falls within the echo window of a recent app push. */
+function isOwnEcho(lastPushedTs: string, eventUpdated: string): boolean {
+    return Math.abs(dayjs(eventUpdated).diff(dayjs(lastPushedTs), 'second')) < ECHO_WINDOW_SECONDS;
+}
+
+/** Returns true if the event's start time is strictly before `now`. */
+function isPastEvent(event: { timeStart: string }, now: string): boolean {
+    return dayjs(event.timeStart).isBefore(dayjs(now));
+}
 
 const calendarRoutes = new Hono<{ Variables: AuthVariables }>();
 
@@ -176,6 +196,10 @@ function buildProvider(integration: CalendarIntegrationInterface, userId: string
 calendarRoutes.get('/integrations', authenticateRequest, async (c) => {
     const userId = c.get('session').user.id;
     const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+    // Lazy migration: ensure each integration has at least one CalendarSyncConfig.
+    // Existing integrations created before multi-calendar support have only a calendarId field
+    // but no sync config document — create one transparently on first load.
+    await Promise.all(integrations.map((integration) => ensureSyncConfigExists(integration)));
     // Strip sensitive token fields from the response.
     const safe = integrations.map(({ accessToken: _a, refreshToken: _r, ...rest }) => rest);
     return c.json(safe);
@@ -230,7 +254,10 @@ async function applyUnlinkSideEffects(action: UnlinkAction, routines: RoutineInt
 async function unlinkRoutines(userId: string, routines: RoutineInterface[], now: string): Promise<void> {
     await Promise.all(
         routines.map((r) =>
-            routinesDAO.updateOne({ _id: r._id, user: userId }, { $unset: { calendarEventId: '', calendarIntegrationId: '' }, $set: { updatedTs: now } }),
+            routinesDAO.updateOne(
+                { _id: r._id, user: userId },
+                { $unset: { calendarEventId: '', calendarIntegrationId: '', calendarSyncConfigId: '' }, $set: { updatedTs: now } },
+            ),
         ),
     );
     // Record the unlinked state so other devices learn about the cleared calendarEventId/calendarIntegrationId.
@@ -264,6 +291,10 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
 
     await applyUnlinkSideEffects(action, linkedRoutines, { provider, calendarId: integration.calendarId, userId, now });
     await unlinkRoutines(userId, linkedRoutines, now);
+    // Stop all webhook channels before deleting configs so Google stops sending notifications.
+    const configs = await calendarSyncConfigsDAO.findByIntegration(integrationId);
+    await Promise.all(configs.map((cfg) => teardownWatch(cfg, provider).catch(() => {})));
+    await calendarSyncConfigsDAO.deleteByIntegration(integrationId);
     await calendarIntegrationsDAO.deleteByOwner(integrationId, userId);
     return c.json({ ok: true });
 });
@@ -308,6 +339,214 @@ calendarRoutes.get('/integrations/:id/calendars', authenticateRequest, async (c)
         return c.json({ error: 'Failed to fetch calendars from Google' }, 502);
     }
 });
+
+// ── Sync config management ───────────────────────────────────────────────────
+
+/** Creates a default CalendarSyncConfig for an integration if none exists yet (lazy migration). */
+async function ensureSyncConfigExists(integration: CalendarIntegrationInterface): Promise<void> {
+    const existing = await calendarSyncConfigsDAO.findByIntegration(integration._id);
+    if (hasAtLeastOne(existing)) {
+        return;
+    }
+    const now = dayjs().toISOString();
+    const config: CalendarSyncConfigInterface = {
+        _id: randomUUID(),
+        integrationId: integration._id,
+        user: integration.user,
+        calendarId: integration.calendarId,
+        isDefault: true,
+        enabled: true,
+        ...(integration.lastSyncedTs ? { lastSyncedTs: integration.lastSyncedTs } : {}),
+        createdTs: now,
+        updatedTs: now,
+    };
+    // Use updateOne+upsert keyed by (integrationId, calendarId) to avoid duplicates
+    // if two concurrent requests both see zero configs and try to insert.
+    await calendarSyncConfigsDAO.updateOne({ integrationId: integration._id, calendarId: integration.calendarId } as never, { $setOnInsert: config } as never, {
+        upsert: true,
+    });
+}
+
+calendarRoutes.get('/integrations/:id/sync-configs', authenticateRequest, async (c) => {
+    const userId = c.get('session').user.id;
+    const integrationId = c.req.param('id');
+
+    const integration = await calendarIntegrationsDAO.findByOwnerAndId(integrationId, userId);
+    if (!integration) {
+        return c.json({ error: 'Integration not found' }, 404);
+    }
+
+    const configs = await calendarSyncConfigsDAO.findByIntegration(integrationId);
+    return c.json(configs);
+});
+
+calendarRoutes.post('/integrations/:id/sync-configs', authenticateRequest, async (c) => {
+    const userId = c.get('session').user.id;
+    const integrationId = c.req.param('id');
+
+    const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(integrationId, userId);
+    if (!integration) {
+        return c.json({ error: 'Integration not found' }, 404);
+    }
+
+    const body = await c.req.json<{ calendarId?: unknown; displayName?: unknown; isDefault?: unknown }>();
+    if (typeof body.calendarId !== 'string' || body.calendarId.trim() === '') {
+        return c.json({ error: 'calendarId must be a non-empty string' }, 400);
+    }
+
+    const now = dayjs().toISOString();
+    const configId = randomUUID();
+    const isDefault = body.isDefault === true;
+
+    const config: CalendarSyncConfigInterface = {
+        _id: configId,
+        integrationId,
+        user: userId,
+        calendarId: body.calendarId,
+        ...(typeof body.displayName === 'string' ? { displayName: body.displayName } : {}),
+        isDefault,
+        enabled: true,
+        createdTs: now,
+        updatedTs: now,
+    };
+
+    try {
+        await calendarSyncConfigsDAO.insertOne(config);
+    } catch (err: unknown) {
+        if (err instanceof Error && 'code' in err && (err as { code: number }).code === 11000) {
+            return c.json({ error: 'This calendar is already being synced' }, 409);
+        }
+        throw err;
+    }
+
+    if (isDefault) {
+        await calendarSyncConfigsDAO.setDefault(configId, integrationId);
+    }
+
+    // Start receiving push notifications for this calendar (best-effort — sync still works without it).
+    const provider = buildProvider(integration, userId);
+    await setupWatch(config, provider).catch((err) => {
+        console.error(`[calendar] setupWatch failed for config ${configId}:`, err);
+    });
+
+    return c.json(config, 201);
+});
+
+calendarRoutes.patch('/integrations/:integrationId/sync-configs/:configId', authenticateRequest, async (c) => {
+    const userId = c.get('session').user.id;
+    const integrationId = c.req.param('integrationId');
+    const configId = c.req.param('configId');
+
+    const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(integrationId, userId);
+    if (!integration) {
+        return c.json({ error: 'Integration not found' }, 404);
+    }
+
+    const config = await calendarSyncConfigsDAO.findByOwnerAndId(configId, userId);
+    if (!config || config.integrationId !== integrationId) {
+        return c.json({ error: 'Sync config not found' }, 404);
+    }
+
+    const body = await c.req.json<{ enabled?: unknown; isDefault?: unknown; displayName?: unknown }>();
+    const updates: Partial<CalendarSyncConfigInterface> = { updatedTs: dayjs().toISOString() };
+
+    const enablingWatch = typeof body.enabled === 'boolean' && body.enabled && !config.enabled;
+    const disablingWatch = typeof body.enabled === 'boolean' && !body.enabled && config.enabled;
+
+    if (typeof body.enabled === 'boolean') {
+        updates.enabled = body.enabled;
+    }
+    if (typeof body.displayName === 'string') {
+        updates.displayName = body.displayName;
+    }
+
+    await calendarSyncConfigsDAO.updateOne({ _id: configId, user: userId } as never, { $set: updates });
+
+    if (body.isDefault === true) {
+        await calendarSyncConfigsDAO.setDefault(configId, integrationId);
+    }
+
+    // Manage webhook channel lifecycle when enabled state changes.
+    const provider = buildProvider(integration, userId);
+    if (enablingWatch) {
+        await setupWatch(config, provider).catch((err) => {
+            console.error(`[calendar] setupWatch failed for config ${configId}:`, err);
+        });
+    } else if (disablingWatch) {
+        await teardownWatch(config, provider).catch((err) => {
+            console.error(`[calendar] teardownWatch failed for config ${configId}:`, err);
+        });
+    }
+
+    const updated = await calendarSyncConfigsDAO.findByOwnerAndId(configId, userId);
+    return c.json(updated);
+});
+
+calendarRoutes.delete('/integrations/:integrationId/sync-configs/:configId', authenticateRequest, async (c) => {
+    const userId = c.get('session').user.id;
+    const integrationId = c.req.param('integrationId');
+    const configId = c.req.param('configId');
+
+    const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(integrationId, userId);
+    if (!integration) {
+        return c.json({ error: 'Integration not found' }, 404);
+    }
+
+    const config = await calendarSyncConfigsDAO.findByOwnerAndId(configId, userId);
+    if (!config || config.integrationId !== integrationId) {
+        return c.json({ error: 'Sync config not found' }, 404);
+    }
+
+    const now = dayjs().toISOString();
+
+    // Stop the webhook channel before deleting the config so Google stops sending notifications.
+    const provider = buildProvider(integration, userId);
+    await teardownWatch(config, provider).catch((err) => {
+        console.error(`[calendar] teardownWatch failed for config ${configId}:`, err);
+    });
+
+    // Clear calendarSyncConfigId from items and routines that reference this config
+    // so they don't hold orphaned foreign keys after the config is deleted.
+    await clearSyncConfigReferences(userId, configId, now);
+
+    await calendarSyncConfigsDAO.deleteByOwner(configId, userId);
+    return c.json({ ok: true });
+});
+
+/** Clears `calendarSyncConfigId` from items and routines referencing the given config, and records operations. */
+async function clearSyncConfigReferences(userId: string, configId: string, now: string): Promise<void> {
+    // Collect IDs before the update — the filter references calendarSyncConfigId which the write clears.
+    const [itemsBefore, routinesBefore] = await Promise.all([
+        itemsDAO.findArray({ user: userId, calendarSyncConfigId: configId }),
+        routinesDAO.findArray({ user: userId, calendarSyncConfigId: configId }),
+    ]);
+
+    const itemIds = itemsBefore.map((item) => item._id).filter((id): id is string => Boolean(id));
+    const routineIds = routinesBefore.map((r) => r._id);
+
+    await Promise.all([
+        itemsDAO.updateMany({ user: userId, calendarSyncConfigId: configId }, { $unset: { calendarSyncConfigId: '' }, $set: { updatedTs: now } }),
+        routinesDAO.updateMany({ user: userId, calendarSyncConfigId: configId }, { $unset: { calendarSyncConfigId: '' }, $set: { updatedTs: now } }),
+    ]);
+
+    // Re-fetch by stable IDs so operation snapshots reflect the persisted post-write state.
+    const [updatedItems, updatedRoutines] = await Promise.all([
+        hasAtLeastOne(itemIds) ? itemsDAO.findArray({ _id: { $in: itemIds }, user: userId }) : Promise.resolve([]),
+        hasAtLeastOne(routineIds) ? routinesDAO.findArray({ _id: { $in: routineIds }, user: userId }) : Promise.resolve([]),
+    ]);
+
+    const itemOps = updatedItems.flatMap((item) => {
+        const itemId = item._id;
+        if (!itemId) {
+            return [];
+        }
+        return [recordOperation(userId, { entityType: 'item' as const, entityId: itemId, snapshot: item, opType: 'update', now })];
+    });
+    const routineOps = updatedRoutines.map((r) =>
+        recordOperation(userId, { entityType: 'routine' as const, entityId: r._id, snapshot: r, opType: 'update', now }),
+    );
+    await Promise.all([...itemOps, ...routineOps]);
+}
 
 // ── Routine linking ───────────────────────────────────────────────────────────
 
@@ -371,97 +610,174 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
         return c.json({ error: 'Integration not found' }, 404);
     }
 
-    // Use epoch start if never synced so the first pull fetches all historical exceptions.
-    const since = integration.lastSyncedTs ?? dayjs(0).toISOString();
-
     try {
         const provider = buildProvider(integration, userId);
-        const linkedRoutines = await routinesDAO.findArray({
-            user: userId,
-            calendarIntegrationId: integrationId,
-            calendarEventId: { $exists: true },
-        });
-
+        const configs = await calendarSyncConfigsDAO.findEnabledByIntegration(integrationId);
         const now = dayjs().toISOString();
-        const syncCtx: RoutineSyncCtx = { userId, since, now, calendarId: integration.calendarId };
-        await Promise.all(linkedRoutines.map((routine) => syncRoutineExceptions(routine, provider, syncCtx)));
-        await importCalendarItems(integration, provider, { userId, now });
 
-        await calendarIntegrationsDAO.bumpLastSyncedTs(integrationId, userId, now);
-        return c.json({ ok: true, syncedRoutines: linkedRoutines.length });
+        // Sync each enabled calendar independently — each has its own lastSyncedTs cursor.
+        // Sequential to avoid overwhelming Google's API with parallel requests per-account.
+        const syncResults = await configs.reduce(async (prevPromise, config) => {
+            const prev = await prevPromise;
+            const count = await syncSingleCalendar(config, integration, provider, { userId, now, ops: [] });
+            // Keep webhook channel alive — renew if expired or expiring soon.
+            await renewWebhookIfExpired(config, provider).catch((err) => {
+                console.error(`[calendar] renewWebhookIfExpired failed for config ${config._id}:`, err);
+            });
+            return prev + count;
+        }, Promise.resolve(0));
+
+        return c.json({ ok: true, syncedRoutines: syncResults, syncedCalendars: configs.length });
     } catch (err) {
         console.error(`[calendar] sync failed for integration ${integrationId}:`, err);
         return c.json({ error: 'Failed to sync with Google Calendar' }, 502);
     }
 });
 
+/** Syncs a single calendar config: routine exceptions + event import. Returns the number of routines synced. */
+async function syncSingleCalendar(
+    config: CalendarSyncConfigInterface,
+    integration: CalendarIntegrationInterface,
+    provider: GoogleCalendarProvider,
+    ctx: SyncContext,
+): Promise<number> {
+    const since = config.lastSyncedTs ?? dayjs(0).toISOString();
+    const linkedRoutines = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarIntegrationId: integration._id,
+        calendarEventId: { $exists: true },
+        // Include routines explicitly linked to this config, plus legacy routines without a config link.
+        $or: [{ calendarSyncConfigId: config._id }, { calendarSyncConfigId: { $exists: false } }],
+    });
+
+    const syncCtx: RoutineSyncCtx = { userId: ctx.userId, since, now: ctx.now, calendarId: config.calendarId, ops: ctx.ops };
+    await Promise.all(linkedRoutines.map((routine) => syncRoutineExceptions(routine, provider, syncCtx)));
+
+    const source: CalendarSource = { integration, config };
+    const syncResult = await fetchEventsWithSyncToken(config, provider, ctx.now);
+    await importCalendarEvents(source, syncResult.events, ctx);
+    await calendarSyncConfigsDAO.upsertSyncToken(config._id, syncResult.nextSyncToken, ctx.now);
+
+    return linkedRoutines.length;
+}
+
+/**
+ * Fetches events using the syncToken if available, falling back to a full sync.
+ * On 410 Gone (token expired), clears the token and retries as a full sync.
+ */
+async function fetchEventsWithSyncToken(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider, now: string): Promise<EventSyncResult> {
+    if (config.syncToken) {
+        try {
+            return await provider.listEventsIncremental(config.calendarId, config.syncToken);
+        } catch (err) {
+            if (err instanceof SyncTokenInvalidError) {
+                console.warn(`[calendar] syncToken expired for config ${config._id}, falling back to full sync`);
+                await calendarSyncConfigsDAO.upsertSyncToken(config._id, '', config.lastSyncedTs ?? dayjs(0).toISOString());
+                return provider.listEventsFull(config.calendarId, now);
+            }
+            throw err;
+        }
+    }
+    return provider.listEventsFull(config.calendarId, now);
+}
+
 // ── Calendar event import ─────────────────────────────────────────────────────
 
 /**
- * Imports Google Calendar events as `calendar` items.
+ * Imports pre-fetched Google Calendar events as `calendar` items.
  * Skips instances whose recurringEventId belongs to a routine already linked to this integration —
  * those are managed by the routine exception sync path.
  */
-async function importCalendarItems(integration: CalendarIntegrationInterface, provider: GoogleCalendarProvider, ctx: SyncContext): Promise<void> {
-    const since = dayjs(ctx.now).subtract(30, 'day').toISOString();
-    const until = dayjs(ctx.now).add(90, 'day').toISOString();
-
-    const [events, linkedRoutines] = await Promise.all([
-        provider.listEvents(integration.calendarId, since, until),
-        routinesDAO.findArray({ user: ctx.userId, calendarIntegrationId: integration._id, calendarEventId: { $exists: true } }),
-    ]);
+async function importCalendarEvents(source: CalendarSource, events: GCalEvent[], ctx: SyncContext): Promise<void> {
+    const linkedRoutines = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarIntegrationId: source.integration._id,
+        calendarEventId: { $exists: true },
+    });
 
     const routineEventIds = new Set(linkedRoutines.map((r) => r.calendarEventId).filter((id): id is string => Boolean(id)));
 
     const eventsToUpsert = events.filter((e) => !e.recurringEventId || !routineEventIds.has(e.recurringEventId));
     // Each event targets a distinct calendarEventId so there are no write conflicts — safe to parallelize.
-    await Promise.all(eventsToUpsert.map((event) => upsertCalendarItem(event, integration, ctx)));
+    await Promise.all(eventsToUpsert.map((event) => upsertCalendarItem(event, source, ctx)));
 }
 
-async function upsertCalendarItem(
-    event: { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string },
-    integration: CalendarIntegrationInterface,
-    ctx: SyncContext,
-): Promise<void> {
+type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string };
+
+async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const [existing] = await itemsDAO.findArray({ user: ctx.userId, calendarEventId: event.id });
 
+    // Echo detection: if the item was recently pushed to GCal by the app, skip re-importing
+    // the same change back. A 60-second window accounts for clock skew and GCal processing delay.
+    if (existing?.lastPushedToGCalTs && isOwnEcho(existing.lastPushedToGCalTs, event.updated)) {
+        return;
+    }
+
     if (event.status === 'cancelled') {
-        if (existing && !existing.routineId) {
-            // ItemInterface._id is typed optional but WithId<> from MongoDB always has it set.
-            const itemId = existing._id;
-            if (!itemId) {
-                return;
-            }
-            await itemsDAO.updateOne({ _id: itemId, user: ctx.userId }, { $set: { status: 'trash', updatedTs: ctx.now } });
-            await recordOperation(ctx.userId, {
-                entityType: 'item',
-                entityId: itemId,
-                snapshot: { ...existing, status: 'trash', updatedTs: ctx.now },
-                opType: 'update',
-                now: ctx.now,
-            });
+        await trashCancelledItem(existing, ctx);
+        return;
+    }
+
+    // Ignore past events from Google — the app only cares about future changes.
+    // If a previously-future event was moved to the past, trash the local copy.
+    if (event.timeStart && isPastEvent(event, ctx.now)) {
+        if (existing) {
+            await trashCancelledItem(existing, ctx);
         }
         return;
     }
 
     if (existing) {
-        if (existing.routineId) {
-            return; // routine-managed; skip
-        }
-        // Only update if GCal reports a newer modification — prevents overwriting local edits.
-        if (event.updated <= existing.updatedTs) {
-            return;
-        }
-        const itemId = existing._id;
-        if (!itemId) {
-            return;
-        }
-        const updated: ItemInterface = { ...existing, title: event.title, timeStart: event.timeStart, timeEnd: event.timeEnd, updatedTs: ctx.now };
-        await itemsDAO.replaceById(itemId, updated);
-        await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: updated, opType: 'update', now: ctx.now });
+        await updateExistingCalendarItem(existing, event, source, ctx);
+    } else {
+        await createNewCalendarItem(event, source, ctx);
+    }
+}
+
+async function trashCancelledItem(existing: ItemInterface | undefined, ctx: SyncContext): Promise<void> {
+    if (!existing || existing.routineId) {
         return;
     }
+    const itemId = existing._id;
+    if (!itemId) {
+        return;
+    }
+    await itemsDAO.updateOne({ _id: itemId, user: ctx.userId }, { $set: { status: 'trash', updatedTs: ctx.now } });
+    const op = await recordOperation(ctx.userId, {
+        entityType: 'item',
+        entityId: itemId,
+        snapshot: { ...existing, status: 'trash', updatedTs: ctx.now },
+        opType: 'update',
+        now: ctx.now,
+    });
+    ctx.ops.push(op);
+}
 
+async function updateExistingCalendarItem(existing: ItemInterface, event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    if (existing.routineId) {
+        return; // routine-managed; skip
+    }
+    // Only update if GCal reports a newer modification — prevents overwriting local edits.
+    if (event.updated <= existing.updatedTs) {
+        return;
+    }
+    const itemId = existing._id;
+    if (!itemId) {
+        return;
+    }
+    const updated: ItemInterface = {
+        ...existing,
+        title: event.title,
+        timeStart: event.timeStart,
+        timeEnd: event.timeEnd,
+        calendarSyncConfigId: source.config._id,
+        updatedTs: ctx.now,
+    };
+    await itemsDAO.replaceById(itemId, updated);
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: updated, opType: 'update', now: ctx.now }));
+}
+
+async function createNewCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const itemId = randomUUID();
     const newItem: ItemInterface = {
         _id: itemId,
@@ -471,31 +787,13 @@ async function upsertCalendarItem(
         timeStart: event.timeStart,
         timeEnd: event.timeEnd,
         calendarEventId: event.id,
-        calendarIntegrationId: integration._id,
+        calendarIntegrationId: source.integration._id,
+        calendarSyncConfigId: source.config._id,
         createdTs: ctx.now,
         updatedTs: ctx.now,
     };
     await itemsDAO.insertOne(newItem);
-    await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: newItem, opType: 'create', now: ctx.now });
-}
-
-/** Records a server-originated operation so all devices learn about the change via sync pull. */
-async function recordOperation(
-    userId: string,
-    op: { entityType: 'item' | 'routine'; entityId: string; snapshot: ItemInterface | RoutineInterface; opType: 'create' | 'update'; now: string },
-): Promise<void> {
-    // deviceId: 'server' — server-originated ops have no real device; the sync pull
-    // mechanism filters by ts, not deviceId, so this value is just a marker.
-    await operationsDAO.insertOne({
-        _id: randomUUID(),
-        user: userId,
-        deviceId: 'server',
-        ts: op.now,
-        entityType: op.entityType,
-        entityId: op.entityId,
-        opType: op.opType,
-        snapshot: op.snapshot,
-    });
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: newItem, opType: 'create', now: ctx.now }));
 }
 
 type RoutineException = NonNullable<RoutineInterface['routineExceptions']>[number];
@@ -532,11 +830,7 @@ function mergeExceptions(existing: RoutineException[], ex: GCalException): Routi
  * timeStart filter after the write would return zero results).  The post-write re-fetch by
  * stable ID ensures operation snapshots reflect the persisted state.
  */
-async function updateItemsAndRecordOps(
-    userId: string,
-    query: { filter: Record<string, unknown>; setFields: Record<string, unknown> },
-    now: string,
-): Promise<void> {
+async function updateItemsAndRecordOps(ctx: SyncContext, query: { filter: Record<string, unknown>; setFields: Record<string, unknown> }): Promise<void> {
     const before = await itemsDAO.findArray(query.filter);
     const ids = before.map((item) => item._id).filter((id): id is string => Boolean(id));
     if (!hasAtLeastOne(ids)) {
@@ -544,16 +838,17 @@ async function updateItemsAndRecordOps(
     }
     await itemsDAO.updateMany(query.filter, { $set: query.setFields });
     // Re-fetch by stable ID so the snapshot reflects the post-write state.
-    const updated = await itemsDAO.findArray({ _id: { $in: ids }, user: userId });
-    await Promise.all(
+    const updated = await itemsDAO.findArray({ _id: { $in: ids }, user: ctx.userId });
+    const ops = await Promise.all(
         updated.flatMap((item) => {
             const itemId = item._id;
             if (!itemId) {
                 return [];
             }
-            return [recordOperation(userId, { entityType: 'item', entityId: itemId, snapshot: item, opType: 'update', now })];
+            return [recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: item, opType: 'update', now: ctx.now })];
         }),
     );
+    ctx.ops.push(...ops);
 }
 
 /** Applies a single GCal exception's side effects to the items collection. */
@@ -567,16 +862,12 @@ async function applyExceptionToItems(routine: RoutineInterface, ex: GCalExceptio
     const baseFilter = { user: ctx.userId, routineId: routine._id, timeStart: dateFilter };
 
     if (ex.type === 'deleted') {
-        await updateItemsAndRecordOps(ctx.userId, { filter: baseFilter, setFields: { status: 'trash', updatedTs: ctx.now } }, ctx.now);
+        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields: { status: 'trash', updatedTs: ctx.now } });
         return;
     }
 
     if (ex.type === 'modified' && ex.newTimeStart && ex.newTimeEnd) {
-        await updateItemsAndRecordOps(
-            ctx.userId,
-            { filter: baseFilter, setFields: { timeStart: ex.newTimeStart, timeEnd: ex.newTimeEnd, updatedTs: ctx.now } },
-            ctx.now,
-        );
+        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields: { timeStart: ex.newTimeStart, timeEnd: ex.newTimeEnd, updatedTs: ctx.now } });
     }
 }
 
@@ -593,13 +884,167 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
     const updatedExceptions = exceptions.reduce((acc, ex) => mergeExceptions(acc, ex), [...(routine.routineExceptions ?? [])]);
     // Apply item side-effects in parallel — each exception targets a different date so there
     // are no write conflicts between them.
-    const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now };
+    const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops };
     await Promise.all(exceptions.map((ex) => applyExceptionToItems(routine, ex, syncCtx)));
 
     const updatedRoutine: RoutineInterface = { ...routine, routineExceptions: updatedExceptions, updatedTs: ctx.now };
     await routinesDAO.replaceById(routine._id, updatedRoutine);
 
-    await recordOperation(ctx.userId, { entityType: 'routine', entityId: routine._id, snapshot: updatedRoutine, opType: 'update', now: ctx.now });
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routine._id, snapshot: updatedRoutine, opType: 'update', now: ctx.now }));
 }
+
+// ── Webhook watch management ─────────────────────────────────────────────────
+
+/** Sets up a Google push notification channel for the given sync config. Stores webhook fields on success. */
+async function setupWatch(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider): Promise<void> {
+    // Webhook feature is opt-in: no-op when CALENDAR_WEBHOOK_URL is not configured.
+    const webhookUrl = process.env.CALENDAR_WEBHOOK_URL;
+    if (!webhookUrl) {
+        return;
+    }
+    const channelId = randomUUID();
+    const { resourceId, expiration } = await provider.watchEvents(config.calendarId, webhookUrl, channelId);
+    await calendarSyncConfigsDAO.upsertWebhookFields(config._id, channelId, resourceId, expiration);
+}
+
+/** Stops the existing push notification channel for the given sync config. Clears webhook fields regardless of whether the stop call succeeds. */
+async function teardownWatch(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider): Promise<void> {
+    if (config.webhookChannelId && config.webhookResourceId) {
+        // Best-effort stop — the channel may have already expired or been invalidated.
+        await provider.stopWatch(config.webhookChannelId, config.webhookResourceId).catch(() => {});
+    }
+    await calendarSyncConfigsDAO.clearWebhookFields(config._id);
+}
+
+/** Re-registers the webhook channel if it is expired or expiring within 1 day. */
+async function renewWebhookIfExpired(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider): Promise<void> {
+    if (!process.env.CALENDAR_WEBHOOK_URL) {
+        return;
+    }
+
+    const needsRenewal = !config.webhookExpiry || dayjs(config.webhookExpiry).isBefore(dayjs().add(1, 'day'));
+    if (!needsRenewal) {
+        return;
+    }
+
+    if (config.webhookChannelId) {
+        await teardownWatch(config, provider);
+    }
+    await setupWatch(config, provider);
+    console.log(`[calendar-webhook] renewed watch for config ${config._id}`);
+}
+
+export { buildProvider, renewWebhookIfExpired };
+
+// ── Webhook receiver ─────────────────────────────────────────────────────────
+
+// In-memory dedup: Google often fires multiple notifications for the same change in rapid succession.
+// Track recently-processed channel IDs to avoid redundant syncs within a short window.
+// Uses raw epoch-ms (Date.now) instead of dayjs because this is a hot path comparing
+// monotonic timestamps — dayjs object allocation would add unnecessary overhead.
+const recentWebhookChannels = new Map<string, number>();
+const WEBHOOK_DEDUP_TTL_MS = 10_000;
+
+/** Removes entries older than the TTL to prevent unbounded memory growth. */
+function pruneStaleWebhookEntries(now: number): void {
+    for (const [key, ts] of recentWebhookChannels) {
+        if (now - ts > WEBHOOK_DEDUP_TTL_MS) {
+            recentWebhookChannels.delete(key);
+        }
+    }
+}
+
+/** Returns true if this channel was already seen within the dedup window. Records the arrival for future checks. */
+function checkAndRecordWebhook(channelId: string): boolean {
+    const now = Date.now();
+    const lastSeen = recentWebhookChannels.get(channelId);
+    const isDuplicate = Boolean(lastSeen && now - lastSeen < WEBHOOK_DEDUP_TTL_MS);
+    recentWebhookChannels.set(channelId, now);
+    pruneStaleWebhookEntries(now);
+    return isDuplicate;
+}
+
+// No authenticateRequest — Google sends these webhooks directly.
+// Security: verified by looking up the channel ID in our database.
+calendarRoutes.post('/webhooks/google', async (c) => {
+    const channelId = c.req.header('x-goog-channel-id');
+    const resourceId = c.req.header('x-goog-resource-id');
+    const resourceState = c.req.header('x-goog-resource-state');
+
+    if (!channelId || !resourceId) {
+        return c.text('Missing required headers', 400);
+    }
+
+    // Google sends a 'sync' notification when the watch is first established — just acknowledge it.
+    if (resourceState === 'sync') {
+        return c.text('OK', 200);
+    }
+
+    const config = await calendarSyncConfigsDAO.findByWebhookChannelId(channelId);
+    if (!config || config.webhookResourceId !== resourceId) {
+        return c.text('Unknown channel', 404);
+    }
+
+    // Respond immediately — Google expects a fast 200. Sync runs asynchronously.
+    const response = c.text('OK', 200);
+
+    if (!checkAndRecordWebhook(channelId)) {
+        // Fire-and-forget: run the sync in the background so we don't block the webhook response.
+        runWebhookSync(config).catch((err) => {
+            console.error(`[calendar-webhook] sync failed for config ${config._id}:`, err);
+        });
+    }
+
+    return response;
+});
+
+/** Runs an incremental sync for a single calendar config, triggered by a webhook notification. */
+async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void> {
+    const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(config.integrationId, config.user);
+    if (!integration) {
+        console.warn(`[calendar-webhook] integration ${config.integrationId} not found for config ${config._id} — skipping sync`);
+        return;
+    }
+    const provider = buildProvider(integration, config.user);
+    const now = dayjs().toISOString();
+    const ctx: SyncContext = { userId: config.user, now, ops: [] };
+    await syncSingleCalendar(config, integration, provider, ctx);
+    // Keep webhook channel alive — renew if close to expiring so the next change also triggers a webhook.
+    await renewWebhookIfExpired(config, provider).catch((err) => {
+        console.error(`[calendar-webhook] renewWebhookIfExpired failed for config ${config._id}:`, err);
+    });
+    notifyUserViaSse(config.user, { type: 'update', ts: now });
+    // Web Push for devices without an open SSE connection (app closed / backgrounded).
+    await notifyViaWebPush(config.user, null, ctx.ops, now).catch((err) => {
+        console.error(`[calendar-webhook] web push failed for user ${config.user}:`, err);
+    });
+}
+
+// ── Webhook renewal ──────────────────────────────────────────────────────────
+
+// Secured by a shared secret so only the Cloud Scheduler job can trigger renewal.
+calendarRoutes.post('/webhooks/renew', async (c) => {
+    const cronSecret = c.req.header('x-webhook-cron-secret');
+    if (!cronSecret || cronSecret !== process.env.CALENDAR_WEBHOOK_CRON_SECRET) {
+        return c.text('Unauthorized', 401);
+    }
+
+    const horizon = dayjs().add(1, 'day').toISOString();
+    const expiring = await calendarSyncConfigsDAO.findNeedingWebhook(horizon);
+
+    const results = await Promise.allSettled(
+        expiring.map(async (config) => {
+            const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(config.integrationId, config.user);
+            if (!integration) {
+                return;
+            }
+            const provider = buildProvider(integration, config.user);
+            await renewWebhookIfExpired(config, provider);
+        }),
+    );
+
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    return c.json({ renewed: results.length - failed, failed });
+});
 
 export { calendarRoutes };

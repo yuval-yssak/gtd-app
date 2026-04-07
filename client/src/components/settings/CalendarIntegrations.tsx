@@ -1,5 +1,6 @@
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
 import CircularProgress from '@mui/material/CircularProgress';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
@@ -9,25 +10,34 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Divider from '@mui/material/Divider';
 import FormControl from '@mui/material/FormControl';
 import FormControlLabel from '@mui/material/FormControlLabel';
+import IconButton from '@mui/material/IconButton';
 import InputLabel from '@mui/material/InputLabel';
+import List from '@mui/material/List';
+import ListItem from '@mui/material/ListItem';
+import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
 import Select from '@mui/material/Select';
+import Switch from '@mui/material/Switch';
 import Typography from '@mui/material/Typography';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     type CalendarIntegration,
+    type CalendarSyncConfig,
+    createSyncConfig,
     deleteIntegration,
+    deleteSyncConfig,
     type GoogleCalendar,
     initiateGoogleCalendarAuth,
     listCalendars,
     listIntegrations,
+    listSyncConfigs,
     syncIntegration,
     type UnlinkAction,
-    updateIntegration,
+    updateSyncConfig,
 } from '../../api/calendarApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { hasAtLeastOne } from '../../lib/typeUtils';
@@ -141,12 +151,7 @@ export function CalendarIntegrations() {
                 </Typography>
             )}
             {integrations.map((integration) => (
-                <IntegrationRow
-                    key={integration._id}
-                    integration={integration}
-                    onDisconnected={loadIntegrations}
-                    onCalendarChanged={(updated) => setIntegrations((prev) => prev.map((i) => (i._id === updated._id ? updated : i)))}
-                />
+                <IntegrationRow key={integration._id} integration={integration} onDisconnected={loadIntegrations} />
             ))}
             <Button variant="outlined" size="small" onClick={initiateGoogleCalendarAuth}>
                 Connect Google Calendar
@@ -156,8 +161,7 @@ export function CalendarIntegrations() {
                 <ChooseCalendarDialog
                     integration={chooseCalendarFor}
                     onClose={() => setChooseCalendarFor(null)}
-                    onSaved={(calendarId) => {
-                        setIntegrations((prev) => prev.map((i) => (i._id === chooseCalendarFor._id ? { ...i, calendarId } : i)));
+                    onSaved={() => {
                         setChooseCalendarFor(null);
                         syncAndRefresh().catch(() => {});
                     }}
@@ -167,19 +171,103 @@ export function CalendarIntegrations() {
     );
 }
 
+/** Fetches sync configs for an integration, with unmount-safe cancellation. */
+function useSyncConfigs(integrationId: string): {
+    configs: CalendarSyncConfig[];
+    isLoading: boolean;
+    reload: () => void;
+    setConfigs: React.Dispatch<React.SetStateAction<CalendarSyncConfig[]>>;
+} {
+    const [configs, setConfigs] = useState<CalendarSyncConfig[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const isMountedRef = useRef(true);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
+    const fetchConfigs = useCallback(async () => {
+        setIsLoading(true);
+        try {
+            const loaded = await listSyncConfigs(integrationId);
+            if (isMountedRef.current) setConfigs(loaded);
+        } catch {
+            // Swallow — the caller decides how to handle missing configs.
+        } finally {
+            if (isMountedRef.current) setIsLoading(false);
+        }
+    }, [integrationId]);
+
+    useEffect(() => {
+        fetchConfigs();
+    }, [fetchConfigs]);
+
+    return { configs, isLoading, reload: fetchConfigs, setConfigs };
+}
+
 interface IntegrationRowProps {
     integration: CalendarIntegration;
     onDisconnected: () => void;
-    onCalendarChanged: (updated: CalendarIntegration) => void;
 }
 
-function IntegrationRow({ integration, onDisconnected, onCalendarChanged }: IntegrationRowProps) {
-    const { calendars, fetchError: calendarFetchError } = useCalendarList(integration._id);
+/** Manages sync config mutations with error handling and optimistic state updates. */
+function useSyncConfigActions(
+    integrationId: string,
+    setConfigs: React.Dispatch<React.SetStateAction<CalendarSyncConfig[]>>,
+): { actions: ConfigActions; actionError: string | null } {
+    const [actionError, setActionError] = useState<string | null>(null);
+
+    const onToggleEnabled = useCallback(
+        async (config: CalendarSyncConfig) => {
+            setActionError(null);
+            try {
+                const updated = await updateSyncConfig(integrationId, config._id, { enabled: !config.enabled });
+                setConfigs((prev) => prev.map((c) => (c._id === config._id ? updated : c)));
+            } catch {
+                setActionError('Failed to update calendar. Please try again.');
+            }
+        },
+        [integrationId, setConfigs],
+    );
+
+    const onSetDefault = useCallback(
+        async (config: CalendarSyncConfig) => {
+            setActionError(null);
+            try {
+                const updated = await updateSyncConfig(integrationId, config._id, { isDefault: true });
+                // The server unsets isDefault on all sibling configs — refresh to get accurate state.
+                setConfigs((prev) => prev.map((c) => (c._id === config._id ? updated : { ...c, isDefault: false })));
+            } catch {
+                setActionError('Failed to set default calendar. Please try again.');
+            }
+        },
+        [integrationId, setConfigs],
+    );
+
+    const onRemove = useCallback(
+        async (config: CalendarSyncConfig) => {
+            setActionError(null);
+            try {
+                await deleteSyncConfig(integrationId, config._id);
+                setConfigs((prev) => prev.filter((c) => c._id !== config._id));
+            } catch {
+                setActionError('Failed to remove calendar. Please try again.');
+            }
+        },
+        [integrationId, setConfigs],
+    );
+
+    return { actions: { onToggleEnabled, onSetDefault, onRemove }, actionError };
+}
+
+/** Wraps the sync-now action with loading, error, and unmount-safety state. */
+function useSyncNow(integrationId: string): { onSyncNow: () => void; isSyncing: boolean; syncError: string | null } {
     const [isSyncing, setIsSyncing] = useState(false);
-    const [isDisconnectOpen, setIsDisconnectOpen] = useState(false);
+    const [syncError, setSyncError] = useState<string | null>(null);
     const { syncAndRefresh } = useAppData();
-    // Guards onCalendarSelect / onSyncNow against setState calls after the row unmounts
-    // (e.g. user disconnects while a sync is in flight).
     const isMountedRef = useRef(true);
     useEffect(
         () => () => {
@@ -188,28 +276,41 @@ function IntegrationRow({ integration, onDisconnected, onCalendarChanged }: Inte
         [],
     );
 
-    async function onCalendarSelect(calendarId: string) {
-        await updateIntegration(integration._id, calendarId);
-        if (!isMountedRef.current) {
-            return;
-        }
-        onCalendarChanged({ ...integration, calendarId });
-        // Fire-and-forget: a sync failure must not roll back a successful calendar save.
-        syncAndRefresh().catch(() => {});
-    }
-
-    async function onSyncNow() {
+    const onSyncNow = useCallback(async () => {
         setIsSyncing(true);
+        setSyncError(null);
         try {
-            await syncIntegration(integration._id);
+            await syncIntegration(integrationId);
             await syncAndRefresh();
+        } catch {
+            if (isMountedRef.current) setSyncError('Sync failed. Please try again.');
         } finally {
             if (isMountedRef.current) setIsSyncing(false);
         }
+    }, [integrationId, syncAndRefresh]);
+
+    return { onSyncNow, isSyncing, syncError };
+}
+
+function IntegrationRow({ integration, onDisconnected }: IntegrationRowProps) {
+    const { calendars, fetchError: calendarFetchError } = useCalendarList(integration._id);
+    const { configs, isLoading: configsLoading, reload: reloadConfigs, setConfigs } = useSyncConfigs(integration._id);
+    const { actions, actionError } = useSyncConfigActions(integration._id, setConfigs);
+    const { onSyncNow, isSyncing, syncError } = useSyncNow(integration._id);
+    const [isDisconnectOpen, setIsDisconnectOpen] = useState(false);
+    const [isAddCalendarOpen, setIsAddCalendarOpen] = useState(false);
+    const { syncAndRefresh } = useAppData();
+
+    function resolveCalendarName(calendarId: string): string {
+        return calendars.find((c) => c.id === calendarId)?.name ?? calendarId;
     }
 
+    // Calendars already being synced — used to filter the "add calendar" dropdown.
+    const syncedCalendarIds = new Set(configs.map((c) => c.calendarId));
+    const availableToAdd = calendars.filter((c) => !syncedCalendarIds.has(c.id));
+
     const connectedSince = dayjs(integration.createdTs).format('MMM D, YYYY');
-    const lastSynced = integration.lastSyncedTs ? dayjs(integration.lastSyncedTs).format('MMM D, YYYY h:mm A') : 'Never';
+    const errorMessage = calendarFetchError ?? actionError ?? syncError;
 
     return (
         <Box mb={2}>
@@ -218,52 +319,26 @@ function IntegrationRow({ integration, onDisconnected, onCalendarChanged }: Inte
                 Google Calendar
             </Typography>
             <Typography variant="caption" color="text.secondary" display="block">
-                Connected {connectedSince} · Last synced {lastSynced}
+                Connected {connectedSince}
             </Typography>
 
-            {calendarFetchError && (
+            {errorMessage && (
                 <Typography variant="caption" color="error" display="block" mt={1}>
-                    {calendarFetchError}
+                    {errorMessage}
                 </Typography>
             )}
-            {calendars.length > 0 && (
-                <Box mt={1} mb={1}>
-                    <FormControl size="small">
-                        <InputLabel>Syncing to</InputLabel>
-                        <Select
-                            label="Syncing to"
-                            value={integration.calendarId}
-                            onChange={(e) =>
-                                onCalendarSelect(e.target.value).catch(() => {
-                                    // Roll back the optimistic UI update so the select doesn't
-                                    // show a calendar that wasn't actually saved.
-                                    onCalendarChanged(integration);
-                                })
-                            }
-                            sx={{ minWidth: 200 }}
-                        >
-                            {calendars.map((cal) => (
-                                <MenuItem key={cal.id} value={cal.id}>
-                                    {cal.name}
-                                </MenuItem>
-                            ))}
-                            {!calendars.some((c) => c.id === integration.calendarId) && (
-                                <MenuItem value={integration.calendarId}>{integration.calendarId}</MenuItem>
-                            )}
-                        </Select>
-                    </FormControl>
-                </Box>
+
+            {configsLoading ? (
+                <CircularProgress size={16} sx={{ mt: 1 }} />
+            ) : (
+                <SyncConfigList configs={configs} resolveCalendarName={resolveCalendarName} actions={actions} />
             )}
 
-            <Box sx={{ display: 'flex', gap: 1, mt: 1 }}>
-                <Button variant="outlined" size="small" onClick={onSyncNow} disabled={isSyncing}>
-                    {isSyncing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
-                    {isSyncing ? 'Syncing…' : 'Sync now'}
-                </Button>
-                <Button variant="outlined" size="small" color="error" onClick={() => setIsDisconnectOpen(true)}>
-                    Disconnect
-                </Button>
-            </Box>
+            <IntegrationActions
+                isSyncing={isSyncing}
+                hasAvailableCalendars={availableToAdd.length > 0}
+                actions={{ onSyncNow, onAddCalendar: () => setIsAddCalendarOpen(true), onDisconnect: () => setIsDisconnectOpen(true) }}
+            />
 
             <DisconnectDialog
                 open={isDisconnectOpen}
@@ -271,35 +346,178 @@ function IntegrationRow({ integration, onDisconnected, onCalendarChanged }: Inte
                 onClose={() => setIsDisconnectOpen(false)}
                 onDisconnected={onDisconnected}
             />
+
+            {isAddCalendarOpen && (
+                <AddCalendarDialog
+                    integrationId={integration._id}
+                    availableCalendars={availableToAdd}
+                    onClose={() => setIsAddCalendarOpen(false)}
+                    onAdded={() => {
+                        setIsAddCalendarOpen(false);
+                        reloadConfigs();
+                        syncAndRefresh().catch(() => {});
+                    }}
+                />
+            )}
         </Box>
     );
 }
 
-/** Returns the calendar ID to show selected in the picker.
- *  Prefers the user's explicit choice; falls back to the first real calendar when
- *  integration.calendarId is an alias ('primary') that doesn't appear in calendarList. */
-export function resolveSelectedCalendarId(userSelectedId: string | null, calendars: GoogleCalendar[], integrationCalendarId: string): string {
-    if (userSelectedId !== null) {
-        return userSelectedId;
+interface IntegrationRowActions {
+    onSyncNow: () => void;
+    onAddCalendar: () => void;
+    onDisconnect: () => void;
+}
+
+interface IntegrationActionsProps {
+    isSyncing: boolean;
+    hasAvailableCalendars: boolean;
+    actions: IntegrationRowActions;
+}
+
+function IntegrationActions({ isSyncing, hasAvailableCalendars, actions }: IntegrationActionsProps) {
+    return (
+        <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
+            {hasAvailableCalendars && (
+                <Button variant="outlined" size="small" onClick={actions.onAddCalendar}>
+                    Add calendar
+                </Button>
+            )}
+            <Button variant="outlined" size="small" onClick={actions.onSyncNow} disabled={isSyncing}>
+                {isSyncing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
+                {isSyncing ? 'Syncing…' : 'Sync now'}
+            </Button>
+            <Button variant="outlined" size="small" color="error" onClick={actions.onDisconnect}>
+                Disconnect
+            </Button>
+        </Box>
+    );
+}
+
+interface ConfigActions {
+    onToggleEnabled: (config: CalendarSyncConfig) => void;
+    onSetDefault: (config: CalendarSyncConfig) => void;
+    onRemove: (config: CalendarSyncConfig) => void;
+}
+
+interface SyncConfigListProps {
+    configs: CalendarSyncConfig[];
+    resolveCalendarName: (calendarId: string) => string;
+    actions: ConfigActions;
+}
+
+function SyncConfigList({ configs, resolveCalendarName, actions }: SyncConfigListProps) {
+    if (configs.length === 0) {
+        return (
+            <Typography variant="body2" color="text.secondary" fontStyle="italic" mt={1}>
+                No calendars synced yet.
+            </Typography>
+        );
     }
-    const isKnown = calendars.some((c) => c.id === integrationCalendarId);
-    return isKnown ? integrationCalendarId : hasAtLeastOne(calendars) ? calendars[0].id : integrationCalendarId;
+
+    return (
+        <List dense disablePadding sx={{ mt: 0.5 }}>
+            {configs.map((config) => (
+                <ListItem
+                    key={config._id}
+                    disableGutters
+                    secondaryAction={
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                            {config.isDefault && <Chip label="default" size="small" color="primary" variant="outlined" />}
+                            {!config.isDefault && config.enabled && (
+                                <Button size="small" onClick={() => actions.onSetDefault(config)}>
+                                    Set default
+                                </Button>
+                            )}
+                            <Switch size="small" checked={config.enabled} onChange={() => actions.onToggleEnabled(config)} />
+                            <IconButton size="small" onClick={() => actions.onRemove(config)} title="Stop syncing this calendar">
+                                <Typography variant="body2">✕</Typography>
+                            </IconButton>
+                        </Box>
+                    }
+                >
+                    <ListItemText
+                        primary={config.displayName ?? resolveCalendarName(config.calendarId)}
+                        primaryTypographyProps={{ variant: 'body2', color: config.enabled ? 'text.primary' : 'text.disabled' }}
+                    />
+                </ListItem>
+            ))}
+        </List>
+    );
+}
+
+interface AddCalendarDialogProps {
+    integrationId: string;
+    availableCalendars: GoogleCalendar[];
+    onClose: () => void;
+    onAdded: () => void;
+}
+
+function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded }: AddCalendarDialogProps) {
+    const [selectedId, setSelectedId] = useState(hasAtLeastOne(availableCalendars) ? availableCalendars[0].id : '');
+    const [isSaving, setIsSaving] = useState(false);
+    const [saveError, setSaveError] = useState<string | null>(null);
+
+    async function onConfirm() {
+        if (!selectedId) {
+            return;
+        }
+        setIsSaving(true);
+        setSaveError(null);
+        try {
+            const displayName = availableCalendars.find((c) => c.id === selectedId)?.name;
+            await createSyncConfig(integrationId, { calendarId: selectedId, ...(displayName ? { displayName } : {}) });
+            onAdded();
+        } catch {
+            setSaveError('Failed to add calendar. Please try again.');
+            setIsSaving(false);
+        }
+    }
+
+    return (
+        <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+            <DialogTitle>Add a calendar to sync</DialogTitle>
+            <DialogContent>
+                <FormControl size="small" fullWidth sx={{ mt: 1 }}>
+                    <InputLabel>Calendar</InputLabel>
+                    <Select label="Calendar" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
+                        {availableCalendars.map((cal) => (
+                            <MenuItem key={cal.id} value={cal.id}>
+                                {cal.name}
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
+            </DialogContent>
+            {saveError && (
+                <Typography variant="body2" color="error" sx={{ px: 3, pb: 1 }}>
+                    {saveError}
+                </Typography>
+            )}
+            <DialogActions>
+                <Button onClick={onClose} disabled={isSaving}>
+                    Cancel
+                </Button>
+                <Button onClick={onConfirm} variant="contained" disabled={isSaving || !selectedId}>
+                    {isSaving ? 'Adding…' : 'Add'}
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
 }
 
 interface ChooseCalendarDialogProps {
     integration: CalendarIntegration;
     onClose: () => void;
-    onSaved: (calendarId: string) => void;
+    onSaved: () => void;
 }
 
+/** Shown after the OAuth callback redirect — lets the user pick an initial calendar to sync. */
 function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarDialogProps) {
     const { calendars, isLoading, fetchError: calendarFetchError } = useCalendarList(integration._id);
-    // null = no user override yet; the resolved selectedId defaults below.
-    const [userSelectedId, setUserSelectedId] = useState<string | null>(null);
+    const [selectedId, setSelectedId] = useState('');
     const [isSaving, setIsSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
-    // Guards onConfirm against setState calls if the dialog unmounts while the save is in flight
-    // (e.g. parent closes it after a concurrent update).
     const isMountedRef = useRef(true);
     useEffect(
         () => () => {
@@ -308,16 +526,24 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
         [],
     );
 
-    // 'primary' is a GCal alias that doesn't appear by name in calendarList, so default to the
-    // first real calendar once the list loads. User's manual choice (userSelectedId) takes priority.
-    const selectedId = resolveSelectedCalendarId(userSelectedId, calendars, integration.calendarId);
+    // Default to the first calendar once the list loads.
+    useEffect(() => {
+        if (hasAtLeastOne(calendars) && !selectedId) {
+            setSelectedId(calendars[0].id);
+        }
+    }, [calendars, selectedId]);
 
     async function onConfirm() {
+        if (!selectedId) {
+            return;
+        }
         setIsSaving(true);
         setSaveError(null);
         try {
-            await updateIntegration(integration._id, selectedId);
-            onSaved(selectedId);
+            const displayName = calendars.find((c) => c.id === selectedId)?.name;
+            // First calendar added via the post-OAuth dialog becomes the default sync target.
+            await createSyncConfig(integration._id, { calendarId: selectedId, isDefault: true, ...(displayName ? { displayName } : {}) });
+            onSaved();
         } catch {
             if (isMountedRef.current) {
                 setSaveError('Failed to save calendar selection. Please try again.');
@@ -341,7 +567,7 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
                 ) : (
                     <FormControl size="small" fullWidth>
                         <InputLabel>Calendar</InputLabel>
-                        <Select label="Calendar" value={selectedId} onChange={(e) => setUserSelectedId(e.target.value)}>
+                        <Select label="Calendar" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
                             {calendars.map((cal) => (
                                 <MenuItem key={cal.id} value={cal.id}>
                                     {cal.name}
@@ -360,7 +586,7 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
                 <Button onClick={onClose} disabled={isSaving}>
                     Skip
                 </Button>
-                <Button onClick={onConfirm} variant="contained" disabled={isSaving || isLoading}>
+                <Button onClick={onConfirm} variant="contained" disabled={isSaving || isLoading || !selectedId}>
                     {isSaving ? 'Saving…' : 'Save & sync'}
                 </Button>
             </DialogActions>

@@ -84,6 +84,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // SSE callback, and SW push message. flushSyncQueue/pullFromServer have their own
     // module-level guards, but this prevents redundant IDB reads and setState batches.
     const isSyncingRef = useRef(false);
+    // When an SSE/push event arrives while syncAndRefresh is already running, setting this
+    // flag ensures a follow-up sync runs after the current one finishes. Without it, the
+    // incoming event would be silently dropped and the user wouldn't see the update.
+    const syncRequestedWhileBusy = useRef(false);
     // Prevents setState calls from in-flight syncAndRefresh/initializeFromCache after unmount
     // (e.g. React Strict Mode double-mount, or fast navigation away during a network round-trip).
     const unmountedRef = useRef(false);
@@ -91,6 +95,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // Extracted so both the mount effect and the isOnline effect can call it.
     const syncAndRefresh = useCallback(async () => {
         if (isSyncingRef.current) {
+            syncRequestedWhileBusy.current = true;
             return;
         }
         isSyncingRef.current = true;
@@ -119,6 +124,24 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             setRoutines(await getRoutinesByUser(db, acct.id));
         } finally {
             isSyncingRef.current = false;
+            // If an SSE/push event arrived while we were syncing, do a lightweight catch-up
+            // pull instead of a full syncAndRefresh. A full sync would run calendar integration
+            // and two more pulls, creating race conditions with concurrent pushes. A single
+            // pull is sufficient because the SSE event means new ops are on the server.
+            if (syncRequestedWhileBusy.current) {
+                syncRequestedWhileBusy.current = false;
+                pullFromServer(db)
+                    .then(async () => {
+                        if (unmountedRef.current) return;
+                        const acct = await getActiveAccount(db);
+                        if (!acct) return;
+                        setItems(await getItemsByUser(db, acct.id));
+                        setWorkContexts(await getWorkContextsByUser(db, acct.id));
+                        setPeople(await getPeopleByUser(db, acct.id));
+                        setRoutines(await getRoutinesByUser(db, acct.id));
+                    })
+                    .catch((err) => console.error('[sync] catch-up pull failed:', err));
+            }
         }
     }, [db]);
 

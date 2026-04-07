@@ -1,5 +1,19 @@
 import type { RoutineInterface } from '../types/entities.js';
 
+/** Result of an incremental or full event sync — includes events and the token for the next sync. */
+export interface EventSyncResult {
+    events: GCalEvent[];
+    nextSyncToken: string;
+}
+
+/** Thrown when Google returns 410 Gone, meaning the stored syncToken is no longer valid. */
+export class SyncTokenInvalidError extends Error {
+    constructor() {
+        super('Sync token is no longer valid (410 Gone). A full re-sync is required.');
+        this.name = 'SyncTokenInvalidError';
+    }
+}
+
 export interface GCalException {
     originalDate: string; // ISO date of the original rrule occurrence
     type: 'modified' | 'deleted';
@@ -27,4 +41,18 @@ export interface CalendarProvider {
     getExceptions(eventId: string, calendarId: string, since: string): Promise<GCalException[]>;
     /** Fetches all events (including cancelled) within the given time window. */
     listEvents(calendarId: string, since: string, until: string): Promise<GCalEvent[]>;
+    /** Fetches only events changed since the last sync using Google's syncToken. Throws SyncTokenInvalidError on 410 Gone. */
+    listEventsIncremental(calendarId: string, syncToken: string): Promise<EventSyncResult>;
+    /** Fetches all future events from timeMin onwards and returns a syncToken for subsequent incremental syncs. */
+    listEventsFull(calendarId: string, timeMin: string): Promise<EventSyncResult>;
+    /** Registers a push notification channel for calendar events. Returns Google's resourceId and expiration datetime. */
+    watchEvents(calendarId: string, webhookUrl: string, channelId: string): Promise<{ resourceId: string; expiration: string }>;
+    /** Stops a previously registered push notification channel. */
+    stopWatch(channelId: string, resourceId: string): Promise<void>;
+    /** Creates a single (non-recurring) event. Returns the event ID. */
+    createEvent(calendarId: string, event: { title: string; timeStart: string; timeEnd: string }): Promise<string>;
+    /** Updates fields on an existing single event. */
+    updateEvent(calendarId: string, eventId: string, updates: { title?: string; timeStart?: string; timeEnd?: string }): Promise<void>;
+    /** Deletes (cancels) a single event. */
+    deleteEvent(calendarId: string, eventId: string): Promise<void>;
 }

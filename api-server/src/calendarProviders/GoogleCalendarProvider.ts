@@ -1,7 +1,8 @@
 import dayjs from 'dayjs';
 import { google } from 'googleapis';
 import type { CalendarIntegrationInterface, RoutineInterface } from '../types/entities.js';
-import type { CalendarProvider, GCalEvent, GCalException } from './CalendarProvider.js';
+import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException } from './CalendarProvider.js';
+import { SyncTokenInvalidError } from './CalendarProvider.js';
 
 /** Builds a dateTime object for the Google Calendar API from a date string and HH:MM time. */
 function buildDateTime(dateStr: string, timeOfDay: string, timeZone: string): { dateTime: string; timeZone: string } {
@@ -18,6 +19,64 @@ function endDateTime(dateStr: string, timeOfDay: string, durationMinutes: number
 function seriesStartDate(routine: RoutineInterface): string {
     // Use createdTs date so the rrule series origin matches when the routine was defined.
     return routine.createdTs.slice(0, 10);
+}
+
+/** Type guard for Google API errors which carry a numeric `code` property (e.g. 410 for expired syncTokens). */
+function isGoogleApiError(err: unknown): err is Error & { code: number } {
+    return err instanceof Error && 'code' in err && typeof (err as { code: unknown }).code === 'number';
+}
+
+/** Parses raw Google Calendar API event items into typed GCalEvent objects. Skips all-day events (no dateTime). */
+function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCalEvent[] {
+    // Type-safe cast: googleapis returns `calendar_v3.Schema$Event[]` but we treat it generically
+    // here to decouple the parser from the googleapis type system.
+    const events = (items ?? []) as Array<{
+        id?: string | null;
+        summary?: string | null;
+        start?: { dateTime?: string | null; date?: string | null } | null;
+        end?: { dateTime?: string | null } | null;
+        updated?: string | null;
+        status?: string | null;
+        recurringEventId?: string | null;
+    }>;
+    return events.flatMap<GCalEvent>((event) => {
+        if (!event.id) {
+            return [];
+        }
+        // Cancelled events from incremental sync often lack summary/start/end —
+        // only id and status are needed for the trash-on-cancel path in upsertCalendarItem.
+        if (event.status === 'cancelled') {
+            return [
+                {
+                    id: event.id,
+                    title: event.summary ?? '',
+                    timeStart: event.start?.dateTime ?? '',
+                    timeEnd: event.end?.dateTime ?? '',
+                    updated: event.updated ?? '',
+                    status: 'cancelled',
+                    ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
+                },
+            ];
+        }
+        if (!event.summary || !event.start?.dateTime || !event.end?.dateTime) {
+            return [];
+        }
+        const rawStatus = event.status;
+        const status: GCalEvent['status'] = rawStatus === 'tentative' ? 'tentative' : 'confirmed';
+        return [
+            {
+                id: event.id,
+                title: event.summary,
+                timeStart: event.start.dateTime,
+                timeEnd: event.end.dateTime,
+                // Fall back to timeStart so last-write-wins comparison doesn't incorrectly
+                // treat a missing `updated` field as "just modified now".
+                updated: event.updated ?? event.start.dateTime,
+                status,
+                ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
+            },
+        ];
+    });
 }
 
 export class GoogleCalendarProvider implements CalendarProvider {
@@ -38,8 +97,8 @@ export class GoogleCalendarProvider implements CalendarProvider {
         if (onTokenRefresh) {
             // googleapis emits 'tokens' whenever it silently refreshes an expired access token.
             // Persist the new credentials so the next request doesn't start with a stale token.
-            // Track the latest refresh token locally so repeated refreshes don't fall back to the
-            // stale value captured at construction time.
+            // Must be let — updated on each token refresh event so subsequent persists use the
+            // latest value instead of the stale one captured at construction time.
             let latestRefreshToken = integration.refreshToken;
             let latestTokenExpiry = integration.tokenExpiry;
             oauth2.on('tokens', (tokens) => {
@@ -136,28 +195,111 @@ export class GoogleCalendarProvider implements CalendarProvider {
             orderBy: 'startTime',
         });
 
-        // All-day events use event.start.date (no dateTime) — skipped intentionally since
-        // calendar items in this app require a specific datetime, not just a date.
-        return (response.data.items ?? []).flatMap((event) => {
-            if (!event.id || !event.summary || !event.start?.dateTime || !event.end?.dateTime) {
-                return [];
+        return parseGCalEvents(response.data.items as Array<Record<string, unknown>> | undefined);
+    }
+
+    async listEventsIncremental(calendarId: string, syncToken: string): Promise<EventSyncResult> {
+        try {
+            // syncToken returns only events changed since the token was issued.
+            // showDeleted must be true to receive cancellation notifications.
+            // singleEvents must NOT be set when using syncToken — Google rejects the combination.
+            return await this.paginatedEventsFetch({ calendarId, syncToken, showDeleted: true }, syncToken);
+        } catch (err: unknown) {
+            // Google returns 410 Gone when the syncToken has expired or been invalidated.
+            if (isGoogleApiError(err) && err.code === 410) {
+                throw new SyncTokenInvalidError();
             }
-            const rawStatus = event.status;
-            const status: GCalEvent['status'] = rawStatus === 'cancelled' ? 'cancelled' : rawStatus === 'tentative' ? 'tentative' : 'confirmed';
-            return [
-                {
-                    id: event.id,
-                    title: event.summary,
-                    timeStart: event.start.dateTime,
-                    timeEnd: event.end.dateTime,
-                    // Fall back to timeStart so last-write-wins comparison doesn't incorrectly
-                    // treat a missing `updated` field as "just modified now".
-                    updated: event.updated ?? event.start.dateTime,
-                    status,
-                    ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
-                },
-            ];
+            throw err;
+        }
+    }
+
+    async listEventsFull(calendarId: string, timeMin: string): Promise<EventSyncResult> {
+        // Initial full sync: fetch all future events and obtain a syncToken for incremental use.
+        // singleEvents must NOT be set so that Google returns a nextSyncToken.
+        return this.paginatedEventsFetch({ calendarId, timeMin, showDeleted: true }, '');
+    }
+
+    /**
+     * Fetches all pages of events from Google Calendar.
+     * Google returns max ~250 events per page; nextSyncToken is only present on the final page.
+     */
+    private async paginatedEventsFetch(params: Record<string, unknown>, fallbackSyncToken: string): Promise<EventSyncResult> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const allEvents: GCalEvent[] = [];
+        let pageToken: string | undefined;
+
+        do {
+            const response = await cal.events.list({ ...params, ...(pageToken ? { pageToken } : {}) });
+            allEvents.push(...parseGCalEvents(response.data.items as Array<Record<string, unknown>> | undefined));
+            pageToken = response.data.nextPageToken ?? undefined;
+            // nextSyncToken is only present on the final page (when nextPageToken is absent).
+            if (!pageToken) {
+                return { events: allEvents, nextSyncToken: response.data.nextSyncToken ?? fallbackSyncToken };
+            }
+        } while (pageToken);
+
+        // Unreachable — the do-while exits via the return above when pageToken is absent.
+        return { events: allEvents, nextSyncToken: fallbackSyncToken };
+    }
+
+    async watchEvents(calendarId: string, webhookUrl: string, channelId: string): Promise<{ resourceId: string; expiration: string }> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const response = await cal.events.watch({
+            calendarId,
+            requestBody: {
+                id: channelId,
+                type: 'web_hook',
+                address: webhookUrl,
+            },
         });
+        const resourceId = response.data.resourceId;
+        if (!resourceId) {
+            throw new Error('Google Calendar did not return a resourceId for the watch channel');
+        }
+        // Google returns expiration as unix ms string — convert to ISO for consistent storage.
+        const expiration = response.data.expiration ? dayjs(Number(response.data.expiration)).toISOString() : dayjs().add(7, 'day').toISOString();
+        return { resourceId, expiration };
+    }
+
+    async stopWatch(channelId: string, resourceId: string): Promise<void> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        await cal.channels.stop({ requestBody: { id: channelId, resourceId } });
+    }
+
+    async createEvent(calendarId: string, event: { title: string; timeStart: string; timeEnd: string }): Promise<string> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const response = await cal.events.insert({
+            calendarId,
+            requestBody: {
+                summary: event.title,
+                start: { dateTime: event.timeStart },
+                end: { dateTime: event.timeEnd },
+            },
+        });
+        const eventId = response.data.id;
+        if (!eventId) {
+            throw new Error('Google Calendar did not return an event ID');
+        }
+        return eventId;
+    }
+
+    async updateEvent(calendarId: string, eventId: string, updates: { title?: string; timeStart?: string; timeEnd?: string }): Promise<void> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        // Use patch (not update) so only the provided fields are modified — update would clear omitted fields.
+        await cal.events.patch({
+            calendarId,
+            eventId,
+            requestBody: {
+                ...(updates.title !== undefined ? { summary: updates.title } : {}),
+                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart } } : {}),
+                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd } } : {}),
+            },
+        });
+    }
+
+    async deleteEvent(calendarId: string, eventId: string): Promise<void> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        await cal.events.delete({ calendarId, eventId });
     }
 
     async getExceptions(eventId: string, calendarId: string, since: string): Promise<GCalException[]> {

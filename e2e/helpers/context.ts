@@ -1,5 +1,5 @@
 import type { Browser, Page } from '@playwright/test';
-import { loginAs } from './login';
+import { fetchDevSessionCookie, loginAs } from './login';
 
 export async function withOneLoggedInDevice(browser: Browser, email: string, fn: (page: Page) => Promise<void>): Promise<void> {
     const ctx = await browser.newContext();
@@ -12,11 +12,12 @@ export async function withOneLoggedInDevice(browser: Browser, email: string, fn:
 }
 
 export async function withTwoLoggedInDevices(browser: Browser, email: string, fn: (page1: Page, page2: Page) => Promise<void>): Promise<void> {
+    // Pre-create the user so parallel logins don't race on user creation
+    await fetchDevSessionCookie(email);
     const ctx1 = await browser.newContext();
     const ctx2 = await browser.newContext();
     try {
-        const page1 = await loginAs(ctx1, email);
-        const page2 = await loginAs(ctx2, email);
+        const [page1, page2] = await Promise.all([loginAs(ctx1, email), loginAs(ctx2, email)]);
         await fn(page1, page2);
     } finally {
         await ctx1.close();

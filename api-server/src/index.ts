@@ -15,7 +15,8 @@ const app = new Hono()
             origin: (origin) => (process.env.NODE_ENV !== 'production' ? origin : origin === clientUrl ? origin : null),
             credentials: true, // required so browsers send cookies cross-origin
             allowHeaders: ['Content-Type'],
-            allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+            // PATCH needed for partial updates (e.g., calendar sync config)
+            allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         }),
     )
     // auth is a live ESM binding — assigned in loadDataAccess() before serve() is called, so it's safe to reference lazily here
@@ -34,6 +35,12 @@ async function start() {
     if (process.env.NODE_ENV !== 'production') {
         const { devLoginRoutes } = await import('./routes/devLogin.js');
         app.route('/dev', devLoginRoutes);
+    }
+
+    // Keep Google Calendar webhook channels alive without Cloud Scheduler.
+    if (process.env.CALENDAR_WEBHOOK_URL) {
+        const { startWebhookRenewalTimer } = await import('./lib/webhookRenewal.js');
+        startWebhookRenewalTimer();
     }
 
     const port = Number(process.env.PORT ?? 4000);

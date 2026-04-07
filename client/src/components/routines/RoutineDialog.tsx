@@ -8,6 +8,7 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import FormLabel from '@mui/material/FormLabel';
+import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
@@ -19,6 +20,7 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { createNextCalendarItem, createNextRoutineItem } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
+import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { FrequencyPicker } from './FrequencyPicker';
 import styles from './RoutineDialog.module.css';
@@ -52,6 +54,7 @@ interface FormState {
     notes: string;
     timeOfDay: string; // HH:MM — calendar routines only
     duration: string; // minutes — calendar routines only
+    calendarSyncConfigId: string; // empty = use default calendar
     endsMode: EndsMode;
     endsDate: string; // ISO date — used when endsMode === 'onDate'
     endsCount: string; // positive integer string — used when endsMode === 'afterN'
@@ -108,8 +111,15 @@ function initFormState(routine?: StoredRoutine): FormState {
         notes: routine?.template.notes ?? '',
         timeOfDay: routine?.calendarItemTemplate?.timeOfDay ?? '09:00',
         duration: routine?.calendarItemTemplate?.duration?.toString() ?? '60',
+        calendarSyncConfigId: routine?.calendarSyncConfigId ?? '',
         ...ends,
     };
+}
+
+/** Resolves calendarSyncConfigId + calendarIntegrationId from the form's selected config. */
+function resolveCalendarLink(configId: string, options: CalendarOption[]): { calendarSyncConfigId?: string; calendarIntegrationId?: string } {
+    const selected = options.find((o) => o.configId === configId);
+    return selected ? { calendarSyncConfigId: selected.configId, calendarIntegrationId: selected.integrationId } : {};
 }
 
 function buildTemplate(form: FormState) {
@@ -129,6 +139,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
     const isEdit = routine !== undefined;
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
     const [isSaving, setIsSaving] = useState(false);
+    const { options: calendarOptions } = useCalendarOptions();
 
     function patch(update: Partial<FormState>) {
         setForm((f) => ({ ...f, ...update }));
@@ -154,6 +165,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             const template = buildTemplate(form);
             const calendarItemTemplate =
                 form.routineType === 'calendar' ? { timeOfDay: form.timeOfDay, duration: parseInt(form.duration, 10) || 60 } : undefined;
+            const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
                 await updateRoutine(db, {
@@ -163,6 +175,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     rrule: finalRrule,
                     template,
                     ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                    ...calendarLink,
                 });
             } else {
                 const created = await createRoutine(db, {
@@ -173,6 +186,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     title: trimmedTitle,
                     active: true,
                     ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                    ...calendarLink,
                 });
 
                 // Auto-create the first item — best-effort so a failure doesn't block saving the routine
@@ -237,7 +251,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                 <EndsFields form={form} onPatch={patch} />
 
                 {isCalendar ? (
-                    <CalendarFields form={form} onPatch={patch} />
+                    <CalendarFields form={form} onPatch={patch} calendarOptions={calendarOptions} />
                 ) : (
                     <>
                         <TemplateFields
@@ -275,7 +289,17 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
 
 // ── Calendar-specific fields ───────────────────────────────────────────────────
 
-function CalendarFields({ form, onPatch }: { form: FormState; onPatch: (patch: Partial<FormState>) => void }) {
+function CalendarFields({
+    form,
+    onPatch,
+    calendarOptions,
+}: {
+    form: FormState;
+    onPatch: (patch: Partial<FormState>) => void;
+    calendarOptions: CalendarOption[];
+}) {
+    const showPicker = calendarOptions.length > 1;
+
     return (
         <Stack gap={1.5}>
             <Typography variant="caption" color="text.secondary" fontWeight={600}>
@@ -300,6 +324,23 @@ function CalendarFields({ form, onPatch }: { form: FormState; onPatch: (patch: P
                     slotProps={{ htmlInput: { min: 1 } }}
                 />
             </Stack>
+            {/* Only show picker when user has 2+ calendars — with 0-1 there's nothing to choose. */}
+            {showPicker && (
+                <TextField
+                    select
+                    label="Calendar"
+                    value={form.calendarSyncConfigId}
+                    onChange={(e) => onPatch({ calendarSyncConfigId: e.target.value })}
+                    size="small"
+                >
+                    <MenuItem value="">Default</MenuItem>
+                    {calendarOptions.map((opt) => (
+                        <MenuItem key={opt.configId} value={opt.configId}>
+                            {opt.displayName}
+                        </MenuItem>
+                    ))}
+                </TextField>
+            )}
         </Stack>
     );
 }

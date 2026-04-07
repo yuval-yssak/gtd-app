@@ -16,12 +16,13 @@ import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor } from '../db/itemMutations';
+import { useCalendarOptions } from '../hooks/useCalendarOptions';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 import styles from './ClarifyDialog.module.css';
 import { CalendarFields } from './clarify/CalendarFields';
 import { NextActionFields } from './clarify/NextActionFields';
 import {
-    buildCalendarTimes,
+    buildCalendarMeta,
     buildNextActionMeta,
     buildWaitingForMeta,
     type CalendarFormState,
@@ -48,6 +49,7 @@ interface Props {
 export function ClarifyDialog({ items, db, people, workContexts, onClose, onItemProcessed, initialDestination }: Props) {
     const [index, setIndex] = useState(0);
     const [destination, setDestination] = useState<Destination | null>(initialDestination ?? null);
+    const { options: calendarOptions } = useCalendarOptions();
     const [nextActionForm, setNextActionForm] = useState<NextActionFormState>(emptyNextAction);
     const [calendarForm, setCalendarForm] = useState<CalendarFormState>(emptyCalendar);
     const [waitingForForm, setWaitingForForm] = useState<WaitingForFormState>(emptyWaitingFor);
@@ -99,8 +101,7 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
             return;
         }
         if (dest === 'calendar') {
-            const { startIso, endIso } = buildCalendarTimes(calendarForm);
-            await clarifyToCalendar(db, item, startIso, endIso);
+            await clarifyToCalendar(db, item, buildCalendarMeta(calendarForm, calendarOptions));
             return;
         }
         if (dest === 'waitingFor') {
@@ -212,7 +213,11 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
 
                 {destination === 'calendar' && (
                     <Box className={styles.form}>
-                        <CalendarFields value={calendarForm} onChange={(patch) => setCalendarForm((f) => ({ ...f, ...patch }))} />
+                        <CalendarFields
+                            value={calendarForm}
+                            onChange={(patch) => setCalendarForm((f) => ({ ...f, ...patch }))}
+                            calendarOptions={calendarOptions}
+                        />
                     </Box>
                 )}
 
