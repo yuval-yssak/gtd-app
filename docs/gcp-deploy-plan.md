@@ -1,176 +1,134 @@
-# Deploy GTD API Server to Google Cloud Run
+# API Server Deployment
 
-## Context
+## Infrastructure
 
-The GTD api-server is a Node.js/Express/TypeScript app currently on Heroku (via GitHub Actions). Migrating to Google Cloud Run (free tier) for better scalability and no idle cost. MongoDB stays on Atlas (already configured). Cloud Run is chosen because it has the most generous always-free tier (2M req/month), scales to zero, and the app already reads `PORT` from env which Cloud Run sets automatically.
+| Component | Service | Details |
+|---|---|---|
+| **Backend** | Google Cloud Run | `gtd-api` (production), `gtd-api-staging` (staging), region `us-central1` |
+| **Container images** | Google Artifact Registry | Built from `api-server/Dockerfile`, pushed per deploy |
+| **Database** | MongoDB Atlas | Shared cluster, separate databases per environment |
+| **API proxy** | Cloudflare Worker | `workers/api-proxy/` routes custom domains to Cloud Run |
+| **Frontend** | Cloudflare Pages | Static SPA build from `client/` |
 
-## Current State
+### Environments
 
-- `api-server/.github/workflows/heroku-deploy.yml` — existing deploy workflow (to be replaced)
-- `api-server/src/index.ts` — reads `process.env.PORT`, defaults to 4000 ✓
-- `api-server/.env.production` — has all required env vars (MongoDB Atlas, Google OAuth)
-- No Dockerfile exists yet
-
-## Files to Create/Modify
-
-1. **`api-server/Dockerfile`** (new)
-2. **`api-server/.dockerignore`** (new)
-3. **`api-server/.github/workflows/gcp-deploy.yml`** (new, replaces heroku-deploy.yml)
+| Environment | App URL | API URL |
+|---|---|---|
+| production | https://getting-things-done.app | https://api.getting-things-done.app |
+| staging | https://staging.getting-things-done.app | https://api-staging.getting-things-done.app |
 
 ---
 
-## One-Time GCP Setup (manual, in GCP Console or gcloud CLI)
+## How to Deploy
+
+### Push-triggered (recommended)
+
+Push to the `staging` or `production` branch when `api-server/**` files have changed. This triggers `.github/workflows/deploy-api.yml` automatically.
 
 ```bash
-# 1. Create a GCP project (or use existing)
-gcloud projects create gtd-app --name="GTD App"
-gcloud config set project gtd-app
-
-# 2. Enable required APIs
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
-
-# 3. Create Artifact Registry repo (stores Docker images)
-gcloud artifacts repositories create gtd-repo \
-  --repository-format=docker \
-  --location=us-central1
-
-# 4. Create a service account for GitHub Actions to use
-gcloud iam service-accounts create github-deploy \
-  --display-name="GitHub Actions Deploy"
-
-# 5. Grant it Cloud Run and Artifact Registry permissions
-gcloud projects add-iam-policy-binding gtd-app \
-  --member="serviceAccount:github-deploy@gtd-app.iam.gserviceaccount.com" \
-  --role="roles/run.admin"
-gcloud projects add-iam-policy-binding gtd-app \
-  --member="serviceAccount:github-deploy@gtd-app.iam.gserviceaccount.com" \
-  --role="roles/artifactregistry.writer"
-gcloud iam service-accounts add-iam-policy-binding \
-  PROJECT_NUMBER-compute@developer.gserviceaccount.com \
-  --member="serviceAccount:github-deploy@gtd-app.iam.gserviceaccount.com" \
-  --role="roles/iam.serviceAccountUser"
-
-# 6. Create and download service account key → add as GitHub secret GCP_SA_KEY
-gcloud iam service-accounts keys create key.json \
-  --iam-account=github-deploy@gtd-app.iam.gserviceaccount.com
+git push origin main:staging       # deploy to staging
+git push origin main:production    # deploy to production (requires reviewer approval)
 ```
 
-**GitHub Secrets to add** (repo Settings → Secrets):
-- `GCP_SA_KEY` — contents of key.json
-- `GCP_PROJECT_ID` — e.g. `gtd-app`
-- `MONGO_DB_URL` — Atlas connection string
-- `MONGO_DB_NAME` — `gtd_prod`
-- `GOOGLE_OAUTH_APP_CLIENT_ID`
-- `GOOGLE_OAUTH_APP_CLIENT_SECRET`
-- `JWT_SECRET`
+### Manual dispatch
 
----
-
-## Dockerfile (`api-server/Dockerfile`)
-
-```dockerfile
-# Stage 1: Build
-FROM node:22-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
-
-# Stage 2: Run
-FROM node:22-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY --from=builder /app/build ./build
-EXPOSE 8080
-CMD ["node", "build/index.js"]
-```
-
-Note: Cloud Run defaults to port 8080 and sets `PORT=8080` automatically. The app already reads `process.env.PORT`, so no code change needed.
-
----
-
-## .dockerignore (`api-server/.dockerignore`)
-
-```
-node_modules
-build
-.env
-.env.*
-*.md
-.github
-src
-```
-
----
-
-## GitHub Actions Workflow (`api-server/.github/workflows/gcp-deploy.yml`)
-
-```yaml
-name: Deploy to Cloud Run
-
-on:
-  push:
-    branches:
-      - main
-
-env:
-  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-  REGION: us-central1
-  SERVICE: gtd-api
-  IMAGE: us-central1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/gtd-repo/api-server
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Configure Docker
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev
-
-      - name: Build and push image
-        run: |
-          docker build -t $IMAGE:$GITHUB_SHA .
-          docker push $IMAGE:$GITHUB_SHA
-
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy $SERVICE \
-            --image=$IMAGE:$GITHUB_SHA \
-            --region=$REGION \
-            --platform=managed \
-            --allow-unauthenticated \
-            --set-env-vars="NODE_ENV=production,MONGO_DB_NAME=${{ vars.MONGO_DB_NAME }},MONGO_DB_URL=${{ secrets.MONGO_DB_URL }},GOOGLE_OAUTH_APP_CLIENT_ID=${{ secrets.GOOGLE_OAUTH_APP_CLIENT_ID }},GOOGLE_OAUTH_APP_CLIENT_SECRET=${{ secrets.GOOGLE_OAUTH_APP_CLIENT_SECRET }},GOOGLE_REDIRECT_URI=https://gtd-api-HASH-uc.a.run.app/auth/google/callback,JWT_SECRET=${{ secrets.JWT_SECRET }}"
-```
-
----
-
-## Post-Deploy Step: Update Google OAuth
-
-After first deploy, get the Cloud Run service URL:
 ```bash
-gcloud run services describe gtd-api --region=us-central1 --format='value(status.url)'
+./scripts/deploy.sh api staging       # triggers workflow via gh workflow run
+./scripts/deploy.sh api production
 ```
 
-Then update:
-1. `GOOGLE_REDIRECT_URI` in GitHub secret → `https://<your-service-url>/auth/google/callback`
-2. Add the same URI to **Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client → Authorized redirect URIs**
-3. Redeploy to pick up the new env var
+Or directly in the GitHub Actions UI: [Deploy API workflow](https://github.com/yuval-yssak/gtd-app/actions/workflows/deploy-api.yml) -> "Run workflow" -> select environment.
+
+### Monitor progress
+
+```bash
+gh run list --workflow=deploy-api.yml
+gh run watch <run-id>
+```
+
+Or visit: https://github.com/yuval-yssak/gtd-app/actions/workflows/deploy-api.yml
 
 ---
 
-## Verification
+## GitHub Environments
 
-1. After deploy: `curl https://<service-url>/auth/check` → should return 401 (unauthenticated, not 500)
-2. Open browser → `https://<service-url>/auth/google` → should redirect to Google login
-3. Complete login → JWT cookie set → `/auth/check` returns 200
-4. Check Cloud Run logs: `gcloud run services logs read gtd-api --region=us-central1`
+Configured at https://github.com/yuval-yssak/gtd-app/settings/environments
+
+Each environment (`production`, `staging`) holds its own set of secrets and variables. The `production` environment has required reviewers enabled — pushes to the `production` branch require approval before the deploy job runs.
+
+### Secrets (per environment)
+
+| Secret | Purpose |
+|---|---|
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Workload Identity Federation provider for keyless auth |
+| `GCP_SERVICE_ACCOUNT` | Service account email for Cloud Run deploys |
+| `MONGO_DB_URL` | MongoDB Atlas connection string |
+| `GOOGLE_OAUTH_APP_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_OAUTH_APP_CLIENT_SECRET` | Google OAuth client secret |
+| `GH_OAUTH_CLIENT_ID` | GitHub OAuth client ID |
+| `GH_OAUTH_CLIENT_SECRET` | GitHub OAuth client secret |
+| `BETTER_AUTH_SECRET` | Session signing key (64+ chars) |
+| `VAPID_PRIVATE_KEY` | Web Push VAPID private key |
+
+### Variables (per environment)
+
+| Variable | Example |
+|---|---|
+| `GCP_PROJECT_ID` | `gtd-app` |
+| `MONGO_DB_NAME` | `gtd` / `gtd_staging` |
+| `BETTER_AUTH_URL` | `https://api.getting-things-done.app` |
+| `CLIENT_URL` | `https://getting-things-done.app` |
+| `VAPID_PUBLIC_KEY` | (base64url-encoded public key) |
+| `VAPID_SUBJECT` | `mailto:admin@getting-things-done.app` |
+
+---
+
+## Dockerfile
+
+Multi-stage build in `api-server/Dockerfile`:
+
+1. **Builder stage** (Node 24 Alpine): installs all deps, compiles TypeScript to `build/`
+2. **Runtime stage** (Node 24 Alpine): installs production deps only, copies compiled output, exposes port 8080
+
+Cloud Run sets `PORT=8080` automatically. The app reads `process.env.PORT` and defaults to 4000 for local dev.
+
+**Note:** The Dockerfile uses `npm install` instead of `npm ci` because optional WASM dependencies (`@emnapi/*`) resolve differently on macOS vs Linux, causing `npm ci` to fail when the lock file was generated on macOS.
+
+---
+
+## Workflow Details (`deploy-api.yml`)
+
+The workflow:
+
+1. Checks out the repo
+2. Authenticates to GCP via **Workload Identity Federation** (keyless — no service account key file)
+3. Configures Docker to push to Artifact Registry
+4. Builds the image from repo root (`docker build -f api-server/Dockerfile .`) and tags it with the commit SHA
+5. Pushes the image to Artifact Registry
+6. Deploys to Cloud Run with environment variables written to a YAML file (avoids shell escaping issues with special characters in secrets)
+
+The environment selection (`production` or `staging`) determines:
+- Which GitHub Environment's secrets/variables are used
+- Which Cloud Run service to deploy to (`gtd-api` vs `gtd-api-staging`)
+
+---
+
+## API Proxy (Cloudflare Worker)
+
+The `workers/api-proxy/` Cloudflare Worker routes requests from the custom domains to the Cloud Run services:
+
+- `api.getting-things-done.app` -> `gtd-api` Cloud Run service
+- `api-staging.getting-things-done.app` -> `gtd-api-staging` Cloud Run service
+
+This provides a stable domain with Cloudflare's edge network in front of Cloud Run.
+
+---
+
+## Gotchas
+
+- **SSE is single-process**: The in-memory SSE connection registry doesn't work across multiple Cloud Run instances. Cloud Run is configured with `max-instances=1` to avoid this. Scaling beyond one instance would require Redis pub/sub.
+- **Cold starts**: Cloud Run scales to zero. First request after idle may take 2-3 seconds for Node.js to start + MongoDB connection to establish.
+- **`npm install` vs `npm ci`**: The Dockerfile intentionally uses `npm install` due to cross-platform lock file issues (see note above).
+- **Production requires reviewer approval**: The `production` GitHub Environment has required reviewers. The workflow will pause and wait for approval before deploying.
+- **Calendar encryption key**: Not currently in the deploy workflow env vars. Must be added to GitHub Environment secrets if calendar integration is deployed. Changing `CALENDAR_ENCRYPTION_KEY` invalidates all stored OAuth tokens.
+- **Service Worker updates**: After deploying a new frontend build, the PWA service worker activates immediately (`skipWaiting`). Users need to reload once to pick up new JS/CSS. Offline users may see broken pages until they reload (see `client/README.md` for details).
