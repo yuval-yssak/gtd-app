@@ -24,7 +24,7 @@ import ReactMarkdown from 'react-markdown';
 import { CalendarFields } from '../../components/clarify/CalendarFields';
 import { NextActionFields } from '../../components/clarify/NextActionFields';
 import {
-    buildCalendarTimes,
+    buildCalendarMeta,
     buildNextActionMeta,
     buildWaitingForMeta,
     type CalendarFormState,
@@ -39,6 +39,7 @@ import { WaitingForFields } from '../../components/clarify/WaitingForFields';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToInbox, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, updateItem } from '../../db/itemMutations';
+import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import styles from './-item.$itemId.module.css';
 
@@ -151,6 +152,7 @@ function InboxClarifyContent({ item, db, dest, workContexts, people, refreshItem
     // `dest` is captured once at mount — safe because TanStack Router unmounts this component
     // on every navigation, so the search param can never change under an existing instance.
     const [destination, setDestination] = useState<Destination | null>(dest);
+    const { options: calendarOptions } = useCalendarOptions();
     const [nextActionForm, setNextActionForm] = useState<NextActionFormState>(emptyNextAction);
     const [calendarForm, setCalendarForm] = useState<CalendarFormState>(emptyCalendar);
     const [waitingForForm, setWaitingForForm] = useState<WaitingForFormState>(emptyWaitingFor);
@@ -182,8 +184,7 @@ function InboxClarifyContent({ item, db, dest, workContexts, people, refreshItem
             } else if (destination === 'nextAction') {
                 await clarifyToNextAction(db, item, buildNextActionMeta(nextActionForm));
             } else if (destination === 'calendar') {
-                const { startIso, endIso } = buildCalendarTimes(calendarForm);
-                await clarifyToCalendar(db, item, startIso, endIso);
+                await clarifyToCalendar(db, item, buildCalendarMeta(calendarForm, calendarOptions));
             } else if (destination === 'waitingFor') {
                 await clarifyToWaitingFor(db, item, buildWaitingForMeta(waitingForForm));
             }
@@ -256,7 +257,11 @@ function InboxClarifyContent({ item, db, dest, workContexts, people, refreshItem
                 )}
                 {destination === 'calendar' && (
                     <Box className={styles.form}>
-                        <CalendarFields value={calendarForm} onChange={(patch) => setCalendarForm((f) => ({ ...f, ...patch }))} />
+                        <CalendarFields
+                            value={calendarForm}
+                            onChange={(patch) => setCalendarForm((f) => ({ ...f, ...patch }))}
+                            calendarOptions={calendarOptions}
+                        />
                     </Box>
                 )}
                 {destination === 'waitingFor' && (
@@ -291,6 +296,7 @@ interface NextActionEditProps {
 
 function NextActionEditContent({ item, db, workContexts, people, refreshItems, onBack }: NextActionEditProps) {
     const { routines } = useAppData();
+    const { options: calendarOptions } = useCalendarOptions();
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
@@ -375,8 +381,7 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
         }
         setIsSubmitting(true);
         try {
-            const { startIso, endIso } = buildCalendarTimes(calForm);
-            await clarifyToCalendar(db, item, startIso, endIso);
+            await clarifyToCalendar(db, item, buildCalendarMeta(calForm, calendarOptions));
             await refreshItems();
         } finally {
             setIsSubmitting(false);
@@ -491,7 +496,11 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
 
                         {moveDest === 'calendar' && (
                             <Box className={styles.subForm}>
-                                <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} />
+                                <CalendarFields
+                                    value={calForm}
+                                    onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))}
+                                    calendarOptions={calendarOptions}
+                                />
                                 <Stack direction="row" gap={1} mt={1.5}>
                                     <Button size="small" onClick={() => setMoveDest(null)}>
                                         Cancel

@@ -93,6 +93,11 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
 // causing the server to send duplicate push notifications for the same change.
 let flushInFlight: Promise<void> | null = null;
 
+/** Wait for any in-flight sync flush to complete. Returns immediately if no flush is running. */
+export function waitForPendingFlush(): Promise<void> {
+    return flushInFlight ?? Promise.resolve();
+}
+
 export function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
     if (flushInFlight) return flushInFlight;
     flushInFlight = doFlush(db).finally(() => {
@@ -157,6 +162,15 @@ let pullInFlight: Promise<void> | null = null;
 
 export function pullFromServer(db: IDBPDatabase<MyDB>) {
     if (pullInFlight) return pullInFlight;
+    pullInFlight = doPull(db).finally(() => (pullInFlight = null));
+    return pullInFlight;
+}
+
+/** Wait for any in-flight pull to settle, then start a guaranteed-fresh pull.
+ *  Sets pullInFlight directly so no SSE-triggered pull can slip in between the
+ *  await and the new pull (JS microtask ordering guarantees no gap). */
+export async function forcePull(db: IDBPDatabase<MyDB>): Promise<void> {
+    if (pullInFlight) await pullInFlight;
     pullInFlight = doPull(db).finally(() => (pullInFlight = null));
     return pullInFlight;
 }

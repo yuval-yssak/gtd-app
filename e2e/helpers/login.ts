@@ -19,7 +19,7 @@ interface DevLoginResponse {
     };
 }
 
-async function fetchDevSessionCookie(email: string): Promise<DevLoginResponse> {
+export async function fetchDevSessionCookie(email: string): Promise<DevLoginResponse> {
     const res = await fetch(DEV_LOGIN_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

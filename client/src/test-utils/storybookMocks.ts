@@ -184,12 +184,14 @@ export const emptyCalendarState: CalendarFormState = {
     date: '',
     startTime: '',
     endTime: '',
+    calendarSyncConfigId: '',
 };
 
 export const filledCalendarState: CalendarFormState = {
     date: '2024-04-15',
     startTime: '10:00',
     endTime: '11:00',
+    calendarSyncConfigId: '',
 };
 
 export const emptyWaitingForState: WaitingForFormState = {

@@ -1,4 +1,6 @@
 import dayjs from 'dayjs';
+import type { CalendarMeta } from '../../db/itemMutations';
+import type { CalendarOption } from '../../hooks/useCalendarOptions';
 import type { EnergyLevel } from '../../types/MyDB';
 
 export type Destination = 'nextAction' | 'calendar' | 'waitingFor' | 'done' | 'trash';
@@ -30,9 +32,11 @@ export interface CalendarFormState {
     date: string;
     startTime: string;
     endTime: string;
+    /** Sync config ID for the target calendar. Empty string = use default. */
+    calendarSyncConfigId: string;
 }
 
-export const emptyCalendar: CalendarFormState = { date: '', startTime: '', endTime: '' };
+export const emptyCalendar: CalendarFormState = { date: '', startTime: '', endTime: '', calendarSyncConfigId: '' };
 
 export interface WaitingForFormState {
     waitingForPersonId: string;
@@ -59,10 +63,17 @@ export function buildNextActionMeta(form: NextActionFormState) {
     };
 }
 
-export function buildCalendarTimes(form: CalendarFormState): { startIso: string; endIso: string } {
+/** Converts calendar form state into the meta object expected by clarifyToCalendar. */
+export function buildCalendarMeta(form: CalendarFormState, calendarOptions: CalendarOption[]): CalendarMeta {
     const startIso = form.date ? dayjs(`${form.date}${form.startTime ? `T${form.startTime}` : ''}`).toISOString() : dayjs().toISOString();
     const endIso = form.date && form.endTime ? dayjs(`${form.date}T${form.endTime}`).toISOString() : dayjs(startIso).add(1, 'hour').toISOString();
-    return { startIso, endIso };
+
+    const selectedOption = calendarOptions.find((o) => o.configId === form.calendarSyncConfigId);
+    return {
+        timeStart: startIso,
+        timeEnd: endIso,
+        ...(selectedOption ? { calendarSyncConfigId: selectedOption.configId, calendarIntegrationId: selectedOption.integrationId } : {}),
+    };
 }
 
 export function buildWaitingForMeta(form: WaitingForFormState) {

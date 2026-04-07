@@ -1,19 +1,30 @@
-import { inspect } from 'node:util';
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
+import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import type AbstractDAO from '../dataAccess/abstractDAO.js';
+import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
-import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { maybePushToGCal } from '../lib/calendarPushback.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
-import { sendPushToSubscription, vapidPublicKey } from '../lib/webPush.js';
+import { notifyViaWebPush, vapidPublicKey } from '../lib/webPush.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import type { EntityType, ItemInterface, OperationInterface, OpType, PersonInterface, RoutineInterface, WorkContextInterface } from '../types/entities.js';
+import type {
+    CalendarIntegrationInterface,
+    EntitySnapshot,
+    EntityType,
+    ItemInterface,
+    OperationInterface,
+    OpType,
+    PersonInterface,
+    RoutineInterface,
+    WorkContextInterface,
+} from '../types/entities.js';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
 // Snapshot uses `userId` (IndexedDB field name); the server remaps it to `user`.
@@ -25,11 +36,11 @@ interface ClientOp {
     snapshot: (Record<string, unknown> & { userId?: string }) | null;
 }
 
-type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface;
-
-// Items and routines use `title`; people and workContexts use `name`
-function entityDisplayName(snapshot: EntitySnapshot): string {
-    return 'title' in snapshot ? snapshot.title : snapshot.name;
+/** Creates a GoogleCalendarProvider that persists refreshed tokens back to MongoDB. */
+function buildCalendarProvider(integration: CalendarIntegrationInterface, userId: string): GoogleCalendarProvider {
+    return new GoogleCalendarProvider(integration, (accessToken, refreshToken, expiry) =>
+        calendarIntegrationsDAO.updateTokens({ id: integration._id, userId, accessToken, refreshToken, tokenExpiry: expiry }),
+    );
 }
 
 // Single generic helper replacing four near-identical applyXxxOp functions.
@@ -87,24 +98,6 @@ async function purgeOldOperations(userId: string): Promise<void> {
     await operationsDAO.deleteOlderThan(userId, minLastSyncedTs);
 }
 
-async function notifyViaWebPush(userId: string, excludeDeviceId: string, ops: OperationInterface[], now: string): Promise<void> {
-    const opSummaries = ops.map((op) => ({
-        entityType: op.entityType,
-        opType: op.opType,
-        name: op.snapshot ? entityDisplayName(op.snapshot) : null,
-    }));
-    console.log(`[push] notifying ${userId} of ${ops.length} ops (excluding device ${excludeDeviceId}):`, opSummaries);
-    console.log(inspect(opSummaries, { depth: Infinity, colors: true, maxArrayLength: Infinity }));
-    const pushSubs = await pushSubscriptionsDAO.findArray({ user: userId, _id: { $ne: excludeDeviceId } });
-    console.log(`[push] found ${pushSubs.length} subscriptions for user ${userId}`);
-    const pushResults = await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
-    pushResults.forEach((result, i) => {
-        if (result.status === 'rejected') {
-            console.error(`[push] failed to notify device ${pushSubs[i]?._id}:`, result.reason);
-        }
-    });
-}
-
 export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     // ---------------------------------------------------------------------------
     // GET /sync/bootstrap  — full entity snapshot for new/re-syncing devices
@@ -156,6 +149,12 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         await Promise.all([operationsDAO.insertMany(serverOps), ...serverOps.map((op) => applyEntityOp(user.id, op))]);
 
+        // Push calendar-relevant changes back to Google Calendar (fire-and-forget).
+        // Runs after applyEntityOp so the DB state is consistent when the push-back reads it.
+        void Promise.all(serverOps.map((op) => maybePushToGCal(op, buildCalendarProvider))).catch((err) => {
+            console.error('[calendar-pushback] failed:', err);
+        });
+
         await deviceSyncStateDAO.updateOne(
             { _id: deviceId },
             { $set: { lastSeenTs: now, user: user.id }, $setOnInsert: { lastSyncedTs: dayjs(0).toISOString() } },
@@ -182,7 +181,15 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         const ops = await operationsDAO.findArray({ user: user.id, ts: { $gt: since } }, { sort: { ts: 1 } });
 
-        const serverTs = dayjs().toISOString();
+        // Advance the cursor to exactly the last returned op's ts, or keep it at `since`
+        // when nothing is returned. Using dayjs() here would race with concurrent pushes:
+        // a push could commit ops with ts < dayjs() that the query above didn't see,
+        // causing the client to advance its cursor past ops it never received.
+        // Known limitation: if another push commits ops at exactly `lastOp.ts` after this
+        // query ran, the next pull ($gt: lastOp.ts) will miss them. Acceptable for the
+        // low-throughput GTD use case; a monotonic sequence would eliminate the gap.
+        const lastOp = ops.at(-1);
+        const serverTs = lastOp ? lastOp.ts : since;
 
         if (deviceId) {
             // Track per-device pull cursor so old operations can eventually be purged

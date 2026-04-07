@@ -14,5 +14,7 @@ declare namespace NodeJS {
         GITHUB_CLIENT_ID?: string;
         GITHUB_CLIENT_SECRET?: string;
         CALENDAR_ENCRYPTION_KEY?: string;
+        CALENDAR_WEBHOOK_URL?: string;
+        CALENDAR_WEBHOOK_CRON_SECRET?: string;
     }
 }

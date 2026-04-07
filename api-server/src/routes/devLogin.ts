@@ -34,25 +34,31 @@ interface StoredUser {
     email: string;
 }
 
-// Upsert user by email — reuse the existing ID so repeated logins share one user.
+// Atomic upsert user by email — reuse the existing ID so repeated logins share one user.
+// Uses findOneAndUpdate to avoid a TOCTOU race when two devices log in concurrently
+// with the same email (parallel loginAs calls in e2e tests).
 async function getOrCreateUserId(normalizedEmail: string): Promise<string> {
-    const userDoc = await db.collection<StoredUser>('user').findOne({ email: normalizedEmail });
-    if (userDoc) {
-        return userDoc._id;
-    }
-
     const userId = generateId(32);
     const now = dayjs().toDate();
-    await db.collection('user').insertOne({
-        _id: userId,
-        name: normalizedEmail.split('@')[0],
-        email: normalizedEmail,
-        emailVerified: false,
-        image: null,
-        createdAt: now,
-        updatedAt: now,
-    } as never);
-    return userId;
+    const result = await db.collection<StoredUser>('user').findOneAndUpdate(
+        { email: normalizedEmail },
+        {
+            $setOnInsert: {
+                _id: userId,
+                name: normalizedEmail.split('@')[0],
+                email: normalizedEmail,
+                emailVerified: false,
+                image: null,
+                createdAt: now,
+                updatedAt: now,
+            } as never,
+        },
+        { upsert: true, returnDocument: 'after' },
+    );
+    if (!result) {
+        throw new Error('Failed to create or retrieve user');
+    }
+    return result._id;
 }
 
 export const devLoginRoutes = new Hono()

@@ -1,8 +1,11 @@
 import type { IDBPDatabase } from 'idb';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { queueSyncOp } from '../db/syncHelpers';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { queueSyncOp, waitForPendingFlush } from '../db/syncHelpers';
 import type { MyDB, StoredItem } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
+
+// Mock sync API calls so they don't attempt to reach the server during tests
+vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
 
 const USER_ID = 'user-1';
 
@@ -23,7 +26,10 @@ beforeEach(async () => {
     db = await openTestDB();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    // Wait for any fire-and-forget flush from queueSyncOp to finish before closing the DB.
+    // Without this, the flush's IDB operations will throw InvalidStateError from fake-indexeddb.
+    await waitForPendingFlush();
     db.close();
 });
 

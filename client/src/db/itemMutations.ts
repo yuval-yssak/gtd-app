@@ -49,17 +49,51 @@ export interface NextActionMeta {
 
 export async function clarifyToNextAction(db: IDBPDatabase<MyDB>, item: StoredItem, meta: NextActionMeta = {}): Promise<StoredItem> {
     // Strip calendar/waitingFor-specific fields that don't apply to nextAction
-    const { timeStart: _ts, timeEnd: _te, calendarEventId: _ce, calendarIntegrationId: _ci, waitingForPersonId: _wfp, ...rest } = item;
+    const {
+        timeStart: _ts,
+        timeEnd: _te,
+        calendarEventId: _ce,
+        calendarIntegrationId: _ci,
+        calendarSyncConfigId: _csc,
+        waitingForPersonId: _wfp,
+        ...rest
+    } = item;
     const updated: StoredItem = { ...rest, status: 'nextAction', ...meta, updatedTs: nowIso() };
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
 }
 
-export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem, timeStart: string, timeEnd: string): Promise<StoredItem> {
-    // Strip nextAction/waitingFor-specific fields that don't apply to calendar
-    const { workContextIds: _wc, energy: _e, time: _t, focus: _f, urgent: _u, waitingForPersonId: _wfp, ignoreBefore: _ib, ...rest } = item;
-    const updated: StoredItem = { ...rest, status: 'calendar', timeStart, timeEnd, updatedTs: nowIso() };
+export interface CalendarMeta {
+    timeStart: string;
+    timeEnd: string;
+    calendarSyncConfigId?: string;
+    calendarIntegrationId?: string;
+}
+
+export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem, meta: CalendarMeta): Promise<StoredItem> {
+    // Strip nextAction/waitingFor-specific fields and stale calendar IDs so meta can set fresh ones.
+    const {
+        workContextIds: _wc,
+        energy: _e,
+        time: _t,
+        focus: _f,
+        urgent: _u,
+        waitingForPersonId: _wfp,
+        ignoreBefore: _ib,
+        calendarSyncConfigId: _csc,
+        calendarIntegrationId: _ci,
+        ...rest
+    } = item;
+    const updated: StoredItem = {
+        ...rest,
+        status: 'calendar',
+        timeStart: meta.timeStart,
+        timeEnd: meta.timeEnd,
+        ...(meta.calendarSyncConfigId ? { calendarSyncConfigId: meta.calendarSyncConfigId } : {}),
+        ...(meta.calendarIntegrationId ? { calendarIntegrationId: meta.calendarIntegrationId } : {}),
+        updatedTs: nowIso(),
+    };
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
@@ -79,6 +113,7 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
         timeEnd: _te,
         calendarEventId: _ce,
         calendarIntegrationId: _ci,
+        calendarSyncConfigId: _csc,
         workContextIds: _wc,
         energy: _e,
         time: _t,
@@ -106,6 +141,7 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
         timeEnd: _te,
         calendarEventId: _ce,
         calendarIntegrationId: _ci,
+        calendarSyncConfigId: _csc,
         waitingForPersonId: _wfp,
         ...rest
     } = item;
@@ -193,7 +229,9 @@ async function createNextCalendarRoutineItem(db: IDBPDatabase<MyDB>, item: Store
 
     // Guard before calling getCalendarCompletionTiming: timeStart may be absent (item re-clarified to inbox).
     // Treat missing timeStart as 'late' so refDate falls back to now rather than passing an invalid empty string.
-    const refDate = timeStart !== undefined && getCalendarCompletionTiming(timeStart, now.toDate()) === 'onTime' ? dayjs(timeStart).toDate() : now.toDate();
+    const timing = timeStart !== undefined && getCalendarCompletionTiming(timeStart, now.toDate()) === 'onTime' ? 'onTime' : 'late';
+    // Late completions: use midnight to allow today as a valid occurrence. On-time: use timeStart.
+    const refDate = timing === 'onTime' ? dayjs(timeStart).toDate() : dayjs().subtract(1, 'millisecond').toDate();
     await createNextCalendarItem(db, item.userId, routine, refDate);
 }
 

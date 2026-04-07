@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     clarifyToCalendar,
     clarifyToDone,
@@ -12,8 +12,12 @@ import {
     updateItem,
 } from '../db/itemMutations';
 import { createRoutine } from '../db/routineMutations';
+import { waitForPendingFlush } from '../db/syncHelpers';
 import type { MyDB } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
+
+// Mock sync API calls so they don't attempt to reach the server during tests
+vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
 
 const USER_ID = 'user-1';
 
@@ -23,8 +27,12 @@ beforeEach(async () => {
     db = await openTestDB();
 });
 
-afterEach(() => {
+afterEach(async () => {
+    // Wait for any fire-and-forget flush from queueSyncOp to finish before closing the DB.
+    // Without this, the flush's IDB operations will throw InvalidStateError from fake-indexeddb.
+    await waitForPendingFlush().catch(() => {});
     db.close();
+    vi.clearAllMocks();
 });
 
 describe('collectItem', () => {
@@ -96,7 +104,7 @@ describe('clarifyToCalendar', () => {
         await db.clear('syncOperations');
 
         const withNextActionFields = { ...item, workContextIds: ['ctx-1'], energy: 'high' as const, waitingForPersonId: 'p-1', ignoreBefore: '2025-06-01' };
-        const cal = await clarifyToCalendar(db, withNextActionFields, '2025-07-01T09:00:00Z', '2025-07-01T10:00:00Z');
+        const cal = await clarifyToCalendar(db, withNextActionFields, { timeStart: '2025-07-01T09:00:00Z', timeEnd: '2025-07-01T10:00:00Z' });
 
         expect(cal.status).toBe('calendar');
         expect(cal.timeStart).toBe('2025-07-01T09:00:00Z');
@@ -105,6 +113,58 @@ describe('clarifyToCalendar', () => {
         expect((cal as { energy?: string }).energy).toBeUndefined();
         expect(cal.waitingForPersonId).toBeUndefined();
         expect(cal.ignoreBefore).toBeUndefined();
+    });
+
+    it('sets calendarSyncConfigId and calendarIntegrationId when provided', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Team standup' });
+        await db.clear('syncOperations');
+
+        const cal = await clarifyToCalendar(db, item, {
+            timeStart: '2025-07-01T09:00:00Z',
+            timeEnd: '2025-07-01T10:00:00Z',
+            calendarSyncConfigId: 'config-1',
+            calendarIntegrationId: 'integration-1',
+        });
+
+        expect(cal.calendarSyncConfigId).toBe('config-1');
+        expect(cal.calendarIntegrationId).toBe('integration-1');
+    });
+
+    it('strips stale calendarSyncConfigId when re-clarifying to calendar with default', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Moved event' });
+        // First clarify with explicit config
+        const withConfig = await clarifyToCalendar(db, item, {
+            timeStart: '2025-07-01T09:00:00Z',
+            timeEnd: '2025-07-01T10:00:00Z',
+            calendarSyncConfigId: 'old-config',
+            calendarIntegrationId: 'old-integration',
+        });
+        expect(withConfig.calendarSyncConfigId).toBe('old-config');
+
+        // Re-clarify without config (user selected "Default")
+        const withDefault = await clarifyToCalendar(db, withConfig, {
+            timeStart: '2025-07-02T09:00:00Z',
+            timeEnd: '2025-07-02T10:00:00Z',
+        });
+        expect(withDefault.calendarSyncConfigId).toBeUndefined();
+        expect(withDefault.calendarIntegrationId).toBeUndefined();
+    });
+});
+
+describe('clarifyToNextAction strips calendarSyncConfigId', () => {
+    it('removes calendar fields including calendarSyncConfigId', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Was calendar' });
+        const cal = await clarifyToCalendar(db, item, {
+            timeStart: '2025-07-01T09:00:00Z',
+            timeEnd: '2025-07-01T10:00:00Z',
+            calendarSyncConfigId: 'config-1',
+            calendarIntegrationId: 'integration-1',
+        });
+
+        const next = await clarifyToNextAction(db, cal);
+        expect(next.status).toBe('nextAction');
+        expect(next.calendarSyncConfigId).toBeUndefined();
+        expect(next.calendarIntegrationId).toBeUndefined();
     });
 });
 
@@ -289,8 +349,8 @@ describe('calendar routine — clarifyToDone', () => {
         const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
         const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
         expect(nextItems).toHaveLength(1);
-        // Late path uses now as refDate → next Monday on or after today (2026-04-06)
-        expect(nextItems[0]?.timeStart?.startsWith('2026-04-06')).toBe(true);
+        // Late path uses yesterday as refDate → next Monday is 2026-04-13 since we're past Monday 2026-04-06
+        expect(nextItems[0]?.timeStart?.startsWith('2026-04-13')).toBe(true);
     });
 });
 

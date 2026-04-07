@@ -14,7 +14,9 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
     }
 
     async deleteOlderThan(userId: string, ts: string): Promise<void> {
-        await this._collection.deleteMany({ user: userId, ts: { $lt: ts } } as never);
+        // $lte: all devices have advanced their cursor to at least `ts`, meaning they've
+        // received every op at that timestamp. Safe to delete ops at and before `ts`.
+        await this._collection.deleteMany({ user: userId, ts: { $lte: ts } } as never);
     }
 }
 
