@@ -1,4 +1,5 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
+import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
@@ -60,7 +61,7 @@ async function getUserId(sessionCookie: string): Promise<string> {
 }
 
 function makeClientOp(entityType: EntityType, entityId: string, opType: OpType, snapshot: Record<string, unknown> | null) {
-    return { entityType, entityId, opType, queuedAt: new Date().toISOString(), snapshot };
+    return { entityType, entityId, opType, queuedAt: dayjs().toISOString(), snapshot };
 }
 
 function makeItemSnapshot(entityId: string, updatedTs: string, overrides?: Record<string, unknown>) {
@@ -227,7 +228,7 @@ describe('GET /sync/pull', () => {
 
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
 
-        const res = await pull(cookie, { since: new Date(0).toISOString(), deviceId: 'dev-2' });
+        const res = await pull(cookie, { since: dayjs(0).toISOString(), deviceId: 'dev-2' });
 
         expect(res.status).toBe(200);
         const { ops } = (await res.json()) as { ops: { entityId: string }[] };
@@ -282,7 +283,7 @@ describe('GET /sync/pull', () => {
         const entityId = crypto.randomUUID();
         await push(aliceCookie, 'dev-alice', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
 
-        const res = await pull(bobCookie, { since: new Date(0).toISOString() });
+        const res = await pull(bobCookie, { since: dayjs(0).toISOString() });
         const { ops } = (await res.json()) as { ops: unknown[] };
 
         expect(ops).toHaveLength(0);
@@ -425,6 +426,87 @@ describe('Purge logic', () => {
     });
 });
 
+// ─── Stale device cleanup ──────────────────────────────────────────────────
+
+describe('Stale device cleanup', () => {
+    it('devices inactive for >90 days are pruned from deviceSyncState and pushSubscriptions on pull', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const staleTs = dayjs().subtract(91, 'day').toISOString();
+
+        // Insert stale device records directly
+        await db.collection('deviceSyncState').insertOne({ _id: 'dev-stale', user: userId, lastSeenTs: staleTs, lastSyncedTs: staleTs });
+        await db
+            .collection('pushSubscriptions')
+            .insertOne({ _id: 'dev-stale', user: userId, endpoint: 'https://push.example.com/stale', keys: { p256dh: 'k1', auth: 'k2' }, updatedTs: staleTs });
+
+        // Active device pushes and pulls — pull triggers purge
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+        await tick();
+        await pull(cookie, { deviceId: 'dev-active' });
+        await tick();
+
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-stale' })).toBe(0);
+        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-stale' })).toBe(0);
+        // Active device still exists
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-active' })).toBe(1);
+    });
+
+    it('devices active within 90 days are not pruned', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const recentTs = dayjs().subtract(30, 'day').toISOString();
+
+        await db.collection('deviceSyncState').insertOne({ _id: 'dev-recent', user: userId, lastSeenTs: recentTs, lastSyncedTs: recentTs });
+
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+        await tick();
+        await pull(cookie, { deviceId: 'dev-active' });
+        await tick();
+
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-recent' })).toBe(1);
+    });
+
+    it('stale device removal unblocks operation purging', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const staleTs = dayjs().subtract(91, 'day').toISOString();
+
+        // Abandoned device with epoch lastSyncedTs blocks purge
+        await db.collection('deviceSyncState').insertOne({ _id: 'dev-abandoned', user: userId, lastSeenTs: staleTs, lastSyncedTs: dayjs(0).toISOString() });
+
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+        await tick();
+        await pull(cookie, { deviceId: 'dev-active' });
+        await tick();
+
+        // Abandoned device pruned, so ops can be purged
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-abandoned' })).toBe(0);
+        expect(await db.collection('operations').countDocuments()).toBe(0);
+    });
+
+    it('device with stale lastSeenTs but recent lastSyncedTs is not pruned', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const staleTs = dayjs().subtract(91, 'day').toISOString();
+        const recentTs = dayjs().subtract(1, 'day').toISOString();
+
+        // lastSeenTs is stale but lastSyncedTs is recent — device still pulls, just doesn't push
+        await db.collection('deviceSyncState').insertOne({ _id: 'dev-pull-only', user: userId, lastSeenTs: staleTs, lastSyncedTs: recentTs });
+
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+        await tick();
+        await pull(cookie, { deviceId: 'dev-active' });
+        await tick();
+
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-pull-only' })).toBe(1);
+    });
+});
+
 // ─── Multi-device round-trip ─────────────────────────────────────────────────
 
 describe('Multi-device round-trip', () => {
@@ -444,7 +526,7 @@ describe('Multi-device round-trip', () => {
         await tick();
 
         // Device-2 pulls — should receive the create op
-        const pullRes1 = await pull(dev2Cookie, { since: new Date(0).toISOString(), deviceId: 'dev-2' });
+        const pullRes1 = await pull(dev2Cookie, { since: dayjs(0).toISOString(), deviceId: 'dev-2' });
         const { ops: opsForDev2 } = (await pullRes1.json()) as { ops: { entityId: string; opType: string }[] };
         expect(opsForDev2).toHaveLength(1);
         expect(opsForDev2[0]!.entityId).toBe(itemId);
