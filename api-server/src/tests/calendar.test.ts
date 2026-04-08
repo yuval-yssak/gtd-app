@@ -1715,6 +1715,20 @@ describe('calendar push-back — new items', () => {
 
         expect(createSpy).not.toHaveBeenCalled();
     });
+
+    it('skips routine-managed calendar items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, { routineId: 'routine-1' });
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(createSpy).not.toHaveBeenCalled();
+    });
 });
 
 describe('calendar push-back — routines', () => {
@@ -1738,6 +1752,59 @@ describe('calendar push-back — routines', () => {
         // Verify lastPushedToGCalTs was stamped.
         const updated = await routinesDAO.findByOwnerAndId(routine._id, userId);
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('creates GCal recurring event for a new calendar routine', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('new-recurring-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        expect(createSpy).toHaveBeenCalledOnce();
+        const updated = await routinesDAO.findByOwnerAndId(routine._id, userId);
+        expect(updated!.calendarEventId).toBe('new-recurring-id');
+        expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('skips non-calendar routines without calendarEventId', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            routineType: 'nextAction',
+            calendarIntegrationId: 'int-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips calendar routines without calendarIntegrationId', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        const routine = makeRoutine(userId);
+        await routinesDAO.insertOne(routine);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        expect(createSpy).not.toHaveBeenCalled();
     });
 });
 

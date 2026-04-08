@@ -13,11 +13,14 @@ import {
 } from '../db/itemMutations';
 import { createRoutine } from '../db/routineMutations';
 import { waitForPendingFlush } from '../db/syncHelpers';
-import type { MyDB } from '../types/MyDB';
+import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
 // Mock sync API calls so they don't attempt to reach the server during tests
 vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
+vi.mock('../lib/calendarHorizon', () => ({
+    getCalendarHorizonMonths: () => 2,
+}));
 
 const USER_ID = 'user-1';
 
@@ -314,12 +317,14 @@ describe('calendar routine — clarifyToDone', () => {
 
         const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
         const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
-        expect(nextItems).toHaveLength(1);
-        // On-time completion from 2026-04-09 (Thu) → next Thu is 2026-04-16
-        expect(nextItems[0]?.timeStart?.startsWith('2026-04-16')).toBe(true);
+        // Horizon generates multiple future items
+        expect(nextItems.length).toBeGreaterThanOrEqual(1);
+        // On-time completion from 2026-04-09 (Thu) → next Thu is 2026-04-16, should be among them
+        const apr16Item = nextItems.find((i) => i.timeStart?.startsWith('2026-04-16'));
+        expect(apr16Item).toBeDefined();
         // timeEnd must use the same naive local-time format as timeStart (no Z suffix)
-        expect(nextItems[0]?.timeEnd?.startsWith('2026-04-16')).toBe(true);
-        expect(nextItems[0]?.timeEnd?.endsWith('Z')).toBe(false);
+        expect(apr16Item?.timeEnd?.startsWith('2026-04-16')).toBe(true);
+        expect(apr16Item?.timeEnd?.endsWith('Z')).toBe(false);
     });
 
     it('advances from now when completion is more than 24h late', async () => {
@@ -348,9 +353,11 @@ describe('calendar routine — clarifyToDone', () => {
 
         const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
         const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
-        expect(nextItems).toHaveLength(1);
-        // Late path uses yesterday as refDate → next Monday is 2026-04-13 since we're past Monday 2026-04-06
-        expect(nextItems[0]?.timeStart?.startsWith('2026-04-13')).toBe(true);
+        // Horizon generates multiple future items
+        expect(nextItems.length).toBeGreaterThanOrEqual(1);
+        // The nearest Monday should be among them (2026-04-13 since today is past 2026-04-06)
+        const apr13Item = nextItems.find((i) => i.timeStart?.startsWith('2026-04-13'));
+        expect(apr13Item).toBeDefined();
     });
 });
 
@@ -385,18 +392,21 @@ describe('calendar routine — clarifyToTrash', () => {
         expect(updatedRoutine?.routineExceptions).toHaveLength(1);
         expect(updatedRoutine?.routineExceptions?.[0]?.type).toBe('skipped');
 
-        // A new calendar item should be created (for the occurrence after the skipped one)
+        // Future calendar items should be created (skipping the exception date)
         const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
         const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
-        expect(nextItems).toHaveLength(1);
-        // Next item must be AFTER the skipped date
-        // Parens required: ?? has lower precedence than > so without them the comparison is never reached
-        expect((nextItems[0]?.timeStart ?? '') > calItem.timeStart).toBe(true);
+        expect(nextItems.length).toBeGreaterThanOrEqual(1);
+        // None of the generated items should be on the skipped date
+        const skippedDate = calItem.timeStart.slice(0, 10);
+        expect(nextItems.every((i) => !(i.timeStart ?? '').startsWith(skippedDate))).toBe(true);
     });
 
     it('deactivates the routine when rrule series is exhausted', async () => {
-        // COUNT=1 means only one occurrence ever; completing it should exhaust the series
-        const routine = await createRoutine(db, {
+        // COUNT=1 with createdTs in the past means the only occurrence is before today's horizon.
+        // Write directly to IDB because createRoutine() always overrides createdTs with now().
+        const pastDate = dayjs().subtract(7, 'day');
+        const routine: StoredRoutine = {
+            _id: crypto.randomUUID(),
             userId: USER_ID,
             title: 'One-time event',
             routineType: 'calendar',
@@ -404,17 +414,18 @@ describe('calendar routine — clarifyToTrash', () => {
             template: {},
             calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
             active: true,
-        });
+            createdTs: pastDate.toISOString(),
+            updatedTs: pastDate.toISOString(),
+        };
+        await db.put('routines', routine);
 
         const item = await collectItem(db, USER_ID, { title: 'One-time event' });
-        // timeStart yesterday so it's in the past (on-time completion path)
-        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
         const calItem = {
             ...item,
             status: 'calendar' as const,
             routineId: routine._id,
-            timeStart: `${yesterday}T09:00:00`,
-            timeEnd: `${yesterday}T09:30:00`,
+            timeStart: `${pastDate.format('YYYY-MM-DD')}T09:00:00`,
+            timeEnd: `${pastDate.format('YYYY-MM-DD')}T09:30:00`,
         };
         await db.clear('syncOperations');
 

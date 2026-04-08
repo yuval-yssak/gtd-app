@@ -17,7 +17,7 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
-import { createNextCalendarItem, createNextRoutineItem } from '../../db/routineItemHelpers';
+import { createNextRoutineItem, deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
@@ -162,7 +162,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
-                await updateRoutine(db, {
+                const updatedRoutine = {
                     ...routine,
                     routineType: form.routineType,
                     title: trimmedTitle,
@@ -170,7 +170,18 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     template,
                     ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
                     ...calendarLink,
-                });
+                };
+                await updateRoutine(db, updatedRoutine);
+
+                // Regenerate future items when the schedule or item content changes
+                const scheduleChanged =
+                    routine.rrule !== finalRrule ||
+                    routine.title !== trimmedTitle ||
+                    routine.calendarItemTemplate?.timeOfDay !== calendarItemTemplate?.timeOfDay ||
+                    routine.calendarItemTemplate?.duration !== calendarItemTemplate?.duration;
+                if (form.routineType === 'calendar' && scheduleChanged) {
+                    await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
+                }
             } else {
                 const created = await createRoutine(db, {
                     userId,
@@ -183,17 +194,15 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     ...calendarLink,
                 });
 
-                // Auto-create the first item — best-effort so a failure doesn't block saving the routine
+                // Auto-create items — best-effort so a failure doesn't block saving the routine
                 try {
                     if (form.routineType === 'calendar') {
-                        // refDate = just before start of today so the first occurrence on/after today is returned
-                        const refDate = dayjs().startOf('day').subtract(1, 'ms').toDate();
-                        await createNextCalendarItem(db, userId, created, refDate);
+                        await generateCalendarItemsToHorizon(db, userId, created);
                     } else {
                         await createNextRoutineItem(db, userId, created, dayjs().toDate());
                     }
                 } catch (err) {
-                    console.error('[routine] failed to create first item:', err);
+                    console.error('[routine] failed to create items:', err);
                 }
             }
 

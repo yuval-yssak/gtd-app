@@ -86,6 +86,10 @@ async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildP
     if (!snapshot.timeStart || !snapshot.timeEnd || !snapshot._id) {
         return;
     }
+    // Routine-managed items are represented by the routine's GCal recurring series.
+    if (snapshot.routineId) {
+        return;
+    }
 
     const ctx = await resolveDefaultPushContext(userId, buildProvider);
     if (!ctx) {
@@ -114,7 +118,32 @@ async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildP
 // ── Routine push-back ────────────────────────────────────────────────────────
 
 async function handleRoutinePush(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
-    if (!snapshot.calendarEventId) {
+    if (snapshot.calendarEventId) {
+        await pushExistingRoutineToGCal(snapshot, userId, buildProvider);
+        return;
+    }
+    await pushNewRoutineToGCal(snapshot, userId, buildProvider);
+}
+
+/** Pushes edits to an existing GCal recurring event when the routine already has a calendarEventId. */
+async function pushExistingRoutineToGCal(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    const { calendarEventId } = snapshot;
+    if (!calendarEventId) {
+        return;
+    }
+    const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    if (!ctx) {
+        return;
+    }
+
+    await ctx.provider.updateRecurringEvent(calendarEventId, snapshot, ctx.config.calendarId);
+    await stampRoutineLastPushed(userId, snapshot._id);
+}
+
+/** Creates a new GCal recurring event for a calendar routine that isn't linked yet. */
+async function pushNewRoutineToGCal(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    if (snapshot.routineType !== 'calendar' || !snapshot.calendarIntegrationId) {
         return;
     }
 
@@ -124,8 +153,21 @@ async function handleRoutinePush(snapshot: RoutineInterface, userId: string, bui
         return;
     }
 
-    await ctx.provider.updateRecurringEvent(snapshot.calendarEventId, snapshot, ctx.config.calendarId);
-    await stampRoutineLastPushed(userId, snapshot._id);
+    try {
+        const calendarEventId = await ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId);
+        const now = dayjs().toISOString();
+        await routinesDAO.updateOne(
+            { _id: snapshot._id, user: userId },
+            { $set: { calendarEventId, calendarSyncConfigId: ctx.config._id, lastPushedToGCalTs: now, updatedTs: now } },
+        );
+        // Record an operation so other devices sync the newly-linked calendar event ID.
+        const updated = await routinesDAO.findByOwnerAndId(snapshot._id, userId);
+        if (updated) {
+            await recordOperation(userId, { entityType: 'routine', entityId: snapshot._id, snapshot: updated, opType: 'update', now });
+        }
+    } catch (err) {
+        console.error(`[calendar-pushback] failed to create recurring event for routine ${snapshot._id}:`, err);
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
