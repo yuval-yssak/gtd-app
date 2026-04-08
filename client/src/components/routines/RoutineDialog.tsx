@@ -20,6 +20,7 @@ import { useState } from 'react';
 import { createNextRoutineItem, deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { FrequencyPicker } from './FrequencyPicker';
 import styles from './RoutineDialog.module.css';
@@ -113,8 +114,14 @@ function initFormState(routine?: StoredRoutine): FormState {
 
 /** Resolves calendarSyncConfigId + calendarIntegrationId from the form's selected config. */
 function resolveCalendarLink(configId: string, options: CalendarOption[]): { calendarSyncConfigId?: string; calendarIntegrationId?: string } {
-    const selected = options.find((o) => o.configId === configId);
-    return selected ? { calendarSyncConfigId: selected.configId, calendarIntegrationId: selected.integrationId } : {};
+    if (configId) {
+        const selected = options.find((o) => o.configId === configId);
+        return selected ? { calendarSyncConfigId: selected.configId, calendarIntegrationId: selected.integrationId } : {};
+    }
+    // Empty configId = "use default calendar" (see FormState.calendarSyncConfigId comment).
+    // Resolve integrationId so the server can find the default config via resolvePushContext fallback.
+    const fallback = options.find((o) => o.isDefault) ?? (hasAtLeastOne(options) ? options[0] : undefined);
+    return fallback ? { calendarIntegrationId: fallback.integrationId } : {};
 }
 
 function buildTemplate(form: FormState) {
@@ -256,16 +263,14 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                 {isCalendar ? (
                     <CalendarFields form={form} onPatch={patch} calendarOptions={calendarOptions} />
                 ) : (
-                    <>
-                        <TemplateFields
-                            form={form}
-                            workContexts={workContexts}
-                            people={people}
-                            onPatch={patch}
-                            onToggleWorkContext={toggleWorkContext}
-                            onTogglePerson={togglePerson}
-                        />
-                    </>
+                    <TemplateFields
+                        form={form}
+                        workContexts={workContexts}
+                        people={people}
+                        onPatch={patch}
+                        onToggleWorkContext={toggleWorkContext}
+                        onTogglePerson={togglePerson}
+                    />
                 )}
 
                 <TextField

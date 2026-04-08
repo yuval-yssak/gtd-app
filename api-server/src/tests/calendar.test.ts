@@ -1959,3 +1959,329 @@ describe('findNeedingWebhook', () => {
         expect(results).toHaveLength(0);
     });
 });
+
+// ─── Recurring event → routine import ─────────────────────────────────────
+
+describe('POST /calendar/integrations/:id/sync — recurring event import', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('creates a routine from a GCal recurring master event', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        const endTs = dayjs().add(1, 'day').add(30, 'minute').toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-1',
+                    title: 'Weekly standup',
+                    timeStart: futureTs,
+                    timeEnd: endTs,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-1' });
+        expect(routine).not.toBeNull();
+        expect(routine!.title).toBe('Weekly standup');
+        expect(routine!.rrule).toBe('FREQ=WEEKLY;BYDAY=MO');
+        expect(routine!.routineType).toBe('calendar');
+        expect(routine!.calendarIntegrationId).toBe('int-1');
+        expect(routine!.calendarSyncConfigId).toBe('sync-config-1');
+        expect(routine!.calendarItemTemplate).toBeDefined();
+        expect(routine!.calendarItemTemplate!.duration).toBe(30);
+        expect(routine!.active).toBe(true);
+
+        // Operation should be recorded
+        const ops = await operationsDAO.findArray({ entityId: routine!._id, entityType: 'routine' });
+        expect(ops).toHaveLength(1);
+        expect(ops[0]!.opType).toBe('create');
+    });
+
+    it('updates an existing routine when GCal master event is newer', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'recurring-master-2',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Old title',
+                updatedTs: oldTs,
+            }),
+        );
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        const endTs = dayjs().add(1, 'day').add(45, 'minute').toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-2',
+                    title: 'New title',
+                    timeStart: futureTs,
+                    timeEnd: endTs,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-2' });
+        expect(routine!.title).toBe('New title');
+        expect(routine!.rrule).toBe('FREQ=DAILY');
+        expect(routine!.calendarItemTemplate!.duration).toBe(45);
+    });
+
+    it('skips update when existing routine is newer than GCal event', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const recentTs = dayjs().toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'recurring-master-3',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Local title',
+                updatedTs: recentTs,
+            }),
+        );
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-3',
+                    title: 'GCal title',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: dayjs().subtract(2, 'hour').toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-3' });
+        expect(routine!.title).toBe('Local title');
+    });
+
+    it('deactivates routine when GCal master event is cancelled', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'recurring-master-4',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                active: true,
+            }),
+        );
+        // Insert a future item belonging to this routine
+        await itemsDAO.insertOne({
+            _id: 'future-routine-item',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-4',
+                    title: '',
+                    timeStart: '',
+                    timeEnd: '',
+                    updated: dayjs().toISOString(),
+                    status: 'cancelled',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-4' });
+        expect(routine!.active).toBe(false);
+
+        const item = await itemsDAO.findOne({ _id: 'future-routine-item' });
+        expect(item!.status).toBe('trash');
+    });
+
+    it('deactivates routine when cancelled master lacks recurrence field', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-cancel-no-recurrence',
+                calendarEventId: 'recurring-master-no-recurrence',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                active: true,
+            }),
+        );
+
+        // Cancelled master events from incremental sync often lack the recurrence field
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-no-recurrence',
+                    title: '',
+                    timeStart: '',
+                    timeEnd: '',
+                    updated: dayjs().toISOString(),
+                    status: 'cancelled',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ _id: 'routine-cancel-no-recurrence' });
+        expect(routine!.active).toBe(false);
+    });
+
+    it('skips recurring master with echo detection', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const recentTs = dayjs().toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'recurring-master-5',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Original',
+                lastPushedToGCalTs: recentTs,
+                updatedTs: recentTs,
+            }),
+        );
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-5',
+                    title: 'Changed by echo',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: dayjs().add(10, 'second').toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-5' });
+        expect(routine!.title).toBe('Original');
+    });
+
+    it('skips recurring master with no RRULE line', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-no-rrule',
+                    title: 'Only EXDATE',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['EXDATE:20260410T090000Z'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-no-rrule' });
+        expect(routine).toBeNull();
+    });
+
+    it('does not create calendar items for recurring master events', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-6',
+                    title: 'Daily sync',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Should create a routine, not an item
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-6' });
+        expect(routine).not.toBeNull();
+
+        const item = await itemsDAO.findOne({ calendarEventId: 'recurring-master-6' });
+        expect(item).toBeNull();
+    });
+});
