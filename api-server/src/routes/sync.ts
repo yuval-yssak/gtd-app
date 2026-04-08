@@ -8,6 +8,7 @@ import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
+import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
@@ -84,11 +85,25 @@ function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {
     }
 }
 
-async function purgeOldOperations(userId: string): Promise<void> {
-    const deviceStates = await deviceSyncStateDAO.findArray({ user: userId });
-    if (!deviceStates.length) {
+const STALE_DEVICE_DAYS = 90;
+
+async function purgeStaleDevices(userId: string): Promise<void> {
+    const cutoffTs = dayjs().subtract(STALE_DEVICE_DAYS, 'day').toISOString();
+    const staleDeviceIds = await deviceSyncStateDAO.deleteStaleDevices(userId, cutoffTs);
+    if (!staleDeviceIds.length) {
         return;
     }
+
+    console.log(`[purge] removed ${staleDeviceIds.length} stale device(s) for user ${userId}: ${staleDeviceIds.join(', ')}`);
+    await pushSubscriptionsDAO.deleteByDeviceIds(staleDeviceIds, userId);
+}
+
+async function purgeOldOperations(userId: string): Promise<void> {
+    // Remove stale devices first so they no longer hold back the purge floor
+    await purgeStaleDevices(userId);
+
+    const deviceStates = await deviceSyncStateDAO.findArray({ user: userId });
+    if (!deviceStates.length) return;
 
     // Only purge ops all registered devices have already pulled — the slowest device sets the floor.
     // reduce without an initial value uses the first element as the accumulator seed; TypeScript

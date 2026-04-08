@@ -20,6 +20,11 @@ class PushSubscriptionsDAO extends AbstractDAO<PushSubscriptionRecord> {
     async deleteByDevice(deviceId: string, userId: string): Promise<void> {
         await this._collection.deleteOne({ _id: deviceId, user: userId });
     }
+
+    async deleteByDeviceIds(deviceIds: string[], userId: string): Promise<void> {
+        if (!deviceIds.length) return;
+        await this._collection.deleteMany({ _id: { $in: deviceIds }, user: userId } as never);
+    }
 }
 
 export default new PushSubscriptionsDAO();

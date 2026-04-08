@@ -39,9 +39,25 @@ export async function notifyViaWebPush(userId: string, excludeDeviceId: string |
     const pushSubs = await pushSubscriptionsDAO.findArray(filter);
     console.log(`[push] found ${pushSubs.length} subscriptions for user ${userId}`);
     const pushResults = await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
+    const cleanupPromises: Promise<void>[] = [];
     pushResults.forEach((result, i) => {
-        if (result.status === 'rejected') {
-            console.error(`[push] failed to notify device ${pushSubs[i]?._id}:`, result.reason);
+        const sub = pushSubs[i];
+        if (result.status !== 'rejected' || !sub) {
+            return;
+        }
+
+        const statusCode = (result.reason as { statusCode?: number })?.statusCode;
+        if (statusCode === 410 || statusCode === 404) {
+            console.log(`[push] subscription gone for device ${sub._id} (${statusCode}), removing`);
+            cleanupPromises.push(
+                pushSubscriptionsDAO.deleteByDevice(sub._id, userId).catch((e) => {
+                    console.error(`[push] failed to delete stale subscription ${sub._id}:`, e);
+                }),
+            );
+        } else {
+            console.error(`[push] failed to notify device ${sub._id}:`, result.reason);
         }
     });
+    // Fire-and-forget cleanup — don't block the caller
+    void Promise.all(cleanupPromises);
 }
