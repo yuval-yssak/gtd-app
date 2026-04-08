@@ -47,8 +47,6 @@ export interface StoredRoutineTemplate {
     time?: number;
     focus?: boolean;
     urgent?: boolean;
-    /** Days before expectedBy to set ignoreBefore (tickler). undefined = no tickler; 0 = show on due date. */
-    ticklerLeadDays?: number;
     notes?: string;
 }
 

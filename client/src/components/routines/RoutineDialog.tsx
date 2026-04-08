@@ -10,7 +10,6 @@ import FormControlLabel from '@mui/material/FormControlLabel';
 import FormLabel from '@mui/material/FormLabel';
 import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
-import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
@@ -49,8 +48,6 @@ interface FormState {
     time: string;
     focus: boolean;
     urgent: boolean;
-    hasTickler: boolean;
-    ticklerLeadDays: string;
     notes: string;
     timeOfDay: string; // HH:MM — calendar routines only
     duration: string; // minutes — calendar routines only
@@ -106,8 +103,6 @@ function initFormState(routine?: StoredRoutine): FormState {
         time: routine?.template.time?.toString() ?? '',
         focus: routine?.template.focus ?? false,
         urgent: routine?.template.urgent ?? false,
-        hasTickler: routine?.template.ticklerLeadDays !== undefined,
-        ticklerLeadDays: routine?.template.ticklerLeadDays?.toString() ?? '0',
         notes: routine?.template.notes ?? '',
         timeOfDay: routine?.calendarItemTemplate?.timeOfDay ?? '09:00',
         duration: routine?.calendarItemTemplate?.duration?.toString() ?? '60',
@@ -130,7 +125,6 @@ function buildTemplate(form: FormState) {
         ...(form.time ? { time: parseInt(form.time, 10) } : {}),
         ...(form.focus ? { focus: true } : {}),
         ...(form.urgent ? { urgent: true } : {}),
-        ...(form.hasTickler ? { ticklerLeadDays: parseInt(form.ticklerLeadDays, 10) || 0 } : {}),
         ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
     };
 }
@@ -262,7 +256,6 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                             onToggleWorkContext={toggleWorkContext}
                             onTogglePerson={togglePerson}
                         />
-                        <TicklerFields form={form} onPatch={patch} />
                     </>
                 )}
 
@@ -500,30 +493,5 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                 />
             </Stack>
         </Stack>
-    );
-}
-
-function TicklerFields({ form, onPatch }: { form: FormState; onPatch: (patch: Partial<FormState>) => void }) {
-    return (
-        <Box>
-            <FormControlLabel
-                control={<Switch size="small" checked={form.hasTickler} onChange={(e) => onPatch({ hasTickler: e.target.checked })} />}
-                label={<Typography variant="body2">Hide until X days before due (tickler)</Typography>}
-            />
-            {form.hasTickler && (
-                <div className={styles.ticklerRow}>
-                    <Typography variant="body2">Show</Typography>
-                    <TextField
-                        type="number"
-                        size="small"
-                        className={styles.narrowInput}
-                        value={form.ticklerLeadDays}
-                        onChange={(e) => onPatch({ ticklerLeadDays: e.target.value })}
-                        slotProps={{ htmlInput: { min: 0 } }}
-                    />
-                    <Typography variant="body2">days before due (0 = show on due date)</Typography>
-                </div>
-            )}
-        </Box>
     );
 }

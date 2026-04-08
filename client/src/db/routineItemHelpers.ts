@@ -17,10 +17,6 @@ export async function createNextRoutineItem(db: IDBPDatabase<MyDB>, userId: stri
     const nextDueDate = computeNextOccurrence(routine.rrule, completionDate);
     const expectedBy = dayjs(nextDueDate).format('YYYY-MM-DD');
 
-    // Tickler: hide the item until (expectedBy - ticklerLeadDays) so it only surfaces when actionable.
-    const { ticklerLeadDays } = routine.template;
-    const ignoreBefore = ticklerLeadDays !== undefined ? dayjs(nextDueDate).subtract(ticklerLeadDays, 'day').format('YYYY-MM-DD') : undefined;
-
     const now = dayjs().toISOString();
     const item = {
         _id: crypto.randomUUID(),
@@ -29,7 +25,8 @@ export async function createNextRoutineItem(db: IDBPDatabase<MyDB>, userId: stri
         title: routine.title,
         routineId: routine._id,
         expectedBy,
-        ...(ignoreBefore !== undefined ? { ignoreBefore } : {}),
+        // Routine-generated items are hidden until their due date (tickler pattern)
+        ignoreBefore: expectedBy,
         ...(routine.template.workContextIds ? { workContextIds: routine.template.workContextIds } : {}),
         ...(routine.template.peopleIds ? { peopleIds: routine.template.peopleIds } : {}),
         ...(routine.template.energy ? { energy: routine.template.energy } : {}),

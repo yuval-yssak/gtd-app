@@ -76,7 +76,9 @@ All server-side interfaces live in `api-server/src/types/entities.ts`. Client-si
 - `waitingFor` — `waitingForPersonId`, `peopleIds`, `expectedBy`, `ignoreBefore`
 - `done` / `trash` — no additional fields
 
-**Tickler pattern:** `ignoreBefore` (ISO date) on a `nextAction` or `waitingFor` item hides it from all lists until that date. Separate from calendar `timeStart` to avoid semantic overloading.
+**Tickler pattern:** `ignoreBefore` (ISO date) hides an item from all lists until that date. It only applies to `nextAction` and `waitingFor` items — `calendar` items ignore `ignoreBefore` entirely (it has no effect on visibility or filtering). Separate from calendar `timeStart` to avoid semantic overloading.
+
+**Routine-generated next-action items** are always created with `ignoreBefore = expectedBy`, so they stay in the tickler until their due date. There is no configurable lead-days offset.
 
 ### Sync Architecture
 

@@ -29,8 +29,9 @@ function TicklerPage() {
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const today = dayjs().format('YYYY-MM-DD');
+    // ignoreBefore only applies to nextAction and waitingFor items — calendar items ignore it
     const ticklerItems = items
-        .filter((item) => item.ignoreBefore !== undefined && item.ignoreBefore > today)
+        .filter((item) => (item.status === 'nextAction' || item.status === 'waitingFor') && item.ignoreBefore !== undefined && item.ignoreBefore > today)
         .sort((a, b) => (a.ignoreBefore ?? '').localeCompare(b.ignoreBefore ?? ''));
 
     const groups = ticklerItems.reduce<Record<string, StoredItem[]>>((acc, item) => {
