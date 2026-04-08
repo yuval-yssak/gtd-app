@@ -16,5 +16,6 @@ declare namespace NodeJS {
         CALENDAR_ENCRYPTION_KEY?: string;
         CALENDAR_WEBHOOK_URL?: string;
         CALENDAR_WEBHOOK_CRON_SECRET?: string;
+        COMMIT_HASH?: string;
     }
 }

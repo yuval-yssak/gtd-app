@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
@@ -7,6 +8,16 @@ import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
+
+function resolveCommitHash() {
+    try {
+        return execSync('git rev-parse --short HEAD').toString().trim();
+    } catch {
+        return 'unknown';
+    }
+}
+
+const COMMIT_HASH = process.env.COMMIT_HASH ?? resolveCommitHash();
 
 const app = new Hono()
     .use(
@@ -23,7 +34,8 @@ const app = new Hono()
     .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
     .route('/sync', syncRoutes)
     .route('/push', pushRoutes)
-    .route('/calendar', calendarRoutes);
+    .route('/calendar', calendarRoutes)
+    .get('/version', (c) => c.json({ commitHash: COMMIT_HASH }));
 
 // Exported for Hono RPC — client imports this type to get a fully-typed fetch client
 export type AppType = typeof app;
@@ -44,6 +56,7 @@ async function start() {
     }
 
     const port = Number(process.env.PORT ?? 4000);
+    console.log(`Starting server — commit ${COMMIT_HASH}`);
     serve({ fetch: app.fetch, port }, () => console.log(`Listening on port ${port}`));
 }
 

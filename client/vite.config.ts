@@ -1,9 +1,21 @@
+import { execSync } from 'node:child_process';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+const commitHash = (() => {
+    try {
+        return execSync('git rev-parse --short HEAD').toString().trim();
+    } catch {
+        return 'unknown';
+    }
+})();
+
 export default defineConfig({
+    define: {
+        __COMMIT_HASH__: JSON.stringify(commitHash),
+    },
     plugins: [
         // TanStackRouterVite must come before react() so it generates routeTree.gen.ts first
         TanStackRouterVite({ routesDirectory: './src/routes' }),
@@ -40,6 +52,7 @@ export default defineConfig({
             '/items': { target: 'http://localhost:4000', changeOrigin: true },
             '/sync': { target: 'http://localhost:4000', changeOrigin: true },
             '/push': { target: 'http://localhost:4000', changeOrigin: true },
+            '/version': { target: 'http://localhost:4000', changeOrigin: true },
         },
     },
     preview: {
@@ -50,6 +63,7 @@ export default defineConfig({
             '/items': { target: 'http://localhost:4000', changeOrigin: true },
             '/sync': { target: 'http://localhost:4000', changeOrigin: true },
             '/push': { target: 'http://localhost:4000', changeOrigin: true },
+            '/version': { target: 'http://localhost:4000', changeOrigin: true },
         },
     },
 });

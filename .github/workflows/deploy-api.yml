@@ -51,7 +51,7 @@ jobs:
                   SERVICE=${{ env.TARGET_ENV == 'production' && 'gtd-api' || 'gtd-api-staging' }}
                   IMAGE=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/gtd/$SERVICE:${{ github.sha }}
                   # Build from repo root so Docker can access the monorepo root package-lock.json
-                  docker build -f api-server/Dockerfile -t $IMAGE .
+                  docker build -f api-server/Dockerfile --build-arg COMMIT_HASH=${GITHUB_SHA::7} -t $IMAGE .
                   docker push $IMAGE
                   echo "IMAGE=$IMAGE" >> $GITHUB_ENV
                   echo "SERVICE=$SERVICE" >> $GITHUB_ENV
