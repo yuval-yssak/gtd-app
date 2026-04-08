@@ -1,8 +1,9 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { RRule } from 'rrule';
+import { getCalendarHorizonMonths } from '../lib/calendarHorizon';
 import { computeNextOccurrence } from '../lib/rruleUtils';
-import type { MyDB, StoredRoutine } from '../types/MyDB';
+import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { putItem } from './itemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
@@ -52,19 +53,21 @@ export async function createNextRoutineItem(db: IDBPDatabase<MyDB>, userId: stri
 export class RruleExhaustedError extends Error {}
 
 /**
- * Return the first rrule occurrence strictly after `afterDate`, skipping any exception dates.
- * DTSTART is fixed to the routine's creation date (calendar routines use absolute scheduling,
- * not completion-relative scheduling like next-action routines).
- *
+ * Build an RRule anchored to the routine's creation date (UTC midnight) for calendar routines.
  * Uses DTSTART at UTC midnight via RRule.fromString (not the `new RRule({ dtstart })` constructor)
  * because rrule 2.8.1 does not reliably preserve the dtstart time when passed as a Date object —
  * occurrences end up at the current wall-clock time instead. Parsing from a DTSTART string anchors
  * occurrences to 00:00:00Z, and we extract dates with .toISOString().slice(0, 10) for UTC-safe
  * comparison that works in all timezones.
  */
-function computeNextCalendarDate(rruleStr: string, dtstart: Date, afterDate: Date, exceptions: string[]): Date {
+function buildCalendarRule(rruleStr: string, dtstart: Date): RRule {
     const dtStartStr = `${dayjs(dtstart).toISOString().slice(0, 10).replace(/-/g, '')}T000000Z`;
-    const rule = RRule.fromString(`DTSTART:${dtStartStr}\nRRULE:${rruleStr}`);
+    return RRule.fromString(`DTSTART:${dtStartStr}\nRRULE:${rruleStr}`);
+}
+
+/** Return the first rrule occurrence strictly after `afterDate`, skipping any exception dates. */
+function computeNextCalendarDate(rruleStr: string, dtstart: Date, afterDate: Date, exceptions: string[]): Date {
+    const rule = buildCalendarRule(rruleStr, dtstart);
     let candidate = rule.after(afterDate, false);
     while (candidate) {
         if (!exceptions.includes(candidate.toISOString().slice(0, 10))) {
@@ -129,4 +132,93 @@ export async function createNextCalendarItem(db: IDBPDatabase<MyDB>, userId: str
 
     // Record the generated date so the next completion can advance from here without scanning items
     await updateRoutine(db, { ...routine, lastGeneratedDate: dayjs(nextDate).format('YYYY-MM-DD') });
+}
+
+// ── Horizon-based batch generation ───────────────────────────────────────────
+
+/** Build a calendar item for a single rrule occurrence date. */
+function buildCalendarItem(
+    userId: string,
+    routine: StoredRoutine,
+    occurrenceDate: Date,
+    now: string,
+    template: { timeOfDay: string; duration: number },
+): StoredItem {
+    const dateStr = occurrenceDate.toISOString().slice(0, 10);
+    const timeStart = `${dateStr}T${template.timeOfDay}:00`;
+    const timeEnd = dayjs(timeStart).add(template.duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
+
+    return {
+        _id: crypto.randomUUID(),
+        userId,
+        status: 'calendar' as const,
+        title: routine.title,
+        routineId: routine._id,
+        timeStart,
+        timeEnd,
+        ...(routine.template.notes ? { notes: routine.template.notes } : {}),
+        createdTs: now,
+        updatedTs: now,
+    };
+}
+
+/**
+ * Generate calendar items for all rrule occurrences from now until the user's horizon.
+ * Skips exception dates and dates that already have items, then persists and queues sync ops.
+ */
+export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine): Promise<void> {
+    const { calendarItemTemplate } = routine;
+    if (!calendarItemTemplate) {
+        throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
+    }
+
+    const horizonMonths = getCalendarHorizonMonths();
+    const startDate = dayjs().startOf('day').subtract(1, 'ms').toDate();
+    const endDate = dayjs().add(horizonMonths, 'month').endOf('day').toDate();
+
+    const dtstart = dayjs(routine.createdTs).toDate();
+    const rule = buildCalendarRule(routine.rrule, dtstart);
+    const occurrences = rule.between(startDate, endDate, false);
+
+    const exceptionDates = new Set((routine.routineExceptions ?? []).filter((e) => e.type === 'skipped').map((e) => e.date));
+    const existingItems = (await db.getAllFromIndex('items', 'userId', userId)).filter((i) => i.routineId === routine._id && i.status === 'calendar');
+    const existingDates = new Set(existingItems.map((i) => (i.timeStart ?? '').slice(0, 10)));
+
+    const validOccurrences = occurrences.filter((d) => !exceptionDates.has(d.toISOString().slice(0, 10)));
+
+    // If the series is exhausted (no future occurrences at all), signal to the caller
+    if (validOccurrences.length === 0 && existingItems.length === 0) {
+        throw new RruleExhaustedError(`rrule "${routine.rrule}" has no occurrences in the horizon`);
+    }
+
+    const newDates = validOccurrences.filter((d) => !existingDates.has(d.toISOString().slice(0, 10)));
+
+    const now = dayjs().toISOString();
+    for (const date of newDates) {
+        const item = buildCalendarItem(userId, routine, date, now, calendarItemTemplate);
+        await putItem(db, item);
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item });
+    }
+
+    const lastDate = validOccurrences.at(-1);
+    if (lastDate) {
+        await updateRoutine(db, { ...routine, lastGeneratedDate: dayjs(lastDate).format('YYYY-MM-DD') });
+    }
+}
+
+/**
+ * Delete all future calendar items for a routine and regenerate up to the horizon.
+ * Called when the rrule changes so items reflect the new schedule.
+ */
+export async function deleteAndRegenerateFutureItems(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine): Promise<void> {
+    const now = dayjs().startOf('day').format('YYYY-MM-DD');
+    const allItems = await db.getAllFromIndex('items', 'userId', userId);
+    const futureItems = allItems.filter((i) => i.routineId === routine._id && i.status === 'calendar' && (i.timeStart ?? '') >= now);
+
+    for (const item of futureItems) {
+        await db.delete('items', item._id);
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null });
+    }
+
+    await generateCalendarItemsToHorizon(db, userId, routine);
 }

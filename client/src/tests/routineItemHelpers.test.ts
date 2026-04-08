@@ -1,9 +1,19 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createNextRoutineItem, getCalendarCompletionTiming } from '../db/routineItemHelpers';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+    createNextRoutineItem,
+    deleteAndRegenerateFutureItems,
+    generateCalendarItemsToHorizon,
+    getCalendarCompletionTiming,
+    RruleExhaustedError,
+} from '../db/routineItemHelpers';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
+
+vi.mock('../lib/calendarHorizon', () => ({
+    getCalendarHorizonMonths: () => 2,
+}));
 
 const USER_ID = 'user-1';
 
@@ -122,5 +132,134 @@ describe('getCalendarCompletionTiming', () => {
         // Completed a week before the event
         const completionDate = new Date('2024-03-13T10:00:00Z');
         expect(getCalendarCompletionTiming(timeStart, completionDate)).toBe('onTime');
+    });
+});
+
+// ── generateCalendarItemsToHorizon ──────────────────────────────────────────
+
+function buildCalendarRoutine(overrides: Partial<StoredRoutine> = {}): StoredRoutine {
+    return {
+        _id: 'cal-routine-1',
+        userId: USER_ID,
+        title: 'Weekly standup',
+        routineType: 'calendar',
+        rrule: 'FREQ=WEEKLY;BYDAY=MO',
+        template: {},
+        active: true,
+        createdTs: '2025-01-01T00:00:00.000Z',
+        updatedTs: '2025-01-01T00:00:00.000Z',
+        calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+        ...overrides,
+    };
+}
+
+describe('generateCalendarItemsToHorizon', () => {
+    let db: IDBPDatabase<MyDB>;
+
+    beforeEach(async () => {
+        db = await openTestDB();
+    });
+
+    afterEach(() => {
+        db.close();
+    });
+
+    it('generates items up to the 2-month horizon', async () => {
+        const routine = buildCalendarRoutine();
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const calendarItems = items.filter((i) => i.routineId === 'cal-routine-1' && i.status === 'calendar');
+
+        // Weekly for ~2 months: expect roughly 8-9 items
+        expect(calendarItems.length).toBeGreaterThanOrEqual(7);
+        expect(calendarItems.length).toBeLessThanOrEqual(10);
+
+        // All items should be on Mondays
+        for (const item of calendarItems) {
+            expect(dayjs(item.timeStart).day()).toBe(1); // Monday
+            expect(item.timeStart).toContain('T09:00:00');
+        }
+    });
+
+    it('skips exception dates', async () => {
+        // Find the first Monday from today to use as an exception
+        const nextMonday = dayjs().startOf('day').day(8); // next Monday
+        const exceptionDate = nextMonday.format('YYYY-MM-DD');
+
+        const routine = buildCalendarRoutine({
+            routineExceptions: [{ date: exceptionDate, type: 'skipped' }],
+        });
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const calendarItems = items.filter((i) => i.routineId === 'cal-routine-1');
+        const dates = calendarItems.map((i) => (i.timeStart ?? '').slice(0, 10));
+        expect(dates).not.toContain(exceptionDate);
+    });
+
+    it('does not create duplicate items for existing dates', async () => {
+        const routine = buildCalendarRoutine();
+
+        // Generate once
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+        const firstCount = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1').length;
+
+        // Generate again — should not add duplicates
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+        const secondCount = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1').length;
+
+        expect(secondCount).toBe(firstCount);
+    });
+
+    it('queues sync operations for each generated item', async () => {
+        const routine = buildCalendarRoutine();
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        const ops = await db.getAll('syncOperations');
+        // +1 for the routine update (lastGeneratedDate)
+        expect(ops.length).toBe(items.length + 1);
+    });
+
+    it('throws RruleExhaustedError when series is exhausted', async () => {
+        // COUNT=1 with createdTs in the past — the only occurrence is before today's horizon
+        const routine = buildCalendarRoutine({
+            rrule: 'FREQ=DAILY;COUNT=1',
+            createdTs: '2020-01-01T00:00:00.000Z',
+        });
+
+        await expect(generateCalendarItemsToHorizon(db, USER_ID, routine)).rejects.toThrow(RruleExhaustedError);
+    });
+});
+
+// ── deleteAndRegenerateFutureItems ──────────────────────────────────────────
+
+describe('deleteAndRegenerateFutureItems', () => {
+    let db: IDBPDatabase<MyDB>;
+
+    beforeEach(async () => {
+        db = await openTestDB();
+    });
+
+    afterEach(() => {
+        db.close();
+    });
+
+    it('deletes future items and regenerates from new rrule', async () => {
+        const routine = buildCalendarRoutine();
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const beforeItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        expect(beforeItems.length).toBeGreaterThan(0);
+
+        // Change rrule from weekly to biweekly
+        const updatedRoutine = { ...routine, rrule: 'FREQ=WEEKLY;INTERVAL=2;BYDAY=MO' };
+        await deleteAndRegenerateFutureItems(db, USER_ID, updatedRoutine);
+
+        const afterItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1' && i.status === 'calendar');
+        // Biweekly should have roughly half the items
+        expect(afterItems.length).toBeLessThan(beforeItems.length);
+        expect(afterItems.length).toBeGreaterThan(0);
     });
 });

@@ -2,10 +2,12 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Divider from '@mui/material/Divider';
 import FormControlLabel from '@mui/material/FormControlLabel';
+import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
 import { useColorScheme } from '@mui/material/styles';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
@@ -13,6 +15,7 @@ import { useState } from 'react';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
+import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import { getRoutineIndicatorStyle, type RoutineIndicatorStyle, setRoutineIndicatorStyle } from '../../lib/routineIndicatorStyle';
 import type { MyDB } from '../../types/MyDB';
@@ -66,6 +69,9 @@ function SettingsPage() {
                 </Box>
             </Paper>
 
+            {/* Calendar horizon */}
+            <CalendarHorizonSection />
+
             {/* Routine indicator style */}
             <RoutineIndicatorSection />
 
@@ -115,6 +121,38 @@ function AppearanceSection() {
                     />
                     <FormControlLabel value="dark" control={<Radio size="small" />} label={<Typography variant="body2">Dark</Typography>} />
                 </RadioGroup>
+            </Box>
+        </Paper>
+    );
+}
+
+const HORIZON_OPTIONS = [1, 2, 3, 4, 6, 9, 12] as const;
+
+function CalendarHorizonSection() {
+    const [horizon, setHorizon] = useState(() => getCalendarHorizonMonths());
+
+    function onChange(months: number) {
+        setHorizon(months);
+        setCalendarHorizonMonths(months);
+    }
+
+    return (
+        <Paper variant="outlined" className={styles.section}>
+            <Box className={styles.sectionContent}>
+                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                    Calendar horizon
+                </Typography>
+                <Typography variant="body2" color="text.secondary" mb={2}>
+                    How far ahead to generate calendar items for recurring routines. Existing routines are not affected until their next edit or item
+                    completion.
+                </Typography>
+                <TextField select size="small" value={horizon} onChange={(e) => onChange(Number(e.target.value))} sx={{ width: 160 }}>
+                    {HORIZON_OPTIONS.map((m) => (
+                        <MenuItem key={m} value={m}>
+                            {m === 1 ? '1 month' : `${m} months`}
+                        </MenuItem>
+                    ))}
+                </TextField>
             </Box>
         </Paper>
     );

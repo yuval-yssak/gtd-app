@@ -3,7 +3,7 @@ import type { IDBPDatabase } from 'idb';
 import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { deleteItemById, putItem } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
-import { createNextCalendarItem, createNextRoutineItem, getCalendarCompletionTiming, RruleExhaustedError } from './routineItemHelpers';
+import { createNextRoutineItem, generateCalendarItemsToHorizon, RruleExhaustedError } from './routineItemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
 
@@ -210,29 +210,19 @@ async function addCalendarException(db: IDBPDatabase<MyDB>, routine: StoredRouti
 
 /**
  * Handle next-item generation for calendar routines.
- * Before-due trash: record a skipped exception and advance from the item's timeStart
- * (the exception ensures computeNextCalendarDate skips that occurrence).
- * Done / late trash: use timing to decide whether to advance from timeStart (on-time)
- * or from now (late — avoids generating a date in the past).
+ * Before-due trash: record a skipped exception so the date is not regenerated.
+ * All cases: extend the horizon to fill any gaps (e.g. item at the far end of the window).
  */
 async function createNextCalendarRoutineItem(db: IDBPDatabase<MyDB>, item: StoredItem, routine: StoredRoutine, disposalKind: 'done' | 'trash'): Promise<void> {
-    const now = dayjs();
-    // Destructure so TypeScript narrows timeStart to string inside the blocks below
     const { timeStart } = item;
 
-    if (disposalKind === 'trash' && timeStart !== undefined && now.isBefore(dayjs(timeStart))) {
-        // Skip this occurrence; advance from its timeStart (now in exceptions, so the search jumps over it)
+    if (disposalKind === 'trash' && timeStart !== undefined && dayjs().isBefore(dayjs(timeStart))) {
         const routineWithException = await addCalendarException(db, routine, dayjs(timeStart).format('YYYY-MM-DD'));
-        await createNextCalendarItem(db, item.userId, routineWithException, dayjs(timeStart).toDate());
+        await generateCalendarItemsToHorizon(db, item.userId, routineWithException);
         return;
     }
 
-    // Guard before calling getCalendarCompletionTiming: timeStart may be absent (item re-clarified to inbox).
-    // Treat missing timeStart as 'late' so refDate falls back to now rather than passing an invalid empty string.
-    const timing = timeStart !== undefined && getCalendarCompletionTiming(timeStart, now.toDate()) === 'onTime' ? 'onTime' : 'late';
-    // Late completions: use midnight to allow today as a valid occurrence. On-time: use timeStart.
-    const refDate = timing === 'onTime' ? dayjs(timeStart).toDate() : dayjs().subtract(1, 'millisecond').toDate();
-    await createNextCalendarItem(db, item.userId, routine, refDate);
+    await generateCalendarItemsToHorizon(db, item.userId, routine);
 }
 
 // ── Generic edit ──────────────────────────────────────────────────────────────

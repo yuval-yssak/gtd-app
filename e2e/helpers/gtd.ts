@@ -156,6 +156,28 @@ export const gtd = {
     removeRoutine: (page: Page, routineId: string): Promise<void> =>
         page.evaluate((id) => (window as unknown as { __gtd: { removeRoutine(id: string): Promise<void> } }).__gtd.removeRoutine(id), routineId),
 
+    generateCalendarItemsToHorizon: (page: Page, routineId: string): Promise<void> =>
+        page.evaluate(
+            (id) =>
+                (
+                    window as unknown as {
+                        __gtd: { generateCalendarItemsToHorizon(id: string): Promise<void> };
+                    }
+                ).__gtd.generateCalendarItemsToHorizon(id),
+            routineId,
+        ),
+
+    deleteAndRegenerateFutureItems: (page: Page, routineId: string): Promise<void> =>
+        page.evaluate(
+            (id) =>
+                (
+                    window as unknown as {
+                        __gtd: { deleteAndRegenerateFutureItems(id: string): Promise<void> };
+                    }
+                ).__gtd.deleteAndRegenerateFutureItems(id),
+            routineId,
+        ),
+
     // ── Sync controls ────────────────────────────────────────────────────────
     flush: (page: Page): Promise<void> => page.evaluate(() => (window as unknown as { __gtd: { flush(): Promise<void> } }).__gtd.flush()),
 
