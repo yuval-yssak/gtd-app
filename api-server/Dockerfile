@@ -11,6 +11,8 @@ RUN npm run build
 
 FROM node:24-alpine
 WORKDIR /app
+ARG COMMIT_HASH=unknown
+ENV COMMIT_HASH=$COMMIT_HASH
 COPY api-server/package*.json ./
 RUN npm install --omit=dev
 COPY --from=builder /app/build ./build

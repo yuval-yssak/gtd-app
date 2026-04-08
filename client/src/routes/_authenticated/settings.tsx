@@ -90,6 +90,9 @@ function SettingsPage() {
                     <Typography variant="body2" color="text.secondary">
                         Getting Things Done — offline-first GTD productivity app.
                     </Typography>
+                    <Typography variant="caption" color="text.secondary" mt={1} component="p">
+                        Version: {__COMMIT_HASH__}
+                    </Typography>
                 </Box>
             </Paper>
         </Box>
