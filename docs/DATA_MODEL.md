@@ -192,7 +192,6 @@ interface RoutineItemTemplate {
     time?: number;                   // estimated minutes
     focus?: boolean;
     urgent?: boolean;
-    ticklerLeadDays?: number;        // days before expectedBy to set ignoreBefore
     notes?: string;
 }
 

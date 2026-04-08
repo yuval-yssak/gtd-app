@@ -40,7 +40,8 @@ export interface ItemInterface {
     expectedBy?: string;
     /**
      * Tickler date (ISO date string). Item is hidden from all lists until this date passes.
-     * Applies to `nextAction` and `waitingFor` items. Separate from `timeStart` to avoid overloading.
+     * Only applies to `nextAction` and `waitingFor` items — `calendar` items ignore this field.
+     * Separate from `timeStart` to avoid overloading.
      */
     ignoreBefore?: string;
     /**
@@ -86,10 +87,6 @@ export interface RoutineItemTemplate {
     time?: number; // estimated minutes
     focus?: boolean;
     urgent?: boolean;
-    /**
-     * Days before expectedBy to set ignoreBefore (tickler). undefined = no tickler; 0 = show on due date.
-     */
-    ticklerLeadDays?: number;
     notes?: string;
 }
 
