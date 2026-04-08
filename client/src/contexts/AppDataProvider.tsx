@@ -206,6 +206,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         // (e.g. React strict-mode double-mount, or fast navigation away during loadAll).
         let unmounted = false;
         navigator.serviceWorker?.addEventListener('message', onSwMessage);
+        // Ensure SW messages are dispatched immediately rather than being buffered until
+        // the page's load event. Without this, postMessage from the SW push handler can
+        // be lost if it fires before the load event completes.
+        navigator.serviceWorker?.startMessages();
         loadAll()
             .then(() => {
                 if (unmounted) {

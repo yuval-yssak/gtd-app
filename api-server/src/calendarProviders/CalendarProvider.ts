@@ -30,6 +30,7 @@ export interface GCalEvent {
     updated: string; // ISO datetime — used for last-write-wins conflict resolution
     status: 'confirmed' | 'tentative' | 'cancelled';
     recurringEventId?: string; // set for instances that belong to a recurring series
+    recurrence?: string[]; // present on master recurring event definitions (e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO"])
 }
 
 export interface CalendarProvider {

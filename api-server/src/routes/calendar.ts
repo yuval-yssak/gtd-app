@@ -1,5 +1,9 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+
+dayjs.extend(utc);
+
 import { google } from 'googleapis';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
@@ -684,23 +688,156 @@ async function fetchEventsWithSyncToken(config: CalendarSyncConfigInterface, pro
 // ── Calendar event import ─────────────────────────────────────────────────────
 
 /**
- * Imports pre-fetched Google Calendar events as `calendar` items.
- * Skips instances whose recurringEventId belongs to a routine already linked to this integration —
- * those are managed by the routine exception sync path.
+ * Imports pre-fetched Google Calendar events as `calendar` items or routines.
+ * - Recurring master events (with `recurrence`) are imported as routines.
+ * - Events whose id matches an existing routine's calendarEventId are also routed to the
+ *   routine path — cancelled master events from incremental sync often lack the `recurrence`
+ *   field, but still need to deactivate the corresponding routine.
+ * - Instances whose recurringEventId belongs to a linked routine are skipped (managed by exception sync).
+ * - All other events are upserted as individual calendar items.
  */
 async function importCalendarEvents(source: CalendarSource, events: GCalEvent[], ctx: SyncContext): Promise<void> {
-    const linkedRoutines = await routinesDAO.findArray({
+    // Fetch existing linked routines so we can also route events that match a known routine
+    // calendarEventId — handles cancelled masters that arrive without a `recurrence` field.
+    const existingLinkedRoutines = await routinesDAO.findArray({
         user: ctx.userId,
         calendarIntegrationId: source.integration._id,
         calendarEventId: { $exists: true },
     });
+    const knownRoutineEventIds = new Set(existingLinkedRoutines.map((r) => r.calendarEventId).filter((id): id is string => Boolean(id)));
 
-    const routineEventIds = new Set(linkedRoutines.map((r) => r.calendarEventId).filter((id): id is string => Boolean(id)));
+    const isRecurringMaster = (e: GCalEvent) => hasAtLeastOne(e.recurrence ?? []) || knownRoutineEventIds.has(e.id);
+    const recurringMasters = events.filter(isRecurringMaster);
+    const regularEvents = events.filter((e) => !isRecurringMaster(e));
 
-    const eventsToUpsert = events.filter((e) => !e.recurringEventId || !routineEventIds.has(e.recurringEventId));
-    // Each event targets a distinct calendarEventId so there are no write conflicts — safe to parallelize.
+    // Import recurring masters as routines first — their calendarEventIds must be known
+    // before filtering regular events so instances of these series are correctly skipped.
+    await Promise.all(recurringMasters.map((event) => importRecurringEventAsRoutine(event, source, ctx)));
+
+    // Re-fetch after importing new recurring masters so freshly created routines are included.
+    const allLinkedRoutines = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarIntegrationId: source.integration._id,
+        calendarEventId: { $exists: true },
+    });
+    const routineEventIds = new Set(allLinkedRoutines.map((r) => r.calendarEventId).filter((id): id is string => Boolean(id)));
+
+    const eventsToUpsert = regularEvents.filter((e) => !e.recurringEventId || !routineEventIds.has(e.recurringEventId));
     await Promise.all(eventsToUpsert.map((event) => upsertCalendarItem(event, source, ctx)));
 }
+
+// ── Recurring event → routine import ─────────────────────────────────────────
+
+/** Extracts HH:mm in UTC from an ISO datetime string. Routine calendarItemTemplate stores UTC times. */
+function extractUtcTime(isoDatetime: string): string {
+    return dayjs(isoDatetime).utc().format('HH:mm');
+}
+
+/** Extracts the RRULE string from a GCal recurrence array, stripping the "RRULE:" prefix. */
+function extractRrule(recurrence: string[]): string | null {
+    const rruleLine = recurrence.find((r) => r.startsWith('RRULE:'));
+    return rruleLine ? rruleLine.replace(/^RRULE:/, '') : null;
+}
+
+/**
+ * Imports a GCal recurring master event as a routine.
+ * Creates a new routine if none exists for this calendarEventId, or updates the existing one.
+ */
+async function importRecurringEventAsRoutine(event: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const [existing] = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarEventId: event.id,
+        calendarIntegrationId: source.integration._id,
+    });
+
+    if (existing?.lastPushedToGCalTs && isOwnEcho(existing.lastPushedToGCalTs, event.updated)) {
+        return;
+    }
+
+    if (event.status === 'cancelled') {
+        await deactivateRoutineFromGCal(existing, ctx);
+        return;
+    }
+
+    const rrule = extractRrule(event.recurrence ?? []);
+    if (!rrule) {
+        console.warn(`[calendar] recurring master event ${event.id} has no RRULE in recurrence — skipping routine import`);
+        return;
+    }
+
+    if (existing) {
+        await updateRoutineFromGCal(existing, event, rrule, source, ctx);
+        return;
+    }
+
+    await createRoutineFromGCal(event, rrule, source, ctx);
+}
+
+async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const timeOfDay = extractUtcTime(event.timeStart);
+    const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+
+    const routineId = randomUUID();
+    const routine: RoutineInterface = {
+        _id: routineId,
+        user: ctx.userId,
+        title: event.title,
+        routineType: 'calendar',
+        rrule,
+        active: true,
+        calendarEventId: event.id,
+        calendarIntegrationId: source.integration._id,
+        calendarSyncConfigId: source.config._id,
+        calendarItemTemplate: { timeOfDay, duration },
+        template: {},
+        createdTs: ctx.now,
+        updatedTs: ctx.now,
+    };
+
+    await routinesDAO.insertOne(routine);
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: routine, opType: 'create', now: ctx.now }));
+}
+
+async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    if (event.updated <= existing.updatedTs) {
+        return;
+    }
+
+    const routineId = existing._id;
+    const timeOfDay = extractUtcTime(event.timeStart);
+    const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+
+    const updated: RoutineInterface = {
+        ...existing,
+        title: event.title,
+        rrule,
+        calendarSyncConfigId: source.config._id,
+        calendarItemTemplate: { timeOfDay, duration },
+        updatedTs: ctx.now,
+    };
+
+    await routinesDAO.replaceById(routineId, updated);
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
+}
+
+async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined, ctx: SyncContext): Promise<void> {
+    if (!existing || !existing.active) {
+        return;
+    }
+
+    const routineId = existing._id;
+    const updated: RoutineInterface = { ...existing, active: false, updatedTs: ctx.now };
+    await routinesDAO.replaceById(routineId, updated);
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
+
+    // Trash all future items belonging to this routine.
+    await updateItemsAndRecordOps(ctx, {
+        filter: { user: ctx.userId, routineId, status: 'calendar', timeStart: { $gte: ctx.now } },
+        setFields: { status: 'trash', updatedTs: ctx.now },
+    });
+}
+
+// ── Single calendar event import ─────────────────────────────────────────────
 
 type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string };
 

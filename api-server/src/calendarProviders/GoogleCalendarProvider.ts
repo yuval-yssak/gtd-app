@@ -38,6 +38,7 @@ function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCa
         updated?: string | null;
         status?: string | null;
         recurringEventId?: string | null;
+        recurrence?: string[] | null;
     }>;
     return events.flatMap<GCalEvent>((event) => {
         if (!event.id) {
@@ -55,6 +56,7 @@ function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCa
                     updated: event.updated ?? '',
                     status: 'cancelled',
                     ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
+                    ...(event.recurrence ? { recurrence: event.recurrence } : {}),
                 },
             ];
         }
@@ -74,6 +76,7 @@ function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCa
                 updated: event.updated ?? event.start.dateTime,
                 status,
                 ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
+                ...(event.recurrence ? { recurrence: event.recurrence } : {}),
             },
         ];
     });

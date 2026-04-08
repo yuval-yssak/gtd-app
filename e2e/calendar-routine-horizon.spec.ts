@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
+import { hasAtLeastOne } from '../client/src/lib/typeUtils';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
@@ -63,11 +64,14 @@ test.describe('calendar routine horizon', () => {
             // Device 2: pull, then complete the nearest item
             await gtd.pull(page2);
             const device2Items = (await gtd.listCalendar(page2)).filter((i) => i.routineId === routine._id);
+            if (!hasAtLeastOne(device2Items)) {
+                throw new Error('No items found on device 2');
+            }
             expect(device2Items.length).toBe(countBefore);
 
             // Sort by timeStart and complete the earliest one
             const sorted = device2Items.sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''));
-            await gtd.clarifyToDone(page2, sorted[0]!);
+            await gtd.clarifyToDone(page2, sorted[0]);
             await gtd.flush(page2);
 
             // Device 1: pull and verify horizon extended (should still have at least as many items)

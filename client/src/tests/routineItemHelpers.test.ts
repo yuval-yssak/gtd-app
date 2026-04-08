@@ -8,6 +8,7 @@ import {
     getCalendarCompletionTiming,
     RruleExhaustedError,
 } from '../db/routineItemHelpers';
+import { hasAtLeastOne } from '../lib/typeUtils';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -51,7 +52,10 @@ describe('createNextRoutineItem', () => {
 
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         expect(items).toHaveLength(1);
-        const generated = items[0]!;
+        if (!hasAtLeastOne(items)) {
+            throw new Error('No items found');
+        }
+        const generated = items[0];
         expect(generated.ignoreBefore).toBe(generated.expectedBy);
         expect(generated.routineId).toBe('routine-1');
         expect(generated.status).toBe('nextAction');
@@ -63,8 +67,11 @@ describe('createNextRoutineItem', () => {
         await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-01'));
 
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
-        expect(items[0]!.expectedBy).toBe('2025-06-04');
-        expect(items[0]!.ignoreBefore).toBe('2025-06-04');
+        if (!hasAtLeastOne(items)) {
+            throw new Error('No items found');
+        }
+        expect(items[0].expectedBy).toBe('2025-06-04');
+        expect(items[0].ignoreBefore).toBe('2025-06-04');
     });
 
     it('copies template fields onto the generated item', async () => {
@@ -81,7 +88,10 @@ describe('createNextRoutineItem', () => {
         await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-01'));
 
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
-        const generated = items[0]!;
+        if (!hasAtLeastOne(items)) {
+            throw new Error('No items found');
+        }
+        const generated = items[0];
         expect(generated.workContextIds).toEqual(['ctx-1']);
         expect(generated.energy).toBe('high');
         expect(generated.time).toBe(30);
@@ -96,8 +106,11 @@ describe('createNextRoutineItem', () => {
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(1);
-        expect(ops[0]!.opType).toBe('create');
-        expect(ops[0]!.entityType).toBe('item');
+        if (!hasAtLeastOne(ops)) {
+            throw new Error('No sync operations found');
+        }
+        expect(ops[0].opType).toBe('create');
+        expect(ops[0].entityType).toBe('item');
     });
 });
 

@@ -144,6 +144,9 @@ async function pushExistingRoutineToGCal(snapshot: RoutineInterface, userId: str
 /** Creates a new GCal recurring event for a calendar routine that isn't linked yet. */
 async function pushNewRoutineToGCal(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
     if (snapshot.routineType !== 'calendar' || !snapshot.calendarIntegrationId) {
+        if (snapshot.routineType === 'calendar') {
+            console.warn(`[calendar-pushback] routine ${snapshot._id} is calendar type but has no calendarIntegrationId — skipping GCal push`);
+        }
         return;
     }
 
@@ -175,16 +178,19 @@ async function pushNewRoutineToGCal(snapshot: RoutineInterface, userId: string, 
 /** Resolves the push context for an entity that already has integration/config IDs. */
 async function resolvePushContext(link: CalendarLink, userId: string, buildProvider: ProviderFactory): Promise<PushContext | null> {
     if (!link.integrationId) {
+        console.warn(`[calendar-pushback] resolvePushContext: no integrationId — skipping`);
         return null;
     }
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(link.integrationId, userId);
     if (!integration) {
+        console.warn(`[calendar-pushback] resolvePushContext: integration ${link.integrationId} not found for user ${userId}`);
         return null;
     }
     const config = link.configId
         ? await calendarSyncConfigsDAO.findByOwnerAndId(link.configId, userId)
         : ((await calendarSyncConfigsDAO.findEnabledByIntegration(link.integrationId)).find((c) => c.isDefault) ?? null);
     if (!config) {
+        console.warn(`[calendar-pushback] resolvePushContext: no sync config found (configId=${link.configId ?? 'none'}, integrationId=${link.integrationId})`);
         return null;
     }
     return { integration, config, provider: buildProvider(integration, userId) };
