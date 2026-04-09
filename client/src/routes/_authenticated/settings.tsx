@@ -1,5 +1,6 @@
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import ButtonBase from '@mui/material/ButtonBase';
 import Divider from '@mui/material/Divider';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import MenuItem from '@mui/material/MenuItem';
@@ -10,6 +11,7 @@ import { useColorScheme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
+import classNames from 'classnames';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
@@ -17,6 +19,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
 import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
+import { COLOR_THEMES, type ColorThemeId, getColorTheme, setColorTheme } from '../../lib/colorTheme';
 import { getRoutineIndicatorStyle, type RoutineIndicatorStyle, setRoutineIndicatorStyle } from '../../lib/routineIndicatorStyle';
 import type { MyDB } from '../../types/MyDB';
 import styles from './-settings.module.css';
@@ -101,6 +104,12 @@ function SettingsPage() {
 
 function AppearanceSection() {
     const { mode, setMode } = useColorScheme();
+    const [themeId, setThemeId] = useState<ColorThemeId>(getColorTheme);
+
+    function onThemeChange(id: ColorThemeId) {
+        setThemeId(id);
+        setColorTheme(id);
+    }
 
     return (
         <Paper variant="outlined" className={styles.section}>
@@ -124,6 +133,29 @@ function AppearanceSection() {
                     />
                     <FormControlLabel value="dark" control={<Radio size="small" />} label={<Typography variant="body2">Dark</Typography>} />
                 </RadioGroup>
+                <Divider className={styles.divider} />
+                <Typography variant="body2" fontWeight={500} mb={1}>
+                    Color theme
+                </Typography>
+                <Box className={styles.themeGrid}>
+                    {COLOR_THEMES.map((t) => (
+                        <ButtonBase
+                            key={t.id}
+                            className={classNames(styles.themeSwatch, themeId === t.id && styles.themeSwatchSelected)}
+                            onClick={() => onThemeChange(t.id)}
+                            aria-label={t.label}
+                            aria-pressed={themeId === t.id}
+                        >
+                            <Box className={styles.swatchColors}>
+                                <span className={styles.swatchCircle} style={{ backgroundColor: t.primary }} />
+                                <span className={styles.swatchCircle} style={{ backgroundColor: t.secondary }} />
+                            </Box>
+                            <Typography variant="caption" className={styles.swatchLabel}>
+                                {t.label}
+                            </Typography>
+                        </ButtonBase>
+                    ))}
+                </Box>
             </Box>
         </Paper>
     );

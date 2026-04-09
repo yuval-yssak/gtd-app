@@ -2,18 +2,18 @@ import CssBaseline from '@mui/material/CssBaseline';
 import { CssVarsProvider, extendTheme } from '@mui/material/styles';
 import { createRootRouteWithContext, Outlet } from '@tanstack/react-router';
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools';
+import { useMemo } from 'react';
+import { buildThemeOptions, useColorTheme } from '../lib/colorTheme';
 import type { RouterContext } from '../types/routerContext';
 
-// colorSchemes: both light and dark must be listed so MUI generates dark CSS variables.
-// colorSchemeSelector: attribute-based (not 'media') so useColorScheme().setMode() works
-// for the manual toggle in Settings. CssVarsProvider defaults to defaultMode="system",
-// which reads the OS preference and falls back to localStorage on subsequent visits.
-const theme = extendTheme({
-    colorSchemes: { light: true, dark: true },
-    colorSchemeSelector: '[data-color-scheme="%s"]',
-});
-
 function RootComponent() {
+    const colorThemeId = useColorTheme();
+    // Rebuild the MUI theme only when the user picks a different color theme.
+    // colorSchemes must list both light and dark so MUI generates dark CSS variables.
+    // colorSchemeSelector is attribute-based (not 'media') so useColorScheme().setMode()
+    // works for the manual toggle in Settings.
+    const theme = useMemo(() => extendTheme(buildThemeOptions(colorThemeId)), [colorThemeId]);
+
     return (
         <CssVarsProvider theme={theme}>
             <CssBaseline />
