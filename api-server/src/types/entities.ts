@@ -157,6 +157,7 @@ export interface RoutineInterface {
     routineExceptions?: Array<{
         date: string; // ISO date of the original rrule occurrence
         type: 'skipped' | 'modified';
+        itemId?: string;
         newTimeStart?: string; // ISO datetime — present when type === 'modified'
         newTimeEnd?: string;
     }>;
