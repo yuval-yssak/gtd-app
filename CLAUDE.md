@@ -33,7 +33,7 @@ npm run typecheck    # tsc --noEmit
 
 ### Client (`cd client`)
 ```bash
-npm run dev          # Vite dev server
+npm run dev          # Watch build + preview server (port 4173)
 npm run build        # tsc + vite build
 npm run lint         # Biome lint check
 npm run lint:fix     # Auto-fix lint + format (Biome)
@@ -44,7 +44,7 @@ npm run preview      # Preview production build
 ## Architecture
 
 ### Auth Flow
-Better Auth — Google and GitHub OAuth. Accounts with matching emails are linked to one user. Session stored in MongoDB; HTTP-only cookie `better-auth.session_token`. Client tracks login state in IndexedDB (`localLoggedIn` store) rather than React state.
+Better Auth — Google and GitHub OAuth. Accounts with matching emails are linked to one user. Session stored in MongoDB; HTTP-only cookie `better-auth.session_token`. Client tracks login state in IndexedDB (`activeAccount` store) rather than React state.
 
 ### Offline-First Design
 The client is PWA-capable with a Service Worker. All items are stored in **IndexedDB** (via `idb`) with a `syncOperations` store for queueing changes when offline. The router context passes `db`, `auth`, and `items` to all routes.
@@ -68,6 +68,7 @@ All server-side interfaces live in `api-server/src/types/entities.ts`. Client-si
 | `OperationInterface` | `operations` | Server-side sync log entry. Stores full entity snapshot per change. |
 | `DeviceSyncStateInterface` | `deviceSyncState` | Per-device sync cursor. Drives operation log purging. |
 | `CalendarIntegrationInterface` | `calendarIntegrations` | OAuth credentials + calendar ID for Google Calendar sync. |
+| `CalendarSyncConfigInterface` | `calendarSyncConfigs` | Per-calendar sync state within an integration (calendar ID, sync cursor, echo avoidance). |
 
 **Item status → relevant fields:**
 - `inbox` — title only
