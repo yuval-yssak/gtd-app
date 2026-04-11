@@ -835,11 +835,12 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(item).toBeNull();
     });
 
-    it('trashes an existing item when its GCal event is moved to the past', async () => {
+    it('updates an existing item when its GCal event is moved to the past', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
+        const createdTime = dayjs().subtract(2, 'day').toISOString();
         const futureTime = dayjs().add(1, 'day').toISOString();
         const pastTime = dayjs().subtract(1, 'day').toISOString();
         await itemsDAO.insertOne({
@@ -851,12 +852,12 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
             timeEnd: futureTime,
             calendarEventId: 'evt-moved',
             calendarIntegrationId: 'int-1',
-            createdTs: futureTime,
-            updatedTs: futureTime,
+            createdTs: createdTime,
+            updatedTs: createdTime,
         });
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
-            events: [{ id: 'evt-moved', title: 'Was future', timeStart: pastTime, timeEnd: pastTime, updated: dayjs().toISOString(), status: 'confirmed' }],
+            events: [{ id: 'evt-moved', title: 'Now past', timeStart: pastTime, timeEnd: pastTime, updated: dayjs().toISOString(), status: 'confirmed' }],
             nextSyncToken: 'tok-1',
         });
 
@@ -864,10 +865,55 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(res.status).toBe(200);
 
         const item = await itemsDAO.findOne({ _id: 'item-moved-past' });
-        expect(item?.status).toBe('trash');
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('Now past');
+        expect(item?.timeStart).toBe(pastTime);
     });
 
-    it('does not trash a routine-managed item when its GCal event is moved to the past', async () => {
+    it('updates (not trashes) an in-progress event whose start is past but end is future', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const startTime = dayjs().subtract(1, 'hour').toISOString();
+        const endTime = dayjs().add(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-in-progress',
+            user: userId,
+            status: 'calendar',
+            title: 'In-progress meeting',
+            timeStart: startTime,
+            timeEnd: endTime,
+            calendarEventId: 'evt-in-progress',
+            calendarIntegrationId: 'int-1',
+            createdTs: startTime,
+            updatedTs: startTime,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-in-progress',
+                    title: 'In-progress meeting (edited)',
+                    timeStart: startTime,
+                    timeEnd: endTime,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    description: 'new notes',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-in-progress' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('In-progress meeting (edited)');
+    });
+
+    it('skips a routine-managed item when its GCal event is moved to the past', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);

@@ -56,9 +56,9 @@ function isOwnEcho(lastPushedTs: string, eventUpdated: string): boolean {
     return Math.abs(dayjs(eventUpdated).diff(dayjs(lastPushedTs), 'second')) < ECHO_WINDOW_SECONDS;
 }
 
-/** Returns true if the event's start time is strictly before `now`. */
-function isPastEvent(event: { timeStart: string }, now: string): boolean {
-    return dayjs(event.timeStart).isBefore(dayjs(now));
+/** Returns true if the event has fully ended (timeEnd is strictly before `now`). */
+function isPastEvent(event: { timeStart: string; timeEnd: string }, now: string): boolean {
+    return dayjs(event.timeEnd).isBefore(dayjs(now));
 }
 
 const calendarRoutes = new Hono<{ Variables: AuthVariables }>();
@@ -969,11 +969,11 @@ async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, 
         return;
     }
 
-    // Ignore past events from Google — the app only cares about future changes.
-    // If a previously-future event was moved to the past, trash the local copy.
+    // Past events from Google are only relevant if they already exist locally — update them
+    // to reflect any changes (e.g. title/time edits). New past events are ignored.
     if (event.timeStart && isPastEvent(event, ctx.now)) {
         if (existing) {
-            await trashCancelledItem(existing, ctx);
+            await updateExistingCalendarItem(existing, event, source, ctx);
         }
         return;
     }
