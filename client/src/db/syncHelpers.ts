@@ -106,21 +106,78 @@ export function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
     return flushInFlight;
 }
 
-async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
-    // Loop until empty: a fire-and-forget flush from queueSyncOp may have started before
-    // a subsequent mutation added more ops. Without the loop, those late-arriving ops
-    // stay in IDB because the in-flight flush already read its batch before they existed.
-    while (true) {
-        const ops = await db.getAll('syncOperations');
-        if (!ops.length) return;
+// Cross-context flush lock: the main thread and Service Worker each have their own
+// module-level flushInFlight guard, so they can race and POST the same ops twice.
+// This IDB-based lock coordinates across JS contexts via the shared deviceSyncState record.
+const FLUSH_LOCK_TTL_MS = 30_000;
 
-        const deviceId = await getOrCreateDeviceId(db);
-        await pushSyncOps(deviceId, ops);
-
-        // Batch succeeded — remove all sent ops. If the request failed, they stay for retry.
-        for (const op of ops) {
-            if (op.id !== undefined) await db.delete('syncOperations', op.id);
+// Uses a single readwrite transaction so the check-then-set is atomic — IDB serializes
+// overlapping readwrite transactions on the same store, preventing TOCTOU races.
+async function acquireFlushLock(db: IDBPDatabase<MyDB>): Promise<boolean> {
+    const tx = db.transaction('deviceSyncState', 'readwrite');
+    const store = tx.objectStore('deviceSyncState');
+    const state = await store.get('local');
+    if (!state) {
+        // No device state yet — can't write a lock. No deviceId means pushSyncOps
+        // would fail anyway, so skipping is safe.
+        return false;
+    }
+    if (state.flushingTs) {
+        const elapsed = dayjs().diff(dayjs(state.flushingTs));
+        if (elapsed < FLUSH_LOCK_TTL_MS) {
+            return false;
         }
+    }
+    await store.put({ ...state, flushingTs: dayjs().toISOString() });
+    await tx.done;
+    return true;
+}
+
+async function releaseFlushLock(db: IDBPDatabase<MyDB>): Promise<void> {
+    const tx = db.transaction('deviceSyncState', 'readwrite');
+    const store = tx.objectStore('deviceSyncState');
+    const state = await store.get('local');
+    if (state) {
+        await store.put({ ...state, flushingTs: null });
+    }
+    await tx.done;
+}
+
+async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
+    const acquired = await acquireFlushLock(db);
+    if (!acquired) {
+        console.log('[sync-flush] skipping — another context holds the flush lock');
+        return;
+    }
+    try {
+        // Loop until empty: a fire-and-forget flush from queueSyncOp may have started before
+        // a subsequent mutation added more ops. Without the loop, those late-arriving ops
+        // stay in IDB because the in-flight flush already read its batch before they existed.
+        while (true) {
+            const ops = await db.getAll('syncOperations');
+            if (!ops.length) {
+                return;
+            }
+
+            console.log(
+                `[sync-flush] pushing ${ops.length} ops to server`,
+                ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`),
+            );
+
+            const deviceId = await getOrCreateDeviceId(db);
+            await pushSyncOps(deviceId, ops);
+
+            console.log(`[sync-flush] push succeeded, removed ${ops.length} ops from queue`);
+
+            // Batch succeeded — remove all sent ops. If the request failed, they stay for retry.
+            for (const op of ops) {
+                if (op.id !== undefined) {
+                    await db.delete('syncOperations', op.id);
+                }
+            }
+        }
+    } finally {
+        await releaseFlushLock(db).catch((e) => console.warn('[sync-flush] failed to release flush lock', e));
     }
 }
 
@@ -151,7 +208,7 @@ export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void>
 
     // Register device cursor at serverTs — skips replaying all historical ops since bootstrap
     // already gives us the current snapshot; incremental pull takes over from here.
-    await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: serverTs });
+    await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: serverTs, flushingTs: null });
 }
 
 // Module-level guard so concurrent callers (SSE callback and SW-message handler arriving

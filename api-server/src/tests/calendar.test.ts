@@ -8,7 +8,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
-import { maybePushToGCal } from '../lib/calendarPushback.js';
+import { gcalCreationInFlight, maybePushToGCal } from '../lib/calendarPushback.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { calendarRoutes } from '../routes/calendar.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
@@ -39,6 +39,9 @@ beforeEach(async () => {
         db.collection('calendarSyncConfigs').deleteMany({}),
     ]);
     vi.restoreAllMocks();
+    gcalCreationInFlight.clear();
+    // Mock getCalendarTimeZone globally — sync flows call it to refresh the cached timezone.
+    vi.spyOn(GoogleCalendarProvider.prototype, 'getCalendarTimeZone').mockResolvedValue('Asia/Jerusalem');
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -100,6 +103,7 @@ function makeSyncConfig(userId: string, integrationId: string, overrides: Partia
         calendarId: 'primary',
         isDefault: true,
         enabled: true,
+        timeZone: 'Asia/Jerusalem',
         createdTs: now,
         updatedTs: now,
         ...overrides,
@@ -1716,6 +1720,29 @@ describe('calendar push-back — new items', () => {
         expect(createSpy).not.toHaveBeenCalled();
     });
 
+    it('skips item creation when DB already has calendarEventId (concurrent push-back guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Snapshot passed in the op lacks calendarEventId (captured at queue-time).
+        const snapshotWithoutLink = makeItem(userId);
+
+        // But the DB record already has it — a concurrent push-back linked it first.
+        const itemInDb = makeItem(userId, {
+            calendarEventId: 'already-linked',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await itemsDAO.insertOne(itemInDb);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('duplicate-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: snapshotWithoutLink._id!, snapshot: snapshotWithoutLink }), mockBuildProvider());
+
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
     it('skips routine-managed calendar items', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -1748,7 +1775,7 @@ describe('calendar push-back — routines', () => {
 
         await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
 
-        expect(updateSpy).toHaveBeenCalledWith('gcal-recurring-1', routine, 'primary');
+        expect(updateSpy).toHaveBeenCalledWith('gcal-recurring-1', routine, 'primary', 'Asia/Jerusalem');
         // Verify lastPushedToGCalTs was stamped.
         const updated = await routinesDAO.findByOwnerAndId(routine._id, userId);
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
@@ -1773,6 +1800,32 @@ describe('calendar push-back — routines', () => {
         const updated = await routinesDAO.findByOwnerAndId(routine._id, userId);
         expect(updated!.calendarEventId).toBe('new-recurring-id');
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('skips routine creation when DB already has calendarEventId (concurrent push-back guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Snapshot passed in the op lacks calendarEventId (captured at queue-time).
+        const snapshotWithoutLink = makeRoutine(userId, {
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+
+        // But the DB record already has it — a concurrent push-back linked it first.
+        const routineInDb = makeRoutine(userId, {
+            calendarEventId: 'already-linked',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routineInDb);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('duplicate-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: snapshotWithoutLink._id, snapshot: snapshotWithoutLink }), mockBuildProvider());
+
+        expect(createSpy).not.toHaveBeenCalled();
     });
 
     it('skips non-calendar routines without calendarEventId', async () => {
@@ -1808,6 +1861,83 @@ describe('calendar push-back — routines', () => {
     });
 });
 
+describe('calendar push-back — concurrent in-flight guard', () => {
+    it('creates only one GCal recurring event when two create ops race concurrently', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-concurrent-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('new-recurring-id');
+
+        const op = makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine });
+        // Fire two push-backs concurrently for the same entity — simulates back-to-back flush batches.
+        await Promise.all([maybePushToGCal(op, mockBuildProvider()), maybePushToGCal(op, mockBuildProvider())]);
+
+        expect(createSpy).toHaveBeenCalledOnce();
+    });
+
+    it('creates only one GCal event when two create item ops race concurrently', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, { _id: 'item-concurrent-1' });
+        await itemsDAO.insertOne(item);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-gcal-id');
+
+        const op = makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item });
+        // Fire two push-backs concurrently for the same entity.
+        await Promise.all([maybePushToGCal(op, mockBuildProvider()), maybePushToGCal(op, mockBuildProvider())]);
+
+        expect(createSpy).toHaveBeenCalledOnce();
+    });
+
+    it('cleans up in-flight set when item GCal creation fails', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, { _id: 'item-error-cleanup-1' });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockRejectedValue(new Error('GCal API error'));
+
+        const op = makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item });
+        await maybePushToGCal(op, mockBuildProvider());
+
+        // The in-flight set must be cleaned up so subsequent retries are not permanently blocked.
+        expect(gcalCreationInFlight.has(item._id!)).toBe(false);
+    });
+
+    it('cleans up in-flight set when routine GCal creation fails', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-error-cleanup-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockRejectedValue(new Error('GCal API error'));
+
+        const op = makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine });
+        await maybePushToGCal(op, mockBuildProvider());
+
+        expect(gcalCreationInFlight.has(routine._id)).toBe(false);
+    });
+});
+
 // ─── Loop prevention (echo detection) ──────────────────────────────────────
 
 describe('loop prevention — echo detection', () => {
@@ -1835,7 +1965,7 @@ describe('loop prevention — echo detection', () => {
         await itemsDAO.insertOne(existingItem);
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
-        // The event's `updated` timestamp is within the 60-second echo window.
+        // The event's `updated` timestamp is within the 5-second echo window.
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
                 {
@@ -1843,7 +1973,7 @@ describe('loop prevention — echo detection', () => {
                     title: 'Echoed Event — from GCal',
                     timeStart: existingItem.timeStart!,
                     timeEnd: existingItem.timeEnd!,
-                    updated: dayjs().add(5, 'second').toISOString(),
+                    updated: dayjs().add(2, 'second').toISOString(),
                     status: 'confirmed',
                 },
             ],
@@ -2208,7 +2338,7 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
                     title: 'Changed by echo',
                     timeStart: futureTs,
                     timeEnd: futureTs,
-                    updated: dayjs().add(10, 'second').toISOString(),
+                    updated: dayjs().add(2, 'second').toISOString(),
                     status: 'confirmed',
                     recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
                 },
@@ -2283,5 +2413,246 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
 
         const item = await itemsDAO.findOne({ calendarEventId: 'recurring-master-6' });
         expect(item).toBeNull();
+    });
+});
+
+// ── Notes / description sync ──────────────────────────────────────────────
+
+describe('notes/description sync — inbound', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('sets notes and lastSyncedNotes when importing a new GCal event with description', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-notes-1',
+                    title: 'Lunch',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: futureTs,
+                    status: 'confirmed',
+                    description: 'Bring salad',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ calendarEventId: 'evt-notes-1' });
+        expect(item?.notes).toBe('Bring salad');
+        expect(item?.lastSyncedNotes).toBe('Bring salad');
+    });
+
+    it('updates notes when GCal description changed and GCal is newer', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-notes-upd',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-notes-2',
+            calendarIntegrationId: 'int-1',
+            notes: 'Old notes',
+            lastSyncedNotes: 'Old notes',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        const newerTs = dayjs().toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-notes-2',
+                    title: 'Meeting',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: newerTs,
+                    status: 'confirmed',
+                    description: 'Updated from GCal',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-notes-upd' });
+        expect(item?.notes).toBe('Updated from GCal');
+        expect(item?.lastSyncedNotes).toBe('Updated from GCal');
+    });
+
+    it('preserves local notes when GCal description is unchanged (only title updated)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-notes-keep',
+            user: userId,
+            status: 'calendar',
+            title: 'Old title',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-notes-3',
+            calendarIntegrationId: 'int-1',
+            notes: 'My local notes',
+            lastSyncedNotes: 'Same as gcal',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        const newerTs = dayjs().toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-notes-3',
+                    title: 'New title',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: newerTs,
+                    status: 'confirmed',
+                    description: 'Same as gcal',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-notes-keep' });
+        expect(item?.title).toBe('New title');
+        expect(item?.notes).toBe('My local notes');
+    });
+
+    it('preserves local notes when GCal description changed but local is newer', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const newerTs = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-notes-local-wins',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-notes-4',
+            calendarIntegrationId: 'int-1',
+            notes: 'Locally edited notes',
+            lastSyncedNotes: 'Original synced',
+            createdTs: newerTs,
+            updatedTs: newerTs,
+        });
+
+        const olderTs = dayjs().subtract(1, 'hour').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-notes-4',
+                    title: 'Meeting',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: olderTs,
+                    status: 'confirmed',
+                    description: 'GCal description',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-notes-local-wins' });
+        expect(item?.notes).toBe('Locally edited notes');
+    });
+});
+
+describe('notes/description sync — outbound push-back', () => {
+    it('passes description to updateEvent when pushing item with notes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-ev-notes',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            notes: 'Push these notes',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        const updates = updateSpy.mock.calls[0]![2];
+        // Markdown is converted to HTML for GCal; lastSyncedNotes stores the HTML sent.
+        expect(updates).toHaveProperty('description', '<p>Push these notes</p>\n');
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated!.lastSyncedNotes).toBe('<p>Push these notes</p>\n');
+    });
+
+    it('passes empty description when pushing item without notes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-ev-no-notes',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        const updates = updateSpy.mock.calls[0]![2];
+        expect(updates).toHaveProperty('description', '');
+    });
+
+    it('sets lastSyncedNotes when creating a new GCal event with notes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, { notes: 'New item notes' });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-gcal-notes-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated!.calendarEventId).toBe('new-gcal-notes-id');
+        // lastSyncedNotes stores HTML (the value sent to GCal), not the raw Markdown.
+        expect(updated!.lastSyncedNotes).toBe('<p>New item notes</p>\n');
     });
 });

@@ -1,16 +1,27 @@
 import dayjs from 'dayjs';
 import { google } from 'googleapis';
+import { markdownToHtml } from '../lib/markdownHtml.js';
 import type { CalendarIntegrationInterface, RoutineInterface } from '../types/entities.js';
 import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException } from './CalendarProvider.js';
 import { SyncTokenInvalidError } from './CalendarProvider.js';
 
+const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function assertValidTimeOfDay(timeOfDay: string): void {
+    if (!TIME_OF_DAY_PATTERN.test(timeOfDay)) {
+        throw new Error(`Invalid timeOfDay "${timeOfDay}" — expected HH:MM format`);
+    }
+}
+
 /** Builds a dateTime object for the Google Calendar API from a date string and HH:MM time. */
-function buildDateTime(dateStr: string, timeOfDay: string, timeZone: string): { dateTime: string; timeZone: string } {
+export function buildDateTime(dateStr: string, timeOfDay: string, timeZone: string): { dateTime: string; timeZone: string } {
+    assertValidTimeOfDay(timeOfDay);
     return { dateTime: `${dateStr}T${timeOfDay}:00`, timeZone };
 }
 
 /** Computes the end dateTime by adding duration to the start. Uses dayjs to handle midnight overflow correctly. */
-function endDateTime(dateStr: string, timeOfDay: string, durationMinutes: number, timeZone: string): { dateTime: string; timeZone: string } {
+export function endDateTime(dateStr: string, timeOfDay: string, durationMinutes: number, timeZone: string): { dateTime: string; timeZone: string } {
+    assertValidTimeOfDay(timeOfDay);
     const end = dayjs(`${dateStr}T${timeOfDay}`).add(durationMinutes, 'minute');
     return { dateTime: end.format('YYYY-MM-DDTHH:mm:ss'), timeZone };
 }
@@ -39,6 +50,7 @@ function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCa
         status?: string | null;
         recurringEventId?: string | null;
         recurrence?: string[] | null;
+        description?: string | null;
     }>;
     return events.flatMap<GCalEvent>((event) => {
         if (!event.id) {
@@ -75,6 +87,7 @@ function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCa
                 // treat a missing `updated` field as "just modified now".
                 updated: event.updated ?? event.start.dateTime,
                 status,
+                ...(event.description != null ? { description: event.description } : {}),
                 ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
                 ...(event.recurrence ? { recurrence: event.recurrence } : {}),
             },
@@ -122,7 +135,16 @@ export class GoogleCalendarProvider implements CalendarProvider {
         this.auth = oauth2;
     }
 
-    async createRecurringEvent(routine: RoutineInterface, calendarId: string): Promise<string> {
+    async getCalendarTimeZone(calendarId: string): Promise<string> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const response = await cal.calendars.get({ calendarId });
+        if (!response.data.timeZone) {
+            console.warn(`[GoogleCalendarProvider] calendars.get returned no timeZone for ${calendarId} — falling back to UTC`);
+        }
+        return response.data.timeZone ?? 'UTC';
+    }
+
+    async createRecurringEvent(routine: RoutineInterface, calendarId: string, timeZone: string): Promise<string> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const template = routine.calendarItemTemplate;
         if (!template) {
@@ -137,9 +159,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
             calendarId,
             requestBody: {
                 summary: routine.title,
-                start: buildDateTime(startDate, template.timeOfDay, 'UTC'),
-                end: endDateTime(startDate, template.timeOfDay, template.duration, 'UTC'),
+                start: buildDateTime(startDate, template.timeOfDay, timeZone),
+                end: endDateTime(startDate, template.timeOfDay, template.duration, timeZone),
                 recurrence,
+                ...(routine.template.notes !== undefined ? { description: markdownToHtml(routine.template.notes) } : {}),
             },
         });
 
@@ -150,7 +173,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         return eventId;
     }
 
-    async updateRecurringEvent(eventId: string, routine: RoutineInterface, calendarId: string): Promise<void> {
+    async updateRecurringEvent(eventId: string, routine: RoutineInterface, calendarId: string, timeZone: string): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const template = routine.calendarItemTemplate;
         if (!template) {
@@ -163,9 +186,11 @@ export class GoogleCalendarProvider implements CalendarProvider {
             eventId,
             requestBody: {
                 summary: routine.title,
-                start: buildDateTime(startDate, template.timeOfDay, 'UTC'),
-                end: endDateTime(startDate, template.timeOfDay, template.duration, 'UTC'),
+                start: buildDateTime(startDate, template.timeOfDay, timeZone),
+                end: endDateTime(startDate, template.timeOfDay, template.duration, timeZone),
                 recurrence: [`RRULE:${routine.rrule}`],
+                // events.update is a full replace — always send description to avoid leaving stale values.
+                description: routine.template.notes ? markdownToHtml(routine.template.notes) : '',
             },
         });
     }
@@ -269,14 +294,19 @@ export class GoogleCalendarProvider implements CalendarProvider {
         await cal.channels.stop({ requestBody: { id: channelId, resourceId } });
     }
 
-    async createEvent(calendarId: string, event: { title: string; timeStart: string; timeEnd: string }): Promise<string> {
+    async createEvent(
+        calendarId: string,
+        event: { title: string; timeStart: string; timeEnd: string; description?: string },
+        timeZone: string,
+    ): Promise<string> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const response = await cal.events.insert({
             calendarId,
             requestBody: {
                 summary: event.title,
-                start: { dateTime: event.timeStart },
-                end: { dateTime: event.timeEnd },
+                start: { dateTime: event.timeStart, timeZone },
+                end: { dateTime: event.timeEnd, timeZone },
+                ...(event.description !== undefined ? { description: event.description } : {}),
             },
         });
         const eventId = response.data.id;
@@ -286,7 +316,12 @@ export class GoogleCalendarProvider implements CalendarProvider {
         return eventId;
     }
 
-    async updateEvent(calendarId: string, eventId: string, updates: { title?: string; timeStart?: string; timeEnd?: string }): Promise<void> {
+    async updateEvent(
+        calendarId: string,
+        eventId: string,
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        timeZone: string,
+    ): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         // Use patch (not update) so only the provided fields are modified — update would clear omitted fields.
         await cal.events.patch({
@@ -294,8 +329,9 @@ export class GoogleCalendarProvider implements CalendarProvider {
             eventId,
             requestBody: {
                 ...(updates.title !== undefined ? { summary: updates.title } : {}),
-                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart } } : {}),
-                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd } } : {}),
+                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
+                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
+                ...(updates.description !== undefined ? { description: updates.description } : {}),
             },
         });
     }

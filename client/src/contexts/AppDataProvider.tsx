@@ -2,6 +2,7 @@ import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
 import { getActiveAccount } from '../db/accountHelpers';
+import { getOrCreateDeviceId } from '../db/deviceId';
 import { getItemsByUser } from '../db/itemHelpers';
 import { getPeopleByUser } from '../db/personHelpers';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
@@ -216,7 +217,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     return;
                 }
                 if (navigator.onLine) {
-                    openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
+                    getOrCreateDeviceId(db).then((deviceId) => {
+                        if (unmounted) {
+                            return;
+                        }
+                        openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)), deviceId);
+                    });
                     registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
                 }
             })
@@ -248,7 +254,9 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // concurrency guard (flushInFlight) so calling it here alongside syncAndRefresh is safe.
             flushSyncQueue(db).catch((err) => console.error('[online] flush failed:', err));
             syncAndRefresh().catch((err) => console.error('[online] sync failed:', err));
-            openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
+            getOrCreateDeviceId(db).then((deviceId) => {
+                openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)), deviceId);
+            });
             // Re-register push in case the subscription was lost or expired while offline.
             registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
         } else {
