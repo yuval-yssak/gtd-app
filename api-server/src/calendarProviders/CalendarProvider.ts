@@ -20,6 +20,14 @@ export interface GCalException {
     newTimeStart?: string; // ISO datetime — present when type === 'modified'
     newTimeEnd?: string;
     googleEventId?: string;
+    title?: string; // overridden title — present when instance summary differs from master
+    notes?: string; // overridden description — present when instance description differs from master
+}
+
+/** Master event content passed to getExceptions() so it can detect content-only changes. */
+export interface MasterContent {
+    title: string;
+    description: string;
 }
 
 export interface GCalEvent {
@@ -42,7 +50,7 @@ export interface CalendarProvider {
     deleteRecurringEvent(eventId: string, calendarId: string): Promise<void>;
     listCalendars(): Promise<Array<{ id: string; name: string }>>;
     /** @param since ISO datetime string — only exceptions after this point are returned */
-    getExceptions(eventId: string, calendarId: string, since: string): Promise<GCalException[]>;
+    getExceptions(eventId: string, calendarId: string, since: string, masterContent?: MasterContent): Promise<GCalException[]>;
     /** Fetches all events (including cancelled) within the given time window. */
     listEvents(calendarId: string, since: string, until: string): Promise<GCalEvent[]>;
     /** Fetches only events changed since the last sync using Google's syncToken. Throws SyncTokenInvalidError on 410 Gone. */

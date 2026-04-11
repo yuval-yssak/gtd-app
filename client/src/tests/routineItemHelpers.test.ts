@@ -211,6 +211,28 @@ describe('generateCalendarItemsToHorizon', () => {
         expect(dates).not.toContain(exceptionDate);
     });
 
+    it('applies title and notes overrides from content-modified exceptions', async () => {
+        const nextMonday = dayjs().startOf('day').day(8);
+        const overrideDate = nextMonday.format('YYYY-MM-DD');
+
+        const routine = buildCalendarRoutine({
+            routineExceptions: [{ date: overrideDate, type: 'modified', title: 'Special standup', notes: 'Retro agenda' }],
+        });
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const overriddenItem = items.find((i) => (i.timeStart ?? '').startsWith(overrideDate));
+        expect(overriddenItem).toBeDefined();
+        expect(overriddenItem?.title).toBe('Special standup');
+        expect(overriddenItem?.notes).toBe('Retro agenda');
+
+        // Other items should still use the routine's default title
+        const otherItems = items.filter((i) => !(i.timeStart ?? '').startsWith(overrideDate) && i.routineId === 'cal-routine-1');
+        for (const item of otherItems) {
+            expect(item.title).toBe('Weekly standup');
+        }
+    });
+
     it('does not create duplicate items for existing dates', async () => {
         const routine = buildCalendarRoutine();
 

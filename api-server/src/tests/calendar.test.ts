@@ -352,6 +352,69 @@ describe('POST /calendar/integrations/:id/sync', () => {
         });
     });
 
+    it('merges a content-modified exception and updates item title and notes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-1', calendarIntegrationId: 'int-1' });
+        await routinesDAO.insertOne(routine);
+
+        // Insert an item for the occurrence date that will be content-modified
+        await itemsDAO.insertOne({
+            _id: 'item-content-ex',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: '2025-06-09T09:00:00Z',
+            timeEnd: '2025-06-09T09:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: '2025-06-09', type: 'modified', title: 'Retro', notes: '<p>Agenda: review Q2</p>' },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Verify the routine exception record stores markdown-converted notes
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(
+            expect.objectContaining({ date: '2025-06-09', type: 'modified', title: 'Retro', notes: 'Agenda: review Q2' }),
+        );
+
+        // Verify the item was updated with converted notes and lastSyncedNotes
+        const item = await itemsDAO.findByOwnerAndId('item-content-ex', userId);
+        expect(item?.title).toBe('Retro');
+        expect(item?.notes).toBe('Agenda: review Q2');
+        expect(item?.lastSyncedNotes).toBe('<p>Agenda: review Q2</p>');
+    });
+
+    it('does not generate spurious exceptions when instance matches master content', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-1',
+            calendarIntegrationId: 'int-1',
+            title: 'Standup',
+            lastSyncedNotes: '<p>Daily standup</p>',
+            template: { notes: 'Daily standup' },
+        });
+        await routinesDAO.insertOne(routine);
+
+        // getExceptions returns [] because instance matches master — no changes
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updated = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updated?.routineExceptions).toBeUndefined();
+    });
+
     it('imports a new GCal event as a calendar item', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
