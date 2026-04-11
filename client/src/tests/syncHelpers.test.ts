@@ -52,7 +52,7 @@ let db: IDBPDatabase<MyDB>;
 beforeEach(async () => {
     db = await openTestDB();
     // Seed a deviceSyncState so flushSyncQueue/pullFromServer can read deviceId and lastSyncedTs.
-    await db.put('deviceSyncState', { _id: 'local', deviceId: 'device-test', lastSyncedTs: '1970-01-01T00:00:00.000Z' });
+    await db.put('deviceSyncState', { _id: 'local', deviceId: 'device-test', lastSyncedTs: '1970-01-01T00:00:00.000Z', flushingTs: null });
 });
 
 afterEach(() => {

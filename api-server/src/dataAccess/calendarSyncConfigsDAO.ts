@@ -45,6 +45,10 @@ class CalendarSyncConfigsDAO extends AbstractDAO<CalendarSyncConfigInterface> {
         await this.updateOne({ _id: configId } as never, { $set: { syncToken, lastSyncedTs, updatedTs: dayjs().toISOString() } });
     }
 
+    async upsertTimeZone(configId: string, timeZone: string): Promise<void> {
+        await this.updateOne({ _id: configId } as never, { $set: { timeZone, updatedTs: dayjs().toISOString() } });
+    }
+
     async upsertWebhookFields(configId: string, channelId: string, resourceId: string, expiry: string): Promise<void> {
         await this.updateOne({ _id: configId } as never, {
             $set: { webhookChannelId: channelId, webhookResourceId: resourceId, webhookExpiry: expiry, updatedTs: dayjs().toISOString() },

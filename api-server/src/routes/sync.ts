@@ -144,6 +144,11 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             return c.json({ ok: true }, 200);
         }
 
+        console.log(
+            `[sync-push] received from device=${deviceId} | ops=${ops.length}`,
+            ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`),
+        );
+
         const now = dayjs().toISOString();
 
         const serverOps = ops.map<OperationInterface>((op) => {
@@ -164,6 +169,8 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         await Promise.all([operationsDAO.insertMany(serverOps), ...serverOps.map((op) => applyEntityOp(user.id, op))]);
 
+        console.log(`[sync-push] applied ops, triggering GCal push-back for calendar-relevant ops`);
+
         // Push calendar-relevant changes back to Google Calendar (fire-and-forget).
         // Runs after applyEntityOp so the DB state is consistent when the push-back reads it.
         void Promise.all(serverOps.map((op) => maybePushToGCal(op, buildCalendarProvider))).catch((err) => {
@@ -176,7 +183,8 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             { upsert: true },
         );
 
-        notifyUserViaSse(user.id, { type: 'update', ts: now });
+        // Include the originating deviceId so the pushing device can ignore its own echo.
+        notifyUserViaSse(user.id, { type: 'update', ts: now, sourceDeviceId: deviceId });
 
         // Web Push for devices that aren't currently connected via SSE (app closed).
         // Include per-op summaries so the SW can show a meaningful notification body

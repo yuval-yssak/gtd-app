@@ -31,11 +31,14 @@ export interface GCalEvent {
     status: 'confirmed' | 'tentative' | 'cancelled';
     recurringEventId?: string; // set for instances that belong to a recurring series
     recurrence?: string[]; // present on master recurring event definitions (e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO"])
+    description?: string; // GCal event description — maps to ItemInterface.notes
 }
 
 export interface CalendarProvider {
-    createRecurringEvent(routine: RoutineInterface, calendarId: string): Promise<string>; // returns eventId
-    updateRecurringEvent(eventId: string, routine: RoutineInterface, calendarId: string): Promise<void>;
+    /** Fetches the IANA timezone of a calendar from the provider (e.g. "Asia/Jerusalem"). */
+    getCalendarTimeZone(calendarId: string): Promise<string>;
+    createRecurringEvent(routine: RoutineInterface, calendarId: string, timeZone: string): Promise<string>; // returns eventId
+    updateRecurringEvent(eventId: string, routine: RoutineInterface, calendarId: string, timeZone: string): Promise<void>;
     deleteRecurringEvent(eventId: string, calendarId: string): Promise<void>;
     listCalendars(): Promise<Array<{ id: string; name: string }>>;
     /** @param since ISO datetime string — only exceptions after this point are returned */
@@ -51,9 +54,14 @@ export interface CalendarProvider {
     /** Stops a previously registered push notification channel. */
     stopWatch(channelId: string, resourceId: string): Promise<void>;
     /** Creates a single (non-recurring) event. Returns the event ID. */
-    createEvent(calendarId: string, event: { title: string; timeStart: string; timeEnd: string }): Promise<string>;
+    createEvent(calendarId: string, event: { title: string; timeStart: string; timeEnd: string; description?: string }, timeZone: string): Promise<string>;
     /** Updates fields on an existing single event. */
-    updateEvent(calendarId: string, eventId: string, updates: { title?: string; timeStart?: string; timeEnd?: string }): Promise<void>;
+    updateEvent(
+        calendarId: string,
+        eventId: string,
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        timeZone: string,
+    ): Promise<void>;
     /** Deletes (cancels) a single event. */
     deleteEvent(calendarId: string, eventId: string): Promise<void>;
 }

@@ -159,6 +159,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
     async function onSave() {
         const trimmedTitle = form.title.trim();
         if (!trimmedTitle || !form.rrule || isSaving) return;
+        if (form.routineType === 'calendar' && !form.timeOfDay) return;
 
         setIsSaving(true);
         try {
@@ -319,6 +320,7 @@ function CalendarFields({
                     value={form.timeOfDay}
                     onChange={(e) => onPatch({ timeOfDay: e.target.value })}
                     size="small"
+                    required
                     slotProps={{ inputLabel: { shrink: true } }}
                 />
                 <TextField

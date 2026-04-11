@@ -38,6 +38,7 @@ export interface StoredItem {
     focus?: boolean;
     urgent?: boolean;
     notes?: string; // freeform markdown notes — applies to all statuses
+    lastSyncedNotes?: string; // last notes value synced from/to Google Calendar — used for conflict detection
 }
 
 export interface StoredRoutineTemplate {
@@ -69,6 +70,7 @@ export interface StoredRoutine {
     calendarIntegrationId?: string;
     calendarSyncConfigId?: string;
     lastPushedToGCalTs?: string;
+    lastSyncedNotes?: string; // last template.notes value synced from/to Google Calendar — used for conflict detection
     template: StoredRoutineTemplate;
     active: boolean;
     createdTs: string;
@@ -134,6 +136,7 @@ export interface StoredDeviceSyncState {
     _id: 'local'; // singleton — only one entry per device
     deviceId: string; // stable UUID generated on first launch; sent with every push/pull request
     lastSyncedTs: string; // ISO datetime of the last successful pull from the server
+    flushingTs: string | null; // ISO datetime — cross-context flush lock between main thread and SW
 }
 
 export interface SyncOperation {
