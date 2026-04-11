@@ -171,6 +171,8 @@ export interface RoutineInterface {
         itemId?: string;
         newTimeStart?: string; // ISO datetime — present when type === 'modified'
         newTimeEnd?: string;
+        title?: string; // overridden title — present when GCal instance title differs from master
+        notes?: string; // overridden description — present when GCal instance description differs from master
     }>;
 }
 

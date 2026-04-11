@@ -148,15 +148,20 @@ function buildCalendarItem(
     const timeStart = `${dateStr}T${template.timeOfDay}:00`;
     const timeEnd = dayjs(timeStart).add(template.duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
 
+    // Check for content overrides from GCal single-occurrence edits
+    const contentException = (routine.routineExceptions ?? []).find((e) => e.type === 'modified' && e.date === dateStr);
+    const title = contentException?.title ?? routine.title;
+    const notes = contentException?.notes ?? routine.template.notes;
+
     return {
         _id: crypto.randomUUID(),
         userId,
         status: 'calendar' as const,
-        title: routine.title,
+        title,
         routineId: routine._id,
         timeStart,
         timeEnd,
-        ...(routine.template.notes ? { notes: routine.template.notes } : {}),
+        ...(notes ? { notes } : {}),
         createdTs: now,
         updatedTs: now,
     };

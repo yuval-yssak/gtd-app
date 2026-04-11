@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { google } from 'googleapis';
 import { markdownToHtml } from '../lib/markdownHtml.js';
 import type { CalendarIntegrationInterface, RoutineInterface } from '../types/entities.js';
-import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException } from './CalendarProvider.js';
+import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
 import { SyncTokenInvalidError } from './CalendarProvider.js';
 
 const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -341,7 +341,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         await cal.events.delete({ calendarId, eventId });
     }
 
-    async getExceptions(eventId: string, calendarId: string, since: string): Promise<GCalException[]> {
+    async getExceptions(eventId: string, calendarId: string, since: string, masterContent?: MasterContent): Promise<GCalException[]> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
 
         // singleEvents: true expands the recurrence so we get individual instances.
@@ -375,22 +375,46 @@ export class GoogleCalendarProvider implements CalendarProvider {
                 return [{ originalDate, type: 'deleted', ...(event.id ? { googleEventId: event.id } : {}) }];
             }
 
-            // Detect moved instances: compare start against originalStartTime.
-            const startDateTime = event.start?.dateTime;
-            const originalDateTime = event.originalStartTime?.dateTime;
-            if (startDateTime && originalDateTime && startDateTime !== originalDateTime) {
-                return [
-                    {
-                        originalDate,
-                        type: 'modified',
-                        newTimeStart: startDateTime,
-                        ...(event.end?.dateTime ? { newTimeEnd: event.end.dateTime } : {}),
-                        ...(event.id ? { googleEventId: event.id } : {}),
-                    },
-                ];
-            }
-
-            return [];
+            return buildModifiedException(event, originalDate, masterContent);
         });
     }
+}
+
+/** Detects time-move and/or content changes on a non-cancelled instance compared to the master. */
+function buildModifiedException(
+    event: {
+        start?: { dateTime?: string | null } | null;
+        end?: { dateTime?: string | null } | null;
+        originalStartTime?: { dateTime?: string | null } | null;
+        summary?: string | null;
+        description?: string | null;
+        id?: string | null;
+    },
+    originalDate: string,
+    masterContent?: MasterContent,
+): GCalException[] {
+    const startDateTime = event.start?.dateTime;
+    const originalDateTime = event.originalStartTime?.dateTime;
+    const timeMoved = Boolean(startDateTime && originalDateTime && startDateTime !== originalDateTime);
+
+    const instanceTitle = event.summary ?? '';
+    const instanceDesc = event.description ?? '';
+    const titleChanged = masterContent ? instanceTitle !== masterContent.title : false;
+    const descChanged = masterContent ? instanceDesc !== masterContent.description : false;
+
+    if (!timeMoved && !titleChanged && !descChanged) {
+        return [];
+    }
+
+    return [
+        {
+            originalDate,
+            type: 'modified',
+            ...(timeMoved && startDateTime ? { newTimeStart: startDateTime } : {}),
+            ...(timeMoved && event.end?.dateTime ? { newTimeEnd: event.end.dateTime } : {}),
+            ...(titleChanged ? { title: instanceTitle } : {}),
+            ...(descChanged ? { notes: instanceDesc } : {}),
+            ...(event.id ? { googleEventId: event.id } : {}),
+        },
+    ];
 }

@@ -1071,6 +1071,9 @@ function buildExceptionEntry(ex: GCalException): RoutineException {
         type: 'modified',
         ...(ex.newTimeStart ? { newTimeStart: ex.newTimeStart } : {}),
         ...(ex.newTimeEnd ? { newTimeEnd: ex.newTimeEnd } : {}),
+        ...(ex.title !== undefined ? { title: ex.title } : {}),
+        // ex.notes is raw HTML from GCal — convert to markdown for client consumption
+        ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes) } : {}),
     };
 }
 
@@ -1129,8 +1132,16 @@ async function applyExceptionToItems(routine: RoutineInterface, ex: GCalExceptio
         return;
     }
 
-    if (ex.type === 'modified' && ex.newTimeStart && ex.newTimeEnd) {
-        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields: { timeStart: ex.newTimeStart, timeEnd: ex.newTimeEnd, updatedTs: ctx.now } });
+    if (ex.type === 'modified') {
+        const setFields = {
+            updatedTs: ctx.now,
+            ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
+            ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
+            ...(ex.title !== undefined ? { title: ex.title } : {}),
+            // ex.notes is raw HTML from GCal — convert to markdown for storage, keep HTML as lastSyncedNotes
+            ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
+        };
+        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields });
     }
 }
 
@@ -1139,7 +1150,9 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
         return;
     }
 
-    const exceptions = await provider.getExceptions(routine.calendarEventId, ctx.calendarId, ctx.since);
+    // Compare against lastSyncedNotes (raw HTML) since GCal returns HTML descriptions.
+    const masterContent = { title: routine.title, description: routine.lastSyncedNotes ?? '' };
+    const exceptions = await provider.getExceptions(routine.calendarEventId, ctx.calendarId, ctx.since, masterContent);
     if (!hasAtLeastOne(exceptions)) {
         return;
     }
