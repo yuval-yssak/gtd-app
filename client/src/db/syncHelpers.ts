@@ -111,26 +111,28 @@ export function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
 // This IDB-based lock coordinates across JS contexts via the shared deviceSyncState record.
 const FLUSH_LOCK_TTL_MS = 30_000;
 
+type AcquireLockResult = 'acquired' | 'noDeviceState' | 'heldByOther';
+
 // Uses a single readwrite transaction so the check-then-set is atomic — IDB serializes
 // overlapping readwrite transactions on the same store, preventing TOCTOU races.
-async function acquireFlushLock(db: IDBPDatabase<MyDB>): Promise<boolean> {
+async function acquireFlushLock(db: IDBPDatabase<MyDB>): Promise<AcquireLockResult> {
     const tx = db.transaction('deviceSyncState', 'readwrite');
     const store = tx.objectStore('deviceSyncState');
     const state = await store.get('local');
     if (!state) {
         // No device state yet — can't write a lock. No deviceId means pushSyncOps
         // would fail anyway, so skipping is safe.
-        return false;
+        return 'noDeviceState';
     }
     if (state.flushingTs) {
         const elapsed = dayjs().diff(dayjs(state.flushingTs));
         if (elapsed < FLUSH_LOCK_TTL_MS) {
-            return false;
+            return 'heldByOther';
         }
     }
     await store.put({ ...state, flushingTs: dayjs().toISOString() });
     await tx.done;
-    return true;
+    return 'acquired';
 }
 
 async function releaseFlushLock(db: IDBPDatabase<MyDB>): Promise<void> {
@@ -144,9 +146,12 @@ async function releaseFlushLock(db: IDBPDatabase<MyDB>): Promise<void> {
 }
 
 async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
-    const acquired = await acquireFlushLock(db);
-    if (!acquired) {
+    const lockResult = await acquireFlushLock(db);
+    if (lockResult === 'heldByOther') {
         console.log('[sync-flush] skipping — another context holds the flush lock');
+        return;
+    }
+    if (lockResult === 'noDeviceState') {
         return;
     }
     try {
@@ -241,9 +246,11 @@ async function doPull(db: IDBPDatabase<MyDB>): Promise<void> {
     const deviceId = await getOrCreateDeviceId(db);
     const since = await getLastSyncedTs(db);
     const { ops, serverTs } = await fetchSyncOps(since, deviceId);
+
     for (const op of ops) {
         await applyServerOp(db, op);
     }
+
     await setLastSyncedTs(db, serverTs);
 }
 
@@ -282,7 +289,7 @@ function buildEntityHandlers(db: IDBPDatabase<MyDB>): Record<EntityType, EntityA
 
 async function applyServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
     const handlers = buildEntityHandlers(db);
-    return applyEntityOp(op, handlers[op.entityType]);
+    await applyEntityOp(op, handlers[op.entityType]);
 }
 
 async function applyEntityOp(op: ServerOp, handlers: EntityApplyHandlers): Promise<void> {
@@ -295,7 +302,6 @@ async function applyEntityOp(op: ServerOp, handlers: EntityApplyHandlers): Promi
     }
     // Cast to the minimal shape needed here (updatedTs for conflict resolution);
     // handlers.put receives the full object as unknown and re-casts to the concrete type.
-
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as { updatedTs: string };
     const existing = await handlers.getExisting(op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {

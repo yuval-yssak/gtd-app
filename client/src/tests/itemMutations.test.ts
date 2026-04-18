@@ -288,6 +288,13 @@ describe('clarifyToTrash', () => {
     });
 });
 
+// dayjs().day(): 0=Sun..6=Sat. Returns the first dayjs strictly after today landing on targetDay.
+const nextWeekdayAfterToday = (targetDay: number) => {
+    const today = dayjs().startOf('day');
+    const offset = (targetDay - today.day() + 7) % 7 || 7;
+    return today.add(offset, 'day');
+};
+
 describe('calendar routine — clarifyToDone', () => {
     it('creates the next calendar item on-time with correct timeStart for the following occurrence', async () => {
         const routine = await createRoutine(db, {
@@ -300,16 +307,19 @@ describe('calendar routine — clarifyToDone', () => {
             active: true,
         });
 
-        // The routine's createdTs is "now" (today), so DTSTART = today. We use the next Thursday
-        // from today as the item's timeStart so the rrule can find a following occurrence.
-        // 2026-04-09 is the first Thursday on or after the test run date of 2026-04-04.
+        // Use the next upcoming Thursday as the item's timeStart, and expect the following
+        // Thursday (nextThu + 7d) to be generated. Computed from "now" so the test is
+        // independent of the calendar date it runs on.
+        const nextThursday = nextWeekdayAfterToday(4);
+        const followingThursday = nextThursday.add(7, 'day').format('YYYY-MM-DD');
+
         const item = await collectItem(db, USER_ID, { title: 'Family time' });
         const calItem = {
             ...item,
             status: 'calendar' as const,
             routineId: routine._id,
-            timeStart: '2026-04-09T18:00:00',
-            timeEnd: '2026-04-09T21:00:00',
+            timeStart: `${nextThursday.format('YYYY-MM-DD')}T18:00:00`,
+            timeEnd: `${nextThursday.format('YYYY-MM-DD')}T21:00:00`,
         };
         await db.clear('syncOperations');
 
@@ -319,12 +329,11 @@ describe('calendar routine — clarifyToDone', () => {
         const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
         // Horizon generates multiple future items
         expect(nextItems.length).toBeGreaterThanOrEqual(1);
-        // On-time completion from 2026-04-09 (Thu) → next Thu is 2026-04-16, should be among them
-        const apr16Item = nextItems.find((i) => i.timeStart?.startsWith('2026-04-16'));
-        expect(apr16Item).toBeDefined();
+        const followingItem = nextItems.find((i) => i.timeStart?.startsWith(followingThursday));
+        expect(followingItem).toBeDefined();
         // timeEnd must use the same naive local-time format as timeStart (no Z suffix)
-        expect(apr16Item?.timeEnd?.startsWith('2026-04-16')).toBe(true);
-        expect(apr16Item?.timeEnd?.endsWith('Z')).toBe(false);
+        expect(followingItem?.timeEnd?.startsWith(followingThursday)).toBe(true);
+        expect(followingItem?.timeEnd?.endsWith('Z')).toBe(false);
     });
 
     it('advances from now when completion is more than 24h late', async () => {
@@ -355,9 +364,10 @@ describe('calendar routine — clarifyToDone', () => {
         const nextItems = allItems.filter((i) => i.status === 'calendar' && i.routineId === routine._id);
         // Horizon generates multiple future items
         expect(nextItems.length).toBeGreaterThanOrEqual(1);
-        // The nearest Monday should be among them (2026-04-13 since today is past 2026-04-06)
-        const apr13Item = nextItems.find((i) => i.timeStart?.startsWith('2026-04-13'));
-        expect(apr13Item).toBeDefined();
+        // The next upcoming Monday (strictly after today) should be among them.
+        const nextMonday = nextWeekdayAfterToday(1).format('YYYY-MM-DD');
+        const nextMondayItem = nextItems.find((i) => i.timeStart?.startsWith(nextMonday));
+        expect(nextMondayItem).toBeDefined();
     });
 });
 
