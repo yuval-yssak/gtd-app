@@ -12,7 +12,9 @@
         "lint:fix:unsafe": "biome check --write --unsafe",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
-        "test:watch": "vitest"
+        "test:watch": "vitest",
+        "test:sync-audit:setup": "tsx --env-file=.env src/tests-sync-audit/setupOAuth.ts",
+        "test:sync-audit": "vitest run --config vitest.sync-audit.config.ts"
     },
     "dependencies": {
         "@hono/node-server": "latest",
