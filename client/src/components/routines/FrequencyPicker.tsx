@@ -91,9 +91,10 @@ function NextDuePreview({ rrule }: { rrule: string }) {
 interface Props {
     value: string; // rrule string
     onChange: (rrule: string) => void;
+    disabled?: boolean;
 }
 
-export function FrequencyPicker({ value, onChange }: Props) {
+export function FrequencyPicker({ value, onChange, disabled }: Props) {
     const [state, setState] = useState<FreqState>(() => parseToFreqState(value));
 
     function update(patch: Partial<FreqState>) {
@@ -111,7 +112,7 @@ export function FrequencyPicker({ value, onChange }: Props) {
     const currentRrule = buildRrule(state);
 
     return (
-        <div className={styles.root}>
+        <fieldset disabled={disabled} style={{ border: 'none', padding: 0, margin: 0, opacity: disabled ? 0.5 : 1 }}>
             <RadioGroup value={state.mode} onChange={(e) => update({ mode: e.target.value as FreqMode })} className={styles.modeGroup}>
                 {(Object.keys(MODE_LABELS) as FreqMode[]).map((mode) => (
                     <div key={mode}>
@@ -122,7 +123,7 @@ export function FrequencyPicker({ value, onChange }: Props) {
             </RadioGroup>
 
             <NextDuePreview rrule={currentRrule} />
-        </div>
+        </fieldset>
     );
 }
 

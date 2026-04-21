@@ -132,6 +132,11 @@ export interface RoutineInterface {
      */
     calendarSyncConfigId?: string;
     /**
+     * Ref to the routine this was split from via a "this and all following" edit.
+     * Set on the new tail routine; points back to the original (head) routine.
+     */
+    splitFromRoutineId?: string;
+    /**
      * ISO datetime — set when the app pushes an edit to Google Calendar.
      * Used to detect and skip our own echo when a webhook-triggered pull finds the same change.
      */

@@ -7,17 +7,23 @@ export default defineConfig({
     use: {
         baseURL: 'http://localhost:4173',
         // Each test file gets fresh contexts — no shared browser state
+        trace: 'retain-on-failure',
+        video: 'retain-on-failure',
     },
     webServer: [
         {
             command: 'cd ../api-server && npm run dev', // paths are relative to this config file in e2e/
             url: 'http://localhost:4000/sync/config',
             reuseExistingServer: true,
+            stdout: 'ignore',
+            stderr: 'ignore',
         },
         {
             command: 'cd ../client && npm run dev',
             url: 'http://localhost:4173',
             reuseExistingServer: true,
+            stdout: 'ignore',
+            stderr: 'ignore',
         },
     ],
 });

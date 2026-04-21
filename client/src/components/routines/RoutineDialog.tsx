@@ -1,3 +1,4 @@
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
@@ -17,9 +18,11 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
-import { createNextRoutineItem, deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon } from '../../db/routineItemHelpers';
+import { createNextRoutineItem, generateCalendarItemsToHorizon } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
+import { splitRoutine } from '../../db/routineSplit';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { computeSplitDate, stripEndClauses } from '../../lib/routineSplitUtils';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { FrequencyPicker } from './FrequencyPicker';
@@ -56,11 +59,6 @@ interface FormState {
     endsMode: EndsMode;
     endsDate: string; // ISO date — used when endsMode === 'onDate'
     endsCount: string; // positive integer string — used when endsMode === 'afterN'
-}
-
-/** Strip UNTIL and COUNT from an rrule string so FrequencyPicker can parse the base frequency. */
-function stripEndClauses(rruleStr: string): string {
-    return rruleStr.replace(/;UNTIL=[^;]*/g, '').replace(/;COUNT=\d+/g, '');
 }
 
 /** Parse UNTIL/COUNT from an existing rrule string into EndsMode fields. */
@@ -158,8 +156,12 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
 
     async function onSave() {
         const trimmedTitle = form.title.trim();
-        if (!trimmedTitle || !form.rrule || isSaving) return;
-        if (form.routineType === 'calendar' && !form.timeOfDay) return;
+        if (!trimmedTitle || !form.rrule || isSaving) {
+            return;
+        }
+        if (form.routineType === 'calendar' && !form.timeOfDay) {
+            return;
+        }
 
         setIsSaving(true);
         try {
@@ -170,25 +172,37 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
-                const updatedRoutine = {
-                    ...routine,
-                    routineType: form.routineType,
-                    title: trimmedTitle,
-                    rrule: finalRrule,
-                    template,
-                    ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                    ...calendarLink,
-                };
-                await updateRoutine(db, updatedRoutine);
+                // computeSplitDate returns non-null when the series has future occurrences
+                const splitDate = form.routineType === 'calendar' ? computeSplitDate(routine.rrule, routine.createdTs) : null;
 
-                // Regenerate future items when the schedule or item content changes
-                const scheduleChanged =
-                    routine.rrule !== finalRrule ||
-                    routine.title !== trimmedTitle ||
-                    routine.calendarItemTemplate?.timeOfDay !== calendarItemTemplate?.timeOfDay ||
-                    routine.calendarItemTemplate?.duration !== calendarItemTemplate?.duration;
-                if (form.routineType === 'calendar' && scheduleChanged) {
-                    await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
+                if (splitDate) {
+                    // Split: "this and all following" from the next occurrence
+                    await splitRoutine(
+                        db,
+                        userId,
+                        routine,
+                        {
+                            routineType: form.routineType,
+                            title: trimmedTitle,
+                            rrule: finalRrule,
+                            template,
+                            ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                            ...calendarLink,
+                        },
+                        splitDate,
+                    );
+                } else {
+                    // Ended or non-calendar routine: update in place
+                    const updatedRoutine = {
+                        ...routine,
+                        routineType: form.routineType,
+                        title: trimmedTitle,
+                        rrule: finalRrule,
+                        template,
+                        ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                        ...calendarLink,
+                    };
+                    await updateRoutine(db, updatedRoutine);
                 }
             } else {
                 const created = await createRoutine(db, {
@@ -222,12 +236,20 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
     }
 
     const isCalendar = form.routineType === 'calendar';
+    // An ended calendar routine has no future occurrences — schedule fields are locked.
+    const isEndedCalendar = isEdit && routine.routineType === 'calendar' && computeSplitDate(routine.rrule, routine.createdTs) === null;
 
     return (
         <Dialog open onClose={onClose} fullWidth maxWidth="sm">
             <DialogTitle>{isEdit ? 'Edit routine' : 'New routine'}</DialogTitle>
             {/* MUI removes DialogContent top padding when preceded by DialogTitle; restore with sx */}
             <DialogContent className={styles.dialogContent} sx={{ pt: 2 }}>
+                {isEndedCalendar && (
+                    <Alert severity="info" variant="outlined">
+                        This routine has ended. Only title and notes can be edited.
+                    </Alert>
+                )}
+
                 <TextField label="Title" value={form.title} onChange={(e) => patch({ title: e.target.value })} fullWidth required autoFocus />
 
                 <Box>
@@ -240,6 +262,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                         exclusive
                         size="small"
                         value={form.routineType}
+                        disabled={isEndedCalendar}
                         onChange={(_e, val: 'nextAction' | 'calendar' | null) => {
                             if (val) patch({ routineType: val });
                         }}
@@ -256,13 +279,13 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                         </Typography>
                     </FormLabel>
                     {/* key resets FrequencyPicker internal state when switching between create/edit */}
-                    <FrequencyPicker key={routine?._id ?? 'new'} value={form.rrule} onChange={(rrule) => patch({ rrule })} />
+                    <FrequencyPicker key={routine?._id ?? 'new'} value={form.rrule} onChange={(rrule) => patch({ rrule })} disabled={isEndedCalendar} />
                 </Box>
 
-                <EndsFields form={form} onPatch={patch} />
+                <EndsFields form={form} onPatch={patch} disabled={isEndedCalendar} />
 
                 {isCalendar ? (
-                    <CalendarFields form={form} onPatch={patch} calendarOptions={calendarOptions} />
+                    <CalendarFields form={form} onPatch={patch} calendarOptions={calendarOptions} disabled={isEndedCalendar} />
                 ) : (
                     <TemplateFields
                         form={form}
@@ -301,15 +324,17 @@ function CalendarFields({
     form,
     onPatch,
     calendarOptions,
+    disabled,
 }: {
     form: FormState;
     onPatch: (patch: Partial<FormState>) => void;
     calendarOptions: CalendarOption[];
+    disabled?: boolean;
 }) {
     const showPicker = calendarOptions.length > 1;
 
     return (
-        <Stack gap={1.5}>
+        <Stack gap={1.5} sx={disabled ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
             <Typography variant="caption" color="text.secondary" fontWeight={600}>
                 Calendar event settings
             </Typography>
@@ -356,9 +381,9 @@ function CalendarFields({
 
 // ── Ends section ──────────────────────────────────────────────────────────────
 
-function EndsFields({ form, onPatch }: { form: FormState; onPatch: (patch: Partial<FormState>) => void }) {
+function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (patch: Partial<FormState>) => void; disabled?: boolean }) {
     return (
-        <Box>
+        <Box sx={disabled ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
             <FormLabel>
                 <Typography variant="caption" color="text.secondary" className={styles.sectionLabel}>
                     Ends
