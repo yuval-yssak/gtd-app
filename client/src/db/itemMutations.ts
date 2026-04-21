@@ -151,6 +151,30 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
     return updated;
 }
 
+export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
+    // Someday/Maybe carries the same shape as inbox — no schedule, context, or waitingFor metadata.
+    const {
+        workContextIds: _wc,
+        energy: _e,
+        time: _t,
+        focus: _f,
+        urgent: _u,
+        expectedBy: _eb,
+        ignoreBefore: _ib,
+        timeStart: _ts,
+        timeEnd: _te,
+        calendarEventId: _ce,
+        calendarIntegrationId: _ci,
+        calendarSyncConfigId: _csc,
+        waitingForPersonId: _wfp,
+        ...rest
+    } = item;
+    const updated: StoredItem = { ...rest, status: 'somedayMaybe', updatedTs: nowIso() };
+    await putItem(db, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    return updated;
+}
+
 export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
     await putItem(db, updated);
@@ -232,6 +256,38 @@ export async function updateItem(db: IDBPDatabase<MyDB>, item: StoredItem): Prom
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
+}
+
+/**
+ * Records a `modified` exception on the routine for the given occurrence date so future
+ * series regeneration keeps the override. Idempotent — re-recording on the same date updates
+ * the exception in place rather than appending duplicates.
+ * `originalDate` is the ISO date of the occurrence the item was generated for — typically
+ * dayjs(item.timeStart).format('YYYY-MM-DD') _before_ the user's time edit.
+ */
+export async function recordRoutineInstanceModification(
+    db: IDBPDatabase<MyDB>,
+    routineId: string,
+    originalDate: string,
+    override: { itemId: string; newTimeStart?: string; newTimeEnd?: string; title?: string; notes?: string },
+): Promise<void> {
+    const routine = await getRoutineById(db, routineId);
+    if (!routine) {
+        return;
+    }
+    const existing = routine.routineExceptions ?? [];
+    const filtered = existing.filter((e) => e.date !== originalDate);
+    // Explicit-omission pattern (matches clarify helpers) — exactOptionalPropertyTypes disallows undefined assignment.
+    const entry = {
+        date: originalDate,
+        type: 'modified' as const,
+        itemId: override.itemId,
+        ...(override.newTimeStart ? { newTimeStart: override.newTimeStart } : {}),
+        ...(override.newTimeEnd ? { newTimeEnd: override.newTimeEnd } : {}),
+        ...(override.title ? { title: override.title } : {}),
+        ...(override.notes ? { notes: override.notes } : {}),
+    };
+    await updateRoutine(db, { ...routine, routineExceptions: [...filtered, entry] });
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────

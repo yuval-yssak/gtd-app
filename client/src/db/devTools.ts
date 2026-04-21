@@ -11,10 +11,13 @@ import type { CalendarMeta, NextActionMeta, WaitingForMeta } from './itemMutatio
 import {
     clarifyToCalendar,
     clarifyToDone,
+    clarifyToInbox,
     clarifyToNextAction,
+    clarifyToSomedayMaybe,
     clarifyToTrash,
     clarifyToWaitingFor,
     collectItem,
+    recordRoutineInstanceModification,
     removeItem,
     updateItem,
 } from './itemMutations';
@@ -53,10 +56,17 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         clarifyToNextAction: (item: StoredItem, meta: NextActionMeta = {}) => clarifyToNextAction(db, item, meta),
         clarifyToCalendar: (item: StoredItem, meta: CalendarMeta) => clarifyToCalendar(db, item, meta),
         clarifyToWaitingFor: (item: StoredItem, meta: WaitingForMeta) => clarifyToWaitingFor(db, item, meta),
+        clarifyToInbox: (item: StoredItem) => clarifyToInbox(db, item),
+        clarifyToSomedayMaybe: (item: StoredItem) => clarifyToSomedayMaybe(db, item),
         clarifyToDone: (item: StoredItem) => clarifyToDone(db, item),
         clarifyToTrash: (item: StoredItem) => clarifyToTrash(db, item),
         updateItem: (item: StoredItem) => updateItem(db, item),
         removeItem: (itemId: string) => removeItem(db, itemId),
+        recordRoutineInstanceModification: (
+            routineId: string,
+            originalDate: string,
+            override: { itemId: string; newTimeStart?: string; newTimeEnd?: string; title?: string; notes?: string },
+        ) => recordRoutineInstanceModification(db, routineId, originalDate, override),
 
         // ── Supporting entities ──────────────────────────────────────────────
         createPerson: (fields: Omit<NewPersonFields, 'userId'>) => resolveUserId(db).then((uid) => createPerson(db, { ...fields, userId: uid })),

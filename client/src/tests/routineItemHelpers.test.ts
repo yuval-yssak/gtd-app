@@ -247,6 +247,46 @@ describe('generateCalendarItemsToHorizon', () => {
         expect(secondCount).toBe(firstCount);
     });
 
+    it('does not regenerate a moved `modified` exception (its original date is excluded)', async () => {
+        // When the user edits a routine instance's time-of-day to a different day, the exception
+        // carries the original rrule date + a newTimeStart on a later date. A second horizon pass
+        // must NOT regenerate a fresh item for the original date — otherwise the user's move
+        // silently duplicates.
+        const nextMonday = dayjs().startOf('day').day(8);
+        const originalDate = nextMonday.format('YYYY-MM-DD');
+        const movedToDate = nextMonday.add(1, 'day').format('YYYY-MM-DD');
+        const routine = buildCalendarRoutine({
+            routineExceptions: [
+                {
+                    date: originalDate,
+                    type: 'modified',
+                    itemId: 'moved-item',
+                    newTimeStart: `${movedToDate}T09:00:00`,
+                    newTimeEnd: `${movedToDate}T09:30:00`,
+                },
+            ],
+        });
+
+        // The item on the moved date already exists in IDB — mirror what the dialog would leave.
+        await db.put('items', {
+            _id: 'moved-item',
+            userId: USER_ID,
+            status: 'calendar',
+            title: 'Weekly standup',
+            routineId: 'cal-routine-1',
+            timeStart: `${movedToDate}T09:00:00`,
+            timeEnd: `${movedToDate}T09:30:00`,
+            createdTs: '2025-01-01T00:00:00.000Z',
+            updatedTs: '2025-01-01T00:00:00.000Z',
+        });
+
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        const onOriginalDate = items.filter((i) => (i.timeStart ?? '').startsWith(originalDate));
+        expect(onOriginalDate).toHaveLength(0);
+    });
+
     it('queues sync operations for each generated item', async () => {
         const routine = buildCalendarRoutine();
         await generateCalendarItemsToHorizon(db, USER_ID, routine);

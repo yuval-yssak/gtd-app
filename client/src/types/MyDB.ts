@@ -17,7 +17,7 @@ export interface StoredAccount {
 export interface StoredItem {
     _id: string; // client-generated UUID — doubles as the MongoDB _id
     userId: string; // Better Auth user ID — mirrors ItemInterface.user
-    status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'done' | 'trash';
+    status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash';
     title: string;
     createdTs: string;
     updatedTs: string; // ISO datetime — last-write-wins conflict resolution anchor

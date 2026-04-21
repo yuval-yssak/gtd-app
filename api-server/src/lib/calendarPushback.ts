@@ -56,9 +56,69 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
         await pushExistingItemToGCal(snapshot, userId, buildProvider);
         return;
     }
+    // Routine-generated calendar items carry routineId but no calendarEventId — their GCal
+    // presence is the routine's master recurring event. Per-instance edits push a single-instance
+    // override on that master (matrix A2/A3).
+    if (snapshot.status === 'calendar' && snapshot.routineId) {
+        await pushRoutineInstanceOverride(snapshot, userId, buildProvider);
+        return;
+    }
     if (snapshot.status === 'calendar') {
         await pushNewItemToGCal(snapshot, userId, buildProvider);
     }
+}
+
+/**
+ * Pushes a per-instance override (time / title / description) to the routine's GCal master
+ * recurring event. Used when the user edits a routine-generated calendar item locally.
+ * No-ops gracefully when the routine isn't linked to GCal yet.
+ */
+async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
+        return;
+    }
+    const routine = await routinesDAO.findByOwnerAndId(snapshot.routineId, userId);
+    if (!routine?.calendarEventId) {
+        return;
+    }
+    const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    if (!ctx) {
+        return;
+    }
+    const originalDate = resolveOriginalDate(routine, snapshot);
+    const { provider, config, timeZone } = ctx;
+    console.log(
+        `[gcal-pushback] overriding routine instance | routineId=${snapshot.routineId} eventId=${routine.calendarEventId} originalDate=${originalDate}`,
+    );
+    await provider.updateRecurringInstance(
+        routine.calendarEventId,
+        originalDate,
+        {
+            title: snapshot.title,
+            ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
+            ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
+            description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+        },
+        config.calendarId,
+        timeZone,
+    );
+    await stampItemLastPushed(userId, snapshot._id);
+}
+
+/**
+ * Returns the rrule occurrence date this item was originally generated for.
+ * For an un-moved item, `timeStart` still matches the rrule date — use that.
+ * For an already-moved item, `timeStart` is the *new* date, so the rrule date only lives
+ * on the routine's `modified` exception. Look it up by `itemId` and fall back to `timeStart`
+ * if no exception exists yet (first-ever override).
+ */
+function resolveOriginalDate(routine: RoutineInterface, snapshot: ItemInterface): string {
+    const existing = routine.routineExceptions?.find((e) => e.type === 'modified' && e.itemId === snapshot._id);
+    if (existing) {
+        return existing.date;
+    }
+    return dayjs(snapshot.timeStart).format('YYYY-MM-DD');
 }
 
 /** Pushes edits or deletion of an existing calendar-linked item back to Google Calendar. */

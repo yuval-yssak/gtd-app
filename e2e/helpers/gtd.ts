@@ -89,6 +89,28 @@ export const gtd = {
             item,
         ),
 
+    clarifyToInbox: (page: Page, item: StoredItem): Promise<StoredItem> =>
+        page.evaluate(
+            (i) =>
+                (
+                    window as unknown as {
+                        __gtd: { clarifyToInbox(i: StoredItem): Promise<StoredItem> };
+                    }
+                ).__gtd.clarifyToInbox(i as StoredItem),
+            item,
+        ),
+
+    clarifyToSomedayMaybe: (page: Page, item: StoredItem): Promise<StoredItem> =>
+        page.evaluate(
+            (i) =>
+                (
+                    window as unknown as {
+                        __gtd: { clarifyToSomedayMaybe(i: StoredItem): Promise<StoredItem> };
+                    }
+                ).__gtd.clarifyToSomedayMaybe(i as StoredItem),
+            item,
+        ),
+
     // ── Update / remove ──────────────────────────────────────────────────────
     updateItem: (page: Page, item: StoredItem): Promise<StoredItem> =>
         page.evaluate(

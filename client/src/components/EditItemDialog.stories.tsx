@@ -1,6 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { fn } from 'storybook/test';
-import { mockDb, sampleInboxItem, sampleNextActionItem, sampleNextActionWithNotes } from '../test-utils/storybookMocks';
+import {
+    mockDb,
+    sampleCalendarItem,
+    sampleInboxItem,
+    sampleNextActionItem,
+    sampleNextActionWithNotes,
+    samplePeople,
+    sampleWaitingForItem,
+    sampleWorkContexts,
+} from '../test-utils/storybookMocks';
 import { EditItemDialog } from './EditItemDialog';
 
 const meta = {
@@ -10,6 +19,8 @@ const meta = {
     tags: ['autodocs'],
     args: {
         db: mockDb,
+        people: samplePeople,
+        workContexts: sampleWorkContexts,
         onClose: fn(),
         onSaved: fn().mockResolvedValue(undefined),
     },
@@ -28,7 +39,17 @@ export const WithMarkdownNotes: Story = {
     args: { item: sampleNextActionWithNotes },
 };
 
-/** A nextAction item — same dialog but with a different status. */
+/** A nextAction item — same dialog but with a different status chip selected. */
 export const NextActionItem: Story = {
     args: { item: sampleNextActionItem },
+};
+
+/** A calendar item — exposes date + start/end time pickers for rescheduling. */
+export const CalendarItem: Story = {
+    args: { item: sampleCalendarItem },
+};
+
+/** A waiting-for item — exposes the person selector + expected-by and ignore-before dates. */
+export const WaitingForItem: Story = {
+    args: { item: sampleWaitingForItem },
 };

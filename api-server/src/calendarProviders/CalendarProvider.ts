@@ -70,6 +70,20 @@ export interface CalendarProvider {
         updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
         timeZone: string,
     ): Promise<void>;
+    /**
+     * Overrides a single instance of a recurring event series. The original instance is located
+     * by `originalDate` (the YYYY-MM-DD the rrule originally generated). Implementations typically
+     * resolve the instance-specific event ID via the provider's instances list, then patch it —
+     * creating a single-instance override without affecting other occurrences.
+     * Used for matrix cases A2/A3 (per-instance time/title/notes edit on a routine-managed series).
+     */
+    updateRecurringInstance(
+        masterEventId: string,
+        originalDate: string,
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        calendarId: string,
+        timeZone: string,
+    ): Promise<void>;
     /** Deletes (cancels) a single event. */
     deleteEvent(calendarId: string, eventId: string): Promise<void>;
 }

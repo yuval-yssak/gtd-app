@@ -3,6 +3,7 @@ export const ItemStatus = {
     nextAction: 'nextAction',
     calendar: 'calendar',
     waitingFor: 'waitingFor',
+    somedayMaybe: 'somedayMaybe',
     done: 'done',
     trash: 'trash',
 } as const;

@@ -1852,7 +1852,9 @@ describe('calendar push-back — new items', () => {
         expect(createSpy).not.toHaveBeenCalled();
     });
 
-    it('skips routine-managed calendar items', async () => {
+    it('does not use the single-event create path for routine-managed calendar items', async () => {
+        // Routine-managed items don't get their own GCal event — they're represented by the routine's
+        // master recurring event, with per-instance overrides when edited.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -1860,10 +1862,148 @@ describe('calendar push-back — new items', () => {
         const item = makeItem(userId, { routineId: 'routine-1' });
 
         const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-id');
+        // Without a routine in the DB, pushRoutineInstanceOverride also no-ops — so neither
+        // path touches GCal. Both are exclusive: createEvent is not called, and the override
+        // path exits early because the routine can't be resolved.
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
         expect(createSpy).not.toHaveBeenCalled();
+    });
+});
+
+describe('calendar push-back — routine instance overrides', () => {
+    async function setupRoutineWithEvent(userId: string, routineOverrides: Partial<RoutineInterface> = {}) {
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'recurring-master-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            ...routineOverrides,
+        });
+        await routinesDAO.insertOne(routine);
+        return routine;
+    }
+
+    it('pushes a single-instance override when a routine-generated item is edited', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-inst-1',
+            routineId: 'routine-1',
+            title: 'Moved standup',
+            timeStart: '2026-05-04T11:00:00.000Z',
+            timeEnd: '2026-05-04T11:30:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).toHaveBeenCalledOnce();
+        expect(spy.mock.calls[0]![0]).toBe('recurring-master-1');
+        expect(spy.mock.calls[0]![1]).toBe('2026-05-04'); // originalDate derived from timeStart
+        expect(spy.mock.calls[0]![2]).toMatchObject({ title: 'Moved standup', timeStart: '2026-05-04T11:00:00.000Z', timeEnd: '2026-05-04T11:30:00.000Z' });
+        expect(spy.mock.calls[0]![3]).toBe('primary'); // calendarId
+        expect(spy.mock.calls[0]![4]).toBe('Asia/Jerusalem'); // timeZone
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('uses the routine exception date as originalDate when the item was previously moved', async () => {
+        // Regression: on a subsequent edit, snapshot.timeStart is the MOVED date. The rrule
+        // occurrence date lives only on the routine's `modified` exception. Look it up.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId, {
+            routineExceptions: [
+                {
+                    date: '2026-05-04', // original rrule date
+                    type: 'modified' as const,
+                    itemId: 'item-inst-2',
+                    newTimeStart: '2026-05-05T09:00:00.000Z',
+                    newTimeEnd: '2026-05-05T09:30:00.000Z',
+                },
+            ],
+        });
+
+        const item = makeItem(userId, {
+            _id: 'item-inst-2',
+            routineId: 'routine-1',
+            title: 'Re-edited',
+            // This is the MOVED date from the prior edit — NOT the original rrule date.
+            timeStart: '2026-05-05T09:00:00.000Z',
+            timeEnd: '2026-05-05T09:30:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).toHaveBeenCalledOnce();
+        expect(spy.mock.calls[0]![1]).toBe('2026-05-04'); // original rrule date recovered from exception
+    });
+
+    it('no-ops when the routine is not linked to a GCal recurring event', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Routine exists but has no calendarEventId — can't push an override.
+        const unlinkedRoutine = makeRoutine(userId, { _id: 'routine-unlinked' });
+        await routinesDAO.insertOne(unlinkedRoutine);
+
+        const item = makeItem(userId, {
+            _id: 'item-no-link',
+            routineId: 'routine-unlinked',
+        });
+        await itemsDAO.insertOne(item);
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('no-ops when the routine cannot be found (orphaned routineId)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // No routine inserted.
+
+        const item = makeItem(userId, {
+            _id: 'item-orphan',
+            routineId: 'routine-missing',
+        });
+        await itemsDAO.insertOne(item);
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('no-ops when the snapshot has no timeStart', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        // Items without timeStart can't have a rrule date — skip gracefully.
+        const item = makeItem(userId, { _id: 'item-no-ts', routineId: 'routine-1', timeStart: undefined, timeEnd: undefined });
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).not.toHaveBeenCalled();
     });
 });
 

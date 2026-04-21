@@ -97,4 +97,54 @@ test.describe('item updates', () => {
             expect(bootstrap.items.find((i) => i._id === trashed._id)?.status).toBe('trash');
         });
     });
+
+    test('move inbox item to someday/maybe', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `inbox-someday-${dayjs().valueOf()}@example.com`, async (page) => {
+            const inbox = await gtd.collect(page, 'Learn a new instrument');
+
+            const someday = await gtd.clarifyToSomedayMaybe(page, inbox);
+            expect(someday.status).toBe('somedayMaybe');
+            await gtd.flush(page);
+
+            const bootstrap = await gtd.fetchBootstrap(page);
+            const serverItem = bootstrap.items.find((i) => i._id === someday._id);
+            expect(serverItem?.status).toBe('somedayMaybe');
+        });
+    });
+
+    test('move next-action to someday/maybe — status-specific fields stripped', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `na-someday-${dayjs().valueOf()}@example.com`, async (page) => {
+            const inbox = await gtd.collect(page, 'Maybe someday');
+            const na = await gtd.clarifyToNextAction(page, inbox, { energy: 'high', time: 45, urgent: true });
+            await gtd.flush(page);
+
+            const someday = await gtd.clarifyToSomedayMaybe(page, na);
+            expect(someday.status).toBe('somedayMaybe');
+            // Status-specific fields should be stripped by the clarify helper.
+            expect(someday.energy).toBeUndefined();
+            expect(someday.time).toBeUndefined();
+            expect(someday.urgent).toBeUndefined();
+
+            await gtd.flush(page);
+            const bootstrap = await gtd.fetchBootstrap(page);
+            const serverItem = bootstrap.items.find((i) => i._id === someday._id);
+            expect(serverItem?.status).toBe('somedayMaybe');
+            expect(serverItem?.energy).toBeUndefined();
+        });
+    });
+
+    test('move someday/maybe back to inbox', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `someday-inbox-${dayjs().valueOf()}@example.com`, async (page) => {
+            const inbox = await gtd.collect(page, 'Reconsider this');
+            const someday = await gtd.clarifyToSomedayMaybe(page, inbox);
+            await gtd.flush(page);
+
+            const back = await gtd.clarifyToInbox(page, someday);
+            expect(back.status).toBe('inbox');
+
+            await gtd.flush(page);
+            const bootstrap = await gtd.fetchBootstrap(page);
+            expect(bootstrap.items.find((i) => i._id === back._id)?.status).toBe('inbox');
+        });
+    });
 });

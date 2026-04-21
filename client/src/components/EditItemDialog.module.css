@@ -6,6 +6,15 @@
     padding-top: 1rem !important;
 }
 
+.statusLabel {
+    text-transform: uppercase;
+    letter-spacing: 0.0313rem;
+}
+
+.statusChips {
+    margin-top: 0.5rem;
+}
+
 .tabs {
     margin-bottom: 0.5rem;
 }
@@ -53,4 +62,10 @@
 .empty {
     color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
     font-style: italic;
+}
+
+.somedayEmpty {
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    font-style: italic;
+    padding: 0.5rem 0;
 }

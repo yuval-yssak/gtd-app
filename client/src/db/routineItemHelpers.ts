@@ -185,7 +185,16 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
     const rule = buildCalendarRule(routine.rrule, dtstart);
     const occurrences = rule.between(startDate, endDate, false);
 
-    const exceptionDates = new Set((routine.routineExceptions ?? []).filter((e) => e.type === 'skipped').map((e) => e.date));
+    // Exclude any exception date from regeneration:
+    // - 'skipped' dates the user explicitly trashed before due.
+    // - 'modified' dates whose override moved the occurrence to a different day — without this,
+    //   the next horizon pass would generate a fresh item for the original date, duplicating
+    //   the one the user already moved.
+    const exceptionDates = new Set(
+        (routine.routineExceptions ?? [])
+            .filter((e) => e.type === 'skipped' || (e.type === 'modified' && typeof e.newTimeStart === 'string' && e.newTimeStart.slice(0, 10) !== e.date))
+            .map((e) => e.date),
+    );
     const existingItems = (await db.getAllFromIndex('items', 'userId', userId)).filter((i) => i.routineId === routine._id && i.status === 'calendar');
     const existingDates = new Set(existingItems.map((i) => (i.timeStart ?? '').slice(0, 10)));
 

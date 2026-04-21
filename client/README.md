@@ -59,7 +59,7 @@ src/
 ├── components/                      # 30+ components with .stories.tsx companions
 │   ├── AppNav.tsx                   # Desktop sidebar + mobile bottom nav
 │   ├── ClarifyDialog.tsx            # GTD inbox clarification dialog
-│   ├── EditNextActionDialog.tsx     # Next action editor
+│   ├── EditItemDialog.tsx           # Unified status-aware item editor
 │   ├── StatusBar.tsx                # Sync status indicator
 │   ├── clarify/                     # Clarification form field components
 │   ├── routines/                    # Routine management components
