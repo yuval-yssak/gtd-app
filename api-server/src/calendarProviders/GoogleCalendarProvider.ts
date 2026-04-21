@@ -347,9 +347,9 @@ export class GoogleCalendarProvider implements CalendarProvider {
         // singleEvents: true expands the recurrence so we get individual instances.
         // showDeleted: true includes cancelled (deleted) instances.
         // orderBy: 'startTime' requires singleEvents: true.
-        // timeMax caps the window to 1 year ahead — without it Google returns all future
-        // instances which can be thousands for long-running routines.
-        const timeMax = dayjs(since).add(1, 'year').toISOString();
+        // timeMax caps the window to 1 year ahead of NOW — anchoring to `since` would give a useless
+        // window on the first sync (since defaults to 1970-01-01 when lastSyncedTs is unset).
+        const timeMax = dayjs().add(1, 'year').toISOString();
         const response = await cal.events.list({
             calendarId,
             timeMin: since,

@@ -61,8 +61,14 @@ describe('resolveInboundNotes', () => {
         expect(resolveInboundNotes('first description', undefined, olderTs, newerTs)).toBeNull();
     });
 
-    it('returns null when timestamps are equal (local wins tie)', () => {
-        const sameTs = '2026-04-10T10:00:00.000Z';
-        expect(resolveInboundNotes('changed on gcal', 'old synced', sameTs, sameTs)).toBeNull();
+    it('returns GCal description when timestamps are in the same second (GCal wins on tie at second precision)', () => {
+        // GCal's event.updated is second-precision; local updatedTs is millisecond. A local write
+        // followed by a GCal change within the same wall-clock second must still be picked up.
+        const localTs = '2026-04-10T10:00:00.200Z';
+        const gcalTs = '2026-04-10T10:00:00.000Z';
+        expect(resolveInboundNotes('changed on gcal', 'old synced', gcalTs, localTs)).toEqual({
+            notes: 'changed on gcal',
+            lastSyncedNotes: 'changed on gcal',
+        });
     });
 });
