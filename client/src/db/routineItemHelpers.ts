@@ -250,3 +250,40 @@ export async function deleteAndRegenerateFutureItems(db: IDBPDatabase<MyDB>, use
 
     await generateCalendarItemsToHorizon(db, userId, routine);
 }
+
+/**
+ * Update title/notes on all future calendar items whose content isn't overridden by a
+ * per-instance `routineExceptions` entry. Preserves item IDs (and hence GCal event IDs
+ * and any existing overrides) so a simple master rename never deletes and recreates items.
+ */
+export async function regenerateFutureItemContent(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine): Promise<void> {
+    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+    const now = dayjs().toISOString();
+    const allItems = await db.getAllFromIndex('items', 'userId', userId);
+    const futureItems = allItems.filter((i) => i.routineId === routine._id && i.status === 'calendar' && (i.timeStart ?? '') >= todayStr);
+    const exceptions = routine.routineExceptions ?? [];
+    const masterNotes = routine.template.notes;
+
+    for (const item of futureItems) {
+        const dateStr = (item.timeStart ?? '').slice(0, 10);
+        const override = exceptions.find((e) => e.type === 'modified' && e.date === dateStr);
+        const nextTitle = override?.title ?? routine.title;
+        const nextNotes = override?.notes ?? masterNotes;
+
+        if (item.title === nextTitle && (item.notes ?? undefined) === (nextNotes ?? undefined)) {
+            continue;
+        }
+
+        const updated: StoredItem = {
+            ...item,
+            title: nextTitle,
+            ...(nextNotes ? { notes: nextNotes } : {}),
+            updatedTs: now,
+        };
+        if (!nextNotes) {
+            delete updated.notes;
+        }
+        await putItem(db, updated);
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    }
+}

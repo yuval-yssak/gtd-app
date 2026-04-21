@@ -18,11 +18,16 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
-import { createNextRoutineItem, generateCalendarItemsToHorizon } from '../../db/routineItemHelpers';
+import {
+    createNextRoutineItem,
+    deleteAndRegenerateFutureItems,
+    generateCalendarItemsToHorizon,
+    regenerateFutureItemContent,
+} from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import { splitRoutine } from '../../db/routineSplit';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
-import { computeSplitDate, stripEndClauses } from '../../lib/routineSplitUtils';
+import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { FrequencyPicker } from './FrequencyPicker';
@@ -172,11 +177,16 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
-                // computeSplitDate returns non-null when the series has future occurrences
-                const splitDate = form.routineType === 'calendar' ? computeSplitDate(routine.rrule, routine.createdTs) : null;
+                // Split only when a calendar routine already has past items — those should keep
+                // their original title/notes/schedule. Without past items, editing in place is
+                // the correct behavior: users expect "rename this routine" to rename the one
+                // routine, not fork it.
+                const isCalendarEdit = form.routineType === 'calendar';
+                const hasPastItems = isCalendarEdit ? await routineHasPastItems(db, userId, routine._id) : false;
+                const splitDate = hasPastItems ? computeSplitDate(routine.rrule, routine.createdTs) : null;
 
                 if (splitDate) {
-                    // Split: "this and all following" from the next occurrence
+                    // "This and all following" split from the next occurrence
                     await splitRoutine(
                         db,
                         userId,
@@ -192,7 +202,6 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                         splitDate,
                     );
                 } else {
-                    // Ended or non-calendar routine: update in place
                     const updatedRoutine = {
                         ...routine,
                         routineType: form.routineType,
@@ -203,6 +212,18 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                         ...calendarLink,
                     };
                     await updateRoutine(db, updatedRoutine);
+
+                    if (isCalendarEdit && routine.routineType === 'calendar') {
+                        const scheduleChanged =
+                            routine.rrule !== finalRrule ||
+                            routine.calendarItemTemplate?.timeOfDay !== calendarItemTemplate?.timeOfDay ||
+                            routine.calendarItemTemplate?.duration !== calendarItemTemplate?.duration;
+                        if (scheduleChanged) {
+                            await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
+                        } else {
+                            await regenerateFutureItemContent(db, userId, updatedRoutine);
+                        }
+                    }
                 }
             } else {
                 const created = await createRoutine(db, {
