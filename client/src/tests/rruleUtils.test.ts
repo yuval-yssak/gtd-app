@@ -105,4 +105,52 @@ describe('formatCalendarRrule', () => {
     it('falls back to formatRrule when calendarItemTemplate is absent', () => {
         expect(formatCalendarRrule(baseRoutine)).toBe('Every Thu');
     });
+
+    it('shows "until" date when rrule has UNTIL', () => {
+        const routine: StoredRoutine = {
+            ...baseRoutine,
+            rrule: 'FREQ=DAILY;INTERVAL=3;UNTIL=20260414T235959Z',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 60 },
+        };
+        expect(formatCalendarRrule(routine)).toBe('Every 3 days at 09:00 for 1h, until Apr 14');
+    });
+
+    it('shows "from" date when routine is a split tail', () => {
+        const routine: StoredRoutine = {
+            ...baseRoutine,
+            splitFromRoutineId: 'parent-id',
+            createdTs: '2026-04-15T00:00:00Z',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 60 },
+        };
+        expect(formatCalendarRrule(routine)).toBe('Every Thu at 09:00 for 1h, from Apr 15');
+    });
+
+    it('shows both "from" and "until" for a bounded split tail', () => {
+        const routine: StoredRoutine = {
+            ...baseRoutine,
+            splitFromRoutineId: 'parent-id',
+            createdTs: '2026-04-15T00:00:00Z',
+            rrule: 'FREQ=DAILY;INTERVAL=1;UNTIL=20260501T235959Z',
+            calendarItemTemplate: { timeOfDay: '10:00', duration: 30 },
+        };
+        expect(formatCalendarRrule(routine)).toBe('Every day at 10:00 for 30m, from Apr 15, until May 1');
+    });
+
+    it('shows occurrence count for COUNT rules', () => {
+        const routine: StoredRoutine = {
+            ...baseRoutine,
+            rrule: 'FREQ=DAILY;COUNT=5;INTERVAL=3',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 60 },
+        };
+        expect(formatCalendarRrule(routine)).toBe('Every 3 days at 09:00 for 1h, 5 occurrences');
+    });
+
+    it('uses singular form for COUNT=1', () => {
+        const routine: StoredRoutine = {
+            ...baseRoutine,
+            rrule: 'FREQ=DAILY;COUNT=1',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 60 },
+        };
+        expect(formatCalendarRrule(routine)).toBe('Every day at 09:00 for 1h, 1 occurrence');
+    });
 });

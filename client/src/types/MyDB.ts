@@ -69,6 +69,8 @@ export interface StoredRoutine {
     calendarEventId?: string;
     calendarIntegrationId?: string;
     calendarSyncConfigId?: string;
+    /** Ref to the routine this was split from ("this and all following" edit). */
+    splitFromRoutineId?: string;
     lastPushedToGCalTs?: string;
     lastSyncedNotes?: string; // last template.notes value synced from/to Google Calendar — used for conflict detection
     template: StoredRoutineTemplate;

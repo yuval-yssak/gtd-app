@@ -212,6 +212,20 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
 }
 
 /**
+ * Delete future calendar items for a routine starting from a given date.
+ * Used during a routine split to remove items that the tail routine will regenerate.
+ */
+export async function deleteFutureItemsFromDate(db: IDBPDatabase<MyDB>, userId: string, routineId: string, fromDate: string): Promise<void> {
+    const allItems = await db.getAllFromIndex('items', 'userId', userId);
+    const futureItems = allItems.filter((i) => i.routineId === routineId && i.status === 'calendar' && (i.timeStart ?? '') >= fromDate);
+
+    for (const item of futureItems) {
+        await db.delete('items', item._id);
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null });
+    }
+}
+
+/**
  * Delete all future calendar items for a routine and regenerate up to the horizon.
  * Called when the rrule changes so items reflect the new schedule.
  */

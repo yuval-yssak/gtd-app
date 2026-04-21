@@ -98,14 +98,46 @@ function formatDuration(minutes: number): string {
 }
 
 /**
- * Format a calendar routine's schedule as a human-readable string combining frequency, time, and duration.
- * Example: "Every Thu at 18:00 for 3h"
+ * Format a calendar routine's schedule as a human-readable string combining frequency, time, duration,
+ * and date range (for split routines). Examples:
+ * - "Every Thu at 18:00 for 3h"
+ * - "Every 3 days at 09:00 for 1h, until Apr 14"
+ * - "Every 3 days at 09:00 for 1h, from Apr 15"
  */
 export function formatCalendarRrule(routine: StoredRoutine): string {
     const freqPart = formatRrule(routine.rrule);
     const { calendarItemTemplate } = routine;
-    if (!calendarItemTemplate) return freqPart;
+    if (!calendarItemTemplate) {
+        return freqPart;
+    }
     const timePart = `at ${calendarItemTemplate.timeOfDay}`;
     const durationPart = `for ${formatDuration(calendarItemTemplate.duration)}`;
-    return `${freqPart} ${timePart} ${durationPart}`;
+    const rangePart = formatDateRange(routine);
+    return `${freqPart} ${timePart} ${durationPart}${rangePart}`;
+}
+
+/** Extracts date range context for split routines (UNTIL for the head, start date for the tail). */
+function formatDateRange(routine: StoredRoutine): string {
+    const parts: string[] = [];
+
+    if (routine.splitFromRoutineId) {
+        parts.push(`from ${dayjs(routine.createdTs).format('MMM D')}`);
+    }
+
+    const untilMatch = routine.rrule.match(/UNTIL=(\d{4})(\d{2})(\d{2})/);
+    if (untilMatch) {
+        const untilDate = dayjs(`${untilMatch[1]}-${untilMatch[2]}-${untilMatch[3]}`);
+        parts.push(`until ${untilDate.format('MMM D')}`);
+    }
+
+    const countMatch = routine.rrule.match(/COUNT=(\d+)/);
+    if (countMatch?.[1]) {
+        const count = parseInt(countMatch[1], 10);
+        parts.push(`${count} occurrence${count === 1 ? '' : 's'}`);
+    }
+
+    if (!hasAtLeastOne(parts)) {
+        return '';
+    }
+    return `, ${parts.join(', ')}`;
 }
