@@ -56,6 +56,13 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
         await pushExistingItemToGCal(snapshot, userId, buildProvider);
         return;
     }
+    // Routine-generated instance trashed/completed locally → cancel that single GCal occurrence.
+    // The item op carries `routineId` + `timeStart`; the master event lives on the routine.
+    // Mirrors the `skipped` routineException the client just wrote (matrix A4).
+    if (snapshot.routineId && (snapshot.status === 'trash' || snapshot.status === 'done')) {
+        await pushRoutineInstanceCancellation(snapshot, userId, buildProvider);
+        return;
+    }
     // Routine-generated calendar items carry routineId but no calendarEventId — their GCal
     // presence is the routine's master recurring event. Per-instance edits push a single-instance
     // override on that master (matrix A2/A3).
@@ -103,6 +110,34 @@ async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: stri
         config.calendarId,
         timeZone,
     );
+    await stampItemLastPushed(userId, snapshot._id);
+}
+
+/**
+ * Cancels the single GCal occurrence that corresponds to a routine-generated item trashed or
+ * completed locally. Mirrors `pushRoutineInstanceOverride` structurally — resolves routine,
+ * context, and original rrule date, then calls `provider.cancelRecurringInstance`.
+ * No-ops gracefully when the routine isn't linked to GCal yet or the item lacks a timeStart.
+ */
+async function pushRoutineInstanceCancellation(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
+        return;
+    }
+    const routine = await routinesDAO.findByOwnerAndId(snapshot.routineId, userId);
+    if (!routine?.calendarEventId) {
+        return;
+    }
+    const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    if (!ctx) {
+        return;
+    }
+    const originalDate = resolveOriginalDate(routine, snapshot);
+    const { provider, config } = ctx;
+    console.log(
+        `[gcal-pushback] cancelling routine instance | routineId=${snapshot.routineId} eventId=${routine.calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
+    );
+    await provider.cancelRecurringInstance(routine.calendarEventId, originalDate, config.calendarId);
     await stampItemLastPushed(userId, snapshot._id);
 }
 
