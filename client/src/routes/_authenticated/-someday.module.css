@@ -9,3 +9,26 @@
     color: var(--mui-palette-text-disabled, rgba(0, 0, 0, 0.38));
     margin-bottom: 1rem;
 }
+
+.list {
+    /* Match the visual density of other list views (inbox, next-actions). */
+    margin-top: 0.5rem;
+}
+
+.item {
+    padding-right: 5rem;
+}
+
+.item :global(.MuiListItemText-root) {
+    padding-right: 0.5rem;
+}
+
+.countChip {
+    margin-left: 0.75rem;
+    vertical-align: middle;
+}
+
+.actionButtons {
+    display: flex;
+    gap: 0.25rem;
+}

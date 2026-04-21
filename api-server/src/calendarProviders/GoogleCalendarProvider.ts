@@ -341,6 +341,51 @@ export class GoogleCalendarProvider implements CalendarProvider {
         await cal.events.delete({ calendarId, eventId });
     }
 
+    async updateRecurringInstance(
+        masterEventId: string,
+        originalDate: string,
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        calendarId: string,
+        timeZone: string,
+    ): Promise<void> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        // Window the instances call around the target date. Widen by ±1 day because
+        // `dayjs(dateString).startOf('day')` uses the server's local timezone, but the
+        // instance's UTC start can fall on the prior UTC day for any calendar in a positive-offset
+        // timezone. ±1 day covers every real-world tz and keeps pagination tiny; the `.find()`
+        // below narrows to the exact `originalDate` via string comparison.
+        const windowStart = dayjs(originalDate).subtract(1, 'day').toISOString();
+        const windowEnd = dayjs(originalDate).add(1, 'day').toISOString();
+        const instanceList = await cal.events.instances({
+            calendarId,
+            eventId: masterEventId,
+            timeMin: windowStart,
+            timeMax: windowEnd,
+            showDeleted: false,
+            maxResults: 10,
+        });
+        const instance = (instanceList.data.items ?? []).find((ev) => {
+            const origIso = ev.originalStartTime?.dateTime ?? ev.originalStartTime?.date ?? '';
+            return origIso.slice(0, 10) === originalDate;
+        });
+        if (!instance?.id) {
+            // No matching instance — either already overridden out of range, or rrule produces none on that date.
+            // Surfacing this as a warning avoids throwing into the fire-and-forget pushback caller.
+            console.warn(`[GoogleCalendarProvider] updateRecurringInstance: no instance for master ${masterEventId} on ${originalDate} — skipping override`);
+            return;
+        }
+        await cal.events.patch({
+            calendarId,
+            eventId: instance.id,
+            requestBody: {
+                ...(updates.title !== undefined ? { summary: updates.title } : {}),
+                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
+                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
+                ...(updates.description !== undefined ? { description: updates.description } : {}),
+            },
+        });
+    }
+
     async getExceptions(eventId: string, calendarId: string, since: string, masterContent?: MasterContent): Promise<GCalException[]> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
 

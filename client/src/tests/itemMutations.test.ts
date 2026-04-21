@@ -4,10 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     clarifyToCalendar,
     clarifyToDone,
+    clarifyToInbox,
     clarifyToNextAction,
+    clarifyToSomedayMaybe,
     clarifyToTrash,
     clarifyToWaitingFor,
     collectItem,
+    recordRoutineInstanceModification,
     removeItem,
     updateItem,
 } from '../db/itemMutations';
@@ -479,5 +482,179 @@ describe('removeItem', () => {
         expect(ops[0]?.opType).toBe('delete');
         expect(ops[0]?.entityId).toBe(item._id);
         expect(ops[0]?.snapshot).toBeNull();
+    });
+});
+
+describe('clarifyToInbox', () => {
+    it('strips all status-specific fields and keeps notes + peopleIds + routineId', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Back to inbox' });
+        const mixed = {
+            ...item,
+            status: 'nextAction' as const,
+            routineId: 'routine-1',
+            notes: 'kept',
+            peopleIds: ['p-1'],
+            workContextIds: ['ctx-1'],
+            energy: 'high' as const,
+            time: 30,
+            urgent: true,
+            focus: true,
+            expectedBy: '2026-01-01',
+            ignoreBefore: '2025-06-01',
+            timeStart: '2025-07-01T09:00:00Z',
+            timeEnd: '2025-07-01T10:00:00Z',
+            calendarEventId: 'evt-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'cfg-1',
+            waitingForPersonId: 'p-9',
+        };
+
+        const back = await clarifyToInbox(db, mixed);
+
+        expect(back.status).toBe('inbox');
+        expect(back.notes).toBe('kept');
+        expect(back.peopleIds).toEqual(['p-1']);
+        expect(back.routineId).toBe('routine-1');
+        expect(back.workContextIds).toBeUndefined();
+        expect((back as { energy?: string }).energy).toBeUndefined();
+        expect(back.time).toBeUndefined();
+        expect(back.urgent).toBeUndefined();
+        expect(back.focus).toBeUndefined();
+        expect(back.expectedBy).toBeUndefined();
+        expect(back.ignoreBefore).toBeUndefined();
+        expect(back.timeStart).toBeUndefined();
+        expect(back.timeEnd).toBeUndefined();
+        expect(back.calendarEventId).toBeUndefined();
+        expect(back.calendarIntegrationId).toBeUndefined();
+        expect(back.calendarSyncConfigId).toBeUndefined();
+        expect(back.waitingForPersonId).toBeUndefined();
+    });
+
+    it('queues an update op', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Back again' });
+        await db.clear('syncOperations');
+
+        const back = await clarifyToInbox(db, item);
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        expect(ops[0]?.opType).toBe('update');
+        expect(ops[0]?.entityId).toBe(back._id);
+    });
+});
+
+describe('clarifyToSomedayMaybe', () => {
+    it('sets status to somedayMaybe and strips all status-specific fields', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Learn Rust' });
+        // Seed a rich, mixed-status shape — clarifyToSomedayMaybe should remove everything
+        // except title, notes, peopleIds, and routineId.
+        const mixed = {
+            ...item,
+            workContextIds: ['ctx-1'],
+            energy: 'medium' as const,
+            time: 30,
+            urgent: true,
+            focus: true,
+            expectedBy: '2026-01-01',
+            ignoreBefore: '2025-06-01',
+            timeStart: '2025-07-01T09:00:00Z',
+            timeEnd: '2025-07-01T10:00:00Z',
+            calendarEventId: 'evt-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'cfg-1',
+            waitingForPersonId: 'p-1',
+            peopleIds: ['p-2'],
+            notes: 'parking lot',
+        };
+
+        const sm = await clarifyToSomedayMaybe(db, mixed);
+
+        expect(sm.status).toBe('somedayMaybe');
+        expect(sm.notes).toBe('parking lot');
+        expect(sm.peopleIds).toEqual(['p-2']);
+        expect(sm.workContextIds).toBeUndefined();
+        expect((sm as { energy?: string }).energy).toBeUndefined();
+        expect(sm.time).toBeUndefined();
+        expect(sm.urgent).toBeUndefined();
+        expect(sm.focus).toBeUndefined();
+        expect(sm.expectedBy).toBeUndefined();
+        expect(sm.ignoreBefore).toBeUndefined();
+        expect(sm.timeStart).toBeUndefined();
+        expect(sm.timeEnd).toBeUndefined();
+        expect(sm.calendarEventId).toBeUndefined();
+        expect(sm.calendarIntegrationId).toBeUndefined();
+        expect(sm.calendarSyncConfigId).toBeUndefined();
+        expect(sm.waitingForPersonId).toBeUndefined();
+    });
+
+    it('queues an update op', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Maybe later' });
+        await db.clear('syncOperations');
+
+        const sm = await clarifyToSomedayMaybe(db, item);
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        expect(ops[0]?.opType).toBe('update');
+        expect(ops[0]?.entityId).toBe(sm._id);
+    });
+});
+
+describe('recordRoutineInstanceModification', () => {
+    it('adds a modified exception with the supplied time override', async () => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Weekly sync',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            template: {},
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            active: true,
+        });
+        await db.clear('syncOperations');
+
+        await recordRoutineInstanceModification(db, routine._id, '2026-05-04', {
+            itemId: 'item-1',
+            newTimeStart: '2026-05-04T11:00:00',
+            newTimeEnd: '2026-05-04T11:30:00',
+        });
+
+        const updated = await db.get('routines', routine._id);
+        expect(updated?.routineExceptions).toHaveLength(1);
+        expect(updated?.routineExceptions?.[0]).toEqual({
+            date: '2026-05-04',
+            type: 'modified',
+            itemId: 'item-1',
+            newTimeStart: '2026-05-04T11:00:00',
+            newTimeEnd: '2026-05-04T11:30:00',
+        });
+    });
+
+    it('replaces an existing exception on the same date rather than duplicating', async () => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 15 },
+            active: true,
+            routineExceptions: [{ date: '2026-05-04', type: 'modified' as const, itemId: 'old', newTimeStart: '2026-05-04T10:00:00' }],
+        });
+
+        await recordRoutineInstanceModification(db, routine._id, '2026-05-04', {
+            itemId: 'item-1',
+            newTimeStart: '2026-05-04T14:00:00',
+        });
+
+        const updated = await db.get('routines', routine._id);
+        expect(updated?.routineExceptions).toHaveLength(1);
+        expect(updated?.routineExceptions?.[0]?.newTimeStart).toBe('2026-05-04T14:00:00');
+        expect(updated?.routineExceptions?.[0]?.itemId).toBe('item-1');
+    });
+
+    it('no-ops when the routine does not exist', async () => {
+        await expect(
+            recordRoutineInstanceModification(db, 'missing-routine', '2026-05-04', { itemId: 'item-1', newTimeStart: '2026-05-04T10:00:00' }),
+        ).resolves.toBeUndefined();
     });
 });
