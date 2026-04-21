@@ -46,3 +46,6 @@ test-results/
 
 # Misc
 *.local
+
+# Claude Code per-user settings (machine-specific, not shared)
+**/.claude/settings.local.json
