@@ -1,6 +1,8 @@
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc';
+import type { IDBPDatabase } from 'idb';
 import { RRule } from 'rrule';
+import type { MyDB } from '../types/MyDB';
 
 dayjs.extend(utc);
 
@@ -29,6 +31,20 @@ export function computeSplitDate(rrule: string, createdTs: string): string | nul
     const next = rule.after(dayjs().toDate(), false);
     if (!next) return null;
     return next.toISOString().slice(0, 10);
+}
+
+/**
+ * True if the routine has at least one calendar item whose `timeStart` is before today.
+ * Routines without any historical items can be edited in place without losing context.
+ * The `timeStart` presence check matters — a `calendar`-status item without a `timeStart`
+ * would lexicographically compare less than any YYYY-MM-DD date and incorrectly force a split.
+ * The lexicographic `<` is safe because `'YYYY-MM-DDTHH:MM:SS' < 'YYYY-MM-DD'` iff the date
+ * portion is strictly earlier (since `'T' > '-'` at position 10).
+ */
+export async function routineHasPastItems(db: IDBPDatabase<MyDB>, userId: string, routineId: string): Promise<boolean> {
+    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+    const all = await db.getAllFromIndex('items', 'userId', userId);
+    return all.some((i) => i.routineId === routineId && i.status === 'calendar' && i.timeStart !== undefined && i.timeStart < todayStr);
 }
 
 /** Strip UNTIL and COUNT clauses from an rrule string, regardless of position. */

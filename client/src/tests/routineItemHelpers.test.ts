@@ -7,6 +7,7 @@ import {
     generateCalendarItemsToHorizon,
     getCalendarCompletionTiming,
     RruleExhaustedError,
+    regenerateFutureItemContent,
 } from '../db/routineItemHelpers';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
@@ -336,5 +337,73 @@ describe('deleteAndRegenerateFutureItems', () => {
         // Biweekly should have roughly half the items
         expect(afterItems.length).toBeLessThan(beforeItems.length);
         expect(afterItems.length).toBeGreaterThan(0);
+    });
+});
+
+// ── regenerateFutureItemContent ──────────────────────────────────────────────
+
+describe('regenerateFutureItemContent', () => {
+    let db: IDBPDatabase<MyDB>;
+
+    beforeEach(async () => {
+        db = await openTestDB();
+    });
+
+    afterEach(() => {
+        db.close();
+    });
+
+    it('updates title and notes on future items, preserving their ids', async () => {
+        const routine = buildCalendarRoutine();
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const before = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        const idsBefore = before.map((i) => i._id).sort();
+
+        const renamed = { ...routine, title: 'Renamed standup', template: { ...routine.template, notes: 'fresh notes' } };
+        await regenerateFutureItemContent(db, USER_ID, renamed);
+
+        const after = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        expect(after.map((i) => i._id).sort()).toEqual(idsBefore);
+        expect(after.every((i) => i.title === 'Renamed standup')).toBe(true);
+        expect(after.every((i) => i.notes === 'fresh notes')).toBe(true);
+    });
+
+    it('preserves per-instance overrides from routineExceptions', async () => {
+        const routine = buildCalendarRoutine();
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        // Pick one future date to override
+        const all = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        const [target] = all;
+        if (!target) {
+            throw new Error('expected at least one generated item');
+        }
+        const overrideDate = (target.timeStart ?? '').slice(0, 10);
+
+        const renamed = {
+            ...routine,
+            title: 'Renamed standup',
+            routineExceptions: [{ date: overrideDate, type: 'modified' as const, title: 'Custom override', notes: 'instance notes' }],
+        };
+        await regenerateFutureItemContent(db, USER_ID, renamed);
+
+        const after = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        const overridden = after.find((i) => (i.timeStart ?? '').slice(0, 10) === overrideDate);
+        expect(overridden?.title).toBe('Custom override');
+        expect(overridden?.notes).toBe('instance notes');
+        const nonOverridden = after.find((i) => (i.timeStart ?? '').slice(0, 10) !== overrideDate);
+        expect(nonOverridden?.title).toBe('Renamed standup');
+    });
+
+    it('clears notes when master notes are removed and no override exists', async () => {
+        const routine = buildCalendarRoutine({ template: { notes: 'initial' } });
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const cleared = { ...routine, template: {} };
+        await regenerateFutureItemContent(db, USER_ID, cleared);
+
+        const after = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        expect(after.every((i) => i.notes === undefined)).toBe(true);
     });
 });
