@@ -348,12 +348,41 @@ export class GoogleCalendarProvider implements CalendarProvider {
         calendarId: string,
         timeZone: string,
     ): Promise<void> {
+        const instanceId = await this.findInstanceId(masterEventId, originalDate, calendarId, 'updateRecurringInstance');
+        if (!instanceId) {
+            return;
+        }
         const cal = google.calendar({ version: 'v3', auth: this.auth });
-        // Window the instances call around the target date. Widen by ±1 day because
-        // `dayjs(dateString).startOf('day')` uses the server's local timezone, but the
-        // instance's UTC start can fall on the prior UTC day for any calendar in a positive-offset
-        // timezone. ±1 day covers every real-world tz and keeps pagination tiny; the `.find()`
-        // below narrows to the exact `originalDate` via string comparison.
+        await cal.events.patch({
+            calendarId,
+            eventId: instanceId,
+            requestBody: {
+                ...(updates.title !== undefined ? { summary: updates.title } : {}),
+                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
+                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
+                ...(updates.description !== undefined ? { description: updates.description } : {}),
+            },
+        });
+    }
+
+    async cancelRecurringInstance(masterEventId: string, originalDate: string, calendarId: string): Promise<void> {
+        const instanceId = await this.findInstanceId(masterEventId, originalDate, calendarId, 'cancelRecurringInstance');
+        if (!instanceId) {
+            return;
+        }
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        await cal.events.patch({ calendarId, eventId: instanceId, requestBody: { status: 'cancelled' } });
+    }
+
+    /**
+     * Resolves the instance-specific event id for a given occurrence date of a recurring master.
+     * Windows the `events.instances` call by ±1 day because `dayjs(dateString).startOf('day')` uses
+     * the server's local timezone, but the instance's UTC start can fall on the prior UTC day for any
+     * calendar in a positive-offset timezone. ±1 day covers every real-world tz and keeps pagination
+     * tiny; the `.find()` narrows to the exact `originalDate` via string comparison.
+     */
+    private async findInstanceId(masterEventId: string, originalDate: string, calendarId: string, callerLabel: string): Promise<string | null> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
         const windowStart = dayjs(originalDate).subtract(1, 'day').toISOString();
         const windowEnd = dayjs(originalDate).add(1, 'day').toISOString();
         const instanceList = await cal.events.instances({
@@ -369,21 +398,11 @@ export class GoogleCalendarProvider implements CalendarProvider {
             return origIso.slice(0, 10) === originalDate;
         });
         if (!instance?.id) {
-            // No matching instance — either already overridden out of range, or rrule produces none on that date.
-            // Surfacing this as a warning avoids throwing into the fire-and-forget pushback caller.
-            console.warn(`[GoogleCalendarProvider] updateRecurringInstance: no instance for master ${masterEventId} on ${originalDate} — skipping override`);
-            return;
+            // Surface as a warning so the fire-and-forget pushback caller doesn't throw.
+            console.warn(`[GoogleCalendarProvider] ${callerLabel}: no instance for master ${masterEventId} on ${originalDate} — skipping`);
+            return null;
         }
-        await cal.events.patch({
-            calendarId,
-            eventId: instance.id,
-            requestBody: {
-                ...(updates.title !== undefined ? { summary: updates.title } : {}),
-                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
-                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
-                ...(updates.description !== undefined ? { description: updates.description } : {}),
-            },
-        });
+        return instance.id;
     }
 
     async getExceptions(eventId: string, calendarId: string, since: string, masterContent?: MasterContent): Promise<GCalException[]> {

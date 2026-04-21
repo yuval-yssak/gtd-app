@@ -2005,6 +2005,158 @@ describe('calendar push-back — routine instance overrides', () => {
 
         expect(spy).not.toHaveBeenCalled();
     });
+
+    it('cancels the GCal instance when a routine-generated item is trashed (skipped exception)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-1',
+            routineId: 'routine-1',
+            status: 'trash',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).toHaveBeenCalledOnce();
+        expect(cancelSpy).toHaveBeenCalledWith('recurring-master-1', '2026-04-27', 'primary');
+        expect(updateSpy).not.toHaveBeenCalled();
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('cancels the GCal instance when a routine-generated item is completed (done)', async () => {
+        // `done` routes through the same cancellation path as `trash` — completing an instance
+        // should remove it from GCal just like trashing it.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-done-1',
+            routineId: 'routine-1',
+            status: 'done',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).toHaveBeenCalledOnce();
+        expect(cancelSpy).toHaveBeenCalledWith('recurring-master-1', '2026-04-27', 'primary');
+    });
+
+    it('uses the prior modified exception date when trashing a previously-moved instance', async () => {
+        // Edit-then-trash: snapshot.timeStart is the MOVED date, but the rrule's originalDate
+        // lives only on the routine's `modified` exception. The cancellation must target the
+        // original rrule date, not the moved one.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId, {
+            routineExceptions: [
+                {
+                    date: '2026-04-27', // original rrule date
+                    type: 'modified' as const,
+                    itemId: 'item-trash-moved',
+                    newTimeStart: '2026-04-28T09:00:00.000Z',
+                    newTimeEnd: '2026-04-28T10:00:00.000Z',
+                },
+            ],
+        });
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-moved',
+            routineId: 'routine-1',
+            status: 'trash',
+            // Moved date — NOT the original rrule date.
+            timeStart: '2026-04-28T09:00:00.000Z',
+            timeEnd: '2026-04-28T10:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).toHaveBeenCalledOnce();
+        expect(cancelSpy.mock.calls[0]![1]).toBe('2026-04-27'); // original rrule date, recovered from modified exception
+    });
+
+    it('no-ops cancellation when the routine is not linked to a GCal recurring event', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const unlinkedRoutine = makeRoutine(userId, { _id: 'routine-unlinked-cancel' });
+        await routinesDAO.insertOne(unlinkedRoutine);
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-no-link',
+            routineId: 'routine-unlinked-cancel',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it('no-ops cancellation when routineId is orphaned (routine missing from DB)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-orphan',
+            routineId: 'routine-missing',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it('no-ops cancellation when the snapshot has no timeStart', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        // Without timeStart the helper can't derive an original rrule date — skip gracefully.
+        const item = makeItem(userId, {
+            _id: 'item-trash-no-ts',
+            routineId: 'routine-1',
+            status: 'trash',
+            timeStart: undefined,
+            timeEnd: undefined,
+        });
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
 });
 
 describe('calendar push-back — routines', () => {

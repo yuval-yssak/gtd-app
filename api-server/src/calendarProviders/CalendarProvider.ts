@@ -84,6 +84,13 @@ export interface CalendarProvider {
         calendarId: string,
         timeZone: string,
     ): Promise<void>;
+    /**
+     * Cancels a single instance of a recurring event series without affecting other occurrences.
+     * The instance is located by `originalDate` (the YYYY-MM-DD the rrule originally generated),
+     * then patched to `status: cancelled`. Used for matrix case A4 (trash a single instance of a
+     * routine-managed series — equivalent to a `skipped` routineException).
+     */
+    cancelRecurringInstance(masterEventId: string, originalDate: string, calendarId: string): Promise<void>;
     /** Deletes (cancels) a single event. */
     deleteEvent(calendarId: string, eventId: string): Promise<void>;
 }
