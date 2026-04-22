@@ -152,6 +152,44 @@ describe('POST /sync/push', () => {
         expect(await db.collection('operations').countDocuments({ entityId, opType: 'delete' })).toBe(1);
     });
 
+    it('routine delete: succeeds when routine is already gone (concurrent delete from another device)', async () => {
+        const cookie = await loginAsAlice();
+        const routineId = crypto.randomUUID();
+        // Routine intentionally NOT inserted: models the case where another device's delete arrived first.
+        const res = await push(cookie, 'dev-1', [makeClientOp('routine', routineId, 'delete', null)]);
+        expect(res.status).toBe(200);
+        const op = await db.collection('operations').findOne({ entityId: routineId, opType: 'delete' });
+        expect(op?.snapshot).toBeNull();
+    });
+
+    it('routine delete: pre-delete snapshot is captured on the recorded op', async () => {
+        // The client sends `snapshot: null` for delete ops. The server hydrates the snapshot
+        // from the current routine doc so the calendar push-back cascade can read calendarEventId.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const routineId = crypto.randomUUID();
+
+        await db.collection('routines').insertOne({
+            _id: routineId,
+            user: userId,
+            title: 'Weekly standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            template: {},
+            active: true,
+            calendarEventId: 'gcal-evt-xyz',
+            calendarIntegrationId: 'int-xyz',
+            createdTs: '2024-01-01T00:00:00.000Z',
+            updatedTs: '2024-01-01T00:00:00.000Z',
+        });
+
+        await push(cookie, 'dev-1', [makeClientOp('routine', routineId, 'delete', null)]);
+
+        expect(await db.collection('routines').countDocuments({ _id: routineId })).toBe(0);
+        const op = await db.collection('operations').findOne({ entityId: routineId, opType: 'delete' });
+        expect(op?.snapshot).toMatchObject({ _id: routineId, calendarEventId: 'gcal-evt-xyz', calendarIntegrationId: 'int-xyz' });
+    });
+
     it('all four entity types are stored in their respective collections', async () => {
         const cookie = await loginAsAlice();
         const itemId = crypto.randomUUID();
