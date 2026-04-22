@@ -2260,6 +2260,135 @@ describe('calendar push-back — routines', () => {
 
         expect(createSpy).not.toHaveBeenCalled();
     });
+
+    it('on routine delete: deletes GCal recurring event and trashes generated calendar items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-del',
+            calendarEventId: 'gcal-master-del',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        // Routine is NOT inserted into the DB: the caller (sync.ts) captures the snapshot pre-delete
+        // and then applyEntityOp hard-deletes the doc. By the time maybePushToGCal runs, the routine
+        // is already gone — the push-back must work off the snapshot alone.
+
+        const now = dayjs().toISOString();
+        await itemsDAO.insertMany([
+            { _id: 'gen-1', user: userId, status: 'calendar', title: 'Standup Mon', routineId: 'routine-del', createdTs: now, updatedTs: now },
+            { _id: 'gen-2', user: userId, status: 'calendar', title: 'Standup Mon next', routineId: 'routine-del', createdTs: now, updatedTs: now },
+            // Unrelated item (no routineId) must NOT be touched.
+            { _id: 'other', user: userId, status: 'calendar', title: 'Other cal item', createdTs: now, updatedTs: now },
+            // Item belonging to a different routine must NOT be touched.
+            {
+                _id: 'other-routine-cal',
+                user: userId,
+                status: 'calendar',
+                title: 'Other routine cal',
+                routineId: 'routine-other',
+                createdTs: now,
+                updatedTs: now,
+            },
+            // Item with the same routineId but a non-calendar status must NOT be touched —
+            // the cascade is scoped to the calendar projection of this routine.
+            {
+                _id: 'gen-nextaction',
+                user: userId,
+                status: 'nextAction',
+                title: 'NA sibling',
+                routineId: 'routine-del',
+                createdTs: now,
+                updatedTs: now,
+            },
+        ]);
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, opType: 'delete', snapshot: routine }), mockBuildProvider());
+
+        expect(deleteSpy).toHaveBeenCalledWith('gcal-master-del', 'primary');
+
+        const g1 = await itemsDAO.findOne({ _id: 'gen-1' });
+        const g2 = await itemsDAO.findOne({ _id: 'gen-2' });
+        const other = await itemsDAO.findOne({ _id: 'other' });
+        const otherRoutine = await itemsDAO.findOne({ _id: 'other-routine-cal' });
+        const naSibling = await itemsDAO.findOne({ _id: 'gen-nextaction' });
+        expect(g1?.status).toBe('trash');
+        expect(g2?.status).toBe('trash');
+        expect(other?.status).toBe('calendar');
+        expect(otherRoutine?.status).toBe('calendar');
+        expect(naSibling?.status).toBe('nextAction');
+
+        // Each cascade-trashed item records an update op so other devices sync the state change.
+        const ops = await operationsDAO.findArray({ entityId: { $in: ['gen-1', 'gen-2'] } });
+        expect(ops).toHaveLength(2);
+        expect(ops.every((op) => op.opType === 'update' && op.snapshot?.status === 'trash')).toBe(true);
+    });
+
+    it('on routine delete without calendarEventId: trashes generated items but skips GCal call', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, { _id: 'routine-nolink', routineType: 'nextAction' });
+        // No calendarEventId — nothing to remove from GCal.
+
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'gen-nextaction',
+            user: userId,
+            status: 'calendar',
+            title: 'Weird next-action with cal status',
+            routineId: 'routine-nolink',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, opType: 'delete', snapshot: routine }), mockBuildProvider());
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+        const item = await itemsDAO.findOne({ _id: 'gen-nextaction' });
+        expect(item?.status).toBe('trash');
+    });
+
+    it('on routine delete: swallows GCal provider errors and still trashes generated items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-err',
+            calendarEventId: 'gcal-err-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'gen-err',
+            user: userId,
+            status: 'calendar',
+            title: 'Instance',
+            routineId: 'routine-err',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockRejectedValue(new Error('boom'));
+
+        // Must not throw: provider failure is best-effort.
+        await expect(
+            maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, opType: 'delete', snapshot: routine }), mockBuildProvider()),
+        ).resolves.toBeUndefined();
+
+        const item = await itemsDAO.findOne({ _id: 'gen-err' });
+        expect(item?.status).toBe('trash');
+    });
 });
 
 describe('calendar push-back — concurrent in-flight guard', () => {

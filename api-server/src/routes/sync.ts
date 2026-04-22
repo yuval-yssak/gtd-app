@@ -71,6 +71,34 @@ async function applyEntitySnapshotOp<T extends EntitySnapshot>(
     }
 }
 
+/**
+ * Routine-delete ops ship with `snapshot: null`. To drive the GCal push-back cascade
+ * (delete the master recurring event; trash generated calendar items) we need the
+ * pre-delete routine state. Mutates each matching op in-place so the same snapshot
+ * is both recorded in the ops collection and handed to `maybePushToGCal`.
+ *
+ * MUST complete before the `applyEntityOp` Promise.all below, which hard-deletes the routine
+ * from the DB — otherwise the lookup would race against the deletion and return null.
+ */
+async function hydrateRoutineDeleteSnapshots(userId: string, ops: OperationInterface[]): Promise<void> {
+    const targets = ops.filter((op) => op.entityType === 'routine' && op.opType === 'delete' && !op.snapshot);
+    if (!targets.length) {
+        return;
+    }
+    await Promise.all(
+        targets.map(async (op) => {
+            const routine = await routinesDAO.findByOwnerAndId(op.entityId, userId);
+            if (routine) {
+                op.snapshot = routine;
+                return;
+            }
+            // Concurrent delete from another device already removed the routine. The cascade
+            // has already run (or is running) on that other device; this op becomes a no-op.
+            console.warn(`[sync-push] routine ${op.entityId} already deleted — snapshot hydration skipped, cascade will no-op`);
+        }),
+    );
+}
+
 function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {
     const { entityType, entityId, opType, snapshot } = op;
     switch (entityType) {
@@ -166,6 +194,11 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
                 snapshot,
             };
         });
+
+        // Routine deletes arrive with snapshot=null from the client. Capture the pre-delete
+        // routine doc so `maybePushToGCal` can see the `calendarEventId` that needs removing
+        // from Google Calendar and scope the generated-items cascade to this routine.
+        await hydrateRoutineDeleteSnapshots(user.id, serverOps);
 
         await Promise.all([operationsDAO.insertMany(serverOps), ...serverOps.map((op) => applyEntityOp(user.id, op))]);
 

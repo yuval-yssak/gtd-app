@@ -2,7 +2,13 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogContentText from '@mui/material/DialogContentText';
+import DialogTitle from '@mui/material/DialogTitle';
 import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
@@ -25,12 +31,23 @@ export const Route = createFileRoute('/_authenticated/routines')({
 
 function RoutinesPage() {
     const { db } = Route.useRouteContext();
-    const { account, routines, workContexts, people, refreshRoutines, refreshItems } = useAppData();
+    const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh } = useAppData();
     const [dialogRoutine, setDialogRoutine] = useState<StoredRoutine | 'new' | null>(null);
+    const [routineToDelete, setRoutineToDelete] = useState<StoredRoutine | null>(null);
 
-    async function onDelete(routine: StoredRoutine) {
-        await removeRoutine(db, routine._id);
+    async function onConfirmDelete() {
+        if (!routineToDelete) {
+            return;
+        }
+        // Close dialog synchronously + snapshot the target: prevents a double-click from
+        // re-entering this handler with the same routineToDelete (would enqueue a duplicate delete op).
+        const target = routineToDelete;
+        setRoutineToDelete(null);
+        await removeRoutine(db, target._id);
         await refreshRoutines();
+        // Push the delete + pull the server cascade (trashed generated calendar items)
+        // so the Calendar view reflects the removal without waiting for an SSE tick.
+        await syncAndRefresh();
     }
 
     async function onSaved() {
@@ -75,7 +92,7 @@ function RoutinesPage() {
                                             </IconButton>
                                         </Tooltip>
                                         <Tooltip title="Delete">
-                                            <IconButton size="small" color="error" onClick={() => void onDelete(routine)}>
+                                            <IconButton size="small" color="error" onClick={() => setRoutineToDelete(routine)}>
                                                 <DeleteOutlineIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
@@ -116,6 +133,28 @@ function RoutinesPage() {
                     onSaved={onSaved}
                 />
             )}
+
+            <Dialog open={routineToDelete !== null} onClose={() => setRoutineToDelete(null)} maxWidth="sm" fullWidth>
+                <DialogTitle>Delete routine?</DialogTitle>
+                <DialogContent>
+                    <DialogContentText>
+                        {routineToDelete ? <>Delete "{routineToDelete.title}"?</> : null}
+                        {routineToDelete?.routineType === 'calendar' && (
+                            <>
+                                <br />
+                                <br />
+                                This will also remove the recurring event from Google Calendar and trash all generated calendar items.
+                            </>
+                        )}
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setRoutineToDelete(null)}>Cancel</Button>
+                    <Button color="error" onClick={() => void onConfirmDelete()}>
+                        Delete
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Box>
     );
 }
