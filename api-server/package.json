@@ -26,6 +26,7 @@
         "jsonwebtoken": "latest",
         "marked": "^18.0.0",
         "mongodb": "latest",
+        "rrule": "^2.8.1",
         "turndown": "^7.2.4",
         "web-push": "^3.6.7"
     },

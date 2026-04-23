@@ -63,10 +63,12 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
         await pushExistingItemToGCal(snapshot, userId, buildProvider);
         return;
     }
-    // Routine-generated instance trashed/completed locally → cancel that single GCal occurrence.
+    // Routine-generated instance trashed locally → cancel that single GCal occurrence.
     // The item op carries `routineId` + `timeStart`; the master event lives on the routine.
     // Mirrors the `skipped` routineException the client just wrote (matrix A4).
-    if (snapshot.routineId && (snapshot.status === 'trash' || snapshot.status === 'done')) {
+    // `done` is intentionally GTD-local — the GCal occurrence must remain (matrix A8); otherwise
+    // the GCal echo round-trips a `deleted` exception back and the app-side item flips to `trash`.
+    if (snapshot.routineId && snapshot.status === 'trash') {
         await pushRoutineInstanceCancellation(snapshot, userId, buildProvider);
         return;
     }

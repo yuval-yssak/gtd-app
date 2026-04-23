@@ -167,6 +167,47 @@ function buildCalendarItem(
     };
 }
 
+/** Dates that must be skipped when generating or counting occurrences. Shared between the
+ *  generator and the exhaustion check so their notions of "valid occurrence" cannot drift.
+ *  - `skipped`: user explicitly trashed this occurrence before due.
+ *  - `modified`: an occurrence that was moved to a different day — the original date is no
+ *    longer a rrule-backed slot and must not regenerate. `modified` entries whose newTimeStart
+ *    stays on the same date are NOT skipped (they're pure time/title/notes overrides). */
+function buildExceptionDateSet(routine: StoredRoutine): Set<string> {
+    return new Set(
+        (routine.routineExceptions ?? [])
+            .filter((e) => e.type === 'skipped' || (e.type === 'modified' && typeof e.newTimeStart === 'string' && e.newTimeStart.slice(0, 10) !== e.date))
+            .map((e) => e.date),
+    );
+}
+
+/** Rrule occurrences from today through the horizon, minus any dates carried by exceptions.
+ *  The one true source of "future slots that should produce items". */
+function getValidFutureOccurrences(routine: StoredRoutine): Date[] {
+    const horizonMonths = getCalendarHorizonMonths();
+    const startDate = dayjs().startOf('day').subtract(1, 'ms').toDate();
+    const endDate = dayjs().add(horizonMonths, 'month').endOf('day').toDate();
+    const rule = buildCalendarRule(routine.rrule, dayjs(routine.createdTs).toDate());
+    const exceptionDates = buildExceptionDateSet(routine);
+    return rule.between(startDate, endDate, false).filter((d) => !exceptionDates.has(d.toISOString().slice(0, 10)));
+}
+
+/**
+ * Read-only exhaustion check: true when the routine has no live `calendar`-status items AND
+ * no future rrule occurrences before the horizon. Used by the disposal path to deactivate
+ * one-shot (`COUNT=1`) and otherwise-exhausted routines without invoking the generator.
+ * MUST stay aligned with `generateCalendarItemsToHorizon`'s exhaustion predicate — both
+ * branch on the same `(validOccurrences, liveCalendarItems)` signal, so the shared helpers
+ * above are the single source of truth for that condition.
+ */
+export async function isCalendarRoutineExhausted(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine): Promise<boolean> {
+    if (getValidFutureOccurrences(routine).length > 0) {
+        return false;
+    }
+    const items = await db.getAllFromIndex('items', 'userId', userId);
+    return !items.some((i) => i.routineId === routine._id && i.status === 'calendar');
+}
+
 /**
  * Generate calendar items for all rrule occurrences from now until the user's horizon.
  * Skips exception dates and dates that already have items, then persists and queues sync ops.
@@ -177,31 +218,20 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
         throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
     }
 
-    const horizonMonths = getCalendarHorizonMonths();
-    const startDate = dayjs().startOf('day').subtract(1, 'ms').toDate();
-    const endDate = dayjs().add(horizonMonths, 'month').endOf('day').toDate();
-
-    const dtstart = dayjs(routine.createdTs).toDate();
-    const rule = buildCalendarRule(routine.rrule, dtstart);
-    const occurrences = rule.between(startDate, endDate, false);
-
-    // Exclude any exception date from regeneration:
-    // - 'skipped' dates the user explicitly trashed before due.
-    // - 'modified' dates whose override moved the occurrence to a different day — without this,
-    //   the next horizon pass would generate a fresh item for the original date, duplicating
-    //   the one the user already moved.
-    const exceptionDates = new Set(
-        (routine.routineExceptions ?? [])
-            .filter((e) => e.type === 'skipped' || (e.type === 'modified' && typeof e.newTimeStart === 'string' && e.newTimeStart.slice(0, 10) !== e.date))
-            .map((e) => e.date),
-    );
-    const existingItems = (await db.getAllFromIndex('items', 'userId', userId)).filter((i) => i.routineId === routine._id && i.status === 'calendar');
-    const existingDates = new Set(existingItems.map((i) => (i.timeStart ?? '').slice(0, 10)));
-
-    const validOccurrences = occurrences.filter((d) => !exceptionDates.has(d.toISOString().slice(0, 10)));
+    const validOccurrences = getValidFutureOccurrences(routine);
+    // Dedupe against any item tied to this routine regardless of status — a `done`/`trash` item on
+    // a given date still "claims" that occurrence, so the user doesn't get a duplicate calendar item
+    // when the horizon is re-extended on disposal (matrix A8).
+    const allRoutineItems = (await db.getAllFromIndex('items', 'userId', userId)).filter((i) => i.routineId === routine._id);
+    // Filter out items without a timeStart (e.g. an inbox item briefly re-attached to the routine)
+    // so they don't seed an empty-string date key that would spuriously match against slice(0,10).
+    const existingDates = new Set(allRoutineItems.map((i) => i.timeStart?.slice(0, 10)).filter((d): d is string => Boolean(d)));
+    // Exhaustion check uses only live `calendar` items — a series with only disposed (done/trash)
+    // items and no future occurrences is genuinely over, even if historical items remain.
+    const liveCalendarItems = allRoutineItems.filter((i) => i.status === 'calendar');
 
     // If the series is exhausted (no future occurrences at all), signal to the caller
-    if (validOccurrences.length === 0 && existingItems.length === 0) {
+    if (validOccurrences.length === 0 && liveCalendarItems.length === 0) {
         throw new RruleExhaustedError(`rrule "${routine.rrule}" has no occurrences in the horizon`);
     }
 

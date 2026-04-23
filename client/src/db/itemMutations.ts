@@ -3,7 +3,7 @@ import type { IDBPDatabase } from 'idb';
 import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { deleteItemById, putItem } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
-import { createNextRoutineItem, generateCalendarItemsToHorizon, RruleExhaustedError } from './routineItemHelpers';
+import { createNextRoutineItem, isCalendarRoutineExhausted, RruleExhaustedError } from './routineItemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
 
@@ -235,18 +235,24 @@ async function addCalendarException(db: IDBPDatabase<MyDB>, routine: StoredRouti
 /**
  * Handle next-item generation for calendar routines.
  * Before-due trash: record a skipped exception so the date is not regenerated.
- * All cases: extend the horizon to fill any gaps (e.g. item at the far end of the window).
+ * Disposal never extends the horizon — the initial horizon pass at routine creation (and any
+ * subsequent rrule-edit/split regen) is the sole generator. Tying regen to disposal caused the
+ * matrix-A8 phantom duplicate when a race around the disposal wrote today's regenerated `calendar`
+ * item before the `done` item was visible to the dedupe filter. Horizon rollover over calendar
+ * time is a separate concern handled by the split/rrule-edit paths, not by dispose.
+ * After recording the exception (if any), if the series has no live items left and no future
+ * rrule occurrences, deactivate the routine — covers `COUNT=1` one-shots and otherwise-consumed
+ * series so they don't linger as active rows on the Routines page.
  */
 async function createNextCalendarRoutineItem(db: IDBPDatabase<MyDB>, item: StoredItem, routine: StoredRoutine, disposalKind: 'done' | 'trash'): Promise<void> {
     const { timeStart } = item;
-
-    if (disposalKind === 'trash' && timeStart !== undefined && dayjs().isBefore(dayjs(timeStart))) {
-        const routineWithException = await addCalendarException(db, routine, dayjs(timeStart).format('YYYY-MM-DD'));
-        await generateCalendarItemsToHorizon(db, item.userId, routineWithException);
-        return;
+    const effectiveRoutine =
+        disposalKind === 'trash' && timeStart !== undefined && dayjs().isBefore(dayjs(timeStart))
+            ? await addCalendarException(db, routine, dayjs(timeStart).format('YYYY-MM-DD'))
+            : routine;
+    if (await isCalendarRoutineExhausted(db, item.userId, effectiveRoutine)) {
+        await updateRoutine(db, { ...effectiveRoutine, active: false });
     }
-
-    await generateCalendarItemsToHorizon(db, item.userId, routine);
 }
 
 // ── Generic edit ──────────────────────────────────────────────────────────────
