@@ -1,9 +1,7 @@
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
-import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import type AbstractDAO from '../dataAccess/abstractDAO.js';
-import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
@@ -11,12 +9,12 @@ import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
 import { notifyViaWebPush, vapidPublicKey } from '../lib/webPush.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import type {
-    CalendarIntegrationInterface,
     EntitySnapshot,
     EntityType,
     ItemInterface,
@@ -35,13 +33,6 @@ interface ClientOp {
     opType: OpType;
     queuedAt: string;
     snapshot: (Record<string, unknown> & { userId?: string }) | null;
-}
-
-/** Creates a GoogleCalendarProvider that persists refreshed tokens back to MongoDB. */
-function buildCalendarProvider(integration: CalendarIntegrationInterface, userId: string): GoogleCalendarProvider {
-    return new GoogleCalendarProvider(integration, (accessToken, refreshToken, expiry) =>
-        calendarIntegrationsDAO.updateTokens({ id: integration._id, userId, accessToken, refreshToken, tokenExpiry: expiry }),
-    );
 }
 
 // Single generic helper replacing four near-identical applyXxxOp functions.

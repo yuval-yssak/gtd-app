@@ -57,7 +57,7 @@ export function seriesStartDate(routine: RoutineInterface): string {
 }
 
 /** Type guard for Google API errors which carry a numeric `code` property (e.g. 410 for expired syncTokens). */
-function isGoogleApiError(err: unknown): err is Error & { code: number } {
+export function isGoogleApiError(err: unknown): err is Error & { code: number } {
     return err instanceof Error && 'code' in err && typeof (err as { code: unknown }).code === 'number';
 }
 
