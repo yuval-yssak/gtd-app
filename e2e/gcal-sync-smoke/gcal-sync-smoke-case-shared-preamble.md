@@ -50,7 +50,6 @@ Record the observed `routineExceptions` block verbatim in the result notes. If t
 
 ## Chrome memory hygiene (critical)
 A prior run ballooned Chrome to >10GB. Keep memory bounded:
-- **One case per session.** Don't chain multiple cases in one Claude session — each case in a fresh session with fresh tabs.
 - **No full-page reads on Google Calendar.** Never call `read_page` on the GCal tab — it returns a massive a11y tree. Use `find` with a targeted query instead.
 - **Screenshot only when needed for verification.** Don't screenshot for progress updates.
 - **Close old tabs before opening new ones** — don't accumulate.
@@ -69,11 +68,13 @@ When a routine is created app-side with weekly BYDAY=MO but `createdTs` falls on
 7. Append the result to `e2e/gcal-sync-smoke/session-1-results.md` (create if missing). Entry format:
    ```
    ## <case-id> — <scenario summary>
+   **Run at:** <ISO 8601 local timestamp from `date -Iseconds`>
    **Status:** Pass | Fail | N-A | Timeout
    **Observed:** …
    **Notes:** …
    **Routine title:** e2e-smoke-<case>-<ts> (so cleanup knows what to delete)
    ```
+   Capture the timestamp at the **start** of the case (right after reading the Given/When/Then), via `date -Iseconds` in Bash. Record it verbatim — do not compute or guess the time from context.
 
 ## Known pre-existing state (not created by these tests)
 - A routine called `routine 1` exists (every 3 days at 09:00 for 1h, 6 occurrences) with items on scattered dates. Ignore as noise.

@@ -1,5 +1,15 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import { google } from 'googleapis';
+import rrule from 'rrule';
+
+// `rrule@2.8.1` ships a UMD/CJS bundle as its `main` (no conditional exports), so under Node's
+// ESM loader a named import fails at runtime even though types resolve via `dist/esm/index.d.ts`.
+// Default-import then destructure works across tsx/Vitest/Node via esModuleInterop.
+const { RRule } = rrule;
+
+dayjs.extend(utc);
+
 import { markdownToHtml } from '../lib/markdownHtml.js';
 import type { CalendarIntegrationInterface, RoutineInterface } from '../types/entities.js';
 import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
@@ -26,10 +36,24 @@ export function endDateTime(dateStr: string, timeOfDay: string, durationMinutes:
     return { dateTime: end.format('YYYY-MM-DDTHH:mm:ss'), timeZone };
 }
 
-/** Returns a stable anchor date (YYYY-MM-DD) to use as DTSTART for the event series. */
-function seriesStartDate(routine: RoutineInterface): string {
-    // Use createdTs date so the rrule series origin matches when the routine was defined.
-    return routine.createdTs.slice(0, 10);
+/**
+ * Returns the first rrule-matching date (YYYY-MM-DD) on or after the routine's createdTs.
+ * Google Calendar treats DTSTART as an explicit first occurrence — if it doesn't match the
+ * RRULE's BYDAY/BYMONTHDAY constraints, GCal emits a phantom occurrence on DTSTART in addition
+ * to the recurrence. Snap DTSTART forward to the first real occurrence to avoid that.
+ */
+export function seriesStartDate(routine: RoutineInterface): string {
+    const createdDate = routine.createdTs.slice(0, 10);
+    const dtStartStr = `${createdDate.replace(/-/g, '')}T000000Z`;
+    const rule = RRule.fromString(`DTSTART:${dtStartStr}\nRRULE:${routine.rrule}`);
+    // Search strictly after (createdTs - 1 day) so the first occurrence on or after createdTs
+    // is returned — preserving already-matching dates (e.g. DAILY) and rolling forward to the
+    // next BYDAY/BYMONTHDAY match otherwise.
+    const first = rule.after(dayjs.utc(createdDate).subtract(1, 'day').toDate(), false);
+    if (!first) {
+        throw new Error(`Routine ${routine._id} has an rrule with no occurrences on or after ${createdDate}`);
+    }
+    return first.toISOString().slice(0, 10);
 }
 
 /** Type guard for Google API errors which carry a numeric `code` property (e.g. 410 for expired syncTokens). */

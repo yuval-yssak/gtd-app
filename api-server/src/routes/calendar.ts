@@ -21,6 +21,7 @@ import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
 import { ensureTimeZone } from '../lib/calendarPushback.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
+import { propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
@@ -979,6 +980,37 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     // Propagate notes change to all future calendar items belonging to this routine.
     if (notesUpdate) {
         const itemOps = await propagateRoutineNotesToItems(routineId, notesUpdate.notes || undefined, ctx.userId, ctx.now);
+        ctx.ops.push(...itemOps);
+    }
+
+    // Structural changes from GCal master need to reach existing items — GCal expands only a
+    // near-term instance window when fetching exceptions, so relying on `syncRoutineExceptions`
+    // alone leaves far-future items stuck on the old schedule/title.
+    if (structurallyNewer) {
+        await propagateMasterScheduleChanges(existing, updated, ctx);
+    }
+}
+
+/**
+ * Detects what changed between the pre- and post-update routine snapshots and pushes those
+ * changes to the generated items:
+ *  - rrule / timeOfDay / duration change → delete future items and regenerate on the new schedule
+ *  - title-only change → rename future items in place (preserves IDs and per-instance overrides)
+ */
+async function propagateMasterScheduleChanges(previous: RoutineInterface, next: RoutineInterface, ctx: SyncContext): Promise<void> {
+    const scheduleChanged =
+        previous.rrule !== next.rrule ||
+        previous.calendarItemTemplate?.timeOfDay !== next.calendarItemTemplate?.timeOfDay ||
+        previous.calendarItemTemplate?.duration !== next.calendarItemTemplate?.duration;
+
+    if (scheduleChanged) {
+        const itemOps = await regenerateFutureRoutineItems(next, ctx.userId, ctx.now);
+        ctx.ops.push(...itemOps);
+        return;
+    }
+
+    if (previous.title !== next.title) {
+        const itemOps = await propagateRoutineTitleToItems(next, ctx.userId, ctx.now);
         ctx.ops.push(...itemOps);
     }
 }

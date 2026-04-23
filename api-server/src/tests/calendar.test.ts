@@ -2034,9 +2034,10 @@ describe('calendar push-back — routine instance overrides', () => {
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
     });
 
-    it('cancels the GCal instance when a routine-generated item is completed (done)', async () => {
-        // `done` routes through the same cancellation path as `trash` — completing an instance
-        // should remove it from GCal just like trashing it.
+    it('does NOT cancel the GCal instance when a routine-generated item is completed (done)', async () => {
+        // Matrix A8: completion is a GTD-local concept — the GCal occurrence must remain so other
+        // calendars / attendees still see the event. Cancelling on done would also round-trip a
+        // `deleted` exception back via GCal sync and flip the app-side item from `done` to `trash`.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -2055,8 +2056,7 @@ describe('calendar push-back — routine instance overrides', () => {
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
-        expect(cancelSpy).toHaveBeenCalledOnce();
-        expect(cancelSpy).toHaveBeenCalledWith('recurring-master-1', '2026-04-27', 'primary');
+        expect(cancelSpy).not.toHaveBeenCalled();
     });
 
     it('uses the prior modified exception date when trashing a previously-moved instance', async () => {
@@ -2943,6 +2943,409 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
 
         const item = await itemsDAO.findOne({ calendarEventId: 'recurring-master-6' });
         expect(item).toBeNull();
+    });
+
+    it('propagates GCal master title edit to all future generated items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-title-prop',
+                calendarEventId: 'master-title-prop',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Old name',
+                createdTs: oldTs,
+                updatedTs: oldTs,
+            }),
+        );
+
+        // Three future items on different days — all should get retitled.
+        const makeItem = (suffix: string, daysAhead: number): ItemInterface => ({
+            _id: `item-title-${suffix}`,
+            user: userId,
+            status: 'calendar',
+            title: 'Old name',
+            routineId: 'routine-title-prop',
+            timeStart: dayjs().add(daysAhead, 'day').format('YYYY-MM-DDT09:00:00'),
+            timeEnd: dayjs().add(daysAhead, 'day').format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+        await itemsDAO.insertOne(makeItem('a', 7));
+        await itemsDAO.insertOne(makeItem('b', 14));
+        await itemsDAO.insertOne(makeItem('c', 21));
+
+        // Use a Jerusalem-local 09:00 timeStart with explicit timezone offset so that
+        // `extractLocalTime` round-trips to exactly "09:00" — matching the existing routine's
+        // `calendarItemTemplate.timeOfDay`. Otherwise the inferred schedule would differ and the
+        // update path would regenerate items instead of just propagating the title.
+        const futureDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const gcalStart = dayjs.tz(`${futureDate}T09:00:00`, 'Asia/Jerusalem').format();
+        const gcalEnd = dayjs.tz(`${futureDate}T09:30:00`, 'Asia/Jerusalem').format();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-title-prop',
+                    title: 'New name',
+                    timeStart: gcalStart,
+                    timeEnd: gcalEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-title-prop',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const items = await itemsDAO.findArray({ routineId: 'routine-title-prop', status: 'calendar' });
+        expect(items).toHaveLength(3);
+        for (const item of items) {
+            expect(item.title).toBe('New name');
+            // IDs must be preserved — this is a rename, not a regenerate.
+            expect(['item-title-a', 'item-title-b', 'item-title-c']).toContain(item._id);
+        }
+    });
+
+    it('regenerates future items when GCal master rrule changes (Mon → Tue)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        // Anchor createdTs to a Monday so the rrule's DTSTART lines up with BYDAY=MO.
+        const monday = dayjs().day(1).add(1, 'week').startOf('day');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-rrule-swap',
+                calendarEventId: 'master-rrule-swap',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                createdTs: monday.toISOString(),
+                updatedTs: oldTs,
+            }),
+        );
+
+        const existingItemId = 'item-rrule-existing';
+        await itemsDAO.insertOne({
+            _id: existingItemId,
+            user: userId,
+            status: 'calendar',
+            title: 'Weekly',
+            routineId: 'routine-rrule-swap',
+            timeStart: monday.format('YYYY-MM-DDT09:00:00'),
+            timeEnd: monday.format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        // GCal master edit: recurrence now on Tuesday, start shifts 1 day.
+        const tuesday = monday.add(1, 'day');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-rrule-swap',
+                    title: 'Weekly',
+                    timeStart: tuesday.format('YYYY-MM-DDT09:00:00'),
+                    timeEnd: tuesday.format('YYYY-MM-DDT09:30:00'),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TU'],
+                },
+            ],
+            nextSyncToken: 'tok-rrule-swap',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Old Monday item is trashed; fresh Tuesday items are created.
+        const trashed = await itemsDAO.findOne({ _id: existingItemId });
+        expect(trashed!.status).toBe('trash');
+
+        const liveItems = await itemsDAO.findArray({ routineId: 'routine-rrule-swap', status: 'calendar' });
+        expect(liveItems.length).toBeGreaterThan(0);
+        for (const item of liveItems) {
+            // Tuesday = day 2 of the week.
+            expect(dayjs(item.timeStart).day()).toBe(2);
+        }
+    });
+
+    it('regenerates future items when GCal master duration changes (30 → 60)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const monday = dayjs().day(1).add(1, 'week').startOf('day');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-duration-change',
+                calendarEventId: 'master-duration-change',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Meeting',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                createdTs: monday.toISOString(),
+                updatedTs: oldTs,
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            }),
+        );
+
+        await itemsDAO.insertOne({
+            _id: 'item-duration-existing',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            routineId: 'routine-duration-change',
+            timeStart: monday.format('YYYY-MM-DDT09:00:00'),
+            timeEnd: monday.format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-duration-change',
+                    title: 'Meeting',
+                    timeStart: monday.format('YYYY-MM-DDT09:00:00'),
+                    timeEnd: monday.format('YYYY-MM-DDT10:00:00'),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-duration',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const trashed = await itemsDAO.findOne({ _id: 'item-duration-existing' });
+        expect(trashed!.status).toBe('trash');
+
+        const liveItems = await itemsDAO.findArray({ routineId: 'routine-duration-change', status: 'calendar' });
+        expect(liveItems.length).toBeGreaterThan(0);
+        for (const item of liveItems) {
+            const durationMin = dayjs(item.timeEnd).diff(dayjs(item.timeStart), 'minute');
+            expect(durationMin).toBe(60);
+        }
+    });
+
+    it('regenerates future items when GCal master timeOfDay changes (09:00 → 10:00)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const monday = dayjs().day(1).add(1, 'week').startOf('day');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-time-change',
+                calendarEventId: 'master-time-change',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Meeting',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                createdTs: monday.toISOString(),
+                updatedTs: oldTs,
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            }),
+        );
+
+        await itemsDAO.insertOne({
+            _id: 'item-time-existing',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            routineId: 'routine-time-change',
+            timeStart: monday.format('YYYY-MM-DDT09:00:00'),
+            timeEnd: monday.format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        // Use Jerusalem-local 10:00 with explicit timezone so `extractLocalTime` yields "10:00".
+        const gcalStart = dayjs.tz(`${monday.format('YYYY-MM-DD')}T10:00:00`, 'Asia/Jerusalem').format();
+        const gcalEnd = dayjs.tz(`${monday.format('YYYY-MM-DD')}T10:30:00`, 'Asia/Jerusalem').format();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-time-change',
+                    title: 'Meeting',
+                    timeStart: gcalStart,
+                    timeEnd: gcalEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-time',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const trashed = await itemsDAO.findOne({ _id: 'item-time-existing' });
+        expect(trashed!.status).toBe('trash');
+
+        const liveItems = await itemsDAO.findArray({ routineId: 'routine-time-change', status: 'calendar' });
+        expect(liveItems.length).toBeGreaterThan(0);
+        for (const item of liveItems) {
+            expect(item.timeStart?.slice(11, 16)).toBe('10:00');
+        }
+    });
+
+    it('preserves per-instance title overrides when GCal master title changes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const nextMon = dayjs().day(1).add(1, 'week').startOf('day');
+        const overrideDate = nextMon.format('YYYY-MM-DD');
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-title-override',
+                calendarEventId: 'master-title-override',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Old name',
+                createdTs: oldTs,
+                updatedTs: oldTs,
+                routineExceptions: [{ date: overrideDate, type: 'modified', title: 'Special name' }],
+            }),
+        );
+
+        // One regular future item (to be renamed) + one with a per-instance override (to be preserved).
+        await itemsDAO.insertOne({
+            _id: 'item-regular',
+            user: userId,
+            status: 'calendar',
+            title: 'Old name',
+            routineId: 'routine-title-override',
+            timeStart: nextMon.add(7, 'day').format('YYYY-MM-DDT09:00:00'),
+            timeEnd: nextMon.add(7, 'day').format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+        await itemsDAO.insertOne({
+            _id: 'item-overridden',
+            user: userId,
+            status: 'calendar',
+            title: 'Special name',
+            routineId: 'routine-title-override',
+            timeStart: `${overrideDate}T09:00:00`,
+            timeEnd: `${overrideDate}T09:30:00`,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        // Preserve the routine's 09:00 / 30m schedule so only title changes.
+        const futureDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const gcalStart = dayjs.tz(`${futureDate}T09:00:00`, 'Asia/Jerusalem').format();
+        const gcalEnd = dayjs.tz(`${futureDate}T09:30:00`, 'Asia/Jerusalem').format();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-title-override',
+                    title: 'New name',
+                    timeStart: gcalStart,
+                    timeEnd: gcalEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-override',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const regular = await itemsDAO.findOne({ _id: 'item-regular' });
+        expect(regular!.title).toBe('New name');
+        const overridden = await itemsDAO.findOne({ _id: 'item-overridden' });
+        expect(overridden!.title).toBe('Special name');
+    });
+
+    it('leaves past items untouched when GCal master title changes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-past-items',
+                calendarEventId: 'master-past-items',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Old name',
+                createdTs: oldTs,
+                updatedTs: oldTs,
+            }),
+        );
+
+        // Past item should keep its historical title regardless of master rename.
+        await itemsDAO.insertOne({
+            _id: 'item-past',
+            user: userId,
+            status: 'calendar',
+            title: 'Old name',
+            routineId: 'routine-past-items',
+            timeStart: dayjs().subtract(7, 'day').format('YYYY-MM-DDT09:00:00'),
+            timeEnd: dayjs().subtract(7, 'day').format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+        await itemsDAO.insertOne({
+            _id: 'item-future',
+            user: userId,
+            status: 'calendar',
+            title: 'Old name',
+            routineId: 'routine-past-items',
+            timeStart: dayjs().add(7, 'day').format('YYYY-MM-DDT09:00:00'),
+            timeEnd: dayjs().add(7, 'day').format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        const futureDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const gcalStart = dayjs.tz(`${futureDate}T09:00:00`, 'Asia/Jerusalem').format();
+        const gcalEnd = dayjs.tz(`${futureDate}T09:30:00`, 'Asia/Jerusalem').format();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-past-items',
+                    title: 'New name',
+                    timeStart: gcalStart,
+                    timeEnd: gcalEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-past',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const past = await itemsDAO.findOne({ _id: 'item-past' });
+        expect(past!.title).toBe('Old name');
+        const future = await itemsDAO.findOne({ _id: 'item-future' });
+        expect(future!.title).toBe('New name');
     });
 });
 

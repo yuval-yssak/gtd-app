@@ -307,6 +307,83 @@ describe('generateCalendarItemsToHorizon', () => {
 
         await expect(generateCalendarItemsToHorizon(db, USER_ID, routine)).rejects.toThrow(RruleExhaustedError);
     });
+
+    it('does not recreate a calendar item for a date whose item was marked done (matrix A8)', async () => {
+        // Regression guard: dedupe must match items of ANY status for this routine, not just
+        // status === 'calendar'. Otherwise the disposal-time horizon extension creates a
+        // duplicate item on the same date that was just marked done.
+        const nextMonday = dayjs().startOf('day').day(8);
+        const doneDate = nextMonday.format('YYYY-MM-DD');
+        const routine = buildCalendarRoutine();
+
+        await db.put('items', {
+            _id: 'done-item',
+            userId: USER_ID,
+            status: 'done',
+            title: 'Weekly standup',
+            routineId: 'cal-routine-1',
+            timeStart: `${doneDate}T09:00:00`,
+            timeEnd: `${doneDate}T09:30:00`,
+            createdTs: '2025-01-01T00:00:00.000Z',
+            updatedTs: '2025-01-01T00:00:00.000Z',
+        });
+
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        const onDoneDate = items.filter((i) => (i.timeStart ?? '').startsWith(doneDate));
+        expect(onDoneDate).toHaveLength(1);
+        expect(onDoneDate[0]?.status).toBe('done');
+    });
+
+    it('does not recreate a calendar item for a date whose item was marked trash', async () => {
+        // Same dedupe rule as the done case — the `skipped` exception would also block it on the
+        // trash path, but this covers the dedupe itself independently of the exception list.
+        const nextMonday = dayjs().startOf('day').day(8);
+        const trashDate = nextMonday.format('YYYY-MM-DD');
+        const routine = buildCalendarRoutine();
+
+        await db.put('items', {
+            _id: 'trash-item',
+            userId: USER_ID,
+            status: 'trash',
+            title: 'Weekly standup',
+            routineId: 'cal-routine-1',
+            timeStart: `${trashDate}T09:00:00`,
+            timeEnd: `${trashDate}T09:30:00`,
+            createdTs: '2025-01-01T00:00:00.000Z',
+            updatedTs: '2025-01-01T00:00:00.000Z',
+        });
+
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1');
+        const onTrashDate = items.filter((i) => (i.timeStart ?? '').startsWith(trashDate));
+        expect(onTrashDate).toHaveLength(1);
+        expect(onTrashDate[0]?.status).toBe('trash');
+    });
+
+    it('throws RruleExhaustedError when only done/trash items remain and rrule has no future occurrences', async () => {
+        // Without gating exhaustion on live `calendar`-status items, historical done items would
+        // suppress the exhausted signal and the routine would never be deactivated.
+        const routine = buildCalendarRoutine({
+            rrule: 'FREQ=DAILY;COUNT=1',
+            createdTs: '2020-01-01T00:00:00.000Z',
+        });
+        await db.put('items', {
+            _id: 'historical-done',
+            userId: USER_ID,
+            status: 'done',
+            title: 'Weekly standup',
+            routineId: 'cal-routine-1',
+            timeStart: '2020-01-01T09:00:00',
+            timeEnd: '2020-01-01T09:30:00',
+            createdTs: '2020-01-01T00:00:00.000Z',
+            updatedTs: '2020-01-01T00:00:00.000Z',
+        });
+
+        await expect(generateCalendarItemsToHorizon(db, USER_ID, routine)).rejects.toThrow(RruleExhaustedError);
+    });
 });
 
 // ── deleteAndRegenerateFutureItems ──────────────────────────────────────────

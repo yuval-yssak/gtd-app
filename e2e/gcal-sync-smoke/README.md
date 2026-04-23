@@ -19,6 +19,7 @@ Open a fresh Claude session in `/Users/yuvalyssak/gtd-e2e-ai-driven` and paste:
 ### Session 1 — Basics + Conflicts
 
 #### A. App-originated routine, then app-side change
+- `gcal-sync-smoke-case-A1.md` — Create calendar routine in app, link to GCal
 - `gcal-sync-smoke-case-A2.md` — Modify instance time in app
 - `gcal-sync-smoke-case-A3.md` — Modify instance title/notes in app
 - `gcal-sync-smoke-case-A4.md` — Trash instance in app
@@ -28,7 +29,7 @@ Open a fresh Claude session in `/Users/yuvalyssak/gtd-e2e-ai-driven` and paste:
 - `gcal-sync-smoke-case-A8.md` — Complete instance in app
 - `gcal-sync-smoke-case-A9.md` — Offline edit then reconnect
 
-A1 is already recorded as `Pass-with-anomaly` in the results file (DTSTART anchor bug).
+A1 is the foundational case — run it first in any new session. The known DTSTART anchor bug (GCal renders an extra creation-day occurrence on non-BYDAY weekdays) is expected; mark as `Pass-with-anomaly`.
 
 #### B. App-originated routine, then GCal-side change
 - `gcal-sync-smoke-case-B1.md` — Modify instance time in GCal
@@ -75,6 +76,8 @@ Session 2 still lives as a single composite plan. If it runs long, split per-cas
 All per-case sessions append a result block to:
 
 - `session-1-results.md` (in this folder; git-ignored)
+
+Each block starts with a **Run at:** line (ISO 8601 timestamp from `date -Iseconds`, captured at case start) so re-runs stay ordered and the elapsed time between runs is visible at a glance. See the shared preamble step 7 for the full entry template.
 
 Currently contains A1 (Pass-with-anomaly) and A2 (N-A — superseded now that full editing ships).
 
