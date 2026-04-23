@@ -11,9 +11,9 @@ import { queueSyncOp } from './syncHelpers';
 dayjs.extend(utc);
 
 /**
- * Split a calendar routine at `splitDate`: cap the original with UNTIL,
- * delete its future items from that date, create a new tail routine with the
- * edited properties, and generate items for it.
+ * Split a calendar routine at `splitDate`: cap the original with UNTIL and mark it
+ * inactive, delete its future items from that date, create a new tail routine with
+ * the edited properties, and generate items for it.
  */
 export async function splitRoutine(
     db: IDBPDatabase<MyDB>,
@@ -26,7 +26,7 @@ export async function splitRoutine(
 
     // 1. Cap the original routine's rrule with UNTIL
     const cappedRrule = addUntilToRrule(original.rrule, splitDate);
-    await updateRoutine(db, { ...original, rrule: cappedRrule });
+    await updateRoutine(db, { ...original, rrule: cappedRrule, active: false });
 
     // 2. Delete future items from the original after the split point
     await deleteFutureItemsFromDate(db, userId, original._id, splitDate);
