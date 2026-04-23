@@ -31,7 +31,7 @@ Same rules as Session 1: **no code changes, no mocks, observational only**.
 3. **Load Chrome MCP tools:** `ToolSearch({ query: "claude-in-chrome", max_results: 30 })`.
 4. **Open tabs** via `tabs_context_mcp` then `tabs_create_mcp` for the app and `https://calendar.google.com`.
 5. **Verify login + GCal integration connected.**
-6. **Ask the user for the dedicated test calendar name/ID.** Same calendar should be used as in Session 1 if possible.
+6. **Target calendar:** primary calendar on `yuval.gtd.test@gmail.com` (same as Session 1). No need to ask.
 7. **Check Session 1 report status.** Ask the user: did Session 1 reveal any load-bearing failures that block these cases? If so, flag and pause.
 
 ## Ground rules (same as Session 1)
