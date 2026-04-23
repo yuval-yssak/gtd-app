@@ -786,10 +786,57 @@ async function importCalendarEvents(source: CalendarSource, events: GCalEvent[],
     await Promise.all(eventsToUpsert.map((event) => upsertCalendarItem(event, source, ctx)));
 }
 
+const normalizeTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * Pick the most likely parent routine for a newly-imported GCal recurring master that looks like
+ * a "this and following" split tail. Google exposes no lineage signal linking the new master to
+ * the original, so we stack heuristics: same sync config, tight 0–1 day gap between the
+ * original's UNTIL and the tail's first occurrence, and an exact normalized title match.
+ * Ties broken by smallest absolute gap, then by _id for determinism.
+ *
+ * We deliberately do NOT compare BYDAY: the whole point of "this and following" is that the user
+ * changed the schedule (often the weekday), so a MO→TU split would be the expected pattern and
+ * any disjoint-weekday veto would false-negative exactly the real splits we need to detect.
+ *
+ * Exported for unit testing.
+ */
+export function pickSplitParent(args: {
+    tail: { title: string; rrule: string; calendarSyncConfigId: string | undefined; tailStart: string };
+    candidates: RoutineInterface[];
+}): RoutineInterface | null {
+    const tailTitleNorm = normalizeTitle(args.tail.title);
+    const tailStartDay = dayjs(args.tail.tailStart).startOf('day');
+
+    const passing = args.candidates.flatMap((candidate) => {
+        if (candidate.calendarSyncConfigId !== args.tail.calendarSyncConfigId) {
+            return [];
+        }
+        const until = extractUntilFromRrule(candidate.rrule);
+        if (!until) {
+            return [];
+        }
+        const gapDays = tailStartDay.diff(dayjs(until).startOf('day'), 'day');
+        if (gapDays < 0 || gapDays > 1) {
+            return [];
+        }
+        if (normalizeTitle(candidate.title) !== tailTitleNorm) {
+            return [];
+        }
+        return [{ candidate, gapAbsMs: Math.abs(dayjs(args.tail.tailStart).diff(dayjs(until))) }];
+    });
+
+    if (!hasAtLeastOne(passing)) {
+        return null;
+    }
+    passing.sort((a, b) => a.gapAbsMs - b.gapAbsMs || a.candidate._id.localeCompare(b.candidate._id));
+    return passing[0].candidate;
+}
+
 /**
  * Detect GCal series splits: when "this and all following" is used in GCal, the original series
  * gains UNTIL and a new master is created. Link the new routine to the original via splitFromRoutineId
- * using a timing overlap heuristic (new series starts within 0–2 days after original's UNTIL).
+ * by running pickSplitParent against existing capped candidates.
  */
 async function detectAndLinkSplits(
     routinesBeforeImport: RoutineInterface[],
@@ -803,7 +850,6 @@ async function detectAndLinkSplits(
         return;
     }
 
-    // Existing routines that now have UNTIL are potential split parents
     const parentCandidates = routinesAfterImport.filter((r) => existingIds.has(r._id) && r.rrule.includes('UNTIL='));
 
     for (const tail of newRoutines) {
@@ -811,32 +857,22 @@ async function detectAndLinkSplits(
             continue;
         }
 
-        // Use the GCal event's start time as the tail's first occurrence
         const event = masterEvents.find((e) => e.id === tail.calendarEventId);
         if (!event) {
             continue;
         }
 
-        const tailStart = dayjs(event.timeStart).startOf('day');
-
-        const parent = parentCandidates.find((candidate) => {
-            if (candidate.calendarSyncConfigId !== tail.calendarSyncConfigId) {
-                return false;
-            }
-            const untilDate = extractUntilFromRrule(candidate.rrule);
-            if (!untilDate) {
-                return false;
-            }
-            const untilDay = dayjs(untilDate).startOf('day');
-            const gapDays = tailStart.diff(untilDay, 'day');
-            return gapDays >= 0 && gapDays <= 2;
+        const parent = pickSplitParent({
+            tail: { title: tail.title, rrule: tail.rrule, calendarSyncConfigId: tail.calendarSyncConfigId, tailStart: event.timeStart },
+            candidates: parentCandidates,
         });
-
-        if (parent) {
-            const linked: RoutineInterface = { ...tail, splitFromRoutineId: parent._id, updatedTs: ctx.now };
-            await routinesDAO.replaceById(tail._id, linked);
-            ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: tail._id, snapshot: linked, opType: 'update', now: ctx.now }));
+        if (!parent) {
+            continue;
         }
+
+        const linked: RoutineInterface = { ...tail, splitFromRoutineId: parent._id, updatedTs: ctx.now };
+        await routinesDAO.replaceById(tail._id, linked);
+        ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: tail._id, snapshot: linked, opType: 'update', now: ctx.now }));
     }
 }
 
@@ -937,6 +973,7 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
 
     const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
     const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+    const newlyGainsUntil = structurallyNewer && !existing.rrule.includes('UNTIL=') && rrule.includes('UNTIL=');
 
     // Re-fetch: routineExceptions may have been written by syncRoutineExceptions earlier in the same
     // sync cycle, and the `existing` snapshot we were passed predates that write. Using the stale
@@ -951,6 +988,10 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
                   rrule,
                   calendarSyncConfigId: source.config._id,
                   calendarItemTemplate: { timeOfDay, duration },
+                  // Mirror client-side splitRoutine: capping the parent pauses it so the UI
+                  // reflects that the segment is historical. Without this, a capped-in-the-past
+                  // routine shows as "Active" even though it no longer generates instances.
+                  ...(newlyGainsUntil ? { active: false } : {}),
               }
             : {}),
         ...(notesUpdate
@@ -967,7 +1008,7 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
 
     // When GCal adds UNTIL (series split via "this and all following"), trash items past the UNTIL date.
-    if (structurallyNewer && !existing.rrule.includes('UNTIL=') && rrule.includes('UNTIL=')) {
+    if (newlyGainsUntil) {
         const untilDate = extractUntilFromRrule(rrule);
         if (untilDate) {
             await updateItemsAndRecordOps(ctx, {

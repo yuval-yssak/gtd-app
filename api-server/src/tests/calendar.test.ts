@@ -10,7 +10,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { gcalCreationInFlight, maybePushToGCal } from '../lib/calendarPushback.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { calendarRoutes } from '../routes/calendar.js';
+import { calendarRoutes, pickSplitParent } from '../routes/calendar.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
@@ -3587,5 +3587,418 @@ describe('notes/description sync — outbound push-back', () => {
         expect(updated!.calendarEventId).toBe('new-gcal-notes-id');
         // lastSyncedNotes stores HTML (the value sent to GCal), not the raw Markdown.
         expect(updated!.lastSyncedNotes).toBe('<p>New item notes</p>\n');
+    });
+});
+
+// ─── pickSplitParent — unit tests ─────────────────────────────────────────
+
+describe('pickSplitParent', () => {
+    function makeCandidate(overrides: Partial<RoutineInterface>): RoutineInterface {
+        const now = dayjs().toISOString();
+        return {
+            _id: 'cand-1',
+            user: 'u',
+            title: 'Standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z',
+            template: {},
+            active: false,
+            createdTs: now,
+            updatedTs: now,
+            calendarSyncConfigId: 'sync-config-1',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            ...overrides,
+        };
+    }
+
+    it('returns the matching candidate on the happy path', () => {
+        const candidate = makeCandidate({});
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent?._id).toBe('cand-1');
+    });
+
+    it('returns null when no candidates qualify', () => {
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('E8 regression: rejects when title differs even if gap is within window', () => {
+        const candidate = makeCandidate({ title: 'Standup' });
+        const parent = pickSplitParent({
+            tail: { title: 'unrelated-E8-foo', rrule: 'FREQ=WEEKLY;BYDAY=WE', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-06T11:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('E7 regression: picks the title-matching chain even when another chain has a closer gap', () => {
+        // Wrong chain — closer gap but different title.
+        const wrong = makeCandidate({ _id: 'wrong', title: 'unrelated chain', rrule: 'FREQ=WEEKLY;BYDAY=TU;UNTIL=20260505T055959Z' });
+        // Right chain — same title; UNTIL placed just before the tail start (the typical GCal pattern).
+        const right = makeCandidate({ _id: 'right', title: 'E7 original', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260505T055959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'E7 original', rrule: 'FREQ=WEEKLY;BYDAY=TU,TH', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [wrong, right],
+        });
+        expect(parent?._id).toBe('right');
+    });
+
+    it('rejects when gap exceeds 1 day', () => {
+        const candidate = makeCandidate({ rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260501T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('rejects when tail start precedes UNTIL (negative gap)', () => {
+        const candidate = makeCandidate({ rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260510T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('rejects when calendarSyncConfigId differs', () => {
+        const candidate = makeCandidate({ calendarSyncConfigId: 'sync-config-other' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('accepts disjoint BYDAY (real splits usually change weekday, e.g. MO → TU)', () => {
+        const candidate = makeCandidate({ rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=TU', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent?._id).toBe('cand-1');
+    });
+
+    it('picks the smallest-gap candidate among multiple passing', () => {
+        const farther = makeCandidate({ _id: 'far', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T000000Z' });
+        const closer = makeCandidate({ _id: 'close', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [farther, closer],
+        });
+        expect(parent?._id).toBe('close');
+    });
+
+    it('tie-breaks on _id when gaps are equal', () => {
+        const a = makeCandidate({ _id: 'aaa', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z' });
+        const b = makeCandidate({ _id: 'bbb', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [b, a],
+        });
+        expect(parent?._id).toBe('aaa');
+    });
+
+    it('normalizes whitespace and case when comparing titles', () => {
+        const candidate = makeCandidate({ title: 'Standup' });
+        const parent = pickSplitParent({
+            tail: { title: '  standup ', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent?._id).toBe('cand-1');
+    });
+});
+
+// ─── POST /calendar/integrations/:id/sync — split detection ──────────────
+
+describe('POST /calendar/integrations/:id/sync — split detection', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('links a new master to its split parent and pauses the parent (happy path)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'parent-routine',
+                calendarEventId: 'master-parent',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly sync',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                updatedTs: oldTs,
+            }),
+        );
+
+        const parentStart = dayjs().add(1, 'day').toISOString();
+        const parentEnd = dayjs().add(1, 'day').add(30, 'minute').toISOString();
+        const tailStart = dayjs().add(8, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const tailEnd = dayjs(tailStart).add(30, 'minute').toISOString();
+        const untilCompact = dayjs(tailStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-parent',
+                    title: 'Weekly sync',
+                    timeStart: parentStart,
+                    timeEnd: parentEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+                },
+                {
+                    id: 'master-tail',
+                    title: 'Weekly sync',
+                    timeStart: tailStart,
+                    timeEnd: tailEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TU'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const tail = await routinesDAO.findOne({ calendarEventId: 'master-tail' });
+        expect(tail).not.toBeNull();
+        expect(tail!.splitFromRoutineId).toBe('parent-routine');
+
+        const parent = await routinesDAO.findByOwnerAndId('parent-routine', userId);
+        expect(parent!.active).toBe(false);
+        expect(parent!.rrule).toContain('UNTIL=');
+    });
+
+    it('E8 regression: does not link an unrelated master whose start happens to fall within the gap window', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Pre-seed a capped parent routine (already paused by a prior sync).
+        const untilIso = dayjs().add(7, 'day').toISOString();
+        const untilCompact = dayjs(untilIso).utc().format('YYYYMMDD[T]HHmmss[Z]');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'capped-unrelated',
+                calendarEventId: 'master-capped',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly sync',
+                rrule: `FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`,
+                active: false,
+                updatedTs: dayjs().toISOString(),
+            }),
+        );
+
+        // New, unrelated master: different title, different BYDAY, but start falls inside the 0–1 day window after UNTIL.
+        const unrelatedStart = dayjs(untilIso).add(1, 'hour').toISOString();
+        const unrelatedEnd = dayjs(unrelatedStart).add(1, 'hour').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-unrelated',
+                    title: 'Unrelated event',
+                    timeStart: unrelatedStart,
+                    timeEnd: unrelatedEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=WE'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const unrelated = await routinesDAO.findOne({ calendarEventId: 'master-unrelated' });
+        expect(unrelated).not.toBeNull();
+        expect(unrelated!.splitFromRoutineId).toBeUndefined();
+    });
+
+    it('flips active to false when GCal newly adds UNTIL to an existing routine', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-gets-capped',
+                calendarEventId: 'master-gets-capped',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly sync',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                active: true,
+                updatedTs: oldTs,
+            }),
+        );
+
+        // Future calendar item that should be trashed by the UNTIL cap.
+        const futureItemStart = dayjs().add(30, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'future-item',
+            user: userId,
+            status: 'calendar',
+            title: 'Weekly sync',
+            timeStart: futureItemStart,
+            timeEnd: dayjs(futureItemStart).add(30, 'minute').toISOString(),
+            routineId: 'routine-gets-capped',
+            calendarEventId: 'master-gets-capped',
+            calendarIntegrationId: 'int-1',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        const untilIso = dayjs().add(7, 'day').toISOString();
+        const untilCompact = dayjs(untilIso).utc().format('YYYYMMDD[T]HHmmss[Z]');
+        const eventStart = dayjs().add(1, 'day').toISOString();
+        const eventEnd = dayjs(eventStart).add(30, 'minute').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-gets-capped',
+                    title: 'Weekly sync',
+                    timeStart: eventStart,
+                    timeEnd: eventEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findByOwnerAndId('routine-gets-capped', userId);
+        expect(routine!.active).toBe(false);
+        expect(routine!.rrule).toContain('UNTIL=');
+
+        // Future item past UNTIL should be trashed.
+        const item = await itemsDAO.findByOwnerAndId('future-item', userId);
+        expect(item!.status).toBe('trash');
+
+        // The update operation snapshot should carry active: false so other devices sync it.
+        const ops = await operationsDAO.findArray({ entityId: 'routine-gets-capped', entityType: 'routine' });
+        const routineUpdateOp = ops.find((op: OperationInterface) => op.opType === 'update');
+        expect(routineUpdateOp).toBeDefined();
+        expect((routineUpdateOp!.snapshot as RoutineInterface).active).toBe(false);
+    });
+
+    it('does not re-flip active on repeat sync of an already-capped, already-inactive parent', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const untilIso = dayjs().add(7, 'day').toISOString();
+        const untilCompact = dayjs(untilIso).utc().format('YYYYMMDD[T]HHmmss[Z]');
+        const oldTs = dayjs().subtract(2, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'already-capped',
+                calendarEventId: 'master-already-capped',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly sync',
+                rrule: `FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`,
+                active: false,
+                updatedTs: oldTs,
+            }),
+        );
+
+        const eventStart = dayjs().add(1, 'day').toISOString();
+        const eventEnd = dayjs(eventStart).add(30, 'minute').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-already-capped',
+                    title: 'Weekly sync',
+                    timeStart: eventStart,
+                    timeEnd: eventEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findByOwnerAndId('already-capped', userId);
+        expect(routine!.active).toBe(false);
+    });
+
+    it('does not treat a freshly-imported tail as a parent for another freshly-imported tail in the same cycle', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // No pre-existing routine: both events are new this cycle. One carries UNTIL (resembles a
+        // capped series) and the other's start falls within the 0–1 day gap — but since neither
+        // existed before the import, detectAndLinkSplits must leave both unlinked.
+        const tailA_Start = dayjs().add(10, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const tailA_End = dayjs(tailA_Start).add(30, 'minute').toISOString();
+        const untilCompact = dayjs(tailA_Start).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+        const tailB_Start = dayjs(tailA_Start).add(1, 'hour').toISOString();
+        const tailB_End = dayjs(tailB_Start).add(30, 'minute').toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-new-capped',
+                    title: 'Weekly sync',
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+                },
+                {
+                    id: 'master-new-tailA',
+                    title: 'Weekly sync',
+                    timeStart: tailA_Start,
+                    timeEnd: tailA_End,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TU'],
+                },
+                {
+                    id: 'master-new-tailB',
+                    title: 'Weekly sync',
+                    timeStart: tailB_Start,
+                    timeEnd: tailB_End,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=WE'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const tailA = await routinesDAO.findOne({ calendarEventId: 'master-new-tailA' });
+        const tailB = await routinesDAO.findOne({ calendarEventId: 'master-new-tailB' });
+        expect(tailA!.splitFromRoutineId).toBeUndefined();
+        expect(tailB!.splitFromRoutineId).toBeUndefined();
     });
 });

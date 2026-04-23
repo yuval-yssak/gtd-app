@@ -132,10 +132,33 @@ describe('splitRoutine', () => {
         expect(tail.title).toBe('Updated standup');
         expect(tail.splitFromRoutineId).toBe('routine-1');
         expect(tail.calendarItemTemplate?.timeOfDay).toBe('10:00');
+        expect(tail.active).toBe(true);
 
         // Tail should be in IDB
         const stored = await db.get('routines', tail._id);
         expect(stored?.title).toBe('Updated standup');
+    });
+
+    it('marks the original routine inactive after split', async () => {
+        const original = buildRoutine();
+        await db.put('routines', original);
+
+        await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                routineType: 'calendar',
+                title: 'Updated standup',
+                rrule: 'FREQ=DAILY;INTERVAL=1',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '10:00', duration: 30 },
+            },
+            '2025-06-01',
+        );
+
+        const updatedOriginal = await db.get('routines', 'routine-1');
+        expect(updatedOriginal?.active).toBe(false);
     });
 
     it('does not carry calendarEventId from the original to the tail', async () => {
@@ -240,8 +263,19 @@ describe('splitRoutine', () => {
         const itemOps = ops.filter((op) => op.entityType === 'item');
 
         // 1 update for the capped original + 1 create for the tail
-        expect(routineOps.filter((op) => op.opType === 'update')).toHaveLength(1);
-        expect(routineOps.filter((op) => op.opType === 'create')).toHaveLength(1);
+        const routineUpdateOps = routineOps.filter((op) => op.opType === 'update');
+        const routineCreateOps = routineOps.filter((op) => op.opType === 'create');
+        expect(routineUpdateOps).toHaveLength(1);
+        expect(routineCreateOps).toHaveLength(1);
+
+        // Capped original's update snapshot carries active: false
+        const cappedSnapshot = routineUpdateOps[0]?.snapshot as StoredRoutine | null;
+        expect(cappedSnapshot?.active).toBe(false);
+        expect(cappedSnapshot?.rrule).toContain('UNTIL=');
+
+        // Tail create snapshot stays active: true
+        const tailSnapshot = routineCreateOps[0]?.snapshot as StoredRoutine | null;
+        expect(tailSnapshot?.active).toBe(true);
 
         // At least 1 delete op (for the deleted future item)
         expect(itemOps.filter((op) => op.opType === 'delete').length).toBeGreaterThanOrEqual(1);
