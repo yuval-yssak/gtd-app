@@ -32,6 +32,7 @@ import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { FrequencyPicker } from './FrequencyPicker';
 import styles from './RoutineDialog.module.css';
+import { isCalendarScheduleChanged } from './routineEditDecision';
 
 interface Props {
     db: IDBPDatabase<MyDB>;
@@ -66,13 +67,29 @@ interface FormState {
     endsCount: string; // positive integer string — used when endsMode === 'afterN'
 }
 
+/**
+ * Parse the compact RFC 5545 UTC datetime (YYYYMMDDTHHmmssZ) that UNTIL uses.
+ * dayjs's default parser treats this as Invalid Date without an explicit format mask,
+ * which corrupted the Ends mode on edit and silently triggered a split.
+ */
+function parseRruleUntil(raw: string): string {
+    const match = raw.match(/^(\d{4})(\d{2})(\d{2})T\d{6}Z$/);
+    if (!match) {
+        return '';
+    }
+    return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
 /** Parse UNTIL/COUNT from an existing rrule string into EndsMode fields. */
 function parseEndsFromRrule(rruleStr: string): { endsMode: EndsMode; endsDate: string; endsCount: string } {
     const untilMatch = rruleStr.match(/UNTIL=([^;]+)/);
     const countMatch = rruleStr.match(/COUNT=(\d+)/);
     // noUncheckedIndexedAccess: capture group [1] is string | undefined; fall back to '' to satisfy types
     if (untilMatch) {
-        return { endsMode: 'onDate', endsDate: dayjs(untilMatch[1] ?? '').format('YYYY-MM-DD'), endsCount: '' };
+        const parsed = parseRruleUntil(untilMatch[1] ?? '');
+        // Fall back to dayjs for ISO-formatted UNTIL values (defensive); compact form is handled above.
+        const endsDate = parsed || dayjs(untilMatch[1] ?? '').format('YYYY-MM-DD');
+        return { endsMode: 'onDate', endsDate, endsCount: '' };
     }
     if (countMatch) {
         return { endsMode: 'afterN', endsDate: '', endsCount: countMatch[1] ?? '' };
@@ -177,12 +194,18 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
-                // Split only when a calendar routine already has past items — those should keep
-                // their original title/notes/schedule. Without past items, editing in place is
-                // the correct behavior: users expect "rename this routine" to rename the one
-                // routine, not fork it.
+                // Split only when a calendar routine's schedule changed AND it has past items —
+                // past items should keep their original schedule. Title/notes-only edits always
+                // stay in-place; forking a routine just because the user renamed it would be
+                // surprising and leave orphaned chains.
                 const isCalendarEdit = form.routineType === 'calendar';
-                const hasPastItems = isCalendarEdit ? await routineHasPastItems(db, userId, routine._id) : false;
+                const scheduleChanged = isCalendarScheduleChanged(routine, {
+                    routineType: form.routineType,
+                    rrule: finalRrule,
+                    timeOfDay: calendarItemTemplate?.timeOfDay,
+                    duration: calendarItemTemplate?.duration,
+                });
+                const hasPastItems = scheduleChanged ? await routineHasPastItems(db, userId, routine._id) : false;
                 const splitDate = hasPastItems ? computeSplitDate(routine.rrule, routine.createdTs) : null;
 
                 if (splitDate) {
@@ -214,10 +237,6 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     await updateRoutine(db, updatedRoutine);
 
                     if (isCalendarEdit && routine.routineType === 'calendar') {
-                        const scheduleChanged =
-                            routine.rrule !== finalRrule ||
-                            routine.calendarItemTemplate?.timeOfDay !== calendarItemTemplate?.timeOfDay ||
-                            routine.calendarItemTemplate?.duration !== calendarItemTemplate?.duration;
                         if (scheduleChanged) {
                             await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
                         } else {
