@@ -957,6 +957,13 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
 
     await routinesDAO.insertOne(routine);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: routine, opType: 'create', now: ctx.now }));
+
+    // Generate the tail's calendar items here. updateRoutineFromGCal regenerates items on schedule
+    // change (line ~1048) but a brand-new routine — most importantly the tail of a "this and following"
+    // split — never goes through that path. Without this, the tail arrives via sync as a routine with
+    // zero items, while the parent's future items have been (correctly) trashed past UNTIL.
+    const itemOps = await regenerateFutureRoutineItems(routine, ctx.userId, ctx.now);
+    ctx.ops.push(...itemOps);
 }
 
 async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
