@@ -5,6 +5,7 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
+import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -53,6 +54,14 @@ function CalendarPage() {
 
     const isPast = (dateKey: string) => dateKey !== 'No date' && dayjs(dateKey).isBefore(dayjs(), 'day');
 
+    const openEditorFor = (item: StoredItem) => {
+        if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
+            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
+        } else {
+            setEditingItem(item);
+        }
+    };
+
     if (calendarItems.length === 0) {
         return (
             <Box>
@@ -87,46 +96,37 @@ function CalendarPage() {
                                     className={styles.item}
                                     secondaryAction={
                                         <Tooltip title="Edit">
-                                            <IconButton
-                                                size="small"
-                                                onClick={() => {
-                                                    // Read at click time — mode changes require a settings navigation
-                                                    // which remounts this component, so no reactive state needed.
-                                                    if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
-                                                        void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
-                                                    } else {
-                                                        setEditingItem(item);
-                                                    }
-                                                }}
-                                            >
+                                            <IconButton size="small" onClick={() => openEditorFor(item)} data-testid="calendarItemEditButton">
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
                                     }
                                 >
-                                    <Box className={styles.timeCol}>
-                                        {item.timeStart && (
-                                            <Typography variant="caption" color="text.secondary">
-                                                {dayjs(item.timeStart).format('h:mm a')}
-                                                {item.timeEnd && ` – ${dayjs(item.timeEnd).format('h:mm a')}`}
-                                            </Typography>
-                                        )}
-                                    </Box>
-                                    {/* pr ensures text doesn't overlap the edit button in secondaryAction */}
-                                    <ListItemText
-                                        primary={
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                <span>{item.title}</span>
-                                                {item.routineId && (
-                                                    <RoutineIndicator
-                                                        routineId={item.routineId}
-                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                    />
-                                                )}
-                                            </Box>
-                                        }
-                                        className={styles.listItemText}
-                                    />
+                                    <ListItemButton onClick={() => openEditorFor(item)} className={styles.rowButton} data-testid="calendarItemRow">
+                                        <Box className={styles.timeCol}>
+                                            {item.timeStart && (
+                                                <Typography variant="caption" color="text.secondary">
+                                                    {dayjs(item.timeStart).format('h:mm a')}
+                                                    {item.timeEnd && ` – ${dayjs(item.timeEnd).format('h:mm a')}`}
+                                                </Typography>
+                                            )}
+                                        </Box>
+                                        {/* pr ensures text doesn't overlap the edit button in secondaryAction */}
+                                        <ListItemText
+                                            primary={
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                    <span>{item.title}</span>
+                                                    {item.routineId && (
+                                                        <RoutineIndicator
+                                                            routineId={item.routineId}
+                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                        />
+                                                    )}
+                                                </Box>
+                                            }
+                                            className={styles.listItemText}
+                                        />
+                                    </ListItemButton>
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>

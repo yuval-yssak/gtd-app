@@ -24,9 +24,19 @@ export async function splitRoutine(
 ): Promise<StoredRoutine> {
     const now = dayjs().toISOString();
 
-    // 1. Cap the original routine's rrule with UNTIL
+    // 1. Cap the original routine's rrule with UNTIL. Prune exceptions that reference dates
+    //    the capped routine no longer generates — otherwise they're orphaned references to
+    //    never-materialized instances and drift through sync forever.
     const cappedRrule = addUntilToRrule(original.rrule, splitDate);
-    await updateRoutine(db, { ...original, rrule: cappedRrule, active: false });
+    const { routineExceptions: existingExceptions, ...rest } = original;
+    const keptExceptions = (existingExceptions ?? []).filter((exc) => exc.date < splitDate);
+    const cappedOriginal: StoredRoutine = {
+        ...rest,
+        rrule: cappedRrule,
+        active: false,
+        ...(keptExceptions.length > 0 ? { routineExceptions: keptExceptions } : {}),
+    };
+    await updateRoutine(db, cappedOriginal);
 
     // 2. Delete future items from the original after the split point
     await deleteFutureItemsFromDate(db, userId, original._id, splitDate);

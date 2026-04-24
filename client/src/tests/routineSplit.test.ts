@@ -239,6 +239,59 @@ describe('splitRoutine', () => {
         expect(dayjs(tail.createdTs).format('YYYY-MM-DD')).toBe('2025-06-01');
     });
 
+    it('prunes routineExceptions past the split date on the capped original', async () => {
+        const original = buildRoutine({
+            routineExceptions: [
+                { date: '2025-05-10', type: 'modified', newTimeStart: '2025-05-10T11:00:00Z', newTimeEnd: '2025-05-10T12:00:00Z' },
+                { date: '2025-06-15', type: 'modified', newTimeStart: '2025-06-15T11:00:00Z', newTimeEnd: '2025-06-15T12:00:00Z' },
+                { date: '2025-07-01', type: 'skipped' },
+            ],
+        });
+        await db.put('routines', original);
+
+        await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                routineType: 'calendar',
+                title: 'Updated standup',
+                rrule: 'FREQ=DAILY;INTERVAL=1',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            },
+            '2025-06-01',
+        );
+
+        const capped = await db.get('routines', 'routine-1');
+        // Only the May 10 exception falls before the June 1 split date; the others are orphaned.
+        expect(capped?.routineExceptions?.map((e) => e.date)).toEqual(['2025-05-10']);
+    });
+
+    it('drops the routineExceptions field entirely when all exceptions were past UNTIL', async () => {
+        const original = buildRoutine({
+            routineExceptions: [{ date: '2025-07-15', type: 'skipped' }],
+        });
+        await db.put('routines', original);
+
+        await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                routineType: 'calendar',
+                title: 'Updated standup',
+                rrule: 'FREQ=DAILY;INTERVAL=1',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            },
+            '2025-06-01',
+        );
+
+        const capped = await db.get('routines', 'routine-1');
+        expect(capped?.routineExceptions).toBeUndefined();
+    });
+
     it('queues sync ops for the capped original, deleted items, new tail, and generated items', async () => {
         const original = buildRoutine();
         await db.put('routines', original);
