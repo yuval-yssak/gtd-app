@@ -3782,6 +3782,78 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         expect(parent!.rrule).toContain('UNTIL=');
     });
 
+    // Regression for the GCal "this and following + time shift" bug: the tail routine arrived
+    // via sync but its calendar items were never generated, because createRoutineFromGCal only
+    // stored the routine. Symptom: parent's future items got trashed past UNTIL (correct), tail
+    // had zero items, so the user saw "two routines, same name, items missing for the tail".
+    it('generates calendar items for the new tail routine when GCal splits with a time shift', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'parent-shift',
+                calendarEventId: 'master-parent-shift',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Daily standup',
+                rrule: 'FREQ=DAILY',
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                updatedTs: oldTs,
+            }),
+        );
+
+        // Parent retains its original 09:00 timing; tail picks up the same series at 11:00 the next day.
+        const parentStart = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const parentEnd = dayjs(parentStart).add(30, 'minute').toISOString();
+        const tailStart = dayjs().add(2, 'day').hour(11).minute(0).second(0).millisecond(0).toISOString();
+        const tailEnd = dayjs(tailStart).add(30, 'minute').toISOString();
+        const untilCompact = dayjs(tailStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-parent-shift',
+                    title: 'Daily standup',
+                    timeStart: parentStart,
+                    timeEnd: parentEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=DAILY;UNTIL=${untilCompact}`],
+                },
+                {
+                    id: 'master-tail-shift',
+                    title: 'Daily standup',
+                    timeStart: tailStart,
+                    timeEnd: tailEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const tail = await routinesDAO.findOne({ calendarEventId: 'master-tail-shift' });
+        expect(tail).not.toBeNull();
+        expect(tail!.splitFromRoutineId).toBe('parent-shift');
+        expect(tail!.calendarItemTemplate?.timeOfDay).toBe('11:00');
+
+        // The tail must have its future calendar items materialised — otherwise the user sees a
+        // routine with no items after the split. All items must use the new 11:00 timeOfDay.
+        const tailItems = await itemsDAO.findArray({ user: userId, routineId: tail!._id, status: 'calendar' });
+        expect(tailItems.length).toBeGreaterThan(0);
+        for (const item of tailItems) {
+            expect(item.timeStart).toBeDefined();
+            expect(dayjs(item.timeStart).format('HH:mm')).toBe('11:00');
+        }
+    });
+
     it('E8 regression: does not link an unrelated master whose start happens to fall within the gap window', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

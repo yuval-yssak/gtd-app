@@ -106,20 +106,21 @@ File: `e2e/gcal-sync-smoke/session-2-E-results.md`. Create on first case if miss
 
 ---
 
-### E2 — GCal-side split
+### E2 — GCal-side split with time shift
 
-**Reuse from:** none. Need a GCal-origin routine, OR reuse an existing app-origin routine (matrix says C1-based but A1-based works since the sync direction is what's being tested).
+**Reuse from:** none. Need a fresh routine so the pre-split item count is deterministic (a known regression was masked when E2 only checked routine-level state).
 
-**Given:** existing routine `R` linked to GCal with future items generated.
+**Given:** new routine `R` (weekly-Mon, 09:00, 30min) linked to GCal with future items generated.
 
 **When:** in GCal, open one occurrence of the master, click the event, choose "Edit event" → scope dialog → "This and following events" → change time (e.g. 09:00 → 10:30) → Save.
 
 **Then:**
 - GCal: original master now has UNTIL; new master event for the tail with the new time.
 - App: after sync (≤30s), `R.rrule` has UNTIL; new routine `R'` exists with `splitFromRoutineId = R._id` and the new time.
+- **App Calendar: the tail's future dates show items at the new time (10:30), not 09:00 and not missing.** This is the regression lane — a tail routine that arrives with zero items means the user has lost their schedule for all post-split dates.
 
 **Setup steps:**
-1. Pick a routine: simplest is to reuse E1's `R` if E1 passed and left `R` still active. Otherwise create a fresh one (steps like E1.1–E1.6 with title `e2e-smoke-E2-<ts>`). Wait 10s for GCal event creation.
+1. Create a fresh routine titled `e2e-smoke-E2-<ts>` (E1 steps 1–6). Wait 10s for GCal event creation.
 2. Navigate GCal tab to `https://calendar.google.com/calendar/u/2/r/week/2026/4/26`.
 3. Take one screenshot. Locate the `e2e-smoke-E2-<ts>` event on Mon Apr 27.
 4. **Do not use `read_page` on GCal.** Use `find` with query "e2e-smoke-E2 event tile on Monday Apr 27" → click to open the event popover.
@@ -128,11 +129,17 @@ File: `e2e/gcal-sync-smoke/session-2-E-results.md`. Create on first case if miss
 7. `find` "Save button in GCal event editor" → click.
 8. GCal will show a scope dialog: `find` "This and following events option" → click. `find` "OK or Save in scope dialog" → click.
 
-**Verify (2 screenshots after waiting 30s):**
+**Verify (3 screenshots after waiting 30s, plus one mongosh query):**
 9. Screenshot GCal week → expect old event series (before today) and a new series (after today) at 10:30.
 10. Screenshot app `/routines` → expect two routines: one with the old rule capped, one with new rule (10:30).
+11. Screenshot app `/calendar` for the week covering the split boundary → expect the post-split Mondays to show `e2e-smoke-E2-*` items at **10:30**. If any post-split Monday is blank, the regression is back.
+12. mongosh one-shot (shape per preamble) — count items linked to the tail routine:
+    ```
+    db.items.countDocuments({ routineId: <tail._id>, status: 'calendar', timeStart: { $gte: <today-ISO> } })
+    ```
+    Expect `>= 3`. If `0`, the tail arrived without items → fail with "tail routine has zero items after split with time shift" (cross-ref: server-side `createRoutineFromGCal` regression).
 
-**Record:** did the app detect the split? If only one routine exists and the original was mutated in-place, note that as the split-detection heuristic fired or failed.
+**Record:** two explicit lines in the result block: `tail-routine-found: yes|no`, `tail-items-count: <N>`. This makes the regression machine-checkable in future runs.
 
 ---
 
