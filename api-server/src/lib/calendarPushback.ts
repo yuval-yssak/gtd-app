@@ -77,8 +77,9 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
     }
     // Routine-generated calendar items carry routineId but no calendarEventId — their GCal
     // presence is the routine's master recurring event. Per-instance edits push a single-instance
-    // override on that master (matrix A2/A3).
-    if (snapshot.status === 'calendar' && snapshot.routineId) {
+    // override on that master (matrix A2/A3); marking done applies the ✓-prefix + sage colorId
+    // to that instance (matrix A8); reopen clears both back to the master's defaults.
+    if (snapshot.routineId && (snapshot.status === 'calendar' || snapshot.status === 'done')) {
         await pushRoutineInstanceOverride(snapshot, userId, buildProvider);
         return;
     }
@@ -89,7 +90,10 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
 
 /**
  * Pushes a per-instance override (time / title / description) to the routine's GCal master
- * recurring event. Used when the user edits a routine-generated calendar item locally.
+ * recurring event. Used when the user edits a routine-generated calendar item locally, and
+ * when marking it done — the latter applies the ✓ title marker + sage colorId on the instance,
+ * leaving the master and other occurrences untouched (matrix A8). Reopen (status → 'calendar')
+ * clears both: clean title + colorId: null reverts the instance to the master's defaults.
  * No-ops gracefully when the routine isn't linked to GCal yet.
  */
 async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
@@ -107,17 +111,19 @@ async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: stri
     }
     const originalDate = resolveOriginalDate(routine, snapshot);
     const { provider, config, timeZone } = ctx;
+    const isDone = snapshot.status === 'done';
     console.log(
-        `[gcal-pushback] overriding routine instance | routineId=${snapshot.routineId} eventId=${routine.calendarEventId} originalDate=${originalDate}`,
+        `[gcal-pushback] overriding routine instance | routineId=${snapshot.routineId} eventId=${routine.calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
     );
     await provider.updateRecurringInstance(
         routine.calendarEventId,
         originalDate,
         {
-            title: snapshot.title,
+            title: isDone ? applyDoneMarker(snapshot.title) : snapshot.title,
             ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
             ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
             description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+            colorId: isDone ? DONE_COLOR_ID : null,
         },
         config.calendarId,
         timeZone,
