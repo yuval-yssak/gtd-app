@@ -1,0 +1,25 @@
+.list {
+    margin-top: 0.25rem;
+}
+
+.rowLink {
+    text-decoration: none;
+    color: inherit;
+    width: 100%;
+}
+
+.titleRow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.groupHeader {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 0.25rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--mui-palette-divider, rgba(0, 0, 0, 0.08));
+}
