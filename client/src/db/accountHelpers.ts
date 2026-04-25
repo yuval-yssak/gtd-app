@@ -1,8 +1,40 @@
+import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import type { MyDB, StoredAccount } from '../types/MyDB';
+import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
 
 export async function upsertAccount(account: StoredAccount, db: IDBPDatabase<MyDB>): Promise<void> {
     await db.put('accounts', account);
+}
+
+/** Shape of the Better Auth `getSession()` user object we care about. Keep `image` permissive
+ *  (string | null | undefined) to match Better Auth's actual return type, which uses an
+ *  optional null-or-string field. `provider` is widened with a defensive cast at the call
+ *  site since Better Auth doesn't expose it on the session user. */
+export type SessionLike = { user: { id: string; email: string; name: string; image?: string | null | undefined } };
+
+/**
+ * Write the local `accounts` + `activeAccount` records from a Better Auth session. Shared by
+ * the OAuth callback path (auth.callback.tsx) and the authenticated-route guard's recovery
+ * path that handles "user cleared site data while the server cookie remained" — both must
+ * mirror the same persisted shape so subsequent boots converge.
+ */
+export async function hydrateAccountFromSession(db: IDBPDatabase<MyDB>, session: SessionLike): Promise<void> {
+    // Better Auth doesn't expose the OAuth provider on the session user; default to 'google'.
+    // The chosen value is cosmetic — server-side account-link logic is what actually drives
+    // identity, so a wrong default here only affects the local UI hint.
+    const provider: OAuthProvider = (session.user as { provider?: OAuthProvider }).provider ?? 'google';
+    await upsertAccount(
+        {
+            id: session.user.id,
+            email: session.user.email,
+            name: session.user.name,
+            image: session.user.image ?? null,
+            provider,
+            addedAt: dayjs().valueOf(),
+        },
+        db,
+    );
+    await setActiveAccount(session.user.id, db);
 }
 
 export async function setActiveAccount(userId: string, db: IDBPDatabase<MyDB>): Promise<void> {

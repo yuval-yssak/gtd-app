@@ -1,10 +1,13 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc';
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+dayjs.extend(utc);
+
 vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
 
-import { createNextRoutineItem, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from '../db/routineItemHelpers';
+import { createFirstRoutineItem, createNextRoutineItem, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { waitForPendingFlush } from '../db/syncHelpers';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
@@ -69,6 +72,89 @@ describe('createNextRoutineItem — startDate', () => {
         await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-15'));
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         expect(items).toHaveLength(0);
+    });
+});
+
+// ── createFirstRoutineItem: includes today as a candidate so daily/interval rules land today ──
+
+describe('createFirstRoutineItem', () => {
+    // Pin time so weekday-derived assertions can't flake across a midnight boundary.
+    // 2025-04-23 12:00 local = a Wednesday at noon — gives us a clean "today" + "tomorrow".
+    // toFake: ['Date'] keeps setTimeout/setInterval real so IDB async ops aren't frozen.
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ['Date'] }).setSystemTime(new Date('2025-04-23T12:00:00'));
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('daily rule: first item lands today', async () => {
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=1' });
+        await createFirstRoutineItem(db, USER_ID, routine);
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        if (!hasAtLeastOne(items)) throw new Error('No items');
+        expect(items[0].expectedBy).toBe(todayStr);
+    });
+
+    it('every-3-days rule: first item lands today', async () => {
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=3' });
+        await createFirstRoutineItem(db, USER_ID, routine);
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        if (!hasAtLeastOne(items)) throw new Error('No items');
+        expect(items[0].expectedBy).toBe(todayStr);
+    });
+
+    it('weekly rule with non-matching BYDAY: first item lands on the next matching weekday', async () => {
+        // Pick a BYDAY that is NOT today (Wed) so the rule must advance — Thursday.
+        const routine = buildRoutine({ rrule: 'FREQ=WEEKLY;BYDAY=TH' });
+        await createFirstRoutineItem(db, USER_ID, routine);
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        if (!hasAtLeastOne(items)) throw new Error('No items');
+        const tomorrowStr = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        expect(items[0].expectedBy).toBe(tomorrowStr);
+    });
+
+    it('future startDate: snaps the first item to startDate', async () => {
+        const futureStart = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=1', startDate: futureStart });
+        await createFirstRoutineItem(db, USER_ID, routine);
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        if (!hasAtLeastOne(items)) throw new Error('No items');
+        expect(items[0].expectedBy).toBe(futureStart);
+    });
+
+    it('paused routine: generates no item', async () => {
+        const routine = buildRoutine({ active: false });
+        await createFirstRoutineItem(db, USER_ID, routine);
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        expect(items).toHaveLength(0);
+    });
+
+    // Regression: anchoring on UTC rather than local would land on the wrong calendar date
+    // whenever local-midnight straddles a UTC day boundary. The two pinned moments below catch
+    // both directions: early-morning (positive UTC offsets see UTC = yesterday) and late-evening
+    // (negative UTC offsets see UTC = tomorrow). Together they detect a regression in any
+    // non-UTC TZ; on a UTC CI process they still assert the noon-equivalent contract.
+    it('daily rule near end-of-day local: lands on local today, not UTC tomorrow', async () => {
+        vi.setSystemTime(new Date('2025-04-23T23:30:00'));
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=1' });
+        await createFirstRoutineItem(db, USER_ID, routine);
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        if (!hasAtLeastOne(items)) throw new Error('No items');
+        expect(items[0].expectedBy).toBe(todayStr);
+    });
+
+    it('daily rule near start-of-day local: lands on local today, not UTC yesterday', async () => {
+        vi.setSystemTime(new Date('2025-04-23T00:30:00'));
+        const todayStr = dayjs().format('YYYY-MM-DD');
+        const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=1' });
+        await createFirstRoutineItem(db, USER_ID, routine);
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        if (!hasAtLeastOne(items)) throw new Error('No items');
+        expect(items[0].expectedBy).toBe(todayStr);
     });
 });
 

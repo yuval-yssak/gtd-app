@@ -22,26 +22,10 @@ function parseAnchorToUtcDate(anchor: string): Date {
 }
 
 /**
- * Create the next nextAction item for a routine, scheduling it for the first rrule occurrence
- * after completionDate. Called whenever a routine-linked item is marked done or trashed,
- * regardless of the item's current status — this ensures continuity even if the item was
- * transformed to inbox/calendar/waitingFor before being completed.
+ * Build, persist, and queue-sync a nextAction item for the given expectedBy date. Shared body
+ * between createNextRoutineItem (disposal path) and createFirstRoutineItem (creation path).
  */
-export async function createNextRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine, completionDate: Date): Promise<void> {
-    // Paused routines never generate new items. Belt-and-suspenders — the pause path explicitly
-    // trashes future items, so this guards against disposal hooks firing for a routine that was
-    // paused after the current item was created.
-    if (!routine.active) {
-        return;
-    }
-    // Anchor to the later of completionDate and startDate so a future-start-date routine never
-    // produces an item with expectedBy before its startDate. Parse startDate as UTC to avoid a
-    // local-TZ shift that would otherwise move the anchor back a day.
-    const startAsUtc = routine.startDate ? dayjs.utc(routine.startDate).toDate() : null;
-    const anchor = startAsUtc && startAsUtc > completionDate ? startAsUtc : completionDate;
-    const nextDueDate = computeNextOccurrence(routine.rrule, anchor);
-    const expectedBy = dayjs(nextDueDate).format('YYYY-MM-DD');
-
+async function persistRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine, expectedBy: string): Promise<void> {
     const now = dayjs().toISOString();
     const item = {
         _id: crypto.randomUUID(),
@@ -65,6 +49,54 @@ export async function createNextRoutineItem(db: IDBPDatabase<MyDB>, userId: stri
 
     await putItem(db, item);
     await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item });
+}
+
+/**
+ * Create the next nextAction item for a routine, scheduling it for the first rrule occurrence
+ * after completionDate. Called whenever a routine-linked item is marked done or trashed,
+ * regardless of the item's current status — this ensures continuity even if the item was
+ * transformed to inbox/calendar/waitingFor before being completed.
+ */
+export async function createNextRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine, completionDate: Date): Promise<void> {
+    // Paused routines never generate new items. Belt-and-suspenders — the pause path explicitly
+    // trashes future items, so this guards against disposal hooks firing for a routine that was
+    // paused after the current item was created.
+    if (!routine.active) {
+        return;
+    }
+    // Anchor to the later of completionDate and startDate so a future-start-date routine never
+    // produces an item with expectedBy before its startDate. Parse startDate as UTC to avoid a
+    // local-TZ shift that would otherwise move the anchor back a day.
+    const startAsUtc = routine.startDate ? dayjs.utc(routine.startDate).toDate() : null;
+    const anchor = startAsUtc && startAsUtc > completionDate ? startAsUtc : completionDate;
+    const nextDueDate = computeNextOccurrence(routine.rrule, anchor);
+    const expectedBy = dayjs(nextDueDate).format('YYYY-MM-DD');
+    await persistRoutineItem(db, userId, routine, expectedBy);
+}
+
+/**
+ * Create the *first* nextAction item for a brand-new routine. Anchors at the user's local
+ * "today" with includeAnchor=true so a daily/interval rule (FREQ=DAILY) lands today, while
+ * weekly/monthly rules whose BYDAY/BYMONTHDAY don't match today still advance to the next match.
+ *
+ * The anchor is constructed as UTC-midnight on the *local calendar date* — i.e. the Date's UTC
+ * components (year/month/day/weekday) equal the user's local wall-clock components. parseRrule
+ * embeds the anchor's UTC components into DTSTART, so this scheme makes rrule's weekday math
+ * (BYDAY) operate on the local weekday. Formatting the resulting occurrence with dayjs.utc()
+ * then yields the matching local calendar date string. Anchoring at "real" UTC midnight would
+ * land on tomorrow's date for negative-offset users in the late evening and would shift weekday
+ * matching off by one for any TZ where local-midnight straddles a UTC day boundary.
+ */
+export async function createFirstRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine): Promise<void> {
+    if (!routine.active) {
+        return;
+    }
+    const todayAsUtcDay = dayjs.utc(dayjs().format('YYYY-MM-DD')).toDate();
+    const startAsUtcDay = routine.startDate ? dayjs.utc(routine.startDate).toDate() : null;
+    const anchor = startAsUtcDay && startAsUtcDay > todayAsUtcDay ? startAsUtcDay : todayAsUtcDay;
+    const nextDueDate = computeNextOccurrence(routine.rrule, anchor, true);
+    const expectedBy = dayjs.utc(nextDueDate).format('YYYY-MM-DD');
+    await persistRoutineItem(db, userId, routine, expectedBy);
 }
 
 // ── Calendar routine helpers ───────────────────────────────────────────────────

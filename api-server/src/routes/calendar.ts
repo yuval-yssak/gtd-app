@@ -19,6 +19,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
 import { ensureTimeZone } from '../lib/calendarPushback.js';
+import { stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
 import { propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
@@ -1206,11 +1207,15 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
         return;
     }
 
+    // Sync layer owns the "✓ " done marker on GCal — strip it on inbound only when this item is
+    // already done locally. For an open item, a user-typed "✓ " in GCal must be preserved verbatim.
+    const incomingTitle = existing.status === 'done' ? stripDoneMarker(event.title) : event.title;
+
     const updated: ItemInterface = {
         ...existing,
         ...(structurallyNewer
             ? {
-                  title: event.title,
+                  title: incomingTitle,
                   timeStart: event.timeStart,
                   timeEnd: event.timeEnd,
                   calendarSyncConfigId: source.config._id,

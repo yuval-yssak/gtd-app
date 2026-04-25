@@ -21,12 +21,15 @@ function parseRrule(rruleStr: string, dtstart: Date): RRule {
 }
 
 /**
- * Return the first rrule occurrence that falls strictly after `afterDate`.
- * Used by next-action routines to compute the next due date from the completion date.
+ * Return the first rrule occurrence at or after `afterDate`.
+ * - `includeAnchor=false` (default): strictly after — used after item completion so a same-day
+ *   completion advances to the next occurrence.
+ * - `includeAnchor=true`: the anchor itself counts — used when generating the *first* item for a
+ *   brand-new routine so a daily/interval rule lands today rather than tomorrow.
  */
-export function computeNextOccurrence(rruleStr: string, afterDate: Date): Date {
+export function computeNextOccurrence(rruleStr: string, afterDate: Date, includeAnchor = false): Date {
     const rule = parseRrule(rruleStr, afterDate);
-    const next = rule.after(afterDate, false);
+    const next = rule.after(afterDate, includeAnchor);
     if (!next) {
         throw new Error(`rrule "${rruleStr}" has no occurrence after ${dayjs(afterDate).toISOString()}`);
     }
