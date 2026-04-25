@@ -3806,9 +3806,12 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         );
 
         // Parent retains its original 09:00 timing; tail picks up the same series at 11:00 the next day.
-        const parentStart = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct in Asia/Jerusalem (the sync config's timezone) so extractLocalTime round-trips
+        // to the expected HH:mm regardless of the test runner's local timezone (CI runs in UTC).
+        const tz = 'Asia/Jerusalem';
+        const parentStart = dayjs().tz(tz).add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
         const parentEnd = dayjs(parentStart).add(30, 'minute').toISOString();
-        const tailStart = dayjs().add(2, 'day').hour(11).minute(0).second(0).millisecond(0).toISOString();
+        const tailStart = dayjs().tz(tz).add(2, 'day').hour(11).minute(0).second(0).millisecond(0).toISOString();
         const tailEnd = dayjs(tailStart).add(30, 'minute').toISOString();
         const untilCompact = dayjs(tailStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
 
@@ -3846,11 +3849,13 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
 
         // The tail must have its future calendar items materialised — otherwise the user sees a
         // routine with no items after the split. All items must use the new 11:00 timeOfDay.
+        // item.timeStart is stored as a naive "YYYY-MM-DDTHH:mm:ss" string built directly from the
+        // routine's timeOfDay (no offset), so a substring match is the timezone-independent check.
         const tailItems = await itemsDAO.findArray({ user: userId, routineId: tail!._id, status: 'calendar' });
         expect(tailItems.length).toBeGreaterThan(0);
         for (const item of tailItems) {
             expect(item.timeStart).toBeDefined();
-            expect(dayjs(item.timeStart).format('HH:mm')).toBe('11:00');
+            expect(item.timeStart).toMatch(/T11:00:00$/);
         }
     });
 
