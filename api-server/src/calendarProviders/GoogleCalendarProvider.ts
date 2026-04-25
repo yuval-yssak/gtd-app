@@ -1,28 +1,78 @@
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import { google } from 'googleapis';
+import rrule from 'rrule';
+
+// `rrule@2.8.1` ships a UMD/CJS bundle as its `main` (no conditional exports), so under Node's
+// ESM loader a named import fails at runtime even though types resolve via `dist/esm/index.d.ts`.
+// Default-import then destructure works across tsx/Vitest/Node via esModuleInterop.
+const { RRule } = rrule;
+
+dayjs.extend(utc);
+
+import { markdownToHtml } from '../lib/markdownHtml.js';
 import type { CalendarIntegrationInterface, RoutineInterface } from '../types/entities.js';
-import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException } from './CalendarProvider.js';
+import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
 import { SyncTokenInvalidError } from './CalendarProvider.js';
 
+const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function assertValidTimeOfDay(timeOfDay: string): void {
+    if (!TIME_OF_DAY_PATTERN.test(timeOfDay)) {
+        throw new Error(`Invalid timeOfDay "${timeOfDay}" — expected HH:MM format`);
+    }
+}
+
 /** Builds a dateTime object for the Google Calendar API from a date string and HH:MM time. */
-function buildDateTime(dateStr: string, timeOfDay: string, timeZone: string): { dateTime: string; timeZone: string } {
+export function buildDateTime(dateStr: string, timeOfDay: string, timeZone: string): { dateTime: string; timeZone: string } {
+    assertValidTimeOfDay(timeOfDay);
     return { dateTime: `${dateStr}T${timeOfDay}:00`, timeZone };
 }
 
 /** Computes the end dateTime by adding duration to the start. Uses dayjs to handle midnight overflow correctly. */
-function endDateTime(dateStr: string, timeOfDay: string, durationMinutes: number, timeZone: string): { dateTime: string; timeZone: string } {
+export function endDateTime(dateStr: string, timeOfDay: string, durationMinutes: number, timeZone: string): { dateTime: string; timeZone: string } {
+    assertValidTimeOfDay(timeOfDay);
     const end = dayjs(`${dateStr}T${timeOfDay}`).add(durationMinutes, 'minute');
     return { dateTime: end.format('YYYY-MM-DDTHH:mm:ss'), timeZone };
 }
 
-/** Returns a stable anchor date (YYYY-MM-DD) to use as DTSTART for the event series. */
-function seriesStartDate(routine: RoutineInterface): string {
-    // Use createdTs date so the rrule series origin matches when the routine was defined.
-    return routine.createdTs.slice(0, 10);
+/**
+ * Returns the first rrule-matching date (YYYY-MM-DD) on or after the routine's createdTs.
+ * Google Calendar treats DTSTART as an explicit first occurrence — if it doesn't match the
+ * RRULE's BYDAY/BYMONTHDAY constraints, GCal emits a phantom occurrence on DTSTART in addition
+ * to the recurrence. Snap DTSTART forward to the first real occurrence to avoid that.
+ */
+export function seriesStartDate(routine: RoutineInterface): string {
+    // Prefer user-set startDate over createdTs. Falls back so legacy routines still work.
+    const anchorDate = (routine.startDate ?? routine.createdTs).slice(0, 10);
+    const dtStartStr = `${anchorDate.replace(/-/g, '')}T000000Z`;
+    const rule = RRule.fromString(`DTSTART:${dtStartStr}\nRRULE:${routine.rrule}`);
+    // Search strictly after (anchor - 1 day) so the first occurrence on or after the anchor
+    // is returned — preserving already-matching dates (e.g. DAILY) and rolling forward to the
+    // next BYDAY/BYMONTHDAY match otherwise.
+    const first = rule.after(dayjs.utc(anchorDate).subtract(1, 'day').toDate(), false);
+    if (!first) {
+        throw new Error(`Routine ${routine._id} has an rrule with no occurrences on or after ${anchorDate}`);
+    }
+    return first.toISOString().slice(0, 10);
+}
+
+/**
+ * Rewrites an RRULE: line to have exactly one UNTIL=<untilDate> clause, stripping any prior
+ * UNTIL or COUNT (which are mutually exclusive with UNTIL in RFC 5545). Exported for testability.
+ */
+export function rrulePinnedUntil(rruleLine: string, untilDate: string): string {
+    const prefix = 'RRULE:';
+    const body = rruleLine.startsWith(prefix) ? rruleLine.slice(prefix.length) : rruleLine;
+    const filtered = body
+        .split(';')
+        .filter((clause) => !clause.startsWith('UNTIL=') && !clause.startsWith('COUNT='))
+        .join(';');
+    return `${prefix}${filtered};UNTIL=${untilDate}`;
 }
 
 /** Type guard for Google API errors which carry a numeric `code` property (e.g. 410 for expired syncTokens). */
-function isGoogleApiError(err: unknown): err is Error & { code: number } {
+export function isGoogleApiError(err: unknown): err is Error & { code: number } {
     return err instanceof Error && 'code' in err && typeof (err as { code: unknown }).code === 'number';
 }
 
@@ -39,6 +89,7 @@ function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCa
         status?: string | null;
         recurringEventId?: string | null;
         recurrence?: string[] | null;
+        description?: string | null;
     }>;
     return events.flatMap<GCalEvent>((event) => {
         if (!event.id) {
@@ -75,6 +126,7 @@ function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCa
                 // treat a missing `updated` field as "just modified now".
                 updated: event.updated ?? event.start.dateTime,
                 status,
+                ...(event.description != null ? { description: event.description } : {}),
                 ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
                 ...(event.recurrence ? { recurrence: event.recurrence } : {}),
             },
@@ -122,7 +174,16 @@ export class GoogleCalendarProvider implements CalendarProvider {
         this.auth = oauth2;
     }
 
-    async createRecurringEvent(routine: RoutineInterface, calendarId: string): Promise<string> {
+    async getCalendarTimeZone(calendarId: string): Promise<string> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const response = await cal.calendars.get({ calendarId });
+        if (!response.data.timeZone) {
+            console.warn(`[GoogleCalendarProvider] calendars.get returned no timeZone for ${calendarId} — falling back to UTC`);
+        }
+        return response.data.timeZone ?? 'UTC';
+    }
+
+    async createRecurringEvent(routine: RoutineInterface, calendarId: string, timeZone: string): Promise<string> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const template = routine.calendarItemTemplate;
         if (!template) {
@@ -137,9 +198,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
             calendarId,
             requestBody: {
                 summary: routine.title,
-                start: buildDateTime(startDate, template.timeOfDay, 'UTC'),
-                end: endDateTime(startDate, template.timeOfDay, template.duration, 'UTC'),
+                start: buildDateTime(startDate, template.timeOfDay, timeZone),
+                end: endDateTime(startDate, template.timeOfDay, template.duration, timeZone),
                 recurrence,
+                ...(routine.template.notes !== undefined ? { description: markdownToHtml(routine.template.notes) } : {}),
             },
         });
 
@@ -150,7 +212,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         return eventId;
     }
 
-    async updateRecurringEvent(eventId: string, routine: RoutineInterface, calendarId: string): Promise<void> {
+    async updateRecurringEvent(eventId: string, routine: RoutineInterface, calendarId: string, timeZone: string): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const template = routine.calendarItemTemplate;
         if (!template) {
@@ -163,9 +225,11 @@ export class GoogleCalendarProvider implements CalendarProvider {
             eventId,
             requestBody: {
                 summary: routine.title,
-                start: buildDateTime(startDate, template.timeOfDay, 'UTC'),
-                end: endDateTime(startDate, template.timeOfDay, template.duration, 'UTC'),
+                start: buildDateTime(startDate, template.timeOfDay, timeZone),
+                end: endDateTime(startDate, template.timeOfDay, template.duration, timeZone),
                 recurrence: [`RRULE:${routine.rrule}`],
+                // events.update is a full replace — always send description to avoid leaving stale values.
+                description: routine.template.notes ? markdownToHtml(routine.template.notes) : '',
             },
         });
     }
@@ -173,6 +237,21 @@ export class GoogleCalendarProvider implements CalendarProvider {
     async deleteRecurringEvent(eventId: string, calendarId: string): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         await cal.events.delete({ calendarId, eventId });
+    }
+
+    /**
+     * Caps the existing GCal master with UNTIL=<untilDate> via events.patch. Reads the master's
+     * current recurrence array, rewrites only the RRULE clause (strips any prior UNTIL/COUNT and
+     * appends the new UNTIL), and preserves EXDATE/RDATE lines untouched. Uses patch (not update)
+     * so start/summary/description are left alone — this is a pure "stop producing new occurrences"
+     * operation.
+     */
+    async capRecurringEvent(eventId: string, untilDate: string, calendarId: string, _timeZone: string): Promise<void> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const existing = await cal.events.get({ calendarId, eventId });
+        const currentRecurrence = existing.data.recurrence ?? [];
+        const nextRecurrence = currentRecurrence.map((line) => (line.startsWith('RRULE:') ? rrulePinnedUntil(line, untilDate) : line));
+        await cal.events.patch({ calendarId, eventId, requestBody: { recurrence: nextRecurrence } });
     }
 
     async listCalendars(): Promise<Array<{ id: string; name: string }>> {
@@ -269,14 +348,19 @@ export class GoogleCalendarProvider implements CalendarProvider {
         await cal.channels.stop({ requestBody: { id: channelId, resourceId } });
     }
 
-    async createEvent(calendarId: string, event: { title: string; timeStart: string; timeEnd: string }): Promise<string> {
+    async createEvent(
+        calendarId: string,
+        event: { title: string; timeStart: string; timeEnd: string; description?: string },
+        timeZone: string,
+    ): Promise<string> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const response = await cal.events.insert({
             calendarId,
             requestBody: {
                 summary: event.title,
-                start: { dateTime: event.timeStart },
-                end: { dateTime: event.timeEnd },
+                start: { dateTime: event.timeStart, timeZone },
+                end: { dateTime: event.timeEnd, timeZone },
+                ...(event.description !== undefined ? { description: event.description } : {}),
             },
         });
         const eventId = response.data.id;
@@ -286,7 +370,12 @@ export class GoogleCalendarProvider implements CalendarProvider {
         return eventId;
     }
 
-    async updateEvent(calendarId: string, eventId: string, updates: { title?: string; timeStart?: string; timeEnd?: string }): Promise<void> {
+    async updateEvent(
+        calendarId: string,
+        eventId: string,
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        timeZone: string,
+    ): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         // Use patch (not update) so only the provided fields are modified — update would clear omitted fields.
         await cal.events.patch({
@@ -294,8 +383,9 @@ export class GoogleCalendarProvider implements CalendarProvider {
             eventId,
             requestBody: {
                 ...(updates.title !== undefined ? { summary: updates.title } : {}),
-                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart } } : {}),
-                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd } } : {}),
+                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
+                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
+                ...(updates.description !== undefined ? { description: updates.description } : {}),
             },
         });
     }
@@ -305,15 +395,79 @@ export class GoogleCalendarProvider implements CalendarProvider {
         await cal.events.delete({ calendarId, eventId });
     }
 
-    async getExceptions(eventId: string, calendarId: string, since: string): Promise<GCalException[]> {
+    async updateRecurringInstance(
+        masterEventId: string,
+        originalDate: string,
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        calendarId: string,
+        timeZone: string,
+    ): Promise<void> {
+        const instanceId = await this.findInstanceId(masterEventId, originalDate, calendarId, 'updateRecurringInstance');
+        if (!instanceId) {
+            return;
+        }
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        await cal.events.patch({
+            calendarId,
+            eventId: instanceId,
+            requestBody: {
+                ...(updates.title !== undefined ? { summary: updates.title } : {}),
+                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
+                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
+                ...(updates.description !== undefined ? { description: updates.description } : {}),
+            },
+        });
+    }
+
+    async cancelRecurringInstance(masterEventId: string, originalDate: string, calendarId: string): Promise<void> {
+        const instanceId = await this.findInstanceId(masterEventId, originalDate, calendarId, 'cancelRecurringInstance');
+        if (!instanceId) {
+            return;
+        }
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        await cal.events.patch({ calendarId, eventId: instanceId, requestBody: { status: 'cancelled' } });
+    }
+
+    /**
+     * Resolves the instance-specific event id for a given occurrence date of a recurring master.
+     * Windows the `events.instances` call by ±1 day because `dayjs(dateString).startOf('day')` uses
+     * the server's local timezone, but the instance's UTC start can fall on the prior UTC day for any
+     * calendar in a positive-offset timezone. ±1 day covers every real-world tz and keeps pagination
+     * tiny; the `.find()` narrows to the exact `originalDate` via string comparison.
+     */
+    private async findInstanceId(masterEventId: string, originalDate: string, calendarId: string, callerLabel: string): Promise<string | null> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const windowStart = dayjs(originalDate).subtract(1, 'day').toISOString();
+        const windowEnd = dayjs(originalDate).add(1, 'day').toISOString();
+        const instanceList = await cal.events.instances({
+            calendarId,
+            eventId: masterEventId,
+            timeMin: windowStart,
+            timeMax: windowEnd,
+            showDeleted: false,
+            maxResults: 10,
+        });
+        const instance = (instanceList.data.items ?? []).find((ev) => {
+            const origIso = ev.originalStartTime?.dateTime ?? ev.originalStartTime?.date ?? '';
+            return origIso.slice(0, 10) === originalDate;
+        });
+        if (!instance?.id) {
+            // Surface as a warning so the fire-and-forget pushback caller doesn't throw.
+            console.warn(`[GoogleCalendarProvider] ${callerLabel}: no instance for master ${masterEventId} on ${originalDate} — skipping`);
+            return null;
+        }
+        return instance.id;
+    }
+
+    async getExceptions(eventId: string, calendarId: string, since: string, masterContent?: MasterContent): Promise<GCalException[]> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
 
         // singleEvents: true expands the recurrence so we get individual instances.
         // showDeleted: true includes cancelled (deleted) instances.
         // orderBy: 'startTime' requires singleEvents: true.
-        // timeMax caps the window to 1 year ahead — without it Google returns all future
-        // instances which can be thousands for long-running routines.
-        const timeMax = dayjs(since).add(1, 'year').toISOString();
+        // timeMax caps the window to 1 year ahead of NOW — anchoring to `since` would give a useless
+        // window on the first sync (since defaults to 1970-01-01 when lastSyncedTs is unset).
+        const timeMax = dayjs().add(1, 'year').toISOString();
         const response = await cal.events.list({
             calendarId,
             timeMin: since,
@@ -339,22 +493,46 @@ export class GoogleCalendarProvider implements CalendarProvider {
                 return [{ originalDate, type: 'deleted', ...(event.id ? { googleEventId: event.id } : {}) }];
             }
 
-            // Detect moved instances: compare start against originalStartTime.
-            const startDateTime = event.start?.dateTime;
-            const originalDateTime = event.originalStartTime?.dateTime;
-            if (startDateTime && originalDateTime && startDateTime !== originalDateTime) {
-                return [
-                    {
-                        originalDate,
-                        type: 'modified',
-                        newTimeStart: startDateTime,
-                        ...(event.end?.dateTime ? { newTimeEnd: event.end.dateTime } : {}),
-                        ...(event.id ? { googleEventId: event.id } : {}),
-                    },
-                ];
-            }
-
-            return [];
+            return buildModifiedException(event, originalDate, masterContent);
         });
     }
+}
+
+/** Detects time-move and/or content changes on a non-cancelled instance compared to the master. */
+function buildModifiedException(
+    event: {
+        start?: { dateTime?: string | null } | null;
+        end?: { dateTime?: string | null } | null;
+        originalStartTime?: { dateTime?: string | null } | null;
+        summary?: string | null;
+        description?: string | null;
+        id?: string | null;
+    },
+    originalDate: string,
+    masterContent?: MasterContent,
+): GCalException[] {
+    const startDateTime = event.start?.dateTime;
+    const originalDateTime = event.originalStartTime?.dateTime;
+    const timeMoved = Boolean(startDateTime && originalDateTime && startDateTime !== originalDateTime);
+
+    const instanceTitle = event.summary ?? '';
+    const instanceDesc = event.description ?? '';
+    const titleChanged = masterContent ? instanceTitle !== masterContent.title : false;
+    const descChanged = masterContent ? instanceDesc !== masterContent.description : false;
+
+    if (!timeMoved && !titleChanged && !descChanged) {
+        return [];
+    }
+
+    return [
+        {
+            originalDate,
+            type: 'modified',
+            ...(timeMoved && startDateTime ? { newTimeStart: startDateTime } : {}),
+            ...(timeMoved && event.end?.dateTime ? { newTimeEnd: event.end.dateTime } : {}),
+            ...(titleChanged ? { title: instanceTitle } : {}),
+            ...(descChanged ? { notes: instanceDesc } : {}),
+            ...(event.id ? { googleEventId: event.id } : {}),
+        },
+    ];
 }

@@ -46,3 +46,9 @@ test-results/
 
 # Misc
 *.local
+
+# Claude Code per-user settings (machine-specific, not shared)
+**/.claude/settings.local.json
+
+# GCal sync smoke test results (per-run, not shared)
+e2e/gcal-sync-smoke/session-*-results.md

@@ -2,10 +2,12 @@ import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
 import { getActiveAccount } from '../db/accountHelpers';
+import { getOrCreateDeviceId } from '../db/deviceId';
 import { getItemsByUser } from '../db/itemHelpers';
 import { getPeopleByUser } from '../db/personHelpers';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { getRoutinesByUser } from '../db/routineHelpers';
+import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnection, openSseConnection } from '../db/sseClient';
 import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { getWorkContextsByUser } from '../db/workContextHelpers';
@@ -114,6 +116,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // during the first pull above — fetch them now so items appear in this cycle.
             await pullFromServer(db);
 
+            // After pulling, check for nextAction routines whose startDate has arrived and
+            // materialize their first item. Separate from the disposal-driven generator because
+            // the first item of a future-start routine has no prior item to trigger generation.
+            await materializePendingNextActionRoutines(db, acct.id);
+
             // Guard after the async work — component may have unmounted while awaiting network.
             if (unmountedRef.current) {
                 return;
@@ -216,7 +223,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     return;
                 }
                 if (navigator.onLine) {
-                    openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
+                    getOrCreateDeviceId(db).then((deviceId) => {
+                        if (unmounted) {
+                            return;
+                        }
+                        openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)), deviceId);
+                    });
                     registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
                 }
             })
@@ -248,7 +260,9 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // concurrency guard (flushInFlight) so calling it here alongside syncAndRefresh is safe.
             flushSyncQueue(db).catch((err) => console.error('[online] flush failed:', err));
             syncAndRefresh().catch((err) => console.error('[online] sync failed:', err));
-            openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)));
+            getOrCreateDeviceId(db).then((deviceId) => {
+                openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)), deviceId);
+            });
             // Re-register push in case the subscription was lost or expired while offline.
             registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
         } else {

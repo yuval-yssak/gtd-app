@@ -1,3 +1,4 @@
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
@@ -17,13 +18,23 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
-import { createNextRoutineItem, deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon } from '../../db/routineItemHelpers';
+import {
+    createNextRoutineItem,
+    deleteAndRegenerateFutureItems,
+    generateCalendarItemsToHorizon,
+    hardDeletePastItems,
+    partitionPastItemsByDoneness,
+    regenerateFutureItemContent,
+} from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
+import { splitRoutine } from '../../db/routineSplit';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { FrequencyPicker } from './FrequencyPicker';
 import styles from './RoutineDialog.module.css';
+import { isCalendarScheduleChanged, isStartDateChanged } from './routineEditDecision';
 
 interface Props {
     db: IDBPDatabase<MyDB>;
@@ -56,11 +67,20 @@ interface FormState {
     endsMode: EndsMode;
     endsDate: string; // ISO date — used when endsMode === 'onDate'
     endsCount: string; // positive integer string — used when endsMode === 'afterN'
+    startDate: string; // ISO date — anchors the rrule schedule. Empty = fall back to createdTs.
 }
 
-/** Strip UNTIL and COUNT from an rrule string so FrequencyPicker can parse the base frequency. */
-function stripEndClauses(rruleStr: string): string {
-    return rruleStr.replace(/;UNTIL=[^;]*/g, '').replace(/;COUNT=\d+/g, '');
+/**
+ * Parse the compact RFC 5545 UTC datetime (YYYYMMDDTHHmmssZ) that UNTIL uses.
+ * dayjs's default parser treats this as Invalid Date without an explicit format mask,
+ * which corrupted the Ends mode on edit and silently triggered a split.
+ */
+function parseRruleUntil(raw: string): string {
+    const match = raw.match(/^(\d{4})(\d{2})(\d{2})T\d{6}Z$/);
+    if (!match) {
+        return '';
+    }
+    return `${match[1]}-${match[2]}-${match[3]}`;
 }
 
 /** Parse UNTIL/COUNT from an existing rrule string into EndsMode fields. */
@@ -69,7 +89,10 @@ function parseEndsFromRrule(rruleStr: string): { endsMode: EndsMode; endsDate: s
     const countMatch = rruleStr.match(/COUNT=(\d+)/);
     // noUncheckedIndexedAccess: capture group [1] is string | undefined; fall back to '' to satisfy types
     if (untilMatch) {
-        return { endsMode: 'onDate', endsDate: dayjs(untilMatch[1] ?? '').format('YYYY-MM-DD'), endsCount: '' };
+        const parsed = parseRruleUntil(untilMatch[1] ?? '');
+        // Fall back to dayjs for ISO-formatted UNTIL values (defensive); compact form is handled above.
+        const endsDate = parsed || dayjs(untilMatch[1] ?? '').format('YYYY-MM-DD');
+        return { endsMode: 'onDate', endsDate, endsCount: '' };
     }
     if (countMatch) {
         return { endsMode: 'afterN', endsDate: '', endsCount: countMatch[1] ?? '' };
@@ -108,6 +131,7 @@ function initFormState(routine?: StoredRoutine): FormState {
         timeOfDay: routine?.calendarItemTemplate?.timeOfDay ?? '09:00',
         duration: routine?.calendarItemTemplate?.duration?.toString() ?? '60',
         calendarSyncConfigId: routine?.calendarSyncConfigId ?? '',
+        startDate: routine?.startDate ?? '',
         ...ends,
     };
 }
@@ -158,7 +182,12 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
 
     async function onSave() {
         const trimmedTitle = form.title.trim();
-        if (!trimmedTitle || !form.rrule || isSaving) return;
+        if (!trimmedTitle || !form.rrule || isSaving) {
+            return;
+        }
+        if (form.routineType === 'calendar' && !form.timeOfDay) {
+            return;
+        }
 
         setIsSaving(true);
         try {
@@ -169,27 +198,127 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
-                const updatedRoutine = {
-                    ...routine,
+                // Split only when a calendar routine's schedule changed AND it has past items —
+                // past items should keep their original schedule. Title/notes-only edits always
+                // stay in-place; forking a routine just because the user renamed it would be
+                // surprising and leave orphaned chains.
+                const isCalendarEdit = form.routineType === 'calendar';
+                const editIntent = {
                     routineType: form.routineType,
-                    title: trimmedTitle,
                     rrule: finalRrule,
-                    template,
-                    ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                    ...calendarLink,
+                    timeOfDay: calendarItemTemplate?.timeOfDay,
+                    duration: calendarItemTemplate?.duration,
+                    startDate: form.startDate || undefined,
                 };
-                await updateRoutine(db, updatedRoutine);
+                const scheduleChanged = isCalendarScheduleChanged(routine, editIntent);
+                const startDateChanged = isStartDateChanged(routine, editIntent);
+                const formStartDate = form.startDate || undefined;
+                // Saving a paused routine from the dialog counts as a resume — flip active=true so
+                // the server pushback sees the transition and the GCal cap is cleared.
+                const resumeOnSave = !routine.active;
 
-                // Regenerate future items when the schedule or item content changes
-                const scheduleChanged =
-                    routine.rrule !== finalRrule ||
-                    routine.title !== trimmedTitle ||
-                    routine.calendarItemTemplate?.timeOfDay !== calendarItemTemplate?.timeOfDay ||
-                    routine.calendarItemTemplate?.duration !== calendarItemTemplate?.duration;
-                if (form.routineType === 'calendar' && scheduleChanged) {
-                    await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
+                // startDate change path: if any `done` past items exist, split to preserve them;
+                // otherwise hard-delete past non-done items and update in place. This happens
+                // before the generic schedule-change split so the startDate branch wins when both
+                // apply (new startDate fully supersedes any rrule-only change semantics).
+                if (startDateChanged) {
+                    const { donePast, nonDonePast } = await partitionPastItemsByDoneness(db, userId, routine._id);
+                    if (donePast.length > 0) {
+                        // Split: cap old routine at yesterday, tail anchored at new startDate.
+                        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+                        await splitRoutine(
+                            db,
+                            userId,
+                            routine,
+                            {
+                                routineType: form.routineType,
+                                title: trimmedTitle,
+                                rrule: finalRrule,
+                                template,
+                                ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                                ...calendarLink,
+                                ...(formStartDate ? { startDate: formStartDate } : {}),
+                            },
+                            yesterday,
+                        );
+                    } else {
+                        await hardDeletePastItems(db, nonDonePast);
+                        const updatedRoutine: StoredRoutine = {
+                            ...routine,
+                            routineType: form.routineType,
+                            title: trimmedTitle,
+                            rrule: finalRrule,
+                            template,
+                            active: true,
+                            ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                            ...calendarLink,
+                            ...(formStartDate ? { startDate: formStartDate } : {}),
+                        };
+                        if (!formStartDate) {
+                            delete updatedRoutine.startDate;
+                        }
+                        await updateRoutine(db, updatedRoutine);
+                        if (isCalendarEdit) {
+                            await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
+                        } else {
+                            // nextAction: seed the first item so the user doesn't see an empty routine.
+                            // Skip when startDate is still in the future — the boot-tick picks it up.
+                            const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+                            const futureStart = formStartDate !== undefined && formStartDate > todayStr;
+                            if (!futureStart) {
+                                await createNextRoutineItem(db, userId, updatedRoutine, dayjs().toDate());
+                            }
+                        }
+                    }
+                } else {
+                    const hasPastItems = scheduleChanged ? await routineHasPastItems(db, userId, routine._id) : false;
+                    const splitDate = hasPastItems ? computeSplitDate(routine.rrule, routine.createdTs) : null;
+
+                    if (splitDate) {
+                        await splitRoutine(
+                            db,
+                            userId,
+                            routine,
+                            {
+                                routineType: form.routineType,
+                                title: trimmedTitle,
+                                rrule: finalRrule,
+                                template,
+                                ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                                ...calendarLink,
+                                ...(formStartDate ? { startDate: formStartDate } : {}),
+                            },
+                            splitDate,
+                        );
+                    } else {
+                        const updatedRoutine: StoredRoutine = {
+                            ...routine,
+                            routineType: form.routineType,
+                            title: trimmedTitle,
+                            rrule: finalRrule,
+                            template,
+                            // Resume: flip active=true when saving a paused routine from the dialog.
+                            ...(resumeOnSave ? { active: true } : {}),
+                            ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                            ...calendarLink,
+                            ...(formStartDate ? { startDate: formStartDate } : {}),
+                        };
+                        if (!formStartDate) {
+                            delete updatedRoutine.startDate;
+                        }
+                        await updateRoutine(db, updatedRoutine);
+
+                        if (isCalendarEdit && routine.routineType === 'calendar') {
+                            if (scheduleChanged || resumeOnSave) {
+                                await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
+                            } else {
+                                await regenerateFutureItemContent(db, userId, updatedRoutine);
+                            }
+                        }
+                    }
                 }
             } else {
+                const formStartDate = form.startDate || undefined;
                 const created = await createRoutine(db, {
                     userId,
                     routineType: form.routineType,
@@ -199,13 +328,19 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     active: true,
                     ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
                     ...calendarLink,
+                    ...(formStartDate ? { startDate: formStartDate } : {}),
                 });
 
-                // Auto-create items — best-effort so a failure doesn't block saving the routine
+                // Auto-create items — best-effort so a failure doesn't block saving the routine.
+                // For nextAction routines with a future startDate, skip initial creation — the
+                // boot-tick (materializePendingNextActionRoutines) will produce the first item
+                // when the startDate arrives.
+                const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+                const futureStart = formStartDate !== undefined && formStartDate > todayStr;
                 try {
                     if (form.routineType === 'calendar') {
                         await generateCalendarItemsToHorizon(db, userId, created);
-                    } else {
+                    } else if (!futureStart) {
                         await createNextRoutineItem(db, userId, created, dayjs().toDate());
                     }
                 } catch (err) {
@@ -221,12 +356,25 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
     }
 
     const isCalendar = form.routineType === 'calendar';
+    // An ended calendar routine has no future occurrences — schedule fields are locked.
+    const isEndedCalendar = isEdit && routine.routineType === 'calendar' && computeSplitDate(routine.rrule, routine.createdTs) === null;
 
     return (
         <Dialog open onClose={onClose} fullWidth maxWidth="sm">
             <DialogTitle>{isEdit ? 'Edit routine' : 'New routine'}</DialogTitle>
             {/* MUI removes DialogContent top padding when preceded by DialogTitle; restore with sx */}
             <DialogContent className={styles.dialogContent} sx={{ pt: 2 }}>
+                {isEdit && !routine.active && (
+                    <Alert severity="info" variant="outlined">
+                        This routine is paused. Save your changes to resume it.
+                    </Alert>
+                )}
+                {isEndedCalendar && (
+                    <Alert severity="info" variant="outlined">
+                        This routine has ended. Only title and notes can be edited.
+                    </Alert>
+                )}
+
                 <TextField label="Title" value={form.title} onChange={(e) => patch({ title: e.target.value })} fullWidth required autoFocus />
 
                 <Box>
@@ -239,6 +387,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                         exclusive
                         size="small"
                         value={form.routineType}
+                        disabled={isEndedCalendar}
                         onChange={(_e, val: 'nextAction' | 'calendar' | null) => {
                             if (val) patch({ routineType: val });
                         }}
@@ -255,13 +404,24 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                         </Typography>
                     </FormLabel>
                     {/* key resets FrequencyPicker internal state when switching between create/edit */}
-                    <FrequencyPicker key={routine?._id ?? 'new'} value={form.rrule} onChange={(rrule) => patch({ rrule })} />
+                    <FrequencyPicker key={routine?._id ?? 'new'} value={form.rrule} onChange={(rrule) => patch({ rrule })} disabled={isEndedCalendar} />
                 </Box>
 
-                <EndsFields form={form} onPatch={patch} />
+                <TextField
+                    type="date"
+                    label="Start date"
+                    size="small"
+                    value={form.startDate}
+                    onChange={(e) => patch({ startDate: e.target.value })}
+                    slotProps={{ inputLabel: { shrink: true } }}
+                    helperText="Optional — anchors the schedule. Leave empty to start today."
+                    disabled={isEndedCalendar}
+                />
+
+                <EndsFields form={form} onPatch={patch} disabled={isEndedCalendar} />
 
                 {isCalendar ? (
-                    <CalendarFields form={form} onPatch={patch} calendarOptions={calendarOptions} />
+                    <CalendarFields form={form} onPatch={patch} calendarOptions={calendarOptions} disabled={isEndedCalendar} />
                 ) : (
                     <TemplateFields
                         form={form}
@@ -300,15 +460,17 @@ function CalendarFields({
     form,
     onPatch,
     calendarOptions,
+    disabled,
 }: {
     form: FormState;
     onPatch: (patch: Partial<FormState>) => void;
     calendarOptions: CalendarOption[];
+    disabled?: boolean;
 }) {
     const showPicker = calendarOptions.length > 1;
 
     return (
-        <Stack gap={1.5}>
+        <Stack gap={1.5} sx={disabled ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
             <Typography variant="caption" color="text.secondary" fontWeight={600}>
                 Calendar event settings
             </Typography>
@@ -319,6 +481,7 @@ function CalendarFields({
                     value={form.timeOfDay}
                     onChange={(e) => onPatch({ timeOfDay: e.target.value })}
                     size="small"
+                    required
                     slotProps={{ inputLabel: { shrink: true } }}
                 />
                 <TextField
@@ -354,9 +517,9 @@ function CalendarFields({
 
 // ── Ends section ──────────────────────────────────────────────────────────────
 
-function EndsFields({ form, onPatch }: { form: FormState; onPatch: (patch: Partial<FormState>) => void }) {
+function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (patch: Partial<FormState>) => void; disabled?: boolean }) {
     return (
-        <Box>
+        <Box sx={disabled ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
             <FormLabel>
                 <Typography variant="caption" color="text.secondary" className={styles.sectionLabel}>
                     Ends

@@ -8,9 +8,9 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
-import { maybePushToGCal } from '../lib/calendarPushback.js';
+import { gcalCreationInFlight, maybePushToGCal } from '../lib/calendarPushback.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { calendarRoutes } from '../routes/calendar.js';
+import { calendarRoutes, pickSplitParent } from '../routes/calendar.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
@@ -39,6 +39,9 @@ beforeEach(async () => {
         db.collection('calendarSyncConfigs').deleteMany({}),
     ]);
     vi.restoreAllMocks();
+    gcalCreationInFlight.clear();
+    // Mock getCalendarTimeZone globally — sync flows call it to refresh the cached timezone.
+    vi.spyOn(GoogleCalendarProvider.prototype, 'getCalendarTimeZone').mockResolvedValue('Asia/Jerusalem');
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -100,6 +103,7 @@ function makeSyncConfig(userId: string, integrationId: string, overrides: Partia
         calendarId: 'primary',
         isDefault: true,
         enabled: true,
+        timeZone: 'Asia/Jerusalem',
         createdTs: now,
         updatedTs: now,
         ...overrides,
@@ -346,6 +350,69 @@ describe('POST /calendar/integrations/:id/sync', () => {
             newTimeStart,
             newTimeEnd,
         });
+    });
+
+    it('merges a content-modified exception and updates item title and notes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-1', calendarIntegrationId: 'int-1' });
+        await routinesDAO.insertOne(routine);
+
+        // Insert an item for the occurrence date that will be content-modified
+        await itemsDAO.insertOne({
+            _id: 'item-content-ex',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: '2025-06-09T09:00:00Z',
+            timeEnd: '2025-06-09T09:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: '2025-06-09', type: 'modified', title: 'Retro', notes: '<p>Agenda: review Q2</p>' },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Verify the routine exception record stores markdown-converted notes
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(
+            expect.objectContaining({ date: '2025-06-09', type: 'modified', title: 'Retro', notes: 'Agenda: review Q2' }),
+        );
+
+        // Verify the item was updated with converted notes and lastSyncedNotes
+        const item = await itemsDAO.findByOwnerAndId('item-content-ex', userId);
+        expect(item?.title).toBe('Retro');
+        expect(item?.notes).toBe('Agenda: review Q2');
+        expect(item?.lastSyncedNotes).toBe('<p>Agenda: review Q2</p>');
+    });
+
+    it('does not generate spurious exceptions when instance matches master content', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-1',
+            calendarIntegrationId: 'int-1',
+            title: 'Standup',
+            lastSyncedNotes: '<p>Daily standup</p>',
+            template: { notes: 'Daily standup' },
+        });
+        await routinesDAO.insertOne(routine);
+
+        // getExceptions returns [] because instance matches master — no changes
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updated = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updated?.routineExceptions).toBeUndefined();
     });
 
     it('imports a new GCal event as a calendar item', async () => {
@@ -831,11 +898,12 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(item).toBeNull();
     });
 
-    it('trashes an existing item when its GCal event is moved to the past', async () => {
+    it('updates an existing item when its GCal event is moved to the past', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
+        const createdTime = dayjs().subtract(2, 'day').toISOString();
         const futureTime = dayjs().add(1, 'day').toISOString();
         const pastTime = dayjs().subtract(1, 'day').toISOString();
         await itemsDAO.insertOne({
@@ -847,12 +915,12 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
             timeEnd: futureTime,
             calendarEventId: 'evt-moved',
             calendarIntegrationId: 'int-1',
-            createdTs: futureTime,
-            updatedTs: futureTime,
+            createdTs: createdTime,
+            updatedTs: createdTime,
         });
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
-            events: [{ id: 'evt-moved', title: 'Was future', timeStart: pastTime, timeEnd: pastTime, updated: dayjs().toISOString(), status: 'confirmed' }],
+            events: [{ id: 'evt-moved', title: 'Now past', timeStart: pastTime, timeEnd: pastTime, updated: dayjs().toISOString(), status: 'confirmed' }],
             nextSyncToken: 'tok-1',
         });
 
@@ -860,10 +928,55 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(res.status).toBe(200);
 
         const item = await itemsDAO.findOne({ _id: 'item-moved-past' });
-        expect(item?.status).toBe('trash');
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('Now past');
+        expect(item?.timeStart).toBe(pastTime);
     });
 
-    it('does not trash a routine-managed item when its GCal event is moved to the past', async () => {
+    it('updates (not trashes) an in-progress event whose start is past but end is future', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const startTime = dayjs().subtract(1, 'hour').toISOString();
+        const endTime = dayjs().add(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-in-progress',
+            user: userId,
+            status: 'calendar',
+            title: 'In-progress meeting',
+            timeStart: startTime,
+            timeEnd: endTime,
+            calendarEventId: 'evt-in-progress',
+            calendarIntegrationId: 'int-1',
+            createdTs: startTime,
+            updatedTs: startTime,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-in-progress',
+                    title: 'In-progress meeting (edited)',
+                    timeStart: startTime,
+                    timeEnd: endTime,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    description: 'new notes',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-in-progress' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('In-progress meeting (edited)');
+    });
+
+    it('skips a routine-managed item when its GCal event is moved to the past', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -1716,7 +1829,32 @@ describe('calendar push-back — new items', () => {
         expect(createSpy).not.toHaveBeenCalled();
     });
 
-    it('skips routine-managed calendar items', async () => {
+    it('skips item creation when DB already has calendarEventId (concurrent push-back guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Snapshot passed in the op lacks calendarEventId (captured at queue-time).
+        const snapshotWithoutLink = makeItem(userId);
+
+        // But the DB record already has it — a concurrent push-back linked it first.
+        const itemInDb = makeItem(userId, {
+            calendarEventId: 'already-linked',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await itemsDAO.insertOne(itemInDb);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('duplicate-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: snapshotWithoutLink._id!, snapshot: snapshotWithoutLink }), mockBuildProvider());
+
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('does not use the single-event create path for routine-managed calendar items', async () => {
+        // Routine-managed items don't get their own GCal event — they're represented by the routine's
+        // master recurring event, with per-instance overrides when edited.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -1724,10 +1862,300 @@ describe('calendar push-back — new items', () => {
         const item = makeItem(userId, { routineId: 'routine-1' });
 
         const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-id');
+        // Without a routine in the DB, pushRoutineInstanceOverride also no-ops — so neither
+        // path touches GCal. Both are exclusive: createEvent is not called, and the override
+        // path exits early because the routine can't be resolved.
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
         expect(createSpy).not.toHaveBeenCalled();
+    });
+});
+
+describe('calendar push-back — routine instance overrides', () => {
+    async function setupRoutineWithEvent(userId: string, routineOverrides: Partial<RoutineInterface> = {}) {
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'recurring-master-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            ...routineOverrides,
+        });
+        await routinesDAO.insertOne(routine);
+        return routine;
+    }
+
+    it('pushes a single-instance override when a routine-generated item is edited', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-inst-1',
+            routineId: 'routine-1',
+            title: 'Moved standup',
+            timeStart: '2026-05-04T11:00:00.000Z',
+            timeEnd: '2026-05-04T11:30:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).toHaveBeenCalledOnce();
+        expect(spy.mock.calls[0]![0]).toBe('recurring-master-1');
+        expect(spy.mock.calls[0]![1]).toBe('2026-05-04'); // originalDate derived from timeStart
+        expect(spy.mock.calls[0]![2]).toMatchObject({ title: 'Moved standup', timeStart: '2026-05-04T11:00:00.000Z', timeEnd: '2026-05-04T11:30:00.000Z' });
+        expect(spy.mock.calls[0]![3]).toBe('primary'); // calendarId
+        expect(spy.mock.calls[0]![4]).toBe('Asia/Jerusalem'); // timeZone
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('uses the routine exception date as originalDate when the item was previously moved', async () => {
+        // Regression: on a subsequent edit, snapshot.timeStart is the MOVED date. The rrule
+        // occurrence date lives only on the routine's `modified` exception. Look it up.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId, {
+            routineExceptions: [
+                {
+                    date: '2026-05-04', // original rrule date
+                    type: 'modified' as const,
+                    itemId: 'item-inst-2',
+                    newTimeStart: '2026-05-05T09:00:00.000Z',
+                    newTimeEnd: '2026-05-05T09:30:00.000Z',
+                },
+            ],
+        });
+
+        const item = makeItem(userId, {
+            _id: 'item-inst-2',
+            routineId: 'routine-1',
+            title: 'Re-edited',
+            // This is the MOVED date from the prior edit — NOT the original rrule date.
+            timeStart: '2026-05-05T09:00:00.000Z',
+            timeEnd: '2026-05-05T09:30:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).toHaveBeenCalledOnce();
+        expect(spy.mock.calls[0]![1]).toBe('2026-05-04'); // original rrule date recovered from exception
+    });
+
+    it('no-ops when the routine is not linked to a GCal recurring event', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Routine exists but has no calendarEventId — can't push an override.
+        const unlinkedRoutine = makeRoutine(userId, { _id: 'routine-unlinked' });
+        await routinesDAO.insertOne(unlinkedRoutine);
+
+        const item = makeItem(userId, {
+            _id: 'item-no-link',
+            routineId: 'routine-unlinked',
+        });
+        await itemsDAO.insertOne(item);
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('no-ops when the routine cannot be found (orphaned routineId)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // No routine inserted.
+
+        const item = makeItem(userId, {
+            _id: 'item-orphan',
+            routineId: 'routine-missing',
+        });
+        await itemsDAO.insertOne(item);
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('no-ops when the snapshot has no timeStart', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        // Items without timeStart can't have a rrule date — skip gracefully.
+        const item = makeItem(userId, { _id: 'item-no-ts', routineId: 'routine-1', timeStart: undefined, timeEnd: undefined });
+
+        const spy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('cancels the GCal instance when a routine-generated item is trashed (skipped exception)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-1',
+            routineId: 'routine-1',
+            status: 'trash',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).toHaveBeenCalledOnce();
+        expect(cancelSpy).toHaveBeenCalledWith('recurring-master-1', '2026-04-27', 'primary');
+        expect(updateSpy).not.toHaveBeenCalled();
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('does NOT cancel the GCal instance when a routine-generated item is completed (done)', async () => {
+        // Matrix A8: completion is a GTD-local concept — the GCal occurrence must remain so other
+        // calendars / attendees still see the event. Cancelling on done would also round-trip a
+        // `deleted` exception back via GCal sync and flip the app-side item from `done` to `trash`.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-done-1',
+            routineId: 'routine-1',
+            status: 'done',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it('uses the prior modified exception date when trashing a previously-moved instance', async () => {
+        // Edit-then-trash: snapshot.timeStart is the MOVED date, but the rrule's originalDate
+        // lives only on the routine's `modified` exception. The cancellation must target the
+        // original rrule date, not the moved one.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId, {
+            routineExceptions: [
+                {
+                    date: '2026-04-27', // original rrule date
+                    type: 'modified' as const,
+                    itemId: 'item-trash-moved',
+                    newTimeStart: '2026-04-28T09:00:00.000Z',
+                    newTimeEnd: '2026-04-28T10:00:00.000Z',
+                },
+            ],
+        });
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-moved',
+            routineId: 'routine-1',
+            status: 'trash',
+            // Moved date — NOT the original rrule date.
+            timeStart: '2026-04-28T09:00:00.000Z',
+            timeEnd: '2026-04-28T10:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).toHaveBeenCalledOnce();
+        expect(cancelSpy.mock.calls[0]![1]).toBe('2026-04-27'); // original rrule date, recovered from modified exception
+    });
+
+    it('no-ops cancellation when the routine is not linked to a GCal recurring event', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const unlinkedRoutine = makeRoutine(userId, { _id: 'routine-unlinked-cancel' });
+        await routinesDAO.insertOne(unlinkedRoutine);
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-no-link',
+            routineId: 'routine-unlinked-cancel',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it('no-ops cancellation when routineId is orphaned (routine missing from DB)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-orphan',
+            routineId: 'routine-missing',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it('no-ops cancellation when the snapshot has no timeStart', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        // Without timeStart the helper can't derive an original rrule date — skip gracefully.
+        const item = makeItem(userId, {
+            _id: 'item-trash-no-ts',
+            routineId: 'routine-1',
+            status: 'trash',
+            timeStart: undefined,
+            timeEnd: undefined,
+        });
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
     });
 });
 
@@ -1748,7 +2176,7 @@ describe('calendar push-back — routines', () => {
 
         await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
 
-        expect(updateSpy).toHaveBeenCalledWith('gcal-recurring-1', routine, 'primary');
+        expect(updateSpy).toHaveBeenCalledWith('gcal-recurring-1', routine, 'primary', 'Asia/Jerusalem');
         // Verify lastPushedToGCalTs was stamped.
         const updated = await routinesDAO.findByOwnerAndId(routine._id, userId);
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
@@ -1773,6 +2201,32 @@ describe('calendar push-back — routines', () => {
         const updated = await routinesDAO.findByOwnerAndId(routine._id, userId);
         expect(updated!.calendarEventId).toBe('new-recurring-id');
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('skips routine creation when DB already has calendarEventId (concurrent push-back guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Snapshot passed in the op lacks calendarEventId (captured at queue-time).
+        const snapshotWithoutLink = makeRoutine(userId, {
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+
+        // But the DB record already has it — a concurrent push-back linked it first.
+        const routineInDb = makeRoutine(userId, {
+            calendarEventId: 'already-linked',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routineInDb);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('duplicate-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: snapshotWithoutLink._id, snapshot: snapshotWithoutLink }), mockBuildProvider());
+
+        expect(createSpy).not.toHaveBeenCalled();
     });
 
     it('skips non-calendar routines without calendarEventId', async () => {
@@ -1806,6 +2260,212 @@ describe('calendar push-back — routines', () => {
 
         expect(createSpy).not.toHaveBeenCalled();
     });
+
+    it('on routine delete: deletes GCal recurring event and trashes generated calendar items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-del',
+            calendarEventId: 'gcal-master-del',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        // Routine is NOT inserted into the DB: the caller (sync.ts) captures the snapshot pre-delete
+        // and then applyEntityOp hard-deletes the doc. By the time maybePushToGCal runs, the routine
+        // is already gone — the push-back must work off the snapshot alone.
+
+        const now = dayjs().toISOString();
+        await itemsDAO.insertMany([
+            { _id: 'gen-1', user: userId, status: 'calendar', title: 'Standup Mon', routineId: 'routine-del', createdTs: now, updatedTs: now },
+            { _id: 'gen-2', user: userId, status: 'calendar', title: 'Standup Mon next', routineId: 'routine-del', createdTs: now, updatedTs: now },
+            // Unrelated item (no routineId) must NOT be touched.
+            { _id: 'other', user: userId, status: 'calendar', title: 'Other cal item', createdTs: now, updatedTs: now },
+            // Item belonging to a different routine must NOT be touched.
+            {
+                _id: 'other-routine-cal',
+                user: userId,
+                status: 'calendar',
+                title: 'Other routine cal',
+                routineId: 'routine-other',
+                createdTs: now,
+                updatedTs: now,
+            },
+            // Item with the same routineId but a non-calendar status must NOT be touched —
+            // the cascade is scoped to the calendar projection of this routine.
+            {
+                _id: 'gen-nextaction',
+                user: userId,
+                status: 'nextAction',
+                title: 'NA sibling',
+                routineId: 'routine-del',
+                createdTs: now,
+                updatedTs: now,
+            },
+        ]);
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, opType: 'delete', snapshot: routine }), mockBuildProvider());
+
+        expect(deleteSpy).toHaveBeenCalledWith('gcal-master-del', 'primary');
+
+        const g1 = await itemsDAO.findOne({ _id: 'gen-1' });
+        const g2 = await itemsDAO.findOne({ _id: 'gen-2' });
+        const other = await itemsDAO.findOne({ _id: 'other' });
+        const otherRoutine = await itemsDAO.findOne({ _id: 'other-routine-cal' });
+        const naSibling = await itemsDAO.findOne({ _id: 'gen-nextaction' });
+        expect(g1?.status).toBe('trash');
+        expect(g2?.status).toBe('trash');
+        expect(other?.status).toBe('calendar');
+        expect(otherRoutine?.status).toBe('calendar');
+        expect(naSibling?.status).toBe('nextAction');
+
+        // Each cascade-trashed item records an update op so other devices sync the state change.
+        const ops = await operationsDAO.findArray({ entityId: { $in: ['gen-1', 'gen-2'] } });
+        expect(ops).toHaveLength(2);
+        expect(ops.every((op) => op.opType === 'update' && op.snapshot?.status === 'trash')).toBe(true);
+    });
+
+    it('on routine delete without calendarEventId: trashes generated items but skips GCal call', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, { _id: 'routine-nolink', routineType: 'nextAction' });
+        // No calendarEventId — nothing to remove from GCal.
+
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'gen-nextaction',
+            user: userId,
+            status: 'calendar',
+            title: 'Weird next-action with cal status',
+            routineId: 'routine-nolink',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, opType: 'delete', snapshot: routine }), mockBuildProvider());
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+        const item = await itemsDAO.findOne({ _id: 'gen-nextaction' });
+        expect(item?.status).toBe('trash');
+    });
+
+    it('on routine delete: swallows GCal provider errors and still trashes generated items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-err',
+            calendarEventId: 'gcal-err-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'gen-err',
+            user: userId,
+            status: 'calendar',
+            title: 'Instance',
+            routineId: 'routine-err',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockRejectedValue(new Error('boom'));
+
+        // Must not throw: provider failure is best-effort.
+        await expect(
+            maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, opType: 'delete', snapshot: routine }), mockBuildProvider()),
+        ).resolves.toBeUndefined();
+
+        const item = await itemsDAO.findOne({ _id: 'gen-err' });
+        expect(item?.status).toBe('trash');
+    });
+});
+
+describe('calendar push-back — concurrent in-flight guard', () => {
+    it('creates only one GCal recurring event when two create ops race concurrently', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-concurrent-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('new-recurring-id');
+
+        const op = makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine });
+        // Fire two push-backs concurrently for the same entity — simulates back-to-back flush batches.
+        await Promise.all([maybePushToGCal(op, mockBuildProvider()), maybePushToGCal(op, mockBuildProvider())]);
+
+        expect(createSpy).toHaveBeenCalledOnce();
+    });
+
+    it('creates only one GCal event when two create item ops race concurrently', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, { _id: 'item-concurrent-1' });
+        await itemsDAO.insertOne(item);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-gcal-id');
+
+        const op = makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item });
+        // Fire two push-backs concurrently for the same entity.
+        await Promise.all([maybePushToGCal(op, mockBuildProvider()), maybePushToGCal(op, mockBuildProvider())]);
+
+        expect(createSpy).toHaveBeenCalledOnce();
+    });
+
+    it('cleans up in-flight set when item GCal creation fails', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, { _id: 'item-error-cleanup-1' });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockRejectedValue(new Error('GCal API error'));
+
+        const op = makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item });
+        await maybePushToGCal(op, mockBuildProvider());
+
+        // The in-flight set must be cleaned up so subsequent retries are not permanently blocked.
+        expect(gcalCreationInFlight.has(item._id!)).toBe(false);
+    });
+
+    it('cleans up in-flight set when routine GCal creation fails', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-error-cleanup-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockRejectedValue(new Error('GCal API error'));
+
+        const op = makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine });
+        await maybePushToGCal(op, mockBuildProvider());
+
+        expect(gcalCreationInFlight.has(routine._id)).toBe(false);
+    });
 });
 
 // ─── Loop prevention (echo detection) ──────────────────────────────────────
@@ -1835,7 +2495,7 @@ describe('loop prevention — echo detection', () => {
         await itemsDAO.insertOne(existingItem);
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
-        // The event's `updated` timestamp is within the 60-second echo window.
+        // The event's `updated` timestamp is within the 5-second echo window.
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
                 {
@@ -1843,7 +2503,7 @@ describe('loop prevention — echo detection', () => {
                     title: 'Echoed Event — from GCal',
                     timeStart: existingItem.timeStart!,
                     timeEnd: existingItem.timeEnd!,
-                    updated: dayjs().add(5, 'second').toISOString(),
+                    updated: dayjs().add(2, 'second').toISOString(),
                     status: 'confirmed',
                 },
             ],
@@ -2208,7 +2868,7 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
                     title: 'Changed by echo',
                     timeStart: futureTs,
                     timeEnd: futureTs,
-                    updated: dayjs().add(10, 'second').toISOString(),
+                    updated: dayjs().add(2, 'second').toISOString(),
                     status: 'confirmed',
                     recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
                 },
@@ -2283,5 +2943,1549 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
 
         const item = await itemsDAO.findOne({ calendarEventId: 'recurring-master-6' });
         expect(item).toBeNull();
+    });
+
+    it('propagates GCal master title edit to all future generated items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-title-prop',
+                calendarEventId: 'master-title-prop',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Old name',
+                createdTs: oldTs,
+                updatedTs: oldTs,
+            }),
+        );
+
+        // Three future items on different days — all should get retitled.
+        const makeItem = (suffix: string, daysAhead: number): ItemInterface => ({
+            _id: `item-title-${suffix}`,
+            user: userId,
+            status: 'calendar',
+            title: 'Old name',
+            routineId: 'routine-title-prop',
+            timeStart: dayjs().add(daysAhead, 'day').format('YYYY-MM-DDT09:00:00'),
+            timeEnd: dayjs().add(daysAhead, 'day').format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+        await itemsDAO.insertOne(makeItem('a', 7));
+        await itemsDAO.insertOne(makeItem('b', 14));
+        await itemsDAO.insertOne(makeItem('c', 21));
+
+        // Use a Jerusalem-local 09:00 timeStart with explicit timezone offset so that
+        // `extractLocalTime` round-trips to exactly "09:00" — matching the existing routine's
+        // `calendarItemTemplate.timeOfDay`. Otherwise the inferred schedule would differ and the
+        // update path would regenerate items instead of just propagating the title.
+        const futureDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const gcalStart = dayjs.tz(`${futureDate}T09:00:00`, 'Asia/Jerusalem').format();
+        const gcalEnd = dayjs.tz(`${futureDate}T09:30:00`, 'Asia/Jerusalem').format();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-title-prop',
+                    title: 'New name',
+                    timeStart: gcalStart,
+                    timeEnd: gcalEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-title-prop',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const items = await itemsDAO.findArray({ routineId: 'routine-title-prop', status: 'calendar' });
+        expect(items).toHaveLength(3);
+        for (const item of items) {
+            expect(item.title).toBe('New name');
+            // IDs must be preserved — this is a rename, not a regenerate.
+            expect(['item-title-a', 'item-title-b', 'item-title-c']).toContain(item._id);
+        }
+    });
+
+    it('regenerates future items when GCal master rrule changes (Mon → Tue)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        // Anchor createdTs to a Monday so the rrule's DTSTART lines up with BYDAY=MO.
+        const monday = dayjs().day(1).add(1, 'week').startOf('day');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-rrule-swap',
+                calendarEventId: 'master-rrule-swap',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                createdTs: monday.toISOString(),
+                updatedTs: oldTs,
+            }),
+        );
+
+        const existingItemId = 'item-rrule-existing';
+        await itemsDAO.insertOne({
+            _id: existingItemId,
+            user: userId,
+            status: 'calendar',
+            title: 'Weekly',
+            routineId: 'routine-rrule-swap',
+            timeStart: monday.format('YYYY-MM-DDT09:00:00'),
+            timeEnd: monday.format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        // GCal master edit: recurrence now on Tuesday, start shifts 1 day.
+        const tuesday = monday.add(1, 'day');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-rrule-swap',
+                    title: 'Weekly',
+                    timeStart: tuesday.format('YYYY-MM-DDT09:00:00'),
+                    timeEnd: tuesday.format('YYYY-MM-DDT09:30:00'),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TU'],
+                },
+            ],
+            nextSyncToken: 'tok-rrule-swap',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Old Monday item is trashed; fresh Tuesday items are created.
+        const trashed = await itemsDAO.findOne({ _id: existingItemId });
+        expect(trashed!.status).toBe('trash');
+
+        const liveItems = await itemsDAO.findArray({ routineId: 'routine-rrule-swap', status: 'calendar' });
+        expect(liveItems.length).toBeGreaterThan(0);
+        for (const item of liveItems) {
+            // Tuesday = day 2 of the week.
+            expect(dayjs(item.timeStart).day()).toBe(2);
+        }
+    });
+
+    it('regenerates future items when GCal master duration changes (30 → 60)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const monday = dayjs().day(1).add(1, 'week').startOf('day');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-duration-change',
+                calendarEventId: 'master-duration-change',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Meeting',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                createdTs: monday.toISOString(),
+                updatedTs: oldTs,
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            }),
+        );
+
+        await itemsDAO.insertOne({
+            _id: 'item-duration-existing',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            routineId: 'routine-duration-change',
+            timeStart: monday.format('YYYY-MM-DDT09:00:00'),
+            timeEnd: monday.format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-duration-change',
+                    title: 'Meeting',
+                    timeStart: monday.format('YYYY-MM-DDT09:00:00'),
+                    timeEnd: monday.format('YYYY-MM-DDT10:00:00'),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-duration',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const trashed = await itemsDAO.findOne({ _id: 'item-duration-existing' });
+        expect(trashed!.status).toBe('trash');
+
+        const liveItems = await itemsDAO.findArray({ routineId: 'routine-duration-change', status: 'calendar' });
+        expect(liveItems.length).toBeGreaterThan(0);
+        for (const item of liveItems) {
+            const durationMin = dayjs(item.timeEnd).diff(dayjs(item.timeStart), 'minute');
+            expect(durationMin).toBe(60);
+        }
+    });
+
+    it('regenerates future items when GCal master timeOfDay changes (09:00 → 10:00)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const monday = dayjs().day(1).add(1, 'week').startOf('day');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-time-change',
+                calendarEventId: 'master-time-change',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Meeting',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                createdTs: monday.toISOString(),
+                updatedTs: oldTs,
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            }),
+        );
+
+        await itemsDAO.insertOne({
+            _id: 'item-time-existing',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            routineId: 'routine-time-change',
+            timeStart: monday.format('YYYY-MM-DDT09:00:00'),
+            timeEnd: monday.format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        // Use Jerusalem-local 10:00 with explicit timezone so `extractLocalTime` yields "10:00".
+        const gcalStart = dayjs.tz(`${monday.format('YYYY-MM-DD')}T10:00:00`, 'Asia/Jerusalem').format();
+        const gcalEnd = dayjs.tz(`${monday.format('YYYY-MM-DD')}T10:30:00`, 'Asia/Jerusalem').format();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-time-change',
+                    title: 'Meeting',
+                    timeStart: gcalStart,
+                    timeEnd: gcalEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-time',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const trashed = await itemsDAO.findOne({ _id: 'item-time-existing' });
+        expect(trashed!.status).toBe('trash');
+
+        const liveItems = await itemsDAO.findArray({ routineId: 'routine-time-change', status: 'calendar' });
+        expect(liveItems.length).toBeGreaterThan(0);
+        for (const item of liveItems) {
+            expect(item.timeStart?.slice(11, 16)).toBe('10:00');
+        }
+    });
+
+    it('preserves per-instance title overrides when GCal master title changes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const nextMon = dayjs().day(1).add(1, 'week').startOf('day');
+        const overrideDate = nextMon.format('YYYY-MM-DD');
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-title-override',
+                calendarEventId: 'master-title-override',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Old name',
+                createdTs: oldTs,
+                updatedTs: oldTs,
+                routineExceptions: [{ date: overrideDate, type: 'modified', title: 'Special name' }],
+            }),
+        );
+
+        // One regular future item (to be renamed) + one with a per-instance override (to be preserved).
+        await itemsDAO.insertOne({
+            _id: 'item-regular',
+            user: userId,
+            status: 'calendar',
+            title: 'Old name',
+            routineId: 'routine-title-override',
+            timeStart: nextMon.add(7, 'day').format('YYYY-MM-DDT09:00:00'),
+            timeEnd: nextMon.add(7, 'day').format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+        await itemsDAO.insertOne({
+            _id: 'item-overridden',
+            user: userId,
+            status: 'calendar',
+            title: 'Special name',
+            routineId: 'routine-title-override',
+            timeStart: `${overrideDate}T09:00:00`,
+            timeEnd: `${overrideDate}T09:30:00`,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        // Preserve the routine's 09:00 / 30m schedule so only title changes.
+        const futureDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const gcalStart = dayjs.tz(`${futureDate}T09:00:00`, 'Asia/Jerusalem').format();
+        const gcalEnd = dayjs.tz(`${futureDate}T09:30:00`, 'Asia/Jerusalem').format();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-title-override',
+                    title: 'New name',
+                    timeStart: gcalStart,
+                    timeEnd: gcalEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-override',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const regular = await itemsDAO.findOne({ _id: 'item-regular' });
+        expect(regular!.title).toBe('New name');
+        const overridden = await itemsDAO.findOne({ _id: 'item-overridden' });
+        expect(overridden!.title).toBe('Special name');
+    });
+
+    it('leaves past items untouched when GCal master title changes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-past-items',
+                calendarEventId: 'master-past-items',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Old name',
+                createdTs: oldTs,
+                updatedTs: oldTs,
+            }),
+        );
+
+        // Past item should keep its historical title regardless of master rename.
+        await itemsDAO.insertOne({
+            _id: 'item-past',
+            user: userId,
+            status: 'calendar',
+            title: 'Old name',
+            routineId: 'routine-past-items',
+            timeStart: dayjs().subtract(7, 'day').format('YYYY-MM-DDT09:00:00'),
+            timeEnd: dayjs().subtract(7, 'day').format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+        await itemsDAO.insertOne({
+            _id: 'item-future',
+            user: userId,
+            status: 'calendar',
+            title: 'Old name',
+            routineId: 'routine-past-items',
+            timeStart: dayjs().add(7, 'day').format('YYYY-MM-DDT09:00:00'),
+            timeEnd: dayjs().add(7, 'day').format('YYYY-MM-DDT09:30:00'),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        const futureDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const gcalStart = dayjs.tz(`${futureDate}T09:00:00`, 'Asia/Jerusalem').format();
+        const gcalEnd = dayjs.tz(`${futureDate}T09:30:00`, 'Asia/Jerusalem').format();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-past-items',
+                    title: 'New name',
+                    timeStart: gcalStart,
+                    timeEnd: gcalEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-past',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const past = await itemsDAO.findOne({ _id: 'item-past' });
+        expect(past!.title).toBe('Old name');
+        const future = await itemsDAO.findOne({ _id: 'item-future' });
+        expect(future!.title).toBe('New name');
+    });
+});
+
+// ── Notes / description sync ──────────────────────────────────────────────
+
+describe('notes/description sync — inbound', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('sets notes and lastSyncedNotes when importing a new GCal event with description', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-notes-1',
+                    title: 'Lunch',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: futureTs,
+                    status: 'confirmed',
+                    description: 'Bring salad',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ calendarEventId: 'evt-notes-1' });
+        expect(item?.notes).toBe('Bring salad');
+        expect(item?.lastSyncedNotes).toBe('Bring salad');
+    });
+
+    it('updates notes when GCal description changed and GCal is newer', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-notes-upd',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-notes-2',
+            calendarIntegrationId: 'int-1',
+            notes: 'Old notes',
+            lastSyncedNotes: 'Old notes',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        const newerTs = dayjs().toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-notes-2',
+                    title: 'Meeting',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: newerTs,
+                    status: 'confirmed',
+                    description: 'Updated from GCal',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-notes-upd' });
+        expect(item?.notes).toBe('Updated from GCal');
+        expect(item?.lastSyncedNotes).toBe('Updated from GCal');
+    });
+
+    it('preserves local notes when GCal description is unchanged (only title updated)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-notes-keep',
+            user: userId,
+            status: 'calendar',
+            title: 'Old title',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-notes-3',
+            calendarIntegrationId: 'int-1',
+            notes: 'My local notes',
+            lastSyncedNotes: 'Same as gcal',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        const newerTs = dayjs().toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-notes-3',
+                    title: 'New title',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: newerTs,
+                    status: 'confirmed',
+                    description: 'Same as gcal',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-notes-keep' });
+        expect(item?.title).toBe('New title');
+        expect(item?.notes).toBe('My local notes');
+    });
+
+    it('preserves local notes when GCal description changed but local is newer', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const newerTs = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-notes-local-wins',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-notes-4',
+            calendarIntegrationId: 'int-1',
+            notes: 'Locally edited notes',
+            lastSyncedNotes: 'Original synced',
+            createdTs: newerTs,
+            updatedTs: newerTs,
+        });
+
+        const olderTs = dayjs().subtract(1, 'hour').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-notes-4',
+                    title: 'Meeting',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: olderTs,
+                    status: 'confirmed',
+                    description: 'GCal description',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-notes-local-wins' });
+        expect(item?.notes).toBe('Locally edited notes');
+    });
+});
+
+describe('notes/description sync — outbound push-back', () => {
+    it('passes description to updateEvent when pushing item with notes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-ev-notes',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            notes: 'Push these notes',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        const updates = updateSpy.mock.calls[0]![2];
+        // Markdown is converted to HTML for GCal; lastSyncedNotes stores the HTML sent.
+        expect(updates).toHaveProperty('description', '<p>Push these notes</p>\n');
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated!.lastSyncedNotes).toBe('<p>Push these notes</p>\n');
+    });
+
+    it('passes empty description when pushing item without notes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-ev-no-notes',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        const updates = updateSpy.mock.calls[0]![2];
+        expect(updates).toHaveProperty('description', '');
+    });
+
+    it('sets lastSyncedNotes when creating a new GCal event with notes', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, { notes: 'New item notes' });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-gcal-notes-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated!.calendarEventId).toBe('new-gcal-notes-id');
+        // lastSyncedNotes stores HTML (the value sent to GCal), not the raw Markdown.
+        expect(updated!.lastSyncedNotes).toBe('<p>New item notes</p>\n');
+    });
+});
+
+// ─── pickSplitParent — unit tests ─────────────────────────────────────────
+
+describe('pickSplitParent', () => {
+    function makeCandidate(overrides: Partial<RoutineInterface>): RoutineInterface {
+        const now = dayjs().toISOString();
+        return {
+            _id: 'cand-1',
+            user: 'u',
+            title: 'Standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z',
+            template: {},
+            active: false,
+            createdTs: now,
+            updatedTs: now,
+            calendarSyncConfigId: 'sync-config-1',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            ...overrides,
+        };
+    }
+
+    it('returns the matching candidate on the happy path', () => {
+        const candidate = makeCandidate({});
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent?._id).toBe('cand-1');
+    });
+
+    it('returns null when no candidates qualify', () => {
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('E8 regression: rejects when title differs even if gap is within window', () => {
+        const candidate = makeCandidate({ title: 'Standup' });
+        const parent = pickSplitParent({
+            tail: { title: 'unrelated-E8-foo', rrule: 'FREQ=WEEKLY;BYDAY=WE', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-06T11:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('E7 regression: picks the title-matching chain even when another chain has a closer gap', () => {
+        // Wrong chain — closer gap but different title.
+        const wrong = makeCandidate({ _id: 'wrong', title: 'unrelated chain', rrule: 'FREQ=WEEKLY;BYDAY=TU;UNTIL=20260505T055959Z' });
+        // Right chain — same title; UNTIL placed just before the tail start (the typical GCal pattern).
+        const right = makeCandidate({ _id: 'right', title: 'E7 original', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260505T055959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'E7 original', rrule: 'FREQ=WEEKLY;BYDAY=TU,TH', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [wrong, right],
+        });
+        expect(parent?._id).toBe('right');
+    });
+
+    it('rejects when gap exceeds 1 day', () => {
+        const candidate = makeCandidate({ rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260501T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('rejects when tail start precedes UNTIL (negative gap)', () => {
+        const candidate = makeCandidate({ rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260510T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('rejects when calendarSyncConfigId differs', () => {
+        const candidate = makeCandidate({ calendarSyncConfigId: 'sync-config-other' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent).toBeNull();
+    });
+
+    it('accepts disjoint BYDAY (real splits usually change weekday, e.g. MO → TU)', () => {
+        const candidate = makeCandidate({ rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=TU', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent?._id).toBe('cand-1');
+    });
+
+    it('picks the smallest-gap candidate among multiple passing', () => {
+        const farther = makeCandidate({ _id: 'far', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T000000Z' });
+        const closer = makeCandidate({ _id: 'close', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [farther, closer],
+        });
+        expect(parent?._id).toBe('close');
+    });
+
+    it('tie-breaks on _id when gaps are equal', () => {
+        const a = makeCandidate({ _id: 'aaa', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z' });
+        const b = makeCandidate({ _id: 'bbb', rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260504T205959Z' });
+        const parent = pickSplitParent({
+            tail: { title: 'Standup', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [b, a],
+        });
+        expect(parent?._id).toBe('aaa');
+    });
+
+    it('normalizes whitespace and case when comparing titles', () => {
+        const candidate = makeCandidate({ title: 'Standup' });
+        const parent = pickSplitParent({
+            tail: { title: '  standup ', rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarSyncConfigId: 'sync-config-1', tailStart: '2026-05-05T06:00:00Z' },
+            candidates: [candidate],
+        });
+        expect(parent?._id).toBe('cand-1');
+    });
+});
+
+// ─── POST /calendar/integrations/:id/sync — split detection ──────────────
+
+describe('POST /calendar/integrations/:id/sync — split detection', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('links a new master to its split parent and pauses the parent (happy path)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'parent-routine',
+                calendarEventId: 'master-parent',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly sync',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                updatedTs: oldTs,
+            }),
+        );
+
+        const parentStart = dayjs().add(1, 'day').toISOString();
+        const parentEnd = dayjs().add(1, 'day').add(30, 'minute').toISOString();
+        const tailStart = dayjs().add(8, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const tailEnd = dayjs(tailStart).add(30, 'minute').toISOString();
+        const untilCompact = dayjs(tailStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-parent',
+                    title: 'Weekly sync',
+                    timeStart: parentStart,
+                    timeEnd: parentEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+                },
+                {
+                    id: 'master-tail',
+                    title: 'Weekly sync',
+                    timeStart: tailStart,
+                    timeEnd: tailEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TU'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const tail = await routinesDAO.findOne({ calendarEventId: 'master-tail' });
+        expect(tail).not.toBeNull();
+        expect(tail!.splitFromRoutineId).toBe('parent-routine');
+
+        const parent = await routinesDAO.findByOwnerAndId('parent-routine', userId);
+        expect(parent!.active).toBe(false);
+        expect(parent!.rrule).toContain('UNTIL=');
+    });
+
+    // Regression for the GCal "this and following + time shift" bug: the tail routine arrived
+    // via sync but its calendar items were never generated, because createRoutineFromGCal only
+    // stored the routine. Symptom: parent's future items got trashed past UNTIL (correct), tail
+    // had zero items, so the user saw "two routines, same name, items missing for the tail".
+    it('generates calendar items for the new tail routine when GCal splits with a time shift', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'parent-shift',
+                calendarEventId: 'master-parent-shift',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Daily standup',
+                rrule: 'FREQ=DAILY',
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                updatedTs: oldTs,
+            }),
+        );
+
+        // Parent retains its original 09:00 timing; tail picks up the same series at 11:00 the next day.
+        const parentStart = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const parentEnd = dayjs(parentStart).add(30, 'minute').toISOString();
+        const tailStart = dayjs().add(2, 'day').hour(11).minute(0).second(0).millisecond(0).toISOString();
+        const tailEnd = dayjs(tailStart).add(30, 'minute').toISOString();
+        const untilCompact = dayjs(tailStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-parent-shift',
+                    title: 'Daily standup',
+                    timeStart: parentStart,
+                    timeEnd: parentEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=DAILY;UNTIL=${untilCompact}`],
+                },
+                {
+                    id: 'master-tail-shift',
+                    title: 'Daily standup',
+                    timeStart: tailStart,
+                    timeEnd: tailEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const tail = await routinesDAO.findOne({ calendarEventId: 'master-tail-shift' });
+        expect(tail).not.toBeNull();
+        expect(tail!.splitFromRoutineId).toBe('parent-shift');
+        expect(tail!.calendarItemTemplate?.timeOfDay).toBe('11:00');
+
+        // The tail must have its future calendar items materialised — otherwise the user sees a
+        // routine with no items after the split. All items must use the new 11:00 timeOfDay.
+        const tailItems = await itemsDAO.findArray({ user: userId, routineId: tail!._id, status: 'calendar' });
+        expect(tailItems.length).toBeGreaterThan(0);
+        for (const item of tailItems) {
+            expect(item.timeStart).toBeDefined();
+            expect(dayjs(item.timeStart).format('HH:mm')).toBe('11:00');
+        }
+    });
+
+    it('E8 regression: does not link an unrelated master whose start happens to fall within the gap window', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Pre-seed a capped parent routine (already paused by a prior sync).
+        const untilIso = dayjs().add(7, 'day').toISOString();
+        const untilCompact = dayjs(untilIso).utc().format('YYYYMMDD[T]HHmmss[Z]');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'capped-unrelated',
+                calendarEventId: 'master-capped',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly sync',
+                rrule: `FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`,
+                active: false,
+                updatedTs: dayjs().toISOString(),
+            }),
+        );
+
+        // New, unrelated master: different title, different BYDAY, but start falls inside the 0–1 day window after UNTIL.
+        const unrelatedStart = dayjs(untilIso).add(1, 'hour').toISOString();
+        const unrelatedEnd = dayjs(unrelatedStart).add(1, 'hour').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-unrelated',
+                    title: 'Unrelated event',
+                    timeStart: unrelatedStart,
+                    timeEnd: unrelatedEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=WE'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const unrelated = await routinesDAO.findOne({ calendarEventId: 'master-unrelated' });
+        expect(unrelated).not.toBeNull();
+        expect(unrelated!.splitFromRoutineId).toBeUndefined();
+    });
+
+    it('flips active to false when GCal newly adds UNTIL to an existing routine', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-gets-capped',
+                calendarEventId: 'master-gets-capped',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly sync',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                active: true,
+                updatedTs: oldTs,
+            }),
+        );
+
+        // Future calendar item that should be trashed by the UNTIL cap.
+        const futureItemStart = dayjs().add(30, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'future-item',
+            user: userId,
+            status: 'calendar',
+            title: 'Weekly sync',
+            timeStart: futureItemStart,
+            timeEnd: dayjs(futureItemStart).add(30, 'minute').toISOString(),
+            routineId: 'routine-gets-capped',
+            calendarEventId: 'master-gets-capped',
+            calendarIntegrationId: 'int-1',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        const untilIso = dayjs().add(7, 'day').toISOString();
+        const untilCompact = dayjs(untilIso).utc().format('YYYYMMDD[T]HHmmss[Z]');
+        const eventStart = dayjs().add(1, 'day').toISOString();
+        const eventEnd = dayjs(eventStart).add(30, 'minute').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-gets-capped',
+                    title: 'Weekly sync',
+                    timeStart: eventStart,
+                    timeEnd: eventEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findByOwnerAndId('routine-gets-capped', userId);
+        expect(routine!.active).toBe(false);
+        expect(routine!.rrule).toContain('UNTIL=');
+
+        // Future item past UNTIL should be trashed.
+        const item = await itemsDAO.findByOwnerAndId('future-item', userId);
+        expect(item!.status).toBe('trash');
+
+        // The update operation snapshot should carry active: false so other devices sync it.
+        const ops = await operationsDAO.findArray({ entityId: 'routine-gets-capped', entityType: 'routine' });
+        const routineUpdateOp = ops.find((op: OperationInterface) => op.opType === 'update');
+        expect(routineUpdateOp).toBeDefined();
+        expect((routineUpdateOp!.snapshot as RoutineInterface).active).toBe(false);
+    });
+
+    it('does not re-flip active on repeat sync of an already-capped, already-inactive parent', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const untilIso = dayjs().add(7, 'day').toISOString();
+        const untilCompact = dayjs(untilIso).utc().format('YYYYMMDD[T]HHmmss[Z]');
+        const oldTs = dayjs().subtract(2, 'hour').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'already-capped',
+                calendarEventId: 'master-already-capped',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Weekly sync',
+                rrule: `FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`,
+                active: false,
+                updatedTs: oldTs,
+            }),
+        );
+
+        const eventStart = dayjs().add(1, 'day').toISOString();
+        const eventEnd = dayjs(eventStart).add(30, 'minute').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-already-capped',
+                    title: 'Weekly sync',
+                    timeStart: eventStart,
+                    timeEnd: eventEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findByOwnerAndId('already-capped', userId);
+        expect(routine!.active).toBe(false);
+    });
+
+    it('does not treat a freshly-imported tail as a parent for another freshly-imported tail in the same cycle', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // No pre-existing routine: both events are new this cycle. One carries UNTIL (resembles a
+        // capped series) and the other's start falls within the 0–1 day gap — but since neither
+        // existed before the import, detectAndLinkSplits must leave both unlinked.
+        const tailA_Start = dayjs().add(10, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const tailA_End = dayjs(tailA_Start).add(30, 'minute').toISOString();
+        const untilCompact = dayjs(tailA_Start).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+        const tailB_Start = dayjs(tailA_Start).add(1, 'hour').toISOString();
+        const tailB_End = dayjs(tailB_Start).add(30, 'minute').toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-new-capped',
+                    title: 'Weekly sync',
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+                },
+                {
+                    id: 'master-new-tailA',
+                    title: 'Weekly sync',
+                    timeStart: tailA_Start,
+                    timeEnd: tailA_End,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TU'],
+                },
+                {
+                    id: 'master-new-tailB',
+                    title: 'Weekly sync',
+                    timeStart: tailB_Start,
+                    timeEnd: tailB_End,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=WE'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const tailA = await routinesDAO.findOne({ calendarEventId: 'master-new-tailA' });
+        const tailB = await routinesDAO.findOne({ calendarEventId: 'master-new-tailB' });
+        expect(tailA!.splitFromRoutineId).toBeUndefined();
+        expect(tailB!.splitFromRoutineId).toBeUndefined();
+    });
+});
+
+// ─── Routine startDate ──────────────────────────────────────────────────────
+
+describe('routine startDate', () => {
+    it('seriesStartDate uses startDate when set, else createdTs', async () => {
+        // Late import to avoid circular load ordering with rrule bundle.
+        const { seriesStartDate } = await import('../calendarProviders/GoogleCalendarProvider.js');
+        const base = makeRoutine('u-any', { createdTs: '2026-01-01T00:00:00.000Z', rrule: 'FREQ=DAILY' });
+        expect(seriesStartDate(base)).toBe('2026-01-01');
+        const withStartDate = { ...base, startDate: '2026-06-15' };
+        expect(seriesStartDate(withStartDate)).toBe('2026-06-15');
+    });
+
+    it('seriesStartDate with startDate > UNTIL throws', async () => {
+        const { seriesStartDate } = await import('../calendarProviders/GoogleCalendarProvider.js');
+        const routine = makeRoutine('u-any', {
+            createdTs: '2026-01-01T00:00:00.000Z',
+            startDate: '2026-12-01',
+            rrule: 'FREQ=DAILY;UNTIL=20260401T235959Z',
+        });
+        expect(() => seriesStartDate(routine)).toThrow(/no occurrences/);
+    });
+
+    it('createRecurringEvent anchors GCal DTSTART on startDate (not createdTs)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: '2026-01-01T00:00:00.000Z',
+            startDate: '2026-06-15',
+            rrule: 'FREQ=DAILY',
+        });
+        await routinesDAO.insertOne(routine);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-new-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        // createRecurringEvent itself computes seriesStartDate internally — we assert it was called
+        // with the routine that has startDate set.
+        expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ startDate: '2026-06-15' }), 'primary', 'Asia/Jerusalem');
+    });
+});
+
+// ─── Routine pause ───────────────────────────────────────────────────────────
+
+describe('routine pause', () => {
+    it('pause pushback caps the GCal master with UNTIL=<yesterday> and leaves eventId stable', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routineActive = makeRoutine(userId, {
+            calendarEventId: 'gcal-master-pause',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: '2026-01-01T10:00:00.000Z',
+        });
+        await routinesDAO.insertOne(routineActive);
+        // Seed a prior operation so handleRoutinePush detects the active transition.
+        await operationsDAO.insertOne({
+            _id: 'op-prior',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-01T09:59:00.000Z',
+            entityType: 'routine',
+            entityId: routineActive._id,
+            opType: 'create',
+            snapshot: routineActive,
+        });
+
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockResolvedValue(undefined);
+
+        const pausedSnapshot: RoutineInterface = { ...routineActive, active: false, updatedTs: '2026-01-01T11:00:00.000Z' };
+        await routinesDAO.replaceById(routineActive._id, pausedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, { entityType: 'routine', entityId: pausedSnapshot._id, snapshot: pausedSnapshot, ts: '2026-01-01T11:00:00.000Z' }),
+            mockBuildProvider(),
+        );
+
+        expect(capSpy).toHaveBeenCalledOnce();
+        expect(capSpy).toHaveBeenCalledWith('gcal-master-pause', expect.stringMatching(/^\d{8}T235959Z$/), 'primary', 'Asia/Jerusalem');
+        // steady-state updateRecurringEvent must NOT fire alongside the cap.
+        expect(updateSpy).not.toHaveBeenCalled();
+    });
+
+    it('pause pushback trashes future items and leaves past/done items alone', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-pause-items',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: '2026-01-02T10:00:00.000Z',
+        });
+        await routinesDAO.insertOne(routine);
+        // Seed prior op with active=true.
+        await operationsDAO.insertOne({
+            _id: 'op-prior-2',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-02T09:59:00.000Z',
+            entityType: 'routine',
+            entityId: routine._id,
+            opType: 'create',
+            snapshot: routine,
+        });
+
+        const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+        const yesterdayStr = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        const tomorrowStr = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        await itemsDAO.insertMany([
+            {
+                _id: 'past-done',
+                user: userId,
+                status: 'done',
+                title: 'past-done',
+                routineId: routine._id,
+                timeStart: `${yesterdayStr}T09:00:00`,
+                createdTs: yesterdayStr,
+                updatedTs: yesterdayStr,
+            },
+            {
+                _id: 'future-calendar',
+                user: userId,
+                status: 'calendar',
+                title: 'future',
+                routineId: routine._id,
+                timeStart: `${tomorrowStr}T09:00:00`,
+                createdTs: todayStr,
+                updatedTs: todayStr,
+            },
+        ]);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+
+        const pausedSnapshot: RoutineInterface = { ...routine, active: false, updatedTs: '2026-01-02T11:00:00.000Z' };
+        await routinesDAO.replaceById(routine._id, pausedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, { entityType: 'routine', entityId: pausedSnapshot._id, snapshot: pausedSnapshot, ts: '2026-01-02T11:00:00.000Z' }),
+            mockBuildProvider(),
+        );
+
+        const future = await itemsDAO.findByOwnerAndId('future-calendar', userId);
+        const past = await itemsDAO.findByOwnerAndId('past-done', userId);
+        expect(future!.status).toBe('trash');
+        expect(past!.status).toBe('done'); // untouched
+    });
+
+    it('capRecurringEvent strips existing UNTIL/COUNT and appends the new UNTIL (unit-level)', async () => {
+        const { rrulePinnedUntil } = await import('../calendarProviders/GoogleCalendarProvider.js');
+        // Pre-existing UNTIL — rewritten.
+        expect(rrulePinnedUntil('RRULE:FREQ=DAILY;UNTIL=20260301T235959Z', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z');
+        // Pre-existing COUNT — stripped (UNTIL and COUNT are mutually exclusive).
+        expect(rrulePinnedUntil('RRULE:FREQ=WEEKLY;COUNT=5;BYDAY=MO', '20260423T235959Z')).toBe('RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260423T235959Z');
+        // No prior cap.
+        expect(rrulePinnedUntil('RRULE:FREQ=DAILY', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z');
+    });
+
+    it('resume pushback: fires updateRecurringEvent (clears UNTIL) and regenerates future items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Routine currently paused (active=false). Prior op is the pause; the NEW op flips active=true.
+        const pausedRoutine = makeRoutine(userId, {
+            _id: 'routine-resume',
+            calendarEventId: 'gcal-master-resume',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: false,
+            updatedTs: '2026-01-05T09:00:00.000Z',
+        });
+        await routinesDAO.insertOne(pausedRoutine);
+        await operationsDAO.insertOne({
+            _id: 'op-paused-prior',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-05T09:00:00.000Z',
+            entityType: 'routine',
+            entityId: pausedRoutine._id,
+            opType: 'update',
+            snapshot: pausedRoutine,
+        });
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockResolvedValue(undefined);
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+
+        const resumedSnapshot: RoutineInterface = { ...pausedRoutine, active: true, updatedTs: '2026-01-05T11:00:00.000Z' };
+        await routinesDAO.replaceById(pausedRoutine._id, resumedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, {
+                _id: 'op-resume-current',
+                entityType: 'routine',
+                entityId: resumedSnapshot._id,
+                snapshot: resumedSnapshot,
+                ts: '2026-01-05T11:00:00.000Z',
+            }),
+            mockBuildProvider(),
+        );
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        expect(capSpy).not.toHaveBeenCalled();
+    });
+
+    it('two back-to-back pause ops: cap fires exactly once (second op sees first as prior)', async () => {
+        // I7 regression: when two pause ops land in quick succession for the same routine (e.g. from
+        // two flush batches), the pre-fix `readPriorActiveFlag` excluded only the current op by _id.
+        // That made BOTH pause ops see each other as "prior" and infer priorActive=false → no
+        // transition → skip cap. Result: GCal master never gets UNTIL, and the live pause in the I7
+        // smoke case left the recurring series un-capped. Strictly-before (ts, _id) ordering fixes it.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routineActive = makeRoutine(userId, {
+            _id: 'routine-double-pause',
+            calendarEventId: 'gcal-master-double',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: '2026-04-24T18:59:00.000Z',
+        });
+        await routinesDAO.insertOne(routineActive);
+        await operationsDAO.insertOne({
+            _id: 'op-prior-active',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-04-24T18:59:00.000Z',
+            entityType: 'routine',
+            entityId: routineActive._id,
+            opType: 'create',
+            snapshot: routineActive,
+        });
+
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+
+        // First pause op lands (ts = 19:00:00.219Z, matching the live repro).
+        const pausedSnapshot: RoutineInterface = { ...routineActive, active: false, updatedTs: '2026-04-24T19:00:00.219Z' };
+        await routinesDAO.replaceById(routineActive._id, pausedSnapshot);
+        const pauseOp1: OperationInterface = {
+            _id: 'op-pause-1',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-04-24T19:00:00.219Z',
+            entityType: 'routine',
+            entityId: pausedSnapshot._id,
+            opType: 'update',
+            snapshot: pausedSnapshot,
+        };
+        await operationsDAO.insertOne(pauseOp1);
+        await maybePushToGCal(pauseOp1, mockBuildProvider());
+
+        // Second pause op lands (ts = 19:00:00.435Z) — same snapshot (active still false).
+        const pauseOp2: OperationInterface = {
+            _id: 'op-pause-2',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-04-24T19:00:00.435Z',
+            entityType: 'routine',
+            entityId: pausedSnapshot._id,
+            opType: 'update',
+            snapshot: { ...pausedSnapshot, updatedTs: '2026-04-24T19:00:00.435Z' },
+        };
+        await operationsDAO.insertOne(pauseOp2);
+        await maybePushToGCal(pauseOp2, mockBuildProvider());
+
+        expect(capSpy).toHaveBeenCalledOnce();
+        expect(capSpy).toHaveBeenCalledWith('gcal-master-double', expect.stringMatching(/^\d{8}T235959Z$/), 'primary', 'Asia/Jerusalem');
+    });
+
+    it('readPriorActiveFlag: same-updatedTs collision is resolved by op._id, not timestamp', async () => {
+        // Two devices pushed concurrently and produced ops with identical updatedTs on the routine
+        // snapshot. The prior op is the active=true create; the new op flips to active=false.
+        // Classifying by updatedTs would fail to exclude the new op; classifying by op._id succeeds.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const sharedUpdatedTs = '2026-01-06T10:00:00.000Z';
+        const routineCreate = makeRoutine(userId, {
+            _id: 'routine-collision',
+            calendarEventId: 'gcal-master-collision',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: sharedUpdatedTs,
+        });
+        await routinesDAO.insertOne(routineCreate);
+        await operationsDAO.insertOne({
+            _id: 'op-create',
+            user: userId,
+            deviceId: 'device-1',
+            ts: sharedUpdatedTs,
+            entityType: 'routine',
+            entityId: routineCreate._id,
+            opType: 'create',
+            snapshot: routineCreate,
+        });
+
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+
+        // New op: same updatedTs, but active=false. Must be recognized as a transition → cap.
+        const pausedSnapshot: RoutineInterface = { ...routineCreate, active: false };
+        await routinesDAO.replaceById(routineCreate._id, pausedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, {
+                _id: 'op-pause-collision',
+                entityType: 'routine',
+                entityId: pausedSnapshot._id,
+                snapshot: pausedSnapshot,
+                ts: sharedUpdatedTs,
+            }),
+            mockBuildProvider(),
+        );
+
+        expect(capSpy).toHaveBeenCalledOnce();
+    });
+
+    it('pause batch with N concurrent item-trash ops: cap fires; per-instance cancellations are skipped', async () => {
+        // Regression: when the user pauses a routine, the client emits one routine-pause op plus
+        // N item-trash ops for the future generated items in a single sync-push batch. All N+1
+        // pushbacks ran in parallel. The N parallel `cancelRecurringInstance` patches against GCal
+        // raced with `capRecurringEvent` and dropped the just-written UNTIL from the master's
+        // recurrence. Fix: when the routine is paused, skip per-instance cancellations entirely —
+        // the cap covers them.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routineActive = makeRoutine(userId, {
+            _id: 'routine-batch-pause',
+            calendarEventId: 'gcal-master-batch-pause',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: '2026-01-10T09:00:00.000Z',
+        });
+        await routinesDAO.insertOne(routineActive);
+        // Seed prior op (active=true) so handleRoutinePush sees the active→inactive transition.
+        await operationsDAO.insertOne({
+            _id: 'op-batch-prior',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-10T09:00:00.000Z',
+            entityType: 'routine',
+            entityId: routineActive._id,
+            opType: 'create',
+            snapshot: routineActive,
+        });
+
+        // Mirror the client batch: routine flips to active=false in the DB BEFORE pushbacks run
+        // (sync.ts applies entity ops before fanning out push-back). Each item-trash op carries a
+        // routine-generated calendar item snapshot.
+        const pausedSnapshot: RoutineInterface = { ...routineActive, active: false, updatedTs: '2026-01-10T10:00:00.000Z' };
+        await routinesDAO.replaceById(routineActive._id, pausedSnapshot);
+
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        const itemCount = 5;
+        const itemOps: OperationInterface[] = Array.from({ length: itemCount }, (_, i) => {
+            const day = dayjs('2026-01-11').add(i, 'day').format('YYYY-MM-DD');
+            const trashedItem: ItemInterface = {
+                _id: `item-trash-${i}`,
+                user: userId,
+                status: 'trash',
+                title: `Standup ${day}`,
+                routineId: routineActive._id,
+                timeStart: `${day}T09:00:00`,
+                timeEnd: `${day}T09:30:00`,
+                createdTs: '2026-01-10T08:00:00.000Z',
+                updatedTs: '2026-01-10T10:00:00.000Z',
+            };
+            return {
+                _id: `op-trash-${i}`,
+                user: userId,
+                deviceId: 'device-1',
+                ts: '2026-01-10T10:00:00.000Z',
+                entityType: 'item',
+                entityId: trashedItem._id!,
+                opType: 'update',
+                snapshot: trashedItem,
+            };
+        });
+        const pauseOp: OperationInterface = {
+            _id: 'op-batch-pause',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-10T10:00:00.000Z',
+            entityType: 'routine',
+            entityId: pausedSnapshot._id,
+            opType: 'update',
+            snapshot: pausedSnapshot,
+        };
+        await operationsDAO.insertMany([...itemOps, pauseOp]);
+
+        // Fan out pushbacks in parallel — same shape as sync.ts line 200.
+        await Promise.all([...itemOps, pauseOp].map((op) => maybePushToGCal(op, mockBuildProvider())));
+
+        expect(capSpy).toHaveBeenCalledOnce();
+        expect(capSpy).toHaveBeenCalledWith('gcal-master-batch-pause', expect.stringMatching(/^\d{8}T235959Z$/), 'primary', 'Asia/Jerusalem');
+        // Per-instance cancellations must be skipped when the routine is paused — racing them
+        // against the cap caused GCal to drop UNTIL from the master.
+        expect(cancelSpy).not.toHaveBeenCalled();
     });
 });

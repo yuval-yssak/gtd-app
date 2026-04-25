@@ -9,7 +9,7 @@ export async function getOrCreateDeviceId(db: IDBPDatabase<MyDB>): Promise<strin
     }
 
     const deviceId = crypto.randomUUID();
-    await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: dayjs(0).toISOString() });
+    await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: dayjs(0).toISOString(), flushingTs: null });
     return deviceId;
 }
 

@@ -3,7 +3,7 @@ import type { IDBPDatabase } from 'idb';
 import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { deleteItemById, putItem } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
-import { createNextRoutineItem, generateCalendarItemsToHorizon, RruleExhaustedError } from './routineItemHelpers';
+import { createNextRoutineItem, isCalendarRoutineExhausted, RruleExhaustedError } from './routineItemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
 
@@ -151,6 +151,30 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
     return updated;
 }
 
+export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
+    // Someday/Maybe carries the same shape as inbox — no schedule, context, or waitingFor metadata.
+    const {
+        workContextIds: _wc,
+        energy: _e,
+        time: _t,
+        focus: _f,
+        urgent: _u,
+        expectedBy: _eb,
+        ignoreBefore: _ib,
+        timeStart: _ts,
+        timeEnd: _te,
+        calendarEventId: _ce,
+        calendarIntegrationId: _ci,
+        calendarSyncConfigId: _csc,
+        waitingForPersonId: _wfp,
+        ...rest
+    } = item;
+    const updated: StoredItem = { ...rest, status: 'somedayMaybe', updatedTs: nowIso() };
+    await putItem(db, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    return updated;
+}
+
 export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
     await putItem(db, updated);
@@ -211,18 +235,24 @@ async function addCalendarException(db: IDBPDatabase<MyDB>, routine: StoredRouti
 /**
  * Handle next-item generation for calendar routines.
  * Before-due trash: record a skipped exception so the date is not regenerated.
- * All cases: extend the horizon to fill any gaps (e.g. item at the far end of the window).
+ * Disposal never extends the horizon — the initial horizon pass at routine creation (and any
+ * subsequent rrule-edit/split regen) is the sole generator. Tying regen to disposal caused the
+ * matrix-A8 phantom duplicate when a race around the disposal wrote today's regenerated `calendar`
+ * item before the `done` item was visible to the dedupe filter. Horizon rollover over calendar
+ * time is a separate concern handled by the split/rrule-edit paths, not by dispose.
+ * After recording the exception (if any), if the series has no live items left and no future
+ * rrule occurrences, deactivate the routine — covers `COUNT=1` one-shots and otherwise-consumed
+ * series so they don't linger as active rows on the Routines page.
  */
 async function createNextCalendarRoutineItem(db: IDBPDatabase<MyDB>, item: StoredItem, routine: StoredRoutine, disposalKind: 'done' | 'trash'): Promise<void> {
     const { timeStart } = item;
-
-    if (disposalKind === 'trash' && timeStart !== undefined && dayjs().isBefore(dayjs(timeStart))) {
-        const routineWithException = await addCalendarException(db, routine, dayjs(timeStart).format('YYYY-MM-DD'));
-        await generateCalendarItemsToHorizon(db, item.userId, routineWithException);
-        return;
+    const effectiveRoutine =
+        disposalKind === 'trash' && timeStart !== undefined && dayjs().isBefore(dayjs(timeStart))
+            ? await addCalendarException(db, routine, dayjs(timeStart).format('YYYY-MM-DD'))
+            : routine;
+    if (await isCalendarRoutineExhausted(db, item.userId, effectiveRoutine)) {
+        await updateRoutine(db, { ...effectiveRoutine, active: false });
     }
-
-    await generateCalendarItemsToHorizon(db, item.userId, routine);
 }
 
 // ── Generic edit ──────────────────────────────────────────────────────────────
@@ -232,6 +262,38 @@ export async function updateItem(db: IDBPDatabase<MyDB>, item: StoredItem): Prom
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
     return updated;
+}
+
+/**
+ * Records a `modified` exception on the routine for the given occurrence date so future
+ * series regeneration keeps the override. Idempotent — re-recording on the same date updates
+ * the exception in place rather than appending duplicates.
+ * `originalDate` is the ISO date of the occurrence the item was generated for — typically
+ * dayjs(item.timeStart).format('YYYY-MM-DD') _before_ the user's time edit.
+ */
+export async function recordRoutineInstanceModification(
+    db: IDBPDatabase<MyDB>,
+    routineId: string,
+    originalDate: string,
+    override: { itemId: string; newTimeStart?: string; newTimeEnd?: string; title?: string; notes?: string },
+): Promise<void> {
+    const routine = await getRoutineById(db, routineId);
+    if (!routine) {
+        return;
+    }
+    const existing = routine.routineExceptions ?? [];
+    const filtered = existing.filter((e) => e.date !== originalDate);
+    // Explicit-omission pattern (matches clarify helpers) — exactOptionalPropertyTypes disallows undefined assignment.
+    const entry = {
+        date: originalDate,
+        type: 'modified' as const,
+        itemId: override.itemId,
+        ...(override.newTimeStart ? { newTimeStart: override.newTimeStart } : {}),
+        ...(override.newTimeEnd ? { newTimeEnd: override.newTimeEnd } : {}),
+        ...(override.title ? { title: override.title } : {}),
+        ...(override.notes ? { notes: override.notes } : {}),
+    };
+    await updateRoutine(db, { ...routine, routineExceptions: [...filtered, entry] });
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────

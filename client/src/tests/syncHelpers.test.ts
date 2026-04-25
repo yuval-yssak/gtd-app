@@ -52,7 +52,7 @@ let db: IDBPDatabase<MyDB>;
 beforeEach(async () => {
     db = await openTestDB();
     // Seed a deviceSyncState so flushSyncQueue/pullFromServer can read deviceId and lastSyncedTs.
-    await db.put('deviceSyncState', { _id: 'local', deviceId: 'device-test', lastSyncedTs: '1970-01-01T00:00:00.000Z' });
+    await db.put('deviceSyncState', { _id: 'local', deviceId: 'device-test', lastSyncedTs: '1970-01-01T00:00:00.000Z', flushingTs: null });
 });
 
 afterEach(() => {
@@ -266,6 +266,52 @@ describe('pullFromServer — routine/person/workContext ops', () => {
         await pullFromServer(db);
 
         expect(await db.get('workContexts', 'wc-2')).toBeUndefined();
+    });
+});
+
+describe('pullFromServer — calendar routine sync', () => {
+    function serverCalendarRoutine(id: string, rrule = 'FREQ=DAILY;INTERVAL=1'): Record<string, unknown> & { user: string } {
+        return {
+            _id: id,
+            user: USER_ID,
+            userId: USER_ID,
+            title: 'Daily standup',
+            routineType: 'calendar',
+            rrule,
+            template: {},
+            active: true,
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            createdTs: '2025-01-01T00:00:00.000Z',
+            updatedTs: '2025-06-01T00:00:00.000Z',
+        };
+    }
+
+    // Item generation is owned by the originating device, not by devices receiving the routine
+    // via sync. Running it here would race with the originator and produce duplicate items
+    // (one set from regen, another from the originator's push).
+    it('does NOT generate items when a calendar routine create arrives via sync', async () => {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'routine', entityId: 'cal-r1', opType: 'create', snapshot: serverCalendarRoutine('cal-r1') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
+
+        await pullFromServer(db);
+
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-r1');
+        expect(items).toHaveLength(0);
+    });
+
+    it('does NOT generate items when a calendar routine update arrives via sync', async () => {
+        await db.put('routines', serverCalendarRoutine('cal-r2') as unknown as StoredRoutine);
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'routine', entityId: 'cal-r2', opType: 'update', snapshot: serverCalendarRoutine('cal-r2') }],
+            serverTs: '2025-06-02T00:00:00.000Z',
+        });
+
+        await pullFromServer(db);
+
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-r2');
+        expect(items).toHaveLength(0);
     });
 });
 

@@ -74,7 +74,27 @@ Generates `nextAction` items. The next instance is created only after the previo
 
 ### `routineType: 'calendar'`
 
-Generates `calendar` items on a fixed schedule. Uses `calendarItemTemplate` (time of day + duration) to set `timeStart`/`timeEnd` on generated items. DTSTART is the routine's creation date (fixed absolute schedule). Good for standing meetings and appointments.
+Generates `calendar` items on a fixed schedule. Uses `calendarItemTemplate` (time of day + duration) to set `timeStart`/`timeEnd` on generated items. DTSTART is `startDate ?? createdTs` (fixed absolute schedule — user-editable via `startDate`). Good for standing meetings and appointments.
+
+### `startDate` (both routine types)
+
+Optional ISO date (YYYY-MM-DD) that anchors the rrule schedule. Falls back to `createdTs` when unset. For calendar routines, `seriesStartDate` snaps it forward to the first BYDAY/BYMONTHDAY match. For nextAction routines, no items are generated with an occurrence date before `startDate` — a future `startDate` delays the first item until a boot-tick materializes it on the app's next sync after the startDate passes.
+
+### Active / Paused lifecycle
+
+The `active` flag controls whether a routine continues to generate items. The invariants per routine type:
+
+| Routine type | Active | Paused (`active=false`) |
+|---|---|---|
+| `nextAction` | At most one open item (the next pending occurrence). Generate-on-dispose: completing/trashing the current item produces the next one. | Zero open items. |
+| `calendar` | Unbounded (2-month horizon of future calendar slots). | Zero future open items. |
+
+"Open" = status is neither `done` nor `trash`. When a user pauses a routine (app-side via the Pause icon in the Routines list):
+
+- All **future** open items tied to the routine are trashed. Past-due open items are left alone — they're the user's backlog, not part of the forward-looking invariant.
+- For calendar routines linked to Google Calendar: the GCal master series is capped with `UNTIL=<yesterday>` via `events.patch`. `calendarEventId` is stable; past occurrences remain intact on Google's side.
+
+A paused routine is **resumed** by opening its edit dialog, setting a new `startDate`, and saving. The save flips `active=true`, the server pushback clears the GCal master's pause-era UNTIL, and future items regenerate.
 
 ### Calendar series linking
 
@@ -206,9 +226,10 @@ interface RoutineInterface {
     calendarSyncConfigId?: string;   // ref to calendarSyncConfigs._id
     lastPushedToGCalTs?: string;     // ISO datetime — echo detection
     template: RoutineItemTemplate;   // fields copied onto generated items
-    active: boolean;
+    active: boolean;                 // paused when false — see Active/Paused lifecycle above
     createdTs: string;
     updatedTs: string;
+    startDate?: string;              // ISO date — anchors the rrule schedule; falls back to createdTs
     calendarItemTemplate?: {         // present when routineType === 'calendar'
         timeOfDay: string;           // HH:MM (24h) — start time
         duration: number;            // minutes

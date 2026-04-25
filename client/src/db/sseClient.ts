@@ -5,7 +5,12 @@ let eventSource: EventSource | null = null;
 
 type OnUpdateCallback = () => void;
 
-export function openSseConnection(onUpdate: OnUpdateCallback): void {
+/**
+ * Opens an SSE connection. When `localDeviceId` is provided, events whose
+ * `sourceDeviceId` matches are ignored — they originated from this device's
+ * own push and would otherwise trigger a redundant sync cycle.
+ */
+export function openSseConnection(onUpdate: OnUpdateCallback, localDeviceId?: string): void {
     closeSseConnection();
 
     // withCredentials is required so the auth cookie is sent cross-origin in production
@@ -13,8 +18,17 @@ export function openSseConnection(onUpdate: OnUpdateCallback): void {
 
     eventSource.onmessage = (event) => {
         try {
-            const data = JSON.parse(event.data as string) as { type?: string };
-            if (data.type === 'update') onUpdate();
+            const data = JSON.parse(event.data as string) as { type?: string; sourceDeviceId?: string };
+            console.log('[sse] received update event', data);
+            if (data.type !== 'update') {
+                return;
+            }
+            // Skip events that originated from this device's own push
+            if (localDeviceId && data.sourceDeviceId === localDeviceId) {
+                console.log('[sse] ignoring own echo');
+                return;
+            }
+            onUpdate();
         } catch {
             // Malformed event — ignore; EventSource will stay open
         }

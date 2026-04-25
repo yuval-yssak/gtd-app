@@ -1,8 +1,10 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
 
 dayjs.extend(utc);
+dayjs.extend(timezone);
 
 import { google } from 'googleapis';
 import { Hono } from 'hono';
@@ -15,12 +17,24 @@ import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
+import { ensureTimeZone } from '../lib/calendarPushback.js';
+import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
+import { propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
+import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
+import type {
+    CalendarIntegrationInterface,
+    CalendarSyncConfigInterface,
+    ItemInterface,
+    OperationInterface,
+    RoutineInterface,
+    RoutineItemTemplate,
+} from '../types/entities.js';
 
 type UnlinkAction = 'keepEvents' | 'deleteEvents' | 'deleteAll';
 type SyncContext = { userId: string; now: string; ops: OperationInterface[] };
@@ -36,18 +50,19 @@ type OAuthTokenResult =
 // ISO date string pattern — used to validate originalDate before building MongoDB queries.
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-// 60 seconds accounts for clock skew between the app server and Google's servers,
-// plus GCal's internal processing delay before the `updated` field is stamped.
-const ECHO_WINDOW_SECONDS = 60;
+// 5 seconds is enough for the push→GCal→webhook roundtrip (< 2s typical). Kept short
+// because `lastSyncedNotes` provides a second layer of protection: even if an echo leaks
+// through, `resolveInboundNotes` will detect the description hasn't actually changed.
+const ECHO_WINDOW_SECONDS = 5;
 
 /** Returns true if the GCal event's `updated` timestamp falls within the echo window of a recent app push. */
 function isOwnEcho(lastPushedTs: string, eventUpdated: string): boolean {
     return Math.abs(dayjs(eventUpdated).diff(dayjs(lastPushedTs), 'second')) < ECHO_WINDOW_SECONDS;
 }
 
-/** Returns true if the event's start time is strictly before `now`. */
-function isPastEvent(event: { timeStart: string }, now: string): boolean {
-    return dayjs(event.timeStart).isBefore(dayjs(now));
+/** Returns true if the event has fully ended (timeEnd is strictly before `now`). */
+function isPastEvent(event: { timeStart: string; timeEnd: string }, now: string): boolean {
+    return dayjs(event.timeEnd).isBefore(dayjs(now));
 }
 
 const calendarRoutes = new Hono<{ Variables: AuthVariables }>();
@@ -193,6 +208,26 @@ function buildProvider(integration: CalendarIntegrationInterface, userId: string
     return new GoogleCalendarProvider(integration, (accessToken, refreshToken, expiry) =>
         calendarIntegrationsDAO.updateTokens({ id: integration._id, userId, accessToken, refreshToken, tokenExpiry: expiry }),
     );
+}
+
+/** Fetches the timezone from Google and updates the sync config if it changed or was never cached. */
+async function refreshTimeZone(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider): Promise<void> {
+    const timeZone = await provider.getCalendarTimeZone(config.calendarId);
+    if (timeZone !== config.timeZone) {
+        await calendarSyncConfigsDAO.upsertTimeZone(config._id, timeZone);
+        // Keep in-memory object in sync with DB so downstream readers see the fresh value.
+        (config as { timeZone: string }).timeZone = timeZone;
+    }
+}
+
+/** Returns the cached timezone for a calendar, or fetches it from Google and caches it on the default sync config. */
+async function resolveTimeZoneForIntegration(integrationId: string, provider: GoogleCalendarProvider, calendarId: string): Promise<string> {
+    const configs = await calendarSyncConfigsDAO.findEnabledByIntegration(integrationId);
+    const config = configs.find((c) => c.calendarId === calendarId) ?? configs.find((c) => c.isDefault);
+    if (!config) {
+        return provider.getCalendarTimeZone(calendarId);
+    }
+    return ensureTimeZone(config, provider);
 }
 
 // ── Integration management ────────────────────────────────────────────────────
@@ -556,9 +591,14 @@ async function clearSyncConfigReferences(userId: string, configId: string, now: 
 
 type CreateEventResult = { ok: true; calendarEventId: string } | { ok: false; error: unknown };
 
-async function tryCreateRecurringEvent(provider: GoogleCalendarProvider, routine: RoutineInterface, calendarId: string): Promise<CreateEventResult> {
+async function tryCreateRecurringEvent(
+    provider: GoogleCalendarProvider,
+    routine: RoutineInterface,
+    calendarId: string,
+    timeZone: string,
+): Promise<CreateEventResult> {
     try {
-        const calendarEventId = await provider.createRecurringEvent(routine, calendarId);
+        const calendarEventId = await provider.createRecurringEvent(routine, calendarId, timeZone);
         return { ok: true, calendarEventId };
     } catch (error) {
         return { ok: false, error };
@@ -586,7 +626,8 @@ calendarRoutes.post('/integrations/:id/link-routine/:routineId', authenticateReq
     }
 
     const provider = buildProvider(integration, userId);
-    const createResult = await tryCreateRecurringEvent(provider, routine, integration.calendarId);
+    const timeZone = await resolveTimeZoneForIntegration(integrationId, provider, integration.calendarId);
+    const createResult = await tryCreateRecurringEvent(provider, routine, integration.calendarId, timeZone);
     if (!createResult.ok) {
         console.error(`[calendar] createRecurringEvent failed for integration ${integrationId}:`, createResult.error);
         return c.json({ error: 'Failed to create Google Calendar event' }, 502);
@@ -594,7 +635,17 @@ calendarRoutes.post('/integrations/:id/link-routine/:routineId', authenticateReq
     const { calendarEventId } = createResult;
 
     const now = dayjs().toISOString();
-    const updatedRoutine: RoutineInterface = { ...routine, calendarEventId, calendarIntegrationId: integrationId, updatedTs: now };
+    // Seed lastSyncedNotes with the exact HTML we just pushed so the next sync doesn't mistake
+    // our own description for an inbound change and doesn't synthesize spurious instance exceptions
+    // (buildModifiedException compares each instance description against this baseline).
+    const pushedDescription = routine.template.notes !== undefined ? markdownToHtml(routine.template.notes) : undefined;
+    const updatedRoutine: RoutineInterface = {
+        ...routine,
+        calendarEventId,
+        calendarIntegrationId: integrationId,
+        ...(pushedDescription !== undefined ? { lastSyncedNotes: pushedDescription } : {}),
+        updatedTs: now,
+    };
     await routinesDAO.replaceById(routineId, updatedRoutine);
 
     // Record as an operation so other devices sync the calendarEventId update.
@@ -645,11 +696,17 @@ async function syncSingleCalendar(
     provider: GoogleCalendarProvider,
     ctx: SyncContext,
 ): Promise<number> {
+    // Refresh the cached timezone on every sync so changes in Google Calendar are picked up.
+    await refreshTimeZone(config, provider);
+
     const since = config.lastSyncedTs ?? dayjs(0).toISOString();
     const linkedRoutines = await routinesDAO.findArray({
         user: ctx.userId,
         calendarIntegrationId: integration._id,
         calendarEventId: { $exists: true },
+        // Inactive routines no longer generate items — skip exception sync to avoid redundant
+        // DB writes and prevent overwriting the deactivation state on repeated syncs.
+        active: { $ne: false },
         // Include routines explicitly linked to this config, plus legacy routines without a config link.
         $or: [{ calendarSyncConfigId: config._id }, { calendarSyncConfigId: { $exists: false } }],
     });
@@ -722,15 +779,110 @@ async function importCalendarEvents(source: CalendarSource, events: GCalEvent[],
     });
     const routineEventIds = new Set(allLinkedRoutines.map((r) => r.calendarEventId).filter((id): id is string => Boolean(id)));
 
+    // Detect GCal series splits ("this and all following") and link new routines to their parent.
+    await detectAndLinkSplits(existingLinkedRoutines, allLinkedRoutines, recurringMasters, ctx);
+
     const eventsToUpsert = regularEvents.filter((e) => !e.recurringEventId || !routineEventIds.has(e.recurringEventId));
     await Promise.all(eventsToUpsert.map((event) => upsertCalendarItem(event, source, ctx)));
 }
 
+const normalizeTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
+
+/**
+ * Pick the most likely parent routine for a newly-imported GCal recurring master that looks like
+ * a "this and following" split tail. Google exposes no lineage signal linking the new master to
+ * the original, so we stack heuristics: same sync config, tight 0–1 day gap between the
+ * original's UNTIL and the tail's first occurrence, and an exact normalized title match.
+ * Ties broken by smallest absolute gap, then by _id for determinism.
+ *
+ * We deliberately do NOT compare BYDAY: the whole point of "this and following" is that the user
+ * changed the schedule (often the weekday), so a MO→TU split would be the expected pattern and
+ * any disjoint-weekday veto would false-negative exactly the real splits we need to detect.
+ *
+ * Exported for unit testing.
+ */
+export function pickSplitParent(args: {
+    tail: { title: string; rrule: string; calendarSyncConfigId: string | undefined; tailStart: string };
+    candidates: RoutineInterface[];
+}): RoutineInterface | null {
+    const tailTitleNorm = normalizeTitle(args.tail.title);
+    const tailStartDay = dayjs(args.tail.tailStart).startOf('day');
+
+    const passing = args.candidates.flatMap((candidate) => {
+        if (candidate.calendarSyncConfigId !== args.tail.calendarSyncConfigId) {
+            return [];
+        }
+        const until = extractUntilFromRrule(candidate.rrule);
+        if (!until) {
+            return [];
+        }
+        const gapDays = tailStartDay.diff(dayjs(until).startOf('day'), 'day');
+        if (gapDays < 0 || gapDays > 1) {
+            return [];
+        }
+        if (normalizeTitle(candidate.title) !== tailTitleNorm) {
+            return [];
+        }
+        return [{ candidate, gapAbsMs: Math.abs(dayjs(args.tail.tailStart).diff(dayjs(until))) }];
+    });
+
+    if (!hasAtLeastOne(passing)) {
+        return null;
+    }
+    passing.sort((a, b) => a.gapAbsMs - b.gapAbsMs || a.candidate._id.localeCompare(b.candidate._id));
+    return passing[0].candidate;
+}
+
+/**
+ * Detect GCal series splits: when "this and all following" is used in GCal, the original series
+ * gains UNTIL and a new master is created. Link the new routine to the original via splitFromRoutineId
+ * by running pickSplitParent against existing capped candidates.
+ */
+async function detectAndLinkSplits(
+    routinesBeforeImport: RoutineInterface[],
+    routinesAfterImport: RoutineInterface[],
+    masterEvents: GCalEvent[],
+    ctx: SyncContext,
+): Promise<void> {
+    const existingIds = new Set(routinesBeforeImport.map((r) => r._id));
+    const newRoutines = routinesAfterImport.filter((r) => !existingIds.has(r._id));
+    if (!hasAtLeastOne(newRoutines)) {
+        return;
+    }
+
+    const parentCandidates = routinesAfterImport.filter((r) => existingIds.has(r._id) && r.rrule.includes('UNTIL='));
+
+    for (const tail of newRoutines) {
+        if (tail.splitFromRoutineId) {
+            continue;
+        }
+
+        const event = masterEvents.find((e) => e.id === tail.calendarEventId);
+        if (!event) {
+            continue;
+        }
+
+        const parent = pickSplitParent({
+            tail: { title: tail.title, rrule: tail.rrule, calendarSyncConfigId: tail.calendarSyncConfigId, tailStart: event.timeStart },
+            candidates: parentCandidates,
+        });
+        if (!parent) {
+            continue;
+        }
+
+        const linked: RoutineInterface = { ...tail, splitFromRoutineId: parent._id, updatedTs: ctx.now };
+        await routinesDAO.replaceById(tail._id, linked);
+        ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: tail._id, snapshot: linked, opType: 'update', now: ctx.now }));
+    }
+}
+
 // ── Recurring event → routine import ─────────────────────────────────────────
 
-/** Extracts HH:mm in UTC from an ISO datetime string. Routine calendarItemTemplate stores UTC times. */
-function extractUtcTime(isoDatetime: string): string {
-    return dayjs(isoDatetime).utc().format('HH:mm');
+/** Extracts HH:mm in the calendar's IANA timezone from an ISO datetime string.
+ *  calendarItemTemplate.timeOfDay stores local time matching the calendar timezone,
+ *  so it round-trips correctly through buildDateTime (which re-applies the timezone). */
+export function extractLocalTime(isoDatetime: string, timeZone: string): string {
+    return dayjs(isoDatetime).tz(timeZone).format('HH:mm');
 }
 
 /** Extracts the RRULE string from a GCal recurrence array, stripping the "RRULE:" prefix. */
@@ -755,6 +907,7 @@ async function importRecurringEventAsRoutine(event: GCalEvent, source: CalendarS
     }
 
     if (event.status === 'cancelled') {
+        console.log(`[gcal-sync] deactivating routine | eventId=${event.id} title=${event.title}`);
         await deactivateRoutineFromGCal(existing, ctx);
         return;
     }
@@ -766,16 +919,23 @@ async function importRecurringEventAsRoutine(event: GCalEvent, source: CalendarS
     }
 
     if (existing) {
+        console.log(`[gcal-sync] updating routine | eventId=${event.id} title=${event.title} routineId=${existing._id}`);
         await updateRoutineFromGCal(existing, event, rrule, source, ctx);
         return;
     }
 
+    console.log(`[gcal-sync] creating routine | eventId=${event.id} title=${event.title} rrule=${rrule}`);
     await createRoutineFromGCal(event, rrule, source, ctx);
 }
 
 async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
-    const timeOfDay = extractUtcTime(event.timeStart);
+    const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
     const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+
+    // Use the GCal event's start date as createdTs so the rrule DTSTART is anchored
+    // to the first occurrence. This is critical for split tails ("this and following"):
+    // the new master's start is the split date, not the sync time.
+    const createdTs = dayjs(event.timeStart).toISOString();
 
     const routineId = randomUUID();
     const routine: RoutineInterface = {
@@ -789,35 +949,118 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
         calendarIntegrationId: source.integration._id,
         calendarSyncConfigId: source.config._id,
         calendarItemTemplate: { timeOfDay, duration },
-        template: {},
-        createdTs: ctx.now,
+        template: event.description != null ? { notes: htmlToMarkdown(event.description) } : {},
+        ...(event.description != null ? { lastSyncedNotes: event.description } : {}),
+        createdTs,
         updatedTs: ctx.now,
     };
 
     await routinesDAO.insertOne(routine);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: routine, opType: 'create', now: ctx.now }));
+
+    // Generate the tail's calendar items here. updateRoutineFromGCal regenerates items on schedule
+    // change (line ~1048) but a brand-new routine — most importantly the tail of a "this and following"
+    // split — never goes through that path. Without this, the tail arrives via sync as a routine with
+    // zero items, while the parent's future items have been (correctly) trashed past UNTIL.
+    const itemOps = await regenerateFutureRoutineItems(routine, ctx.userId, ctx.now);
+    ctx.ops.push(...itemOps);
 }
 
 async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
-    if (event.updated <= existing.updatedTs) {
+    const routineId = existing._id;
+
+    // Determine notes update independently of structural fields.
+    // For routines, GCal description maps to template.notes (not a top-level notes field).
+    const notesUpdate = resolveInboundNotes(event.description, existing.lastSyncedNotes, event.updated, existing.updatedTs);
+
+    const structurallyNewer = isGCalAtLeastAsRecent(event.updated, existing.updatedTs);
+    if (!structurallyNewer && !notesUpdate) {
         return;
     }
 
-    const routineId = existing._id;
-    const timeOfDay = extractUtcTime(event.timeStart);
+    const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
     const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+    const newlyGainsUntil = structurallyNewer && !existing.rrule.includes('UNTIL=') && rrule.includes('UNTIL=');
+
+    // Re-fetch: routineExceptions may have been written by syncRoutineExceptions earlier in the same
+    // sync cycle, and the `existing` snapshot we were passed predates that write. Using the stale
+    // snapshot as the base for replaceById would drop those exceptions.
+    const fresh = (await routinesDAO.findByOwnerAndId(routineId, ctx.userId)) ?? existing;
 
     const updated: RoutineInterface = {
-        ...existing,
-        title: event.title,
-        rrule,
-        calendarSyncConfigId: source.config._id,
-        calendarItemTemplate: { timeOfDay, duration },
+        ...fresh,
+        ...(structurallyNewer
+            ? {
+                  title: event.title,
+                  rrule,
+                  calendarSyncConfigId: source.config._id,
+                  calendarItemTemplate: { timeOfDay, duration },
+                  // Mirror client-side splitRoutine: capping the parent pauses it so the UI
+                  // reflects that the segment is historical. Without this, a capped-in-the-past
+                  // routine shows as "Active" even though it no longer generates instances.
+                  ...(newlyGainsUntil ? { active: false } : {}),
+              }
+            : {}),
+        ...(notesUpdate
+            ? {
+                  // Falsy (empty string) means GCal cleared the description — remove template.notes entirely.
+                  template: notesUpdate.notes ? { ...fresh.template, notes: notesUpdate.notes } : omitNotes(fresh.template),
+                  lastSyncedNotes: notesUpdate.lastSyncedNotes,
+              }
+            : {}),
         updatedTs: ctx.now,
     };
 
     await routinesDAO.replaceById(routineId, updated);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
+
+    // When GCal adds UNTIL (series split via "this and all following"), trash items past the UNTIL date.
+    if (newlyGainsUntil) {
+        const untilDate = extractUntilFromRrule(rrule);
+        if (untilDate) {
+            await updateItemsAndRecordOps(ctx, {
+                filter: { user: ctx.userId, routineId, status: 'calendar', timeStart: { $gt: untilDate } },
+                setFields: { status: 'trash', updatedTs: ctx.now },
+            });
+        }
+    }
+
+    // Propagate notes change to all future calendar items belonging to this routine.
+    if (notesUpdate) {
+        const itemOps = await propagateRoutineNotesToItems(routineId, notesUpdate.notes || undefined, ctx.userId, ctx.now);
+        ctx.ops.push(...itemOps);
+    }
+
+    // Structural changes from GCal master need to reach existing items — GCal expands only a
+    // near-term instance window when fetching exceptions, so relying on `syncRoutineExceptions`
+    // alone leaves far-future items stuck on the old schedule/title.
+    if (structurallyNewer) {
+        await propagateMasterScheduleChanges(existing, updated, ctx);
+    }
+}
+
+/**
+ * Detects what changed between the pre- and post-update routine snapshots and pushes those
+ * changes to the generated items:
+ *  - rrule / timeOfDay / duration change → delete future items and regenerate on the new schedule
+ *  - title-only change → rename future items in place (preserves IDs and per-instance overrides)
+ */
+async function propagateMasterScheduleChanges(previous: RoutineInterface, next: RoutineInterface, ctx: SyncContext): Promise<void> {
+    const scheduleChanged =
+        previous.rrule !== next.rrule ||
+        previous.calendarItemTemplate?.timeOfDay !== next.calendarItemTemplate?.timeOfDay ||
+        previous.calendarItemTemplate?.duration !== next.calendarItemTemplate?.duration;
+
+    if (scheduleChanged) {
+        const itemOps = await regenerateFutureRoutineItems(next, ctx.userId, ctx.now);
+        ctx.ops.push(...itemOps);
+        return;
+    }
+
+    if (previous.title !== next.title) {
+        const itemOps = await propagateRoutineTitleToItems(next, ctx.userId, ctx.now);
+        ctx.ops.push(...itemOps);
+    }
 }
 
 async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined, ctx: SyncContext): Promise<void> {
@@ -826,7 +1069,9 @@ async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined,
     }
 
     const routineId = existing._id;
-    const updated: RoutineInterface = { ...existing, active: false, updatedTs: ctx.now };
+    // Re-fetch to pick up any writes from the exception sync that ran earlier in the same cycle.
+    const fresh = await routinesDAO.findByOwnerAndId(routineId, ctx.userId);
+    const updated: RoutineInterface = { ...(fresh ?? existing), active: false, updatedTs: ctx.now };
     await routinesDAO.replaceById(routineId, updated);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
 
@@ -837,15 +1082,68 @@ async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined,
     });
 }
 
+// ── Notes/description conflict resolution ───────────────────────────────────
+
+/** Returns a copy of the template without the `notes` property (satisfies exactOptionalPropertyTypes). */
+function omitNotes(template: RoutineItemTemplate): RoutineItemTemplate {
+    const { notes: _, ...rest } = template;
+    return rest;
+}
+
+/**
+ * GCal's `event.updated` is truncated to seconds while local `updatedTs` carries milliseconds.
+ * String comparison would drop legitimate GCal edits that land within the same wall-clock second
+ * as a local write (e.g. a user editing in GCal right after link-routine wrote locally). Compare
+ * at second precision with `>=` so that within the same second, GCal wins.
+ */
+function isGCalAtLeastAsRecent(gcalUpdated: string, localUpdatedTs: string): boolean {
+    return dayjs(gcalUpdated).unix() >= dayjs(localUpdatedTs).unix();
+}
+
+/**
+ * Determines whether inbound GCal description should overwrite local notes.
+ * Returns `{ notes (markdown), lastSyncedNotes (raw HTML) }` when GCal wins,
+ * or `null` when local notes stay.
+ *
+ * `lastSyncedNotes` stores raw GCal HTML (not Markdown) so the change-detection
+ * comparison is always apples-to-apples: HTML in vs. HTML stored.
+ */
+export function resolveInboundNotes(
+    gcalDescription: string | undefined,
+    lastSyncedNotes: string | undefined,
+    gcalUpdated: string,
+    localUpdatedTs: string,
+): { notes: string; lastSyncedNotes: string } | null {
+    // Normalize: treat undefined as empty string for comparison purposes,
+    // so that a deleted GCal description (undefined) is detected as a change
+    // when we previously synced a non-empty value.
+    const effectiveDescription = gcalDescription ?? '';
+    const effectiveSynced = lastSyncedNotes ?? '';
+
+    if (effectiveDescription === effectiveSynced) {
+        return null; // No change — keep local notes untouched.
+    }
+    // GCal changed its description. Last-write-wins on timestamp, with same-second going to GCal
+    // (see isGCalAtLeastAsRecent for the rationale).
+    if (isGCalAtLeastAsRecent(gcalUpdated, localUpdatedTs)) {
+        return {
+            notes: effectiveDescription ? htmlToMarkdown(effectiveDescription) : '',
+            lastSyncedNotes: effectiveDescription,
+        };
+    }
+    // Local is newer — keep local notes. Next outbound push will correct GCal.
+    return null;
+}
+
 // ── Single calendar event import ─────────────────────────────────────────────
 
-type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string };
+type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string; description?: string };
 
 async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const [existing] = await itemsDAO.findArray({ user: ctx.userId, calendarEventId: event.id });
 
     // Echo detection: if the item was recently pushed to GCal by the app, skip re-importing
-    // the same change back. A 60-second window accounts for clock skew and GCal processing delay.
+    // the same change back. The 5-second window catches the typical push→webhook roundtrip.
     if (existing?.lastPushedToGCalTs && isOwnEcho(existing.lastPushedToGCalTs, event.updated)) {
         return;
     }
@@ -855,11 +1153,11 @@ async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, 
         return;
     }
 
-    // Ignore past events from Google — the app only cares about future changes.
-    // If a previously-future event was moved to the past, trash the local copy.
+    // Past events from Google are only relevant if they already exist locally — update them
+    // to reflect any changes (e.g. title/time edits). New past events are ignored.
     if (event.timeStart && isPastEvent(event, ctx.now)) {
         if (existing) {
-            await trashCancelledItem(existing, ctx);
+            await updateExistingCalendarItem(existing, event, source, ctx);
         }
         return;
     }
@@ -894,20 +1192,31 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
     if (existing.routineId) {
         return; // routine-managed; skip
     }
-    // Only update if GCal reports a newer modification — prevents overwriting local edits.
-    if (event.updated <= existing.updatedTs) {
-        return;
-    }
     const itemId = existing._id;
     if (!itemId) {
         return;
     }
+
+    // Determine notes update independently of structural fields (title/time).
+    const notesUpdate = resolveInboundNotes(event.description, existing.lastSyncedNotes, event.updated, existing.updatedTs);
+
+    // Structural fields still use the simple timestamp guard.
+    const structurallyNewer = event.updated > existing.updatedTs;
+    if (!structurallyNewer && !notesUpdate) {
+        return;
+    }
+
     const updated: ItemInterface = {
         ...existing,
-        title: event.title,
-        timeStart: event.timeStart,
-        timeEnd: event.timeEnd,
-        calendarSyncConfigId: source.config._id,
+        ...(structurallyNewer
+            ? {
+                  title: event.title,
+                  timeStart: event.timeStart,
+                  timeEnd: event.timeEnd,
+                  calendarSyncConfigId: source.config._id,
+              }
+            : {}),
+        ...notesUpdate,
         updatedTs: ctx.now,
     };
     await itemsDAO.replaceById(itemId, updated);
@@ -926,6 +1235,7 @@ async function createNewCalendarItem(event: CalendarEvent, source: CalendarSourc
         calendarEventId: event.id,
         calendarIntegrationId: source.integration._id,
         calendarSyncConfigId: source.config._id,
+        ...(event.description != null ? { notes: htmlToMarkdown(event.description), lastSyncedNotes: event.description } : {}),
         createdTs: ctx.now,
         updatedTs: ctx.now,
     };
@@ -945,6 +1255,9 @@ function buildExceptionEntry(ex: GCalException): RoutineException {
         type: 'modified',
         ...(ex.newTimeStart ? { newTimeStart: ex.newTimeStart } : {}),
         ...(ex.newTimeEnd ? { newTimeEnd: ex.newTimeEnd } : {}),
+        ...(ex.title !== undefined ? { title: ex.title } : {}),
+        // ex.notes is raw HTML from GCal — convert to markdown for client consumption
+        ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes) } : {}),
     };
 }
 
@@ -1003,8 +1316,16 @@ async function applyExceptionToItems(routine: RoutineInterface, ex: GCalExceptio
         return;
     }
 
-    if (ex.type === 'modified' && ex.newTimeStart && ex.newTimeEnd) {
-        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields: { timeStart: ex.newTimeStart, timeEnd: ex.newTimeEnd, updatedTs: ctx.now } });
+    if (ex.type === 'modified') {
+        const setFields = {
+            updatedTs: ctx.now,
+            ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
+            ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
+            ...(ex.title !== undefined ? { title: ex.title } : {}),
+            // ex.notes is raw HTML from GCal — convert to markdown for storage, keep HTML as lastSyncedNotes
+            ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
+        };
+        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields });
     }
 }
 
@@ -1013,10 +1334,14 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
         return;
     }
 
-    const exceptions = await provider.getExceptions(routine.calendarEventId, ctx.calendarId, ctx.since);
+    // Compare against lastSyncedNotes (raw HTML) since GCal returns HTML descriptions.
+    const masterContent = { title: routine.title, description: routine.lastSyncedNotes ?? '' };
+    const exceptions = await provider.getExceptions(routine.calendarEventId, ctx.calendarId, ctx.since, masterContent);
     if (!hasAtLeastOne(exceptions)) {
         return;
     }
+
+    console.log(`[gcal-sync] syncing routine exceptions | routineId=${routine._id} title=${routine.title} exceptionCount=${exceptions.length}`);
 
     const updatedExceptions = exceptions.reduce((acc, ex) => mergeExceptions(acc, ex), [...(routine.routineExceptions ?? [])]);
     // Apply item side-effects in parallel — each exception targets a different date so there
@@ -1024,7 +1349,11 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
     const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops };
     await Promise.all(exceptions.map((ex) => applyExceptionToItems(routine, ex, syncCtx)));
 
-    const updatedRoutine: RoutineInterface = { ...routine, routineExceptions: updatedExceptions, updatedTs: ctx.now };
+    // Preserve `updatedTs`: exception writes are sync bookkeeping, not user/app edits. Bumping
+    // `updatedTs` here would corrupt the `structurallyNewer` comparison in `updateRoutineFromGCal`
+    // later in the same sync cycle (it would falsely look like local is newer than GCal). Clients
+    // still learn about the change via the operation log, which is keyed on op.ts (= ctx.now).
+    const updatedRoutine: RoutineInterface = { ...routine, routineExceptions: updatedExceptions };
     await routinesDAO.replaceById(routine._id, updatedRoutine);
 
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routine._id, snapshot: updatedRoutine, opType: 'update', now: ctx.now }));
@@ -1125,7 +1454,14 @@ calendarRoutes.post('/webhooks/google', async (c) => {
     // Respond immediately — Google expects a fast 200. Sync runs asynchronously.
     const response = c.text('OK', 200);
 
-    if (!checkAndRecordWebhook(channelId)) {
+    console.log(
+        `[gcal-webhook] received | channelId=${channelId} resourceId=${resourceId} state=${resourceState} configId=${config._id} calendarId=${config.calendarId}`,
+    );
+
+    const isDuplicate = checkAndRecordWebhook(channelId);
+    if (isDuplicate) {
+        console.log(`[gcal-webhook] duplicate — skipping sync | channelId=${channelId}`);
+    } else {
         // Fire-and-forget: run the sync in the background so we don't block the webhook response.
         runWebhookSync(config).catch((err) => {
             console.error(`[calendar-webhook] sync failed for config ${config._id}:`, err);
@@ -1137,6 +1473,7 @@ calendarRoutes.post('/webhooks/google', async (c) => {
 
 /** Runs an incremental sync for a single calendar config, triggered by a webhook notification. */
 async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void> {
+    console.log(`[gcal-webhook-sync] starting | configId=${config._id} calendarId=${config.calendarId}`);
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(config.integrationId, config.user);
     if (!integration) {
         console.warn(`[calendar-webhook] integration ${config.integrationId} not found for config ${config._id} — skipping sync`);
@@ -1146,10 +1483,12 @@ async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void
     const now = dayjs().toISOString();
     const ctx: SyncContext = { userId: config.user, now, ops: [] };
     await syncSingleCalendar(config, integration, provider, ctx);
+    console.log(`[gcal-webhook-sync] sync complete | configId=${config._id} ops=${ctx.ops.length}`);
     // Keep webhook channel alive — renew if close to expiring so the next change also triggers a webhook.
     await renewWebhookIfExpired(config, provider).catch((err) => {
         console.error(`[calendar-webhook] renewWebhookIfExpired failed for config ${config._id}:`, err);
     });
+    console.log(`[gcal-webhook-sync] notifying SSE + push | userId=${config.user} ops=${ctx.ops.length}`);
     notifyUserViaSse(config.user, { type: 'update', ts: now });
     // Web Push for devices without an open SSE connection (app closed / backgrounded).
     await notifyViaWebPush(config.user, null, ctx.ops, now).catch((err) => {

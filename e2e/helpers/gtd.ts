@@ -89,6 +89,28 @@ export const gtd = {
             item,
         ),
 
+    clarifyToInbox: (page: Page, item: StoredItem): Promise<StoredItem> =>
+        page.evaluate(
+            (i) =>
+                (
+                    window as unknown as {
+                        __gtd: { clarifyToInbox(i: StoredItem): Promise<StoredItem> };
+                    }
+                ).__gtd.clarifyToInbox(i as StoredItem),
+            item,
+        ),
+
+    clarifyToSomedayMaybe: (page: Page, item: StoredItem): Promise<StoredItem> =>
+        page.evaluate(
+            (i) =>
+                (
+                    window as unknown as {
+                        __gtd: { clarifyToSomedayMaybe(i: StoredItem): Promise<StoredItem> };
+                    }
+                ).__gtd.clarifyToSomedayMaybe(i as StoredItem),
+            item,
+        ),
+
     // ── Update / remove ──────────────────────────────────────────────────────
     updateItem: (page: Page, item: StoredItem): Promise<StoredItem> =>
         page.evaluate(
@@ -155,6 +177,21 @@ export const gtd = {
 
     removeRoutine: (page: Page, routineId: string): Promise<void> =>
         page.evaluate((id) => (window as unknown as { __gtd: { removeRoutine(id: string): Promise<void> } }).__gtd.removeRoutine(id), routineId),
+
+    pauseRoutine: (page: Page, routineId: string): Promise<StoredRoutine> =>
+        page.evaluate(
+            (id) => (window as unknown as { __gtd: { pauseRoutine(id: string): Promise<StoredRoutine> } }).__gtd.pauseRoutine(id),
+            routineId,
+        ),
+
+    materializePendingNextActionRoutines: (page: Page): Promise<void> =>
+        page.evaluate(() =>
+            (
+                window as unknown as {
+                    __gtd: { materializePendingNextActionRoutines(): Promise<void> };
+                }
+            ).__gtd.materializePendingNextActionRoutines(),
+        ),
 
     generateCalendarItemsToHorizon: (page: Page, routineId: string): Promise<void> =>
         page.evaluate(

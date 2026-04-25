@@ -687,7 +687,16 @@ function InboxPage() {
                     {...(clarifyDest ? { initialDestination: clarifyDest } : {})}
                 />
             )}
-            {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
+            {editingItem && (
+                <EditItemDialog
+                    item={editingItem}
+                    db={db}
+                    people={people}
+                    workContexts={workContexts}
+                    onClose={() => setEditingItem(null)}
+                    onSaved={refreshItems}
+                />
+            )}
 
             <InboxBottomSheet
                 item={bottomSheetItem}

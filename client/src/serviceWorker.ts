@@ -74,14 +74,17 @@ self.addEventListener('push', (event) => {
     // event.data may be absent if the push was sent without a payload (e.g. older server version)
     const payload = (event.data?.json() as { ops?: PushOpSummary[] } | null) ?? null;
 
+    console.log('[sw-push] received push notification', payload);
+
     event.waitUntil(
         openAppDB()
             .then((db) => pullFromServer(db))
-            .then(() =>
+            .then(() => {
+                console.log('[sw-push] pulled from server, notifying open tabs');
                 // Notify any open tabs so they can refresh React state from IndexedDB —
                 // without this, the tab only sees the updated data after the next mount.
-                self.clients.matchAll({ type: 'window' }),
-            )
+                return self.clients.matchAll({ type: 'window' });
+            })
             .then((clients) =>
                 clients.forEach((c) => {
                     c.postMessage({ type: 'sync-complete' });

@@ -152,6 +152,44 @@ describe('POST /sync/push', () => {
         expect(await db.collection('operations').countDocuments({ entityId, opType: 'delete' })).toBe(1);
     });
 
+    it('routine delete: succeeds when routine is already gone (concurrent delete from another device)', async () => {
+        const cookie = await loginAsAlice();
+        const routineId = crypto.randomUUID();
+        // Routine intentionally NOT inserted: models the case where another device's delete arrived first.
+        const res = await push(cookie, 'dev-1', [makeClientOp('routine', routineId, 'delete', null)]);
+        expect(res.status).toBe(200);
+        const op = await db.collection('operations').findOne({ entityId: routineId, opType: 'delete' });
+        expect(op?.snapshot).toBeNull();
+    });
+
+    it('routine delete: pre-delete snapshot is captured on the recorded op', async () => {
+        // The client sends `snapshot: null` for delete ops. The server hydrates the snapshot
+        // from the current routine doc so the calendar push-back cascade can read calendarEventId.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const routineId = crypto.randomUUID();
+
+        await db.collection('routines').insertOne({
+            _id: routineId,
+            user: userId,
+            title: 'Weekly standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            template: {},
+            active: true,
+            calendarEventId: 'gcal-evt-xyz',
+            calendarIntegrationId: 'int-xyz',
+            createdTs: '2024-01-01T00:00:00.000Z',
+            updatedTs: '2024-01-01T00:00:00.000Z',
+        });
+
+        await push(cookie, 'dev-1', [makeClientOp('routine', routineId, 'delete', null)]);
+
+        expect(await db.collection('routines').countDocuments({ _id: routineId })).toBe(0);
+        const op = await db.collection('operations').findOne({ entityId: routineId, opType: 'delete' });
+        expect(op?.snapshot).toMatchObject({ _id: routineId, calendarEventId: 'gcal-evt-xyz', calendarIntegrationId: 'int-xyz' });
+    });
+
     it('all four entity types are stored in their respective collections', async () => {
         const cookie = await loginAsAlice();
         const itemId = crypto.randomUUID();
@@ -368,6 +406,30 @@ describe('GET /sync/bootstrap', () => {
     it('unauthenticated bootstrap returns 401', async () => {
         const res = await app.fetch(new Request('http://localhost:4000/sync/bootstrap'));
         expect(res.status).toBe(401);
+    });
+
+    it('round-trips routine.startDate through push + bootstrap', async () => {
+        const cookie = await loginAsAlice();
+        const routineId = crypto.randomUUID();
+        const ts = dayjs().toISOString();
+        const snapshot = {
+            _id: routineId,
+            userId: 'client-user-id',
+            title: 'Daily',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            createdTs: ts,
+            updatedTs: ts,
+            startDate: '2026-06-15',
+        };
+        const res = await push(cookie, 'device-1', [makeClientOp('routine', routineId, 'create', snapshot)]);
+        expect(res.status).toBe(200);
+
+        const bootstrap = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: cookie });
+        const body = (await bootstrap.json()) as { routines: Array<{ startDate?: string }> };
+        expect(body.routines[0]!.startDate).toBe('2026-06-15');
     });
 });
 
