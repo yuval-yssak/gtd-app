@@ -401,7 +401,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
     async updateRecurringInstance(
         masterEventId: string,
         originalDate: string,
-        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string; colorId?: string | null },
         calendarId: string,
         timeZone: string,
     ): Promise<void> {
@@ -418,6 +418,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
                 ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
                 ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
                 ...(updates.description !== undefined ? { description: updates.description } : {}),
+                ...(updates.colorId !== undefined ? { colorId: updates.colorId } : {}),
             },
         });
     }

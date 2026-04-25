@@ -1322,16 +1322,43 @@ async function applyExceptionToItems(routine: RoutineInterface, ex: GCalExceptio
     }
 
     if (ex.type === 'modified') {
-        const setFields = {
+        const sharedFields = {
             updatedTs: ctx.now,
             ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
             ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
-            ...(ex.title !== undefined ? { title: ex.title } : {}),
             // ex.notes is raw HTML from GCal — convert to markdown for storage, keep HTML as lastSyncedNotes
             ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
         };
-        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields });
+        // The sync layer owns the "✓ " done marker on GCal — strip it on inbound only when the
+        // local item is already done (e.g. our own pushback echo). Otherwise a routine-instance
+        // round-trip would corrupt the stored title with the marker we ourselves applied.
+        if (ex.title === undefined) {
+            await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields: sharedFields });
+            return;
+        }
+        await applyTitledExceptionToItems(baseFilter, ex.title, sharedFields, ctx);
     }
+}
+
+async function applyTitledExceptionToItems(
+    filter: Record<string, unknown>,
+    incomingTitle: string,
+    sharedFields: Record<string, unknown>,
+    ctx: SyncContext,
+): Promise<void> {
+    const before = await itemsDAO.findArray(filter);
+    const withId = before.filter((item): item is ItemInterface & { _id: string } => Boolean(item._id));
+    if (!hasAtLeastOne(withId)) {
+        return;
+    }
+    await Promise.all(
+        withId.map(async (item) => {
+            const title = item.status === 'done' ? stripDoneMarker(incomingTitle) : incomingTitle;
+            const updated: ItemInterface = { ...item, ...sharedFields, title };
+            await itemsDAO.replaceById(item._id, updated);
+            ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: item._id, snapshot: updated, opType: 'update', now: ctx.now }));
+        }),
+    );
 }
 
 async function syncRoutineExceptions(routine: RoutineInterface, provider: GoogleCalendarProvider, ctx: RoutineSyncCtx): Promise<void> {

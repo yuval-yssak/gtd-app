@@ -392,6 +392,74 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(item?.lastSyncedNotes).toBe('<p>Agenda: review Q2</p>');
     });
 
+    it('preserves a user-typed ✓ in the GCal title when the local routine-generated item is open (not done)', async () => {
+        // Symmetric to updateExistingCalendarItem's "open item keeps user-typed ✓" rule: the strip
+        // is GCal-marker-aware only when the local item is already done; for an open item, the ✓
+        // is treated as user content and must round-trip verbatim.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-1', calendarIntegrationId: 'int-1' });
+        await routinesDAO.insertOne(routine);
+
+        await itemsDAO.insertOne({
+            _id: 'item-user-checkmark',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: '2025-06-09T09:00:00Z',
+            timeEnd: '2025-06-09T09:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([{ originalDate: '2025-06-09', type: 'modified', title: '✓ Standup' }]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findByOwnerAndId('item-user-checkmark', userId);
+        // Open item — the ✓ is user content, not our marker. Round-trip verbatim.
+        expect(item?.title).toBe('✓ Standup');
+        expect(item?.status).toBe('calendar');
+    });
+
+    it('strips the ✓ done marker on inbound modified-exception when the local item is already done', async () => {
+        // Echo path: our own pushback applies "✓ Standup" + sage to the GCal instance for a done
+        // routine-generated item. The next inbound sync sees that as a `modified` exception with
+        // title="✓ Standup". Without stripping, the local item's clean stored title would be
+        // overwritten with the marker. The marker must be GCal-only — symmetric to the strip in
+        // updateExistingCalendarItem for non-routine calendar items.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-1', calendarIntegrationId: 'int-1' });
+        await routinesDAO.insertOne(routine);
+
+        await itemsDAO.insertOne({
+            _id: 'item-done-echo',
+            user: userId,
+            status: 'done',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: '2025-06-09T09:00:00Z',
+            timeEnd: '2025-06-09T09:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([{ originalDate: '2025-06-09', type: 'modified', title: '✓ Standup' }]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findByOwnerAndId('item-done-echo', userId);
+        // Stored title stays clean; the ✓ marker remains on the GCal side only.
+        expect(item?.title).toBe('Standup');
+        expect(item?.status).toBe('done');
+    });
+
     it('does not generate spurious exceptions when instance matches master content', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -2159,10 +2227,11 @@ describe('calendar push-back — routine instance overrides', () => {
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
     });
 
-    it('does NOT cancel the GCal instance when a routine-generated item is completed (done)', async () => {
-        // Matrix A8: completion is a GTD-local concept — the GCal occurrence must remain so other
-        // calendars / attendees still see the event. Cancelling on done would also round-trip a
-        // `deleted` exception back via GCal sync and flip the app-side item from `done` to `trash`.
+    it('marks the GCal instance with ✓ prefix and sage colorId when a routine-generated item is done (does not cancel)', async () => {
+        // Matrix A8: completion is GTD-local — the GCal occurrence must remain so other calendars
+        // / attendees still see the event. Cancelling on done would also round-trip a `deleted`
+        // exception back via GCal sync and flip the app-side item from `done` to `trash`. Instead,
+        // a single-instance override applies the ✓ title prefix + sage colorId to that occurrence.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -2172,16 +2241,53 @@ describe('calendar push-back — routine instance overrides', () => {
             _id: 'item-done-1',
             routineId: 'routine-1',
             status: 'done',
+            title: 'Standup',
             timeStart: '2026-04-27T09:00:00.000Z',
             timeEnd: '2026-04-27T10:00:00.000Z',
         });
         await itemsDAO.insertOne(item);
 
         const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
         expect(cancelSpy).not.toHaveBeenCalled();
+        expect(updateSpy).toHaveBeenCalledOnce();
+        expect(updateSpy.mock.calls[0]![0]).toBe('recurring-master-1');
+        expect(updateSpy.mock.calls[0]![1]).toBe('2026-04-27');
+        expect(updateSpy.mock.calls[0]![2]).toMatchObject({ title: '✓ Standup', colorId: '2' });
+
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        // Stored title stays clean — marker lives only in GCal.
+        expect(updated!.title).toBe('Standup');
+        expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('clears the done marker on the GCal instance when a routine-generated item is reopened to calendar', async () => {
+        // Reopen path: status flips back to 'calendar'. The single-instance override must send
+        // the clean title and colorId: null so the instance reverts to the master's defaults.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-reopen-1',
+            routineId: 'routine-1',
+            status: 'calendar',
+            title: 'Standup',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        expect(updateSpy.mock.calls[0]![2]).toMatchObject({ title: 'Standup', colorId: null });
     });
 
     it('uses the prior modified exception date when trashing a previously-moved instance', async () => {
