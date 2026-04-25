@@ -14,14 +14,12 @@ import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { ACTIVE_STATUSES, filterItems, sortItems } from '../../lib/itemSearch';
+import { filterItems, sortItems } from '../../lib/itemSearch';
 import { loadVisibleColumns, type SearchTableColumnId, saveVisibleColumns } from '../../lib/searchTableColumns';
 import { DEFAULT_URL_STATE, parseSearchParams, type SearchUrlState, type SearchView, urlStateToFilters } from '../../lib/searchUrlParams';
 import styles from './-search.module.css';
 
 const QUERY_DEBOUNCE_MS = 200;
-
-const ACTIVE_STATUS_SET = new Set(ACTIVE_STATUSES);
 
 export const Route = createFileRoute('/_authenticated/search')({
     validateSearch: parseSearchParams,
@@ -75,7 +73,7 @@ function SearchPage() {
         saveVisibleColumns(next);
     }
 
-    const filters = useMemo(() => urlStateToFilters(urlState, ACTIVE_STATUS_SET), [urlState]);
+    const filters = useMemo(() => urlStateToFilters(urlState), [urlState]);
     const activeStatuses = filters.statuses;
     const filtered = useMemo(() => sortItems(filterItems(items, filters), 'updatedTs', 'desc'), [items, filters]);
 

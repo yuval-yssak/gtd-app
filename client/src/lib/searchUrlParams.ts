@@ -1,11 +1,16 @@
+import dayjs from 'dayjs';
 import type { StoredItem } from '../types/MyDB';
-import { ALL_STATUSES, type SearchDateField, type SearchFilters } from './itemSearch';
+import { ACTIVE_STATUSES, ALL_STATUSES, type SearchDateField, type SearchFilters } from './itemSearch';
 
 export type SearchView = 'grouped' | 'flatChip' | 'flatMinimal' | 'table';
 
-const VIEWS: ReadonlySet<string> = new Set<SearchView>(['grouped', 'flatChip', 'flatMinimal', 'table']);
-const STATUS_SET: ReadonlySet<string> = new Set<StoredItem['status']>(ALL_STATUSES);
-const DATE_FIELDS: ReadonlySet<string> = new Set<SearchDateField>(['createdTs', 'updatedTs']);
+const VIEWS: ReadonlySet<SearchView> = new Set<SearchView>(['grouped', 'flatChip', 'flatMinimal', 'table']);
+const STATUS_SET: ReadonlySet<StoredItem['status']> = new Set<StoredItem['status']>(ALL_STATUSES);
+const DATE_FIELDS: ReadonlySet<SearchDateField> = new Set<SearchDateField>(['createdTs', 'updatedTs']);
+
+const isStatus = (s: string): s is StoredItem['status'] => (STATUS_SET as ReadonlySet<string>).has(s);
+export const isDateField = (s: string): s is SearchDateField => (DATE_FIELDS as ReadonlySet<string>).has(s);
+const isView = (s: string): s is SearchView => (VIEWS as ReadonlySet<string>).has(s);
 
 // All search-page URL state. Stored shape mirrors the canonical SearchFilters but
 // uses array (rather than Set) for statuses so it survives URL serialization.
@@ -31,9 +36,15 @@ export const DEFAULT_URL_STATE: SearchUrlState = {
     view: 'grouped',
 };
 
-// ISO date prefix is 10 chars (YYYY-MM-DD); reject anything that doesn't fit so a junk URL
-// param doesn't slip into a comparison and silently exclude every item.
-const isIsoDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+// Reject anything that doesn't strictly match YYYY-MM-DD with a real calendar date so a
+// junk URL param doesn't slip into a comparison and silently exclude every item. dayjs
+// without strict-mode normalizes overflow (2026-13-01 → 2027-01-01), so we round-trip
+// through format() and require equality to catch impossible months/days.
+const isIsoDate = (s: string) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    const parsed = dayjs(s);
+    return parsed.isValid() && parsed.format('YYYY-MM-DD') === s;
+};
 
 const readString = (raw: unknown): string => (typeof raw === 'string' ? raw : '');
 
@@ -46,15 +57,15 @@ const readDate = (raw: unknown): string | null => {
 
 const readStatuses = (raw: unknown): StoredItem['status'][] | null => {
     if (typeof raw !== 'string' || raw.length === 0) return null;
-    const parts = raw.split(',').filter((s) => STATUS_SET.has(s));
+    const parts = raw.split(',').filter(isStatus);
     // An empty list after filtering means every value was invalid — treat as "use default"
     // rather than "match nothing", which would be confusing on a fresh navigation.
-    return parts.length > 0 ? (parts as StoredItem['status'][]) : null;
+    return parts.length > 0 ? parts : null;
 };
 
-const readDateField = (raw: unknown): SearchDateField => (typeof raw === 'string' && DATE_FIELDS.has(raw) ? (raw as SearchDateField) : 'updatedTs');
+const readDateField = (raw: unknown): SearchDateField => (typeof raw === 'string' && isDateField(raw) ? raw : 'updatedTs');
 
-const readView = (raw: unknown): SearchView => (typeof raw === 'string' && VIEWS.has(raw) ? (raw as SearchView) : 'grouped');
+const readView = (raw: unknown): SearchView => (typeof raw === 'string' && isView(raw) ? raw : 'grouped');
 
 // Mapped optional-unknown shape so we can read with dot notation without tripping TS4111
 // (noPropertyAccessFromIndexSignature) — bracket notation would in turn trip Biome's
@@ -76,10 +87,12 @@ export function parseSearchParams(search: RawSearchBag): SearchUrlState {
     };
 }
 
-export function urlStateToFilters(state: SearchUrlState, defaultStatuses: ReadonlySet<StoredItem['status']>): SearchFilters {
+const DEFAULT_STATUS_SET: ReadonlySet<StoredItem['status']> = new Set(ACTIVE_STATUSES);
+
+export function urlStateToFilters(state: SearchUrlState): SearchFilters {
     return {
         query: state.q,
-        statuses: state.statuses ? new Set(state.statuses) : defaultStatuses,
+        statuses: state.statuses ? new Set(state.statuses) : DEFAULT_STATUS_SET,
         personId: state.personId,
         contextId: state.contextId,
         dateField: state.dateField,
