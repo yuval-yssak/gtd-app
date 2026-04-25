@@ -155,6 +155,13 @@ export interface RoutineInterface {
     createdTs: string;
     updatedTs: string;
     /**
+     * ISO date (YYYY-MM-DD) — anchors the rrule schedule. Falls back to createdTs when unset.
+     * User-editable in the routine edit dialog. For calendar routines, becomes the GCal series DTSTART
+     * (snapped forward to the first BYDAY/BYMONTHDAY match by seriesStartDate). For nextAction routines,
+     * no items are generated with an occurrence date before startDate.
+     */
+    startDate?: string;
+    /**
      * Present when routineType === 'calendar'. Defines time and duration for generated calendar items.
      */
     calendarItemTemplate?: {

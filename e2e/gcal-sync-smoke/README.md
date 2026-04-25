@@ -71,6 +71,18 @@ Session 2 still lives as a single composite plan. If it runs long, split per-cas
   - H-series: UNTIL boundary / series end (H1–H7; H1/H2 N-A)
   - I-series: Routine deactivation (I1–I6)
 
+#### I. App-side pause / resume (per-case)
+- `gcal-sync-smoke-case-I7.md` — App-side pause (GCal master capped with UNTIL, not deleted)
+- `gcal-sync-smoke-case-I8.md` — App-side resume via new startDate (UNTIL cleared, items regenerate)
+
+#### K. startDate edits (per-case)
+> Labeled K here (not J) because `CALENDAR_ROUTINE_SYNC_TESTS.md` already uses J for webhook/sync-token expiry cases.
+- `gcal-sync-smoke-case-K1.md` — Create calendar routine with future startDate
+- `gcal-sync-smoke-case-K2.md` — Edit startDate forward on routine with `done` past items (split)
+- `gcal-sync-smoke-case-K3.md` — Edit startDate forward on routine without `done` past items (in-place)
+- `gcal-sync-smoke-case-K4.md` — Edit startDate backward
+- `gcal-sync-smoke-case-K5.md` — Edit startDate past UNTIL (no-op + log)
+
 ## Results file
 
 All per-case sessions append a result block to:

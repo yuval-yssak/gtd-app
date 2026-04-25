@@ -407,6 +407,30 @@ describe('GET /sync/bootstrap', () => {
         const res = await app.fetch(new Request('http://localhost:4000/sync/bootstrap'));
         expect(res.status).toBe(401);
     });
+
+    it('round-trips routine.startDate through push + bootstrap', async () => {
+        const cookie = await loginAsAlice();
+        const routineId = crypto.randomUUID();
+        const ts = dayjs().toISOString();
+        const snapshot = {
+            _id: routineId,
+            userId: 'client-user-id',
+            title: 'Daily',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            createdTs: ts,
+            updatedTs: ts,
+            startDate: '2026-06-15',
+        };
+        const res = await push(cookie, 'device-1', [makeClientOp('routine', routineId, 'create', snapshot)]);
+        expect(res.status).toBe(200);
+
+        const bootstrap = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: cookie });
+        const body = (await bootstrap.json()) as { routines: Array<{ startDate?: string }> };
+        expect(body.routines[0]!.startDate).toBe('2026-06-15');
+    });
 });
 
 // ─── Purge logic ─────────────────────────────────────────────────────────────

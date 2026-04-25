@@ -14,8 +14,9 @@ Each scenario is a numbered Given/When/Then case. Each case lists a likely **tes
 - **F. Concurrent edits / conflict resolution**
 - **G. Timezone changes**
 - **H. UNTIL boundary / series end**
-- **I. Routine deactivation (GCal master deleted)**
+- **I. Routine deactivation / pause (GCal-side delete + app-side pause/resume)**
 - **J. Webhook / sync token expiry / disconnected integration**
+- **K. startDate edits**
 
 Conventions:
 - "App side" = local IndexedDB write that flows out via `flushSyncQueue` → server → GCal.
@@ -676,7 +677,9 @@ Conventions:
 
 ---
 
-## I. Routine deactivation (GCal master deleted)
+## I. Routine deactivation / pause
+
+Cases I1–I6 cover deactivation triggered by deleting the GCal master (server-side detection). Cases I7–I8 cover the app-side Pause/Resume gesture, which caps the GCal master with UNTIL rather than deleting it.
 
 ### I1. Master event deleted in GCal — basic deactivation
 **Given** routine `R` from C1 with future items generated
@@ -750,6 +753,34 @@ Conventions:
 - Chain reference preserved
 
 **Test location:** `api-server/src/tests/calendar.test.ts`
+
+---
+
+### I7. App-side pause (user clicks Pause in app)
+**Given** active calendar routine `R` linked to GCal, with future generated items
+**When** user clicks the Pause icon in the Routines list and confirms
+**Then**
+- `R.active = false`
+- All future open items (status `calendar`/`nextAction` with `timeStart`/`expectedBy >= today`) are trashed
+- Past-due open items are left alone (forward-looking invariant)
+- `R.calendarEventId` is stable (not cleared)
+- GCal master is capped with `RRULE;UNTIL=<yesterday>T235959Z` via `events.patch` (not deleted)
+- Past GCal occurrences remain intact on Google's side
+
+**Test location:** `api-server/src/tests/calendar.test.ts` (describe "routine pause"), `client/src/tests/routineMutations.test.ts` (describe "pauseRoutine").
+
+---
+
+### I8. App-side resume via new startDate
+**Given** routine `R` paused via I7
+**When** user opens the edit dialog, sets a new `startDate` (≥ today), and saves
+**Then**
+- `R.active = true` flips back
+- GCal master's pause-era UNTIL is dropped (via `events.update` with the fresh rrule)
+- Future items are regenerated from the new startDate
+- `R.calendarEventId` unchanged
+
+**Test location:** `api-server/src/tests/calendar.test.ts` (pause pushback describe).
 
 ---
 
@@ -873,6 +904,67 @@ Conventions:
 
 ---
 
+## K. startDate edits
+
+The routine `startDate` field (ISO date) anchors the rrule schedule — falls back to `createdTs` when unset. User-editable in the routine edit dialog.
+
+### K1. Create calendar routine with future startDate
+**Given** no routine exists
+**When** user creates a calendar routine with `startDate` > today
+**Then**
+- `R.startDate = <that date>`
+- App shows no generated items until the startDate arrives
+- GCal master's DTSTART is the startDate (snapped forward to BYDAY/BYMONTHDAY if applicable)
+
+**Test location:** `api-server/src/tests/calendar.test.ts`, `client/src/tests/routineStartDate.test.ts`
+
+---
+
+### K2. Edit startDate forward on routine with `done` past items — split gesture
+**Given** active calendar routine `R` with at least one past `status='done'` item
+**When** user edits `R.startDate` to a future date and saves
+**Then**
+- Old routine `R` is capped with `rrule;UNTIL=<yesterday>` and `active=false`
+- New tail routine `R_tail` is created with `startDate=<new date>`, `splitFromRoutineId=R._id`, fresh `calendarEventId`
+- Done past items stay tied to `R` (preserved history)
+- GCal: old master capped via `events.patch`; new master created via `events.insert`
+
+**Test location:** `client/src/tests/routineSplit.test.ts`, `api-server/src/tests/calendar.test.ts`
+
+---
+
+### K3. Edit startDate forward on routine without `done` past items — in-place re-anchor
+**Given** active calendar routine `R` with past items, none of which are `status='done'`
+**When** user edits `R.startDate` to a future date and saves
+**Then**
+- Single routine `R` updated in place with new `startDate`
+- Past non-done items are hard-deleted (no stale rows in Mongo for the routine)
+- Future items regenerate from the new startDate
+- GCal master is re-anchored via `events.update` (same `calendarEventId`)
+
+---
+
+### K4. Edit startDate backward
+**Given** active calendar routine `R` with `startDate` in the future
+**When** user edits `startDate` to an earlier date (still future)
+**Then**
+- In-place re-anchor (no split — no past `done` items exist)
+- Items regenerate from the earlier startDate
+- GCal master DTSTART re-anchored
+
+---
+
+### K5. Edit startDate past UNTIL — graceful no-op
+**Given** active calendar routine `R` with `rrule` containing `UNTIL=<date>`
+**When** user edits `startDate` to a date after UNTIL
+**Then**
+- `seriesStartDate(R)` would throw because no rrule occurrences exist on/after the new startDate
+- Server pushback catches and logs; no GCal API call succeeds, no 5xx propagates to the client
+- `R.startDate` is saved (the local update persists)
+- No items are generated (rrule produces no valid occurrences)
+
+---
+
 ## Cross-cutting concerns / open questions to resolve before implementation
 
 These questions surfaced while writing the matrix. Resolving them will sharpen several test expectations:
@@ -883,6 +975,6 @@ These questions surfaced while writing the matrix. Resolving them will sharpen s
 4. **D3 — moving a master event between calendars:** How should this be represented? Currently flagged as not implemented.
 5. **E8 — split detection false positives:** Is RRULE compatibility part of the heuristic? If not, should it be?
 6. **G1/G2 — wall-clock vs. absolute time on TZ change:** What's the intended user experience?
-7. **H1 — auto-deactivation on UNTIL:** Does `R.active` flip to `false` when UNTIL is passed, or does it stay `true` indefinitely?
-8. **I1 — preserving link metadata after deactivation:** Do `calendarEventId` etc. get cleared, or kept for audit?
+7. **H1 — auto-deactivation on UNTIL:** Does `R.active` flip to `false` when UNTIL is passed, or does it stay `true` indefinitely? _(Partially answered by the pause feature — I7 introduces explicit app-side deactivation via the Pause button. Automatic deactivation when UNTIL is naturally reached is still open.)_
+8. **I1 — preserving link metadata after deactivation:** Do `calendarEventId` etc. get cleared, or kept for audit? _(The I7 app-side pause keeps `calendarEventId` populated so resume via I8 can reuse it; I1 GCal-side deletion still clears it.)_
 9. **J5 — outbound push behavior during `needsReauth`:** Are queued ops dropped, retried later, or held forever?

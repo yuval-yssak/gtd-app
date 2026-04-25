@@ -43,17 +43,32 @@ export function endDateTime(dateStr: string, timeOfDay: string, durationMinutes:
  * to the recurrence. Snap DTSTART forward to the first real occurrence to avoid that.
  */
 export function seriesStartDate(routine: RoutineInterface): string {
-    const createdDate = routine.createdTs.slice(0, 10);
-    const dtStartStr = `${createdDate.replace(/-/g, '')}T000000Z`;
+    // Prefer user-set startDate over createdTs. Falls back so legacy routines still work.
+    const anchorDate = (routine.startDate ?? routine.createdTs).slice(0, 10);
+    const dtStartStr = `${anchorDate.replace(/-/g, '')}T000000Z`;
     const rule = RRule.fromString(`DTSTART:${dtStartStr}\nRRULE:${routine.rrule}`);
-    // Search strictly after (createdTs - 1 day) so the first occurrence on or after createdTs
+    // Search strictly after (anchor - 1 day) so the first occurrence on or after the anchor
     // is returned — preserving already-matching dates (e.g. DAILY) and rolling forward to the
     // next BYDAY/BYMONTHDAY match otherwise.
-    const first = rule.after(dayjs.utc(createdDate).subtract(1, 'day').toDate(), false);
+    const first = rule.after(dayjs.utc(anchorDate).subtract(1, 'day').toDate(), false);
     if (!first) {
-        throw new Error(`Routine ${routine._id} has an rrule with no occurrences on or after ${createdDate}`);
+        throw new Error(`Routine ${routine._id} has an rrule with no occurrences on or after ${anchorDate}`);
     }
     return first.toISOString().slice(0, 10);
+}
+
+/**
+ * Rewrites an RRULE: line to have exactly one UNTIL=<untilDate> clause, stripping any prior
+ * UNTIL or COUNT (which are mutually exclusive with UNTIL in RFC 5545). Exported for testability.
+ */
+export function rrulePinnedUntil(rruleLine: string, untilDate: string): string {
+    const prefix = 'RRULE:';
+    const body = rruleLine.startsWith(prefix) ? rruleLine.slice(prefix.length) : rruleLine;
+    const filtered = body
+        .split(';')
+        .filter((clause) => !clause.startsWith('UNTIL=') && !clause.startsWith('COUNT='))
+        .join(';');
+    return `${prefix}${filtered};UNTIL=${untilDate}`;
 }
 
 /** Type guard for Google API errors which carry a numeric `code` property (e.g. 410 for expired syncTokens). */
@@ -222,6 +237,21 @@ export class GoogleCalendarProvider implements CalendarProvider {
     async deleteRecurringEvent(eventId: string, calendarId: string): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         await cal.events.delete({ calendarId, eventId });
+    }
+
+    /**
+     * Caps the existing GCal master with UNTIL=<untilDate> via events.patch. Reads the master's
+     * current recurrence array, rewrites only the RRULE clause (strips any prior UNTIL/COUNT and
+     * appends the new UNTIL), and preserves EXDATE/RDATE lines untouched. Uses patch (not update)
+     * so start/summary/description are left alone — this is a pure "stop producing new occurrences"
+     * operation.
+     */
+    async capRecurringEvent(eventId: string, untilDate: string, calendarId: string, _timeZone: string): Promise<void> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const existing = await cal.events.get({ calendarId, eventId });
+        const currentRecurrence = existing.data.recurrence ?? [];
+        const nextRecurrence = currentRecurrence.map((line) => (line.startsWith('RRULE:') ? rrulePinnedUntil(line, untilDate) : line));
+        await cal.events.patch({ calendarId, eventId, requestBody: { recurrence: nextRecurrence } });
     }
 
     async listCalendars(): Promise<Array<{ id: string; name: string }>> {

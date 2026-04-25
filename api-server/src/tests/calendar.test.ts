@@ -4074,3 +4074,418 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         expect(tailB!.splitFromRoutineId).toBeUndefined();
     });
 });
+
+// ─── Routine startDate ──────────────────────────────────────────────────────
+
+describe('routine startDate', () => {
+    it('seriesStartDate uses startDate when set, else createdTs', async () => {
+        // Late import to avoid circular load ordering with rrule bundle.
+        const { seriesStartDate } = await import('../calendarProviders/GoogleCalendarProvider.js');
+        const base = makeRoutine('u-any', { createdTs: '2026-01-01T00:00:00.000Z', rrule: 'FREQ=DAILY' });
+        expect(seriesStartDate(base)).toBe('2026-01-01');
+        const withStartDate = { ...base, startDate: '2026-06-15' };
+        expect(seriesStartDate(withStartDate)).toBe('2026-06-15');
+    });
+
+    it('seriesStartDate with startDate > UNTIL throws', async () => {
+        const { seriesStartDate } = await import('../calendarProviders/GoogleCalendarProvider.js');
+        const routine = makeRoutine('u-any', {
+            createdTs: '2026-01-01T00:00:00.000Z',
+            startDate: '2026-12-01',
+            rrule: 'FREQ=DAILY;UNTIL=20260401T235959Z',
+        });
+        expect(() => seriesStartDate(routine)).toThrow(/no occurrences/);
+    });
+
+    it('createRecurringEvent anchors GCal DTSTART on startDate (not createdTs)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: '2026-01-01T00:00:00.000Z',
+            startDate: '2026-06-15',
+            rrule: 'FREQ=DAILY',
+        });
+        await routinesDAO.insertOne(routine);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-new-id');
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        // createRecurringEvent itself computes seriesStartDate internally — we assert it was called
+        // with the routine that has startDate set.
+        expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ startDate: '2026-06-15' }), 'primary', 'Asia/Jerusalem');
+    });
+});
+
+// ─── Routine pause ───────────────────────────────────────────────────────────
+
+describe('routine pause', () => {
+    it('pause pushback caps the GCal master with UNTIL=<yesterday> and leaves eventId stable', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routineActive = makeRoutine(userId, {
+            calendarEventId: 'gcal-master-pause',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: '2026-01-01T10:00:00.000Z',
+        });
+        await routinesDAO.insertOne(routineActive);
+        // Seed a prior operation so handleRoutinePush detects the active transition.
+        await operationsDAO.insertOne({
+            _id: 'op-prior',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-01T09:59:00.000Z',
+            entityType: 'routine',
+            entityId: routineActive._id,
+            opType: 'create',
+            snapshot: routineActive,
+        });
+
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockResolvedValue(undefined);
+
+        const pausedSnapshot: RoutineInterface = { ...routineActive, active: false, updatedTs: '2026-01-01T11:00:00.000Z' };
+        await routinesDAO.replaceById(routineActive._id, pausedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, { entityType: 'routine', entityId: pausedSnapshot._id, snapshot: pausedSnapshot, ts: '2026-01-01T11:00:00.000Z' }),
+            mockBuildProvider(),
+        );
+
+        expect(capSpy).toHaveBeenCalledOnce();
+        expect(capSpy).toHaveBeenCalledWith('gcal-master-pause', expect.stringMatching(/^\d{8}T235959Z$/), 'primary', 'Asia/Jerusalem');
+        // steady-state updateRecurringEvent must NOT fire alongside the cap.
+        expect(updateSpy).not.toHaveBeenCalled();
+    });
+
+    it('pause pushback trashes future items and leaves past/done items alone', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-pause-items',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: '2026-01-02T10:00:00.000Z',
+        });
+        await routinesDAO.insertOne(routine);
+        // Seed prior op with active=true.
+        await operationsDAO.insertOne({
+            _id: 'op-prior-2',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-02T09:59:00.000Z',
+            entityType: 'routine',
+            entityId: routine._id,
+            opType: 'create',
+            snapshot: routine,
+        });
+
+        const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+        const yesterdayStr = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        const tomorrowStr = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        await itemsDAO.insertMany([
+            {
+                _id: 'past-done',
+                user: userId,
+                status: 'done',
+                title: 'past-done',
+                routineId: routine._id,
+                timeStart: `${yesterdayStr}T09:00:00`,
+                createdTs: yesterdayStr,
+                updatedTs: yesterdayStr,
+            },
+            {
+                _id: 'future-calendar',
+                user: userId,
+                status: 'calendar',
+                title: 'future',
+                routineId: routine._id,
+                timeStart: `${tomorrowStr}T09:00:00`,
+                createdTs: todayStr,
+                updatedTs: todayStr,
+            },
+        ]);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+
+        const pausedSnapshot: RoutineInterface = { ...routine, active: false, updatedTs: '2026-01-02T11:00:00.000Z' };
+        await routinesDAO.replaceById(routine._id, pausedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, { entityType: 'routine', entityId: pausedSnapshot._id, snapshot: pausedSnapshot, ts: '2026-01-02T11:00:00.000Z' }),
+            mockBuildProvider(),
+        );
+
+        const future = await itemsDAO.findByOwnerAndId('future-calendar', userId);
+        const past = await itemsDAO.findByOwnerAndId('past-done', userId);
+        expect(future!.status).toBe('trash');
+        expect(past!.status).toBe('done'); // untouched
+    });
+
+    it('capRecurringEvent strips existing UNTIL/COUNT and appends the new UNTIL (unit-level)', async () => {
+        const { rrulePinnedUntil } = await import('../calendarProviders/GoogleCalendarProvider.js');
+        // Pre-existing UNTIL — rewritten.
+        expect(rrulePinnedUntil('RRULE:FREQ=DAILY;UNTIL=20260301T235959Z', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z');
+        // Pre-existing COUNT — stripped (UNTIL and COUNT are mutually exclusive).
+        expect(rrulePinnedUntil('RRULE:FREQ=WEEKLY;COUNT=5;BYDAY=MO', '20260423T235959Z')).toBe('RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260423T235959Z');
+        // No prior cap.
+        expect(rrulePinnedUntil('RRULE:FREQ=DAILY', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z');
+    });
+
+    it('resume pushback: fires updateRecurringEvent (clears UNTIL) and regenerates future items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Routine currently paused (active=false). Prior op is the pause; the NEW op flips active=true.
+        const pausedRoutine = makeRoutine(userId, {
+            _id: 'routine-resume',
+            calendarEventId: 'gcal-master-resume',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: false,
+            updatedTs: '2026-01-05T09:00:00.000Z',
+        });
+        await routinesDAO.insertOne(pausedRoutine);
+        await operationsDAO.insertOne({
+            _id: 'op-paused-prior',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-05T09:00:00.000Z',
+            entityType: 'routine',
+            entityId: pausedRoutine._id,
+            opType: 'update',
+            snapshot: pausedRoutine,
+        });
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockResolvedValue(undefined);
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+
+        const resumedSnapshot: RoutineInterface = { ...pausedRoutine, active: true, updatedTs: '2026-01-05T11:00:00.000Z' };
+        await routinesDAO.replaceById(pausedRoutine._id, resumedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, {
+                _id: 'op-resume-current',
+                entityType: 'routine',
+                entityId: resumedSnapshot._id,
+                snapshot: resumedSnapshot,
+                ts: '2026-01-05T11:00:00.000Z',
+            }),
+            mockBuildProvider(),
+        );
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        expect(capSpy).not.toHaveBeenCalled();
+    });
+
+    it('two back-to-back pause ops: cap fires exactly once (second op sees first as prior)', async () => {
+        // I7 regression: when two pause ops land in quick succession for the same routine (e.g. from
+        // two flush batches), the pre-fix `readPriorActiveFlag` excluded only the current op by _id.
+        // That made BOTH pause ops see each other as "prior" and infer priorActive=false → no
+        // transition → skip cap. Result: GCal master never gets UNTIL, and the live pause in the I7
+        // smoke case left the recurring series un-capped. Strictly-before (ts, _id) ordering fixes it.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routineActive = makeRoutine(userId, {
+            _id: 'routine-double-pause',
+            calendarEventId: 'gcal-master-double',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: '2026-04-24T18:59:00.000Z',
+        });
+        await routinesDAO.insertOne(routineActive);
+        await operationsDAO.insertOne({
+            _id: 'op-prior-active',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-04-24T18:59:00.000Z',
+            entityType: 'routine',
+            entityId: routineActive._id,
+            opType: 'create',
+            snapshot: routineActive,
+        });
+
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+
+        // First pause op lands (ts = 19:00:00.219Z, matching the live repro).
+        const pausedSnapshot: RoutineInterface = { ...routineActive, active: false, updatedTs: '2026-04-24T19:00:00.219Z' };
+        await routinesDAO.replaceById(routineActive._id, pausedSnapshot);
+        const pauseOp1: OperationInterface = {
+            _id: 'op-pause-1',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-04-24T19:00:00.219Z',
+            entityType: 'routine',
+            entityId: pausedSnapshot._id,
+            opType: 'update',
+            snapshot: pausedSnapshot,
+        };
+        await operationsDAO.insertOne(pauseOp1);
+        await maybePushToGCal(pauseOp1, mockBuildProvider());
+
+        // Second pause op lands (ts = 19:00:00.435Z) — same snapshot (active still false).
+        const pauseOp2: OperationInterface = {
+            _id: 'op-pause-2',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-04-24T19:00:00.435Z',
+            entityType: 'routine',
+            entityId: pausedSnapshot._id,
+            opType: 'update',
+            snapshot: { ...pausedSnapshot, updatedTs: '2026-04-24T19:00:00.435Z' },
+        };
+        await operationsDAO.insertOne(pauseOp2);
+        await maybePushToGCal(pauseOp2, mockBuildProvider());
+
+        expect(capSpy).toHaveBeenCalledOnce();
+        expect(capSpy).toHaveBeenCalledWith('gcal-master-double', expect.stringMatching(/^\d{8}T235959Z$/), 'primary', 'Asia/Jerusalem');
+    });
+
+    it('readPriorActiveFlag: same-updatedTs collision is resolved by op._id, not timestamp', async () => {
+        // Two devices pushed concurrently and produced ops with identical updatedTs on the routine
+        // snapshot. The prior op is the active=true create; the new op flips to active=false.
+        // Classifying by updatedTs would fail to exclude the new op; classifying by op._id succeeds.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const sharedUpdatedTs = '2026-01-06T10:00:00.000Z';
+        const routineCreate = makeRoutine(userId, {
+            _id: 'routine-collision',
+            calendarEventId: 'gcal-master-collision',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: sharedUpdatedTs,
+        });
+        await routinesDAO.insertOne(routineCreate);
+        await operationsDAO.insertOne({
+            _id: 'op-create',
+            user: userId,
+            deviceId: 'device-1',
+            ts: sharedUpdatedTs,
+            entityType: 'routine',
+            entityId: routineCreate._id,
+            opType: 'create',
+            snapshot: routineCreate,
+        });
+
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+
+        // New op: same updatedTs, but active=false. Must be recognized as a transition → cap.
+        const pausedSnapshot: RoutineInterface = { ...routineCreate, active: false };
+        await routinesDAO.replaceById(routineCreate._id, pausedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, {
+                _id: 'op-pause-collision',
+                entityType: 'routine',
+                entityId: pausedSnapshot._id,
+                snapshot: pausedSnapshot,
+                ts: sharedUpdatedTs,
+            }),
+            mockBuildProvider(),
+        );
+
+        expect(capSpy).toHaveBeenCalledOnce();
+    });
+
+    it('pause batch with N concurrent item-trash ops: cap fires; per-instance cancellations are skipped', async () => {
+        // Regression: when the user pauses a routine, the client emits one routine-pause op plus
+        // N item-trash ops for the future generated items in a single sync-push batch. All N+1
+        // pushbacks ran in parallel. The N parallel `cancelRecurringInstance` patches against GCal
+        // raced with `capRecurringEvent` and dropped the just-written UNTIL from the master's
+        // recurrence. Fix: when the routine is paused, skip per-instance cancellations entirely —
+        // the cap covers them.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routineActive = makeRoutine(userId, {
+            _id: 'routine-batch-pause',
+            calendarEventId: 'gcal-master-batch-pause',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            active: true,
+            updatedTs: '2026-01-10T09:00:00.000Z',
+        });
+        await routinesDAO.insertOne(routineActive);
+        // Seed prior op (active=true) so handleRoutinePush sees the active→inactive transition.
+        await operationsDAO.insertOne({
+            _id: 'op-batch-prior',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-10T09:00:00.000Z',
+            entityType: 'routine',
+            entityId: routineActive._id,
+            opType: 'create',
+            snapshot: routineActive,
+        });
+
+        // Mirror the client batch: routine flips to active=false in the DB BEFORE pushbacks run
+        // (sync.ts applies entity ops before fanning out push-back). Each item-trash op carries a
+        // routine-generated calendar item snapshot.
+        const pausedSnapshot: RoutineInterface = { ...routineActive, active: false, updatedTs: '2026-01-10T10:00:00.000Z' };
+        await routinesDAO.replaceById(routineActive._id, pausedSnapshot);
+
+        const capSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockResolvedValue(undefined);
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        const itemCount = 5;
+        const itemOps: OperationInterface[] = Array.from({ length: itemCount }, (_, i) => {
+            const day = dayjs('2026-01-11').add(i, 'day').format('YYYY-MM-DD');
+            const trashedItem: ItemInterface = {
+                _id: `item-trash-${i}`,
+                user: userId,
+                status: 'trash',
+                title: `Standup ${day}`,
+                routineId: routineActive._id,
+                timeStart: `${day}T09:00:00`,
+                timeEnd: `${day}T09:30:00`,
+                createdTs: '2026-01-10T08:00:00.000Z',
+                updatedTs: '2026-01-10T10:00:00.000Z',
+            };
+            return {
+                _id: `op-trash-${i}`,
+                user: userId,
+                deviceId: 'device-1',
+                ts: '2026-01-10T10:00:00.000Z',
+                entityType: 'item',
+                entityId: trashedItem._id!,
+                opType: 'update',
+                snapshot: trashedItem,
+            };
+        });
+        const pauseOp: OperationInterface = {
+            _id: 'op-batch-pause',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-10T10:00:00.000Z',
+            entityType: 'routine',
+            entityId: pausedSnapshot._id,
+            opType: 'update',
+            snapshot: pausedSnapshot,
+        };
+        await operationsDAO.insertMany([...itemOps, pauseOp]);
+
+        // Fan out pushbacks in parallel — same shape as sync.ts line 200.
+        await Promise.all([...itemOps, pauseOp].map((op) => maybePushToGCal(op, mockBuildProvider())));
+
+        expect(capSpy).toHaveBeenCalledOnce();
+        expect(capSpy).toHaveBeenCalledWith('gcal-master-batch-pause', expect.stringMatching(/^\d{8}T235959Z$/), 'primary', 'Asia/Jerusalem');
+        // Per-instance cancellations must be skipped when the routine is paused — racing them
+        // against the cap caused GCal to drop UNTIL from the master.
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
+});
