@@ -14,6 +14,7 @@ import type {
     RoutineInterface,
 } from '../types/entities.js';
 import { propagateRoutineNotesToItems } from './calendarItemNotes.js';
+import { applyDoneMarker, DONE_COLOR_ID } from './doneMarker.js';
 import { markdownToHtml } from './markdownHtml.js';
 import { recordOperation } from './operationHelpers.js';
 import { regenerateFutureRoutineItems } from './routineItemRegeneration.js';
@@ -192,14 +193,39 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
 
     const { provider, config, timeZone } = ctx;
 
-    if (snapshot.status === 'trash' || snapshot.status === 'done') {
+    if (snapshot.status === 'trash') {
         console.log(`[gcal-pushback] deleting GCal event | eventId=${eventId} itemId=${itemId} title=${snapshot.title}`);
         await provider.deleteEvent(config.calendarId, eventId);
         await stampItemLastPushed(userId, itemId);
         return;
     }
 
+    // Done items keep their GCal event but signal completion via a leading "✓ " title marker and
+    // a sage colorId. The stored title stays clean — the marker lives only in GCal. Reopen
+    // (status → 'calendar') is handled by the generic-update branch below, which sends a clean
+    // title and colorId: null to revert both.
+    if (snapshot.status === 'done') {
+        console.log(`[gcal-pushback] marking GCal event done | eventId=${eventId} itemId=${itemId} title=${snapshot.title}`);
+        await provider.updateEvent(
+            config.calendarId,
+            eventId,
+            {
+                title: applyDoneMarker(snapshot.title),
+                ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
+                ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
+                description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+                colorId: DONE_COLOR_ID,
+            },
+            timeZone,
+        );
+        const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
+        await stampItemLastPushed(userId, itemId, htmlForSync);
+        return;
+    }
+
     console.log(`[gcal-pushback] updating existing item | eventId=${eventId} title=${snapshot.title} status=${snapshot.status}`);
+    // colorId: null clears any prior done-marker color (sage) so a reopened item reverts to the
+    // calendar's default color. Idempotent for items that never carried a colorId.
     await provider.updateEvent(
         config.calendarId,
         eventId,
@@ -208,6 +234,7 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
             ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
             ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
             description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+            colorId: null,
         },
         timeZone,
     );
