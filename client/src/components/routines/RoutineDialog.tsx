@@ -19,7 +19,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import {
-    createNextRoutineItem,
+    createFirstRoutineItem,
     deleteAndRegenerateFutureItems,
     generateCalendarItemsToHorizon,
     hardDeletePastItems,
@@ -266,7 +266,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                             const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
                             const futureStart = formStartDate !== undefined && formStartDate > todayStr;
                             if (!futureStart) {
-                                await createNextRoutineItem(db, userId, updatedRoutine, dayjs().toDate());
+                                await createFirstRoutineItem(db, userId, updatedRoutine);
                             }
                         }
                     }
@@ -341,7 +341,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     if (form.routineType === 'calendar') {
                         await generateCalendarItemsToHorizon(db, userId, created);
                     } else if (!futureStart) {
-                        await createNextRoutineItem(db, userId, created, dayjs().toDate());
+                        await createFirstRoutineItem(db, userId, created);
                     }
                 } catch (err) {
                     console.error('[routine] failed to create items:', err);

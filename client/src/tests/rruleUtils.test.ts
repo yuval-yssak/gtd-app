@@ -42,6 +42,47 @@ describe('computeNextOccurrence', () => {
         const next = computeNextOccurrence('FREQ=DAILY;INTERVAL=1', after);
         expect(next.toISOString()).toBe('2024-01-11T00:00:00.000Z');
     });
+
+    // ── includeAnchor=true: used for the first item of a brand-new routine so a daily/interval
+    //    rule lands today rather than tomorrow.
+    describe('includeAnchor=true', () => {
+        it('daily rule: returns the anchor date itself when DTSTART matches', () => {
+            const anchor = new Date('2024-01-10T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=DAILY;INTERVAL=1', anchor, true);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-01-10');
+        });
+
+        it('every-3-days rule: returns the anchor date itself when DTSTART matches', () => {
+            const anchor = new Date('2024-01-10T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=DAILY;INTERVAL=3', anchor, true);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-01-10');
+        });
+
+        it('weekly rule (BYDAY=MO) anchored on a Wednesday: returns next Monday', () => {
+            // 2024-01-10 is a Wednesday; next Monday is 2024-01-15
+            const anchor = new Date('2024-01-10T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=WEEKLY;BYDAY=MO', anchor, true);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-01-15');
+        });
+
+        it('weekly rule (BYDAY=WE) anchored on a Wednesday: returns the anchor date', () => {
+            const anchor = new Date('2024-01-10T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=WEEKLY;BYDAY=WE', anchor, true);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-01-10');
+        });
+
+        it('monthly rule (BYMONTHDAY=15) anchored on the 15th: returns the anchor date', () => {
+            const anchor = new Date('2024-01-15T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=MONTHLY;BYMONTHDAY=15', anchor, true);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-01-15');
+        });
+
+        it('monthly rule (BYMONTHDAY=15) anchored on the 10th: returns the next 15th', () => {
+            const anchor = new Date('2024-01-10T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=MONTHLY;BYMONTHDAY=15', anchor, true);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-01-15');
+        });
+    });
 });
 
 describe('formatRrule', () => {
