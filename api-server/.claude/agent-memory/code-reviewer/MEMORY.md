@@ -1,0 +1,3 @@
+- [Op identity for pushback filters](feedback_op_identity_filter.md) — "Prior op" in pushback scans needs strict `(ts, _id)` lex-before current, not just `_id: {$ne}`; otherwise back-to-back same-device ops each see the other as "prior".
+- [Pushback error paths](feedback_pushback_fire_and_forget_error_paths.md) — On any new pushback branch, verify what reconciles DB↔GCal divergence after a swallowed GCal error; silent drift is the bug class.
+- [Transition-branch test coverage](feedback_test_transition_branches.md) — New transition detectors (pause/resume, create-vs-update) repeatedly ship without same-timestamp, no-prior-op, idempotency, or opposite-side tests. Require all four.
