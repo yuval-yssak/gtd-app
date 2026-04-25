@@ -3,6 +3,10 @@ import type { CalendarMeta } from '../../db/itemMutations';
 import type { CalendarOption } from '../../hooks/useCalendarOptions';
 import type { EnergyLevel } from '../../types/MyDB';
 
+// Re-export `CalendarMeta` so callers that already import `buildCalendarMeta` from this module
+// can pull the related type without reaching into `db/itemMutations`.
+export type { CalendarMeta };
+
 export type Destination = 'nextAction' | 'calendar' | 'waitingFor' | 'done' | 'trash';
 
 export interface NextActionFormState {

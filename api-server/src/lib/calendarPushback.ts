@@ -3,17 +3,35 @@ import type { CalendarProvider } from '../calendarProviders/CalendarProvider.js'
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
-import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
+import type {
+    CalendarIntegrationInterface,
+    CalendarSyncConfigInterface,
+    ItemInterface,
+    OperationInterface,
+    OpType,
+    RoutineInterface,
+} from '../types/entities.js';
+import { propagateRoutineNotesToItems } from './calendarItemNotes.js';
+import { markdownToHtml } from './markdownHtml.js';
 import { recordOperation } from './operationHelpers.js';
+import { regenerateFutureRoutineItems } from './routineItemRegeneration.js';
 
 type ProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
 
-/** Resolved calendar context for push-back: decrypted integration, sync config, and provider. */
+// Tracks entity IDs with a GCal creation in-flight. When a second `create` op arrives for the
+// same entity (e.g. from a parallel flush batch), the duplicate is skipped rather than racing
+// through the DB re-read guard's TOCTOU window.
+// Exported for test cleanup only.
+export const gcalCreationInFlight = new Set<string>();
+
+/** Resolved calendar context for push-back: decrypted integration, sync config, provider, and timezone. */
 interface PushContext {
     integration: CalendarIntegrationInterface;
     config: CalendarSyncConfigInterface;
     provider: CalendarProvider;
+    timeZone: string;
 }
 
 /** Identifiers linking an entity to its calendar source — avoids threading 4+ args through helpers. */
@@ -30,12 +48,13 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
     // OperationInterface.snapshot is a union of all entity types — TypeScript cannot narrow it
     // via entityType since it's not a discriminated union. The casts below are safe because
     // the entityType check guarantees the snapshot shape.
+    console.log(`[gcal-pushback] op=${op.opType} entityType=${op.entityType} entityId=${op.entityId} opId=${op._id} ts=${op.ts}`);
     if (op.entityType === 'item' && op.snapshot) {
         await handleItemPush(op.snapshot as ItemInterface, op.user, buildProvider);
         return;
     }
     if (op.entityType === 'routine' && op.snapshot) {
-        await handleRoutinePush(op.snapshot as RoutineInterface, op.user, buildProvider);
+        await handleRoutinePush(op.snapshot as RoutineInterface, op.user, op.opType, op._id, op.ts, buildProvider);
     }
 }
 
@@ -46,9 +65,115 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
         await pushExistingItemToGCal(snapshot, userId, buildProvider);
         return;
     }
+    // Routine-generated instance trashed locally → cancel that single GCal occurrence.
+    // The item op carries `routineId` + `timeStart`; the master event lives on the routine.
+    // Mirrors the `skipped` routineException the client just wrote (matrix A4).
+    // `done` is intentionally GTD-local — the GCal occurrence must remain (matrix A8); otherwise
+    // the GCal echo round-trips a `deleted` exception back and the app-side item flips to `trash`.
+    if (snapshot.routineId && snapshot.status === 'trash') {
+        await pushRoutineInstanceCancellation(snapshot, userId, buildProvider);
+        return;
+    }
+    // Routine-generated calendar items carry routineId but no calendarEventId — their GCal
+    // presence is the routine's master recurring event. Per-instance edits push a single-instance
+    // override on that master (matrix A2/A3).
+    if (snapshot.status === 'calendar' && snapshot.routineId) {
+        await pushRoutineInstanceOverride(snapshot, userId, buildProvider);
+        return;
+    }
     if (snapshot.status === 'calendar') {
         await pushNewItemToGCal(snapshot, userId, buildProvider);
     }
+}
+
+/**
+ * Pushes a per-instance override (time / title / description) to the routine's GCal master
+ * recurring event. Used when the user edits a routine-generated calendar item locally.
+ * No-ops gracefully when the routine isn't linked to GCal yet.
+ */
+async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
+        return;
+    }
+    const routine = await routinesDAO.findByOwnerAndId(snapshot.routineId, userId);
+    if (!routine?.calendarEventId) {
+        return;
+    }
+    const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    if (!ctx) {
+        return;
+    }
+    const originalDate = resolveOriginalDate(routine, snapshot);
+    const { provider, config, timeZone } = ctx;
+    console.log(
+        `[gcal-pushback] overriding routine instance | routineId=${snapshot.routineId} eventId=${routine.calendarEventId} originalDate=${originalDate}`,
+    );
+    await provider.updateRecurringInstance(
+        routine.calendarEventId,
+        originalDate,
+        {
+            title: snapshot.title,
+            ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
+            ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
+            description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+        },
+        config.calendarId,
+        timeZone,
+    );
+    await stampItemLastPushed(userId, snapshot._id);
+}
+
+/**
+ * Cancels the single GCal occurrence that corresponds to a routine-generated item trashed or
+ * completed locally. Mirrors `pushRoutineInstanceOverride` structurally — resolves routine,
+ * context, and original rrule date, then calls `provider.cancelRecurringInstance`.
+ *
+ * Skips when the routine is paused: the same batch carries a routine-pause op that caps the
+ * master with UNTIL, making per-instance cancellation patches redundant. Skipping also avoids
+ * a race we observed in production where N parallel cancellations against the just-capped
+ * master caused GCal to drop UNTIL from the master's recurrence.
+ *
+ * No-ops gracefully when the routine isn't linked to GCal yet or the item lacks a timeStart.
+ */
+async function pushRoutineInstanceCancellation(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
+        return;
+    }
+    const routine = await routinesDAO.findByOwnerAndId(snapshot.routineId, userId);
+    if (!routine?.calendarEventId) {
+        return;
+    }
+    if (!routine.active) {
+        return;
+    }
+    const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    if (!ctx) {
+        return;
+    }
+    const originalDate = resolveOriginalDate(routine, snapshot);
+    const { provider, config } = ctx;
+    console.log(
+        `[gcal-pushback] cancelling routine instance | routineId=${snapshot.routineId} eventId=${routine.calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
+    );
+    await provider.cancelRecurringInstance(routine.calendarEventId, originalDate, config.calendarId);
+    await stampItemLastPushed(userId, snapshot._id);
+}
+
+/**
+ * Returns the rrule occurrence date this item was originally generated for.
+ * For an un-moved item, `timeStart` still matches the rrule date — use that.
+ * For an already-moved item, `timeStart` is the *new* date, so the rrule date only lives
+ * on the routine's `modified` exception. Look it up by `itemId` and fall back to `timeStart`
+ * if no exception exists yet (first-ever override).
+ */
+function resolveOriginalDate(routine: RoutineInterface, snapshot: ItemInterface): string {
+    const existing = routine.routineExceptions?.find((e) => e.type === 'modified' && e.itemId === snapshot._id);
+    if (existing) {
+        return existing.date;
+    }
+    return dayjs(snapshot.timeStart).format('YYYY-MM-DD');
 }
 
 /** Pushes edits or deletion of an existing calendar-linked item back to Google Calendar. */
@@ -65,20 +190,29 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
         return;
     }
 
-    const { provider, config } = ctx;
+    const { provider, config, timeZone } = ctx;
 
     if (snapshot.status === 'trash' || snapshot.status === 'done') {
+        console.log(`[gcal-pushback] deleting GCal event | eventId=${eventId} itemId=${itemId} title=${snapshot.title}`);
         await provider.deleteEvent(config.calendarId, eventId);
         await stampItemLastPushed(userId, itemId);
         return;
     }
 
-    await provider.updateEvent(config.calendarId, eventId, {
-        title: snapshot.title,
-        ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
-        ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
-    });
-    await stampItemLastPushed(userId, itemId);
+    console.log(`[gcal-pushback] updating existing item | eventId=${eventId} title=${snapshot.title} status=${snapshot.status}`);
+    await provider.updateEvent(
+        config.calendarId,
+        eventId,
+        {
+            title: snapshot.title,
+            ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
+            ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
+            description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+        },
+        timeZone,
+    );
+    const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
+    await stampItemLastPushed(userId, itemId, htmlForSync);
 }
 
 /** Creates a new Google Calendar event for an app-created calendar item. */
@@ -91,38 +225,232 @@ async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildP
         return;
     }
 
-    const ctx = await resolveDefaultPushContext(userId, buildProvider);
-    if (!ctx) {
+    // Guard against concurrent GCal creation for the same item (e.g. duplicate create ops
+    // from back-to-back flush batches). Claim the slot synchronously (before any await) so a
+    // second call in the same microtask sees the entry and bails out.
+    if (gcalCreationInFlight.has(snapshot._id)) {
+        console.log(`[gcal-pushback] item ${snapshot._id} GCal creation already in-flight — skipping`);
         return;
     }
+    gcalCreationInFlight.add(snapshot._id);
+    try {
+        // Re-read from DB: a previous (now-completed) push-back may have already linked this entity.
+        const current = await itemsDAO.findByOwnerAndId(snapshot._id, userId);
+        if (current?.calendarEventId) {
+            console.log(`[gcal-pushback] item ${snapshot._id} already linked to GCal event ${current.calendarEventId} — skipping create`);
+            return;
+        }
 
-    const { provider, config, integration } = ctx;
-    const calendarEventId = await provider.createEvent(config.calendarId, {
-        title: snapshot.title,
-        timeStart: snapshot.timeStart,
-        timeEnd: snapshot.timeEnd,
-    });
+        const ctx = await resolveDefaultPushContext(userId, buildProvider);
+        if (!ctx) {
+            return;
+        }
 
-    const now = dayjs().toISOString();
-    await itemsDAO.updateOne(
-        { _id: snapshot._id, user: userId },
-        { $set: { calendarEventId, calendarIntegrationId: integration._id, calendarSyncConfigId: config._id, lastPushedToGCalTs: now, updatedTs: now } },
-    );
-    // Record an operation so other devices learn about the newly-linked calendar event ID.
-    const updated = await itemsDAO.findByOwnerAndId(snapshot._id, userId);
-    if (updated) {
-        await recordOperation(userId, { entityType: 'item', entityId: snapshot._id, snapshot: updated, opType: 'update', now });
+        const { provider, config, integration, timeZone } = ctx;
+        console.log(`[gcal-pushback] creating new GCal event | itemId=${snapshot._id} title=${snapshot.title}`);
+        const calendarEventId = await provider.createEvent(
+            config.calendarId,
+            {
+                title: snapshot.title,
+                timeStart: snapshot.timeStart,
+                timeEnd: snapshot.timeEnd,
+                ...(snapshot.notes !== undefined ? { description: markdownToHtml(snapshot.notes) } : {}),
+            },
+            timeZone,
+        );
+
+        const now = dayjs().toISOString();
+        await itemsDAO.updateOne(
+            { _id: snapshot._id, user: userId },
+            {
+                $set: {
+                    calendarEventId,
+                    calendarIntegrationId: integration._id,
+                    calendarSyncConfigId: config._id,
+                    lastPushedToGCalTs: now,
+                    updatedTs: now,
+                    ...(snapshot.notes !== undefined ? { lastSyncedNotes: markdownToHtml(snapshot.notes) } : {}),
+                },
+            },
+        );
+        // Record an operation so other devices learn about the newly-linked calendar event ID.
+        const updated = await itemsDAO.findByOwnerAndId(snapshot._id, userId);
+        if (updated) {
+            await recordOperation(userId, { entityType: 'item', entityId: snapshot._id, snapshot: updated, opType: 'update', now });
+        }
+    } catch (err) {
+        console.error(`[calendar-pushback] failed to create GCal event for item ${snapshot._id}:`, err);
+    } finally {
+        gcalCreationInFlight.delete(snapshot._id);
     }
 }
 
 // ── Routine push-back ────────────────────────────────────────────────────────
 
-async function handleRoutinePush(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function handleRoutinePush(
+    snapshot: RoutineInterface,
+    userId: string,
+    opType: OpType,
+    currentOpId: string,
+    currentOpTs: string,
+    buildProvider: ProviderFactory,
+): Promise<void> {
+    if (opType === 'delete') {
+        await pushRoutineDeletion(snapshot, userId, buildProvider);
+        return;
+    }
+    // Pushback fires after the op has been inserted and the entity has been upserted. Look up the
+    // single newest op strictly before this one in (ts, _id) lex order to compare prior vs current
+    // active flag. Strictly-before is critical: back-to-back pause ops (e.g. flush batches with
+    // identical snapshots) must not see each other as "prior" — the second one would then think
+    // there's no active transition and skip the cap, leaving the first pause un-capped in GCal if
+    // it also raced on the same lookup.
+    const priorActive = await readPriorActiveFlag(snapshot._id, userId, currentOpId, currentOpTs);
+    const activeTransitioned = priorActive !== null && priorActive !== snapshot.active;
+    if (activeTransitioned && !snapshot.active) {
+        await pushRoutinePause(snapshot, userId, buildProvider);
+        return;
+    }
+    if (activeTransitioned && snapshot.active) {
+        await pushRoutineResume(snapshot, userId, buildProvider);
+        return;
+    }
+    // Steady-state update (or first-ever push): no active transition — skip GCal mutation entirely
+    // if the routine is paused to avoid resurrecting a capped series.
+    if (!snapshot.active) {
+        return;
+    }
     if (snapshot.calendarEventId) {
         await pushExistingRoutineToGCal(snapshot, userId, buildProvider);
         return;
     }
     await pushNewRoutineToGCal(snapshot, userId, buildProvider);
+}
+
+/**
+ * Reads the routine's `active` value as of the operation immediately preceding the current push.
+ * "Preceding" means strictly earlier in (ts, _id) lex order — ops with `ts < currentOpTs`, or the
+ * same `ts` but an `_id` that sorts before the current op's `_id`. This ordering:
+ *  - makes same-updatedTs collisions from two devices deterministic (the op with the smaller `_id`
+ *    is treated as "prior"), and
+ *  - makes back-to-back pause ops from one device safe: the second pause op sees the first as prior
+ *    (`active=false`) and correctly skips the cap, while the first sees the pre-pause `active=true`
+ *    op and fires the cap exactly once.
+ * Returns null if this is the routine's first op (no prior op exists).
+ */
+async function readPriorActiveFlag(routineId: string, userId: string, currentOpId: string, currentOpTs: string): Promise<boolean | null> {
+    const [latest] = await operationsDAO.findArray(
+        {
+            user: userId,
+            entityType: 'routine',
+            entityId: routineId,
+            $or: [{ ts: { $lt: currentOpTs } }, { ts: currentOpTs, _id: { $lt: currentOpId } }],
+        },
+        { sort: { ts: -1, _id: -1 }, limit: 1 },
+    );
+    if (!latest) {
+        return null;
+    }
+    const snapshot = latest.snapshot as RoutineInterface | null;
+    return snapshot ? snapshot.active : null;
+}
+
+/**
+ * Pause pushback: trash future generated items and cap the GCal master with UNTIL=<yesterday>.
+ * Keeps calendarEventId stable so a future resume can patch the same series. Past GCal occurrences
+ * remain intact. No-ops gracefully if the routine isn't linked to GCal.
+ */
+async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    const now = dayjs().toISOString();
+    await regenerateFutureRoutineItems(snapshot, userId, now);
+    if (!snapshot.calendarEventId) {
+        return;
+    }
+    const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    if (!ctx) {
+        return;
+    }
+    // UNTIL=<today - 1 day>T235959Z: RFC 5545 format (YYYYMMDDTHHMMSSZ, no separators) in UTC.
+    const untilDate = `${dayjs().subtract(1, 'day').utc().format('YYYYMMDD')}T235959Z`;
+    console.log(`[gcal-pushback] capping GCal master for routine pause | routineId=${snapshot._id} until=${untilDate}`);
+    try {
+        await ctx.provider.capRecurringEvent(snapshot.calendarEventId, untilDate, ctx.config.calendarId, ctx.timeZone);
+    } catch (err) {
+        console.error(`[calendar-pushback] failed to cap recurring event ${snapshot.calendarEventId} for routine ${snapshot._id}:`, err);
+    }
+}
+
+/**
+ * Resume pushback: clears the pause's UNTIL by pushing the full current rrule back to GCal via
+ * events.update, then regenerates future items from the (possibly new) startDate/rrule in the
+ * snapshot. No-ops gracefully if the routine isn't linked to GCal yet.
+ */
+async function pushRoutineResume(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    const now = dayjs().toISOString();
+    if (snapshot.calendarEventId) {
+        try {
+            await pushExistingRoutineToGCal(snapshot, userId, buildProvider);
+        } catch (err) {
+            // Mirror the pause path: don't block local item regen on GCal transient failures. The
+            // next resume-on-save will push the full current rrule and overwrite any stale UNTIL.
+            console.error(`[calendar-pushback] resume: failed to push updated series for routine ${snapshot._id}:`, err);
+        }
+    }
+    await regenerateFutureRoutineItems(snapshot, userId, now);
+}
+
+/**
+ * Cascades a routine delete: removes the GCal master recurring event (if any) and trashes
+ * every generated `calendar`-status item so the app-side calendar doesn't keep rendering
+ * occurrences of a routine that no longer exists. Each trashed item records its own
+ * server-origin update op so other devices converge via the sync pull.
+ * GCal deletion is best-effort — a provider failure does not block the item cascade.
+ */
+async function pushRoutineDeletion(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    await trashGeneratedCalendarItems(snapshot._id, userId);
+    if (!snapshot.calendarEventId) {
+        return;
+    }
+    const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    if (!ctx) {
+        return;
+    }
+    console.log(`[gcal-pushback] deleting GCal recurring event for routine | routineId=${snapshot._id} eventId=${snapshot.calendarEventId}`);
+    try {
+        await ctx.provider.deleteRecurringEvent(snapshot.calendarEventId, ctx.config.calendarId);
+    } catch (err) {
+        console.error(`[calendar-pushback] failed to delete GCal recurring event ${snapshot.calendarEventId} for routine ${snapshot._id}:`, err);
+    }
+}
+
+/**
+ * Moves every item generated by the given routine (status 'calendar') to 'trash' and records
+ * an op per item so other devices sync the change. The delete-the-routine action explicitly
+ * wins over any concurrent in-flight edits to these items — no last-write-wins guard.
+ */
+async function trashGeneratedCalendarItems(routineId: string, userId: string): Promise<void> {
+    const generated = await itemsDAO.findArray({ user: userId, routineId, status: 'calendar' });
+    const withId = generated.filter((i): i is ItemInterface & { _id: string } => !!i._id);
+    if (!withId.length) {
+        return;
+    }
+    const now = dayjs().toISOString();
+    await itemsDAO.updateMany({ user: userId, routineId, status: 'calendar' }, { $set: { status: 'trash', updatedTs: now } });
+    // Build the post-update snapshot locally rather than re-reading — saves a round trip and
+    // the local merge is equivalent since we control the mutation.
+    await Promise.all(
+        withId.map((item) =>
+            recordOperation(userId, {
+                entityType: 'item',
+                entityId: item._id,
+                snapshot: { ...item, status: 'trash', updatedTs: now },
+                opType: 'update',
+                now,
+            }),
+        ),
+    );
 }
 
 /** Pushes edits to an existing GCal recurring event when the routine already has a calendarEventId. */
@@ -137,8 +465,10 @@ async function pushExistingRoutineToGCal(snapshot: RoutineInterface, userId: str
         return;
     }
 
-    await ctx.provider.updateRecurringEvent(calendarEventId, snapshot, ctx.config.calendarId);
-    await stampRoutineLastPushed(userId, snapshot._id);
+    await ctx.provider.updateRecurringEvent(calendarEventId, snapshot, ctx.config.calendarId, ctx.timeZone);
+    const htmlForSync = snapshot.template.notes !== undefined ? markdownToHtml(snapshot.template.notes) : undefined;
+    await stampRoutineLastPushed(userId, snapshot._id, htmlForSync);
+    await propagateRoutineNotesToItems(snapshot._id, snapshot.template.notes, userId);
 }
 
 /** Creates a new GCal recurring event for a calendar routine that isn't linked yet. */
@@ -150,18 +480,40 @@ async function pushNewRoutineToGCal(snapshot: RoutineInterface, userId: string, 
         return;
     }
 
-    const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
-    if (!ctx) {
+    // Guard against concurrent GCal creation for the same routine (e.g. duplicate create ops
+    // from back-to-back flush batches). Claim the slot synchronously (before any await) so a
+    // second call in the same microtask sees the entry and bails out.
+    if (gcalCreationInFlight.has(snapshot._id)) {
+        console.log(`[gcal-pushback] routine ${snapshot._id} GCal creation already in-flight — skipping`);
         return;
     }
-
+    gcalCreationInFlight.add(snapshot._id);
     try {
-        const calendarEventId = await ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId);
+        // Re-read from DB: a previous (now-completed) push-back may have already linked this entity.
+        const current = await routinesDAO.findByOwnerAndId(snapshot._id, userId);
+        if (current?.calendarEventId) {
+            console.log(`[gcal-pushback] routine ${snapshot._id} already linked to GCal event ${current.calendarEventId} — skipping create`);
+            return;
+        }
+
+        const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
+        const ctx = await resolvePushContext(link, userId, buildProvider);
+        if (!ctx) {
+            return;
+        }
+        const calendarEventId = await ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId, ctx.timeZone);
         const now = dayjs().toISOString();
         await routinesDAO.updateOne(
             { _id: snapshot._id, user: userId },
-            { $set: { calendarEventId, calendarSyncConfigId: ctx.config._id, lastPushedToGCalTs: now, updatedTs: now } },
+            {
+                $set: {
+                    calendarEventId,
+                    calendarSyncConfigId: ctx.config._id,
+                    lastPushedToGCalTs: now,
+                    updatedTs: now,
+                    ...(snapshot.template.notes !== undefined ? { lastSyncedNotes: markdownToHtml(snapshot.template.notes) } : {}),
+                },
+            },
         );
         // Record an operation so other devices sync the newly-linked calendar event ID.
         const updated = await routinesDAO.findByOwnerAndId(snapshot._id, userId);
@@ -170,6 +522,8 @@ async function pushNewRoutineToGCal(snapshot: RoutineInterface, userId: string, 
         }
     } catch (err) {
         console.error(`[calendar-pushback] failed to create recurring event for routine ${snapshot._id}:`, err);
+    } finally {
+        gcalCreationInFlight.delete(snapshot._id);
     }
 }
 
@@ -193,7 +547,9 @@ async function resolvePushContext(link: CalendarLink, userId: string, buildProvi
         console.warn(`[calendar-pushback] resolvePushContext: no sync config found (configId=${link.configId ?? 'none'}, integrationId=${link.integrationId})`);
         return null;
     }
-    return { integration, config, provider: buildProvider(integration, userId) };
+    const provider = buildProvider(integration, userId);
+    const timeZone = await ensureTimeZone(config, provider);
+    return { integration, config, provider, timeZone };
 }
 
 /** Resolves the push context using the user's default sync config (for new app-created items). */
@@ -207,17 +563,38 @@ async function resolveDefaultPushContext(userId: string, buildProvider: Provider
     if (!integration) {
         return null;
     }
-    return { integration, config: defaultConfig, provider: buildProvider(integration, userId) };
+    const provider = buildProvider(integration, userId);
+    const timeZone = await ensureTimeZone(defaultConfig, provider);
+    return { integration, config: defaultConfig, provider, timeZone };
+}
+
+/** Returns the cached timezone from the config, or fetches it from Google and persists it. */
+export async function ensureTimeZone(config: CalendarSyncConfigInterface, provider: CalendarProvider): Promise<string> {
+    if (config.timeZone) {
+        return config.timeZone;
+    }
+    const timeZone = await provider.getCalendarTimeZone(config.calendarId);
+    await calendarSyncConfigsDAO.upsertTimeZone(config._id, timeZone);
+    return timeZone;
 }
 
 /** Stamps `lastPushedToGCalTs` on an item so the inbound sync can detect its own echo. */
-async function stampItemLastPushed(userId: string, itemId: string): Promise<void> {
+async function stampItemLastPushed(userId: string, itemId: string, lastSyncedNotes?: string): Promise<void> {
     const now = dayjs().toISOString();
-    await itemsDAO.updateOne({ _id: itemId, user: userId }, { $set: { lastPushedToGCalTs: now, updatedTs: now } });
+    // updatedTs intentionally omitted — stamping the echo-detection marker should not change the
+    // conflict-resolution anchor; otherwise a subsequent GCal edit would always appear "older".
+    await itemsDAO.updateOne(
+        { _id: itemId, user: userId },
+        { $set: { lastPushedToGCalTs: now, ...(lastSyncedNotes !== undefined ? { lastSyncedNotes } : {}) } },
+    );
 }
 
 /** Stamps `lastPushedToGCalTs` on a routine so the inbound sync can detect its own echo. */
-async function stampRoutineLastPushed(userId: string, routineId: string): Promise<void> {
+async function stampRoutineLastPushed(userId: string, routineId: string, lastSyncedNotes?: string): Promise<void> {
     const now = dayjs().toISOString();
-    await routinesDAO.updateOne({ _id: routineId, user: userId }, { $set: { lastPushedToGCalTs: now, updatedTs: now } });
+    // updatedTs intentionally omitted — see stampItemLastPushed for rationale.
+    await routinesDAO.updateOne(
+        { _id: routineId, user: userId },
+        { $set: { lastPushedToGCalTs: now, ...(lastSyncedNotes !== undefined ? { lastSyncedNotes } : {}) } },
+    );
 }

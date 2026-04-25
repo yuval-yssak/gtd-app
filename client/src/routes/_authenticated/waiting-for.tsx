@@ -26,7 +26,7 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
-    const { items, people, routines, refreshItems } = useAppData();
+    const { items, people, routines, workContexts, refreshItems } = useAppData();
     const navigate = useNavigate();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
@@ -133,7 +133,16 @@ function WaitingForPage() {
                     </List>
                 </Box>
             ))}
-            {editingItem && <EditItemDialog item={editingItem} db={db} onClose={() => setEditingItem(null)} onSaved={refreshItems} />}
+            {editingItem && (
+                <EditItemDialog
+                    item={editingItem}
+                    db={db}
+                    people={people}
+                    workContexts={workContexts}
+                    onClose={() => setEditingItem(null)}
+                    onSaved={refreshItems}
+                />
+            )}
         </Box>
     );
 }

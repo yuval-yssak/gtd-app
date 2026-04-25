@@ -11,19 +11,22 @@ import type { CalendarMeta, NextActionMeta, WaitingForMeta } from './itemMutatio
 import {
     clarifyToCalendar,
     clarifyToDone,
+    clarifyToInbox,
     clarifyToNextAction,
+    clarifyToSomedayMaybe,
     clarifyToTrash,
     clarifyToWaitingFor,
     collectItem,
+    recordRoutineInstanceModification,
     removeItem,
     updateItem,
 } from './itemMutations';
 import type { NewPersonFields } from './personMutations';
 import { createPerson } from './personMutations';
 import { getRoutinesByUser } from './routineHelpers';
-import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon } from './routineItemHelpers';
+import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
-import { createRoutine, removeRoutine, updateRoutine } from './routineMutations';
+import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { flushSyncQueue, forcePull, waitForPendingFlush } from './syncHelpers';
 import { createWorkContext } from './workContextMutations';
 
@@ -53,10 +56,17 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         clarifyToNextAction: (item: StoredItem, meta: NextActionMeta = {}) => clarifyToNextAction(db, item, meta),
         clarifyToCalendar: (item: StoredItem, meta: CalendarMeta) => clarifyToCalendar(db, item, meta),
         clarifyToWaitingFor: (item: StoredItem, meta: WaitingForMeta) => clarifyToWaitingFor(db, item, meta),
+        clarifyToInbox: (item: StoredItem) => clarifyToInbox(db, item),
+        clarifyToSomedayMaybe: (item: StoredItem) => clarifyToSomedayMaybe(db, item),
         clarifyToDone: (item: StoredItem) => clarifyToDone(db, item),
         clarifyToTrash: (item: StoredItem) => clarifyToTrash(db, item),
         updateItem: (item: StoredItem) => updateItem(db, item),
         removeItem: (itemId: string) => removeItem(db, itemId),
+        recordRoutineInstanceModification: (
+            routineId: string,
+            originalDate: string,
+            override: { itemId: string; newTimeStart?: string; newTimeEnd?: string; title?: string; notes?: string },
+        ) => recordRoutineInstanceModification(db, routineId, originalDate, override),
 
         // ── Supporting entities ──────────────────────────────────────────────
         createPerson: (fields: Omit<NewPersonFields, 'userId'>) => resolveUserId(db).then((uid) => createPerson(db, { ...fields, userId: uid })),
@@ -67,6 +77,15 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         createRoutine: (fields: Omit<NewRoutineFields, 'userId'>) => resolveUserId(db).then((uid) => createRoutine(db, { ...fields, userId: uid })),
         updateRoutine: (routine: Parameters<typeof updateRoutine>[1]) => updateRoutine(db, routine),
         removeRoutine: (routineId: string) => removeRoutine(db, routineId),
+        pauseRoutine: (routineId: string) =>
+            resolveUserId(db).then(async (uid) => {
+                const routine = await db.get('routines', routineId);
+                if (!routine) {
+                    throw new Error(`Routine ${routineId} not found`);
+                }
+                return pauseRoutine(db, uid, routine);
+            }),
+        materializePendingNextActionRoutines: () => resolveUserId(db).then((uid) => materializePendingNextActionRoutines(db, uid)),
         generateCalendarItemsToHorizon: (routineId: string) =>
             resolveUserId(db).then(async (uid) => {
                 const routine = await db.get('routines', routineId);

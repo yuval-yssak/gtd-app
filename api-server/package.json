@@ -12,7 +12,9 @@
         "lint:fix:unsafe": "biome check --write --unsafe",
         "typecheck": "tsc --noEmit",
         "test": "vitest run",
-        "test:watch": "vitest"
+        "test:watch": "vitest",
+        "test:sync-audit:setup": "tsx --env-file=.env src/tests-sync-audit/setupOAuth.ts",
+        "test:sync-audit": "vitest run --config vitest.sync-audit.config.ts"
     },
     "dependencies": {
         "@hono/node-server": "latest",
@@ -22,13 +24,17 @@
         "googleapis": "^171.4.0",
         "hono": "latest",
         "jsonwebtoken": "latest",
+        "marked": "^18.0.0",
         "mongodb": "latest",
+        "rrule": "^2.8.1",
+        "turndown": "^7.2.4",
         "web-push": "^3.6.7"
     },
     "devDependencies": {
         "@biomejs/biome": "2.4.8",
         "@types/jsonwebtoken": "latest",
         "@types/node": "^25.5.0",
+        "@types/turndown": "^5.0.6",
         "@types/web-push": "^3.6.4",
         "tsx": "latest",
         "typescript": "latest",

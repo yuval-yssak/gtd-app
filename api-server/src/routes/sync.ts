@@ -1,9 +1,7 @@
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
-import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import type AbstractDAO from '../dataAccess/abstractDAO.js';
-import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
@@ -11,12 +9,12 @@ import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
 import { notifyViaWebPush, vapidPublicKey } from '../lib/webPush.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import type {
-    CalendarIntegrationInterface,
     EntitySnapshot,
     EntityType,
     ItemInterface,
@@ -35,13 +33,6 @@ interface ClientOp {
     opType: OpType;
     queuedAt: string;
     snapshot: (Record<string, unknown> & { userId?: string }) | null;
-}
-
-/** Creates a GoogleCalendarProvider that persists refreshed tokens back to MongoDB. */
-function buildCalendarProvider(integration: CalendarIntegrationInterface, userId: string): GoogleCalendarProvider {
-    return new GoogleCalendarProvider(integration, (accessToken, refreshToken, expiry) =>
-        calendarIntegrationsDAO.updateTokens({ id: integration._id, userId, accessToken, refreshToken, tokenExpiry: expiry }),
-    );
 }
 
 // Single generic helper replacing four near-identical applyXxxOp functions.
@@ -69,6 +60,34 @@ async function applyEntitySnapshotOp<T extends EntitySnapshot>(
     if (!existing || existing.updatedTs <= snapshot.updatedTs) {
         await dao.replaceById(entityId, snapshot);
     }
+}
+
+/**
+ * Routine-delete ops ship with `snapshot: null`. To drive the GCal push-back cascade
+ * (delete the master recurring event; trash generated calendar items) we need the
+ * pre-delete routine state. Mutates each matching op in-place so the same snapshot
+ * is both recorded in the ops collection and handed to `maybePushToGCal`.
+ *
+ * MUST complete before the `applyEntityOp` Promise.all below, which hard-deletes the routine
+ * from the DB — otherwise the lookup would race against the deletion and return null.
+ */
+async function hydrateRoutineDeleteSnapshots(userId: string, ops: OperationInterface[]): Promise<void> {
+    const targets = ops.filter((op) => op.entityType === 'routine' && op.opType === 'delete' && !op.snapshot);
+    if (!targets.length) {
+        return;
+    }
+    await Promise.all(
+        targets.map(async (op) => {
+            const routine = await routinesDAO.findByOwnerAndId(op.entityId, userId);
+            if (routine) {
+                op.snapshot = routine;
+                return;
+            }
+            // Concurrent delete from another device already removed the routine. The cascade
+            // has already run (or is running) on that other device; this op becomes a no-op.
+            console.warn(`[sync-push] routine ${op.entityId} already deleted — snapshot hydration skipped, cascade will no-op`);
+        }),
+    );
 }
 
 function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {
@@ -144,6 +163,11 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             return c.json({ ok: true }, 200);
         }
 
+        console.log(
+            `[sync-push] received from device=${deviceId} | ops=${ops.length}`,
+            ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`),
+        );
+
         const now = dayjs().toISOString();
 
         const serverOps = ops.map<OperationInterface>((op) => {
@@ -162,7 +186,14 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             };
         });
 
+        // Routine deletes arrive with snapshot=null from the client. Capture the pre-delete
+        // routine doc so `maybePushToGCal` can see the `calendarEventId` that needs removing
+        // from Google Calendar and scope the generated-items cascade to this routine.
+        await hydrateRoutineDeleteSnapshots(user.id, serverOps);
+
         await Promise.all([operationsDAO.insertMany(serverOps), ...serverOps.map((op) => applyEntityOp(user.id, op))]);
+
+        console.log(`[sync-push] applied ops, triggering GCal push-back for calendar-relevant ops`);
 
         // Push calendar-relevant changes back to Google Calendar (fire-and-forget).
         // Runs after applyEntityOp so the DB state is consistent when the push-back reads it.
@@ -176,7 +207,8 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             { upsert: true },
         );
 
-        notifyUserViaSse(user.id, { type: 'update', ts: now });
+        // Include the originating deviceId so the pushing device can ignore its own echo.
+        notifyUserViaSse(user.id, { type: 'update', ts: now, sourceDeviceId: deviceId });
 
         // Web Push for devices that aren't currently connected via SSE (app closed).
         // Include per-op summaries so the SW can show a meaningful notification body

@@ -38,6 +38,13 @@ const MODE_LABELS: Record<FreqMode, string> = {
     yearly: 'Every year',
 };
 
+// Pure helper (exported for unit tests). Toggles `key` in `selectedDays` but keeps at least
+// one day selected, so the computed rrule always has a BYDAY clause.
+export function computeToggledDays(selectedDays: readonly string[], key: string) {
+    const toggled = selectedDays.includes(key) ? selectedDays.filter((d) => d !== key) : [...selectedDays, key];
+    return toggled.length > 0 ? toggled : [key];
+}
+
 // Simple string-based rrule parser — avoids dealing with rrule.js's complex byweekday union types.
 function parseToFreqState(rruleStr: string): FreqState {
     const defaults: FreqState = { mode: 'daily', intervalDays: 1, selectedDays: ['MO'], intervalWeeks: 1, dayOfMonth: 1, intervalMonths: 1 };
@@ -91,27 +98,32 @@ function NextDuePreview({ rrule }: { rrule: string }) {
 interface Props {
     value: string; // rrule string
     onChange: (rrule: string) => void;
+    disabled?: boolean;
 }
 
-export function FrequencyPicker({ value, onChange }: Props) {
+export function FrequencyPicker({ value, onChange, disabled }: Props) {
     const [state, setState] = useState<FreqState>(() => parseToFreqState(value));
 
-    function update(patch: Partial<FreqState>) {
-        const next = { ...state, ...patch };
-        setState(next);
-        onChange(buildRrule(next));
+    // Functional updater: rapid successive clicks (toggle Mon, then Tue before React flushes)
+    // used to read a stale `state` closure and lose the first toggle. Reading from `prev` ensures
+    // each click composes on top of the latest state.
+    function update(patch: Partial<FreqState> | ((prev: FreqState) => Partial<FreqState>)) {
+        setState((prev) => {
+            const resolved = typeof patch === 'function' ? patch(prev) : patch;
+            const next = { ...prev, ...resolved };
+            onChange(buildRrule(next));
+            return next;
+        });
     }
 
     function toggleDay(key: string) {
-        const days = state.selectedDays.includes(key) ? state.selectedDays.filter((d) => d !== key) : [...state.selectedDays, key];
-        // Keep at least one day selected to produce a valid rrule
-        update({ selectedDays: days.length > 0 ? days : [key] });
+        update((prev) => ({ selectedDays: computeToggledDays(prev.selectedDays, key) }));
     }
 
     const currentRrule = buildRrule(state);
 
     return (
-        <div className={styles.root}>
+        <fieldset disabled={disabled} style={{ border: 'none', padding: 0, margin: 0, opacity: disabled ? 0.5 : 1 }}>
             <RadioGroup value={state.mode} onChange={(e) => update({ mode: e.target.value as FreqMode })} className={styles.modeGroup}>
                 {(Object.keys(MODE_LABELS) as FreqMode[]).map((mode) => (
                     <div key={mode}>
@@ -122,7 +134,7 @@ export function FrequencyPicker({ value, onChange }: Props) {
             </RadioGroup>
 
             <NextDuePreview rrule={currentRrule} />
-        </div>
+        </fieldset>
     );
 }
 

@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { deleteRoutineById, putRoutine } from './routineHelpers';
+import { trashFutureItemsFromDate } from './routineItemHelpers';
 import { queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
@@ -28,4 +29,18 @@ export async function updateRoutine(db: IDBPDatabase<MyDB>, routine: StoredRouti
 export async function removeRoutine(db: IDBPDatabase<MyDB>, routineId: string): Promise<void> {
     await deleteRoutineById(db, routineId);
     await queueSyncOp(db, { opType: 'delete', entityType: 'routine', entityId: routineId, snapshot: null });
+}
+
+/**
+ * Pause a routine: flips `active=false` and trashes every future open item tied to it. Past-due
+ * open items are intentionally left alone — the pause invariant is forward-looking, not a cleanup
+ * of the user's backlog. Server-side pushback (handleRoutinePush) detects the active-flag transition
+ * and caps the GCal master with UNTIL for calendar routines; nothing extra happens for nextAction.
+ */
+export async function pauseRoutine(db: IDBPDatabase<MyDB>, userId: string, routine: StoredRoutine): Promise<StoredRoutine> {
+    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+    // Trash future open items BEFORE flipping active=false so horizon-generator guards that early-
+    // return on !active don't accidentally leave items behind on a different device's next sync.
+    await trashFutureItemsFromDate(db, userId, routine._id, todayStr);
+    return updateRoutine(db, { ...routine, active: false });
 }

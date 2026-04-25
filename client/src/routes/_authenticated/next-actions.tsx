@@ -14,7 +14,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
-import { EditNextActionDialog } from '../../components/EditNextActionDialog';
+import { EditItemDialog } from '../../components/EditItemDialog';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
@@ -201,7 +201,7 @@ function NextActionsPage() {
                 </List>
             )}
             {editingItem && (
-                <EditNextActionDialog
+                <EditItemDialog
                     item={editingItem}
                     db={db}
                     people={people}

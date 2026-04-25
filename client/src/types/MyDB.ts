@@ -17,7 +17,7 @@ export interface StoredAccount {
 export interface StoredItem {
     _id: string; // client-generated UUID — doubles as the MongoDB _id
     userId: string; // Better Auth user ID — mirrors ItemInterface.user
-    status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'done' | 'trash';
+    status: 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash';
     title: string;
     createdTs: string;
     updatedTs: string; // ISO datetime — last-write-wins conflict resolution anchor
@@ -38,6 +38,7 @@ export interface StoredItem {
     focus?: boolean;
     urgent?: boolean;
     notes?: string; // freeform markdown notes — applies to all statuses
+    lastSyncedNotes?: string; // last notes value synced from/to Google Calendar — used for conflict detection
 }
 
 export interface StoredRoutineTemplate {
@@ -68,11 +69,21 @@ export interface StoredRoutine {
     calendarEventId?: string;
     calendarIntegrationId?: string;
     calendarSyncConfigId?: string;
+    /** Ref to the routine this was split from ("this and all following" edit). */
+    splitFromRoutineId?: string;
     lastPushedToGCalTs?: string;
+    lastSyncedNotes?: string; // last template.notes value synced from/to Google Calendar — used for conflict detection
     template: StoredRoutineTemplate;
     active: boolean;
     createdTs: string;
     updatedTs: string;
+    /**
+     * ISO date (YYYY-MM-DD) — anchors the rrule schedule. Falls back to createdTs when unset.
+     * User-editable in the routine edit dialog. For calendar routines, becomes the GCal series DTSTART
+     * (snapped forward to the first BYDAY/BYMONTHDAY match). For nextAction routines, no items are
+     * generated with an occurrence date before startDate.
+     */
+    startDate?: string;
     /** Present when routineType === 'calendar'. Defines time and duration for generated calendar items. */
     calendarItemTemplate?: {
         timeOfDay: string; // HH:MM (24h) — start time
@@ -87,6 +98,8 @@ export interface StoredRoutine {
         itemId?: string;
         newTimeStart?: string; // ISO datetime — present when type === 'modified'
         newTimeEnd?: string;
+        title?: string; // overridden title — present when GCal instance title differs from master
+        notes?: string; // overridden description — present when GCal instance description differs from master
     }>;
 }
 
@@ -134,6 +147,7 @@ export interface StoredDeviceSyncState {
     _id: 'local'; // singleton — only one entry per device
     deviceId: string; // stable UUID generated on first launch; sent with every push/pull request
     lastSyncedTs: string; // ISO datetime of the last successful pull from the server
+    flushingTs: string | null; // ISO datetime — cross-context flush lock between main thread and SW
 }
 
 export interface SyncOperation {
