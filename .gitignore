@@ -52,3 +52,7 @@ test-results/
 
 # GCal sync smoke test results (per-run, not shared)
 e2e/gcal-sync-smoke/session-*-results.md
+
+# Gmail label manager OAuth credentials (per-user, not shared)
+scripts/gmail-labels/credentials.json
+scripts/gmail-labels/token.json
