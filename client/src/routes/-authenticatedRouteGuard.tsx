@@ -1,6 +1,6 @@
 import { redirect } from '@tanstack/router-core';
 import type { IDBPDatabase } from 'idb';
-import { getActiveAccount } from '../db/accountHelpers';
+import { getActiveAccount, hydrateAccountFromSession } from '../db/accountHelpers';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
 
@@ -8,14 +8,23 @@ export async function authenticatedRouteGuard({ context }: { context: { db: IDBP
     const { db } = context;
     const activeAccount = await getActiveAccount(db);
 
-    if (!activeAccount) {
-        throw redirect({ to: '/login' });
+    if (activeAccount) {
+        // Allow through immediately — don't await the server check so slow/offline
+        // networks never block the route. The background check handles the rare case
+        // of a revoked session (e.g. account deleted server-side).
+        verifySessionInBackground();
+        return;
     }
 
-    // Allow through immediately — don't await the server check so slow/offline
-    // networks never block the route. The background check handles the rare case
-    // of a revoked session (e.g. account deleted server-side).
-    verifySessionInBackground();
+    // No local account. Before redirecting to /login, try to recover from a still-valid
+    // server session — this happens after the user clears site data while the Better-Auth
+    // httpOnly cookie remains. Without this branch, the login route's beforeLoad sees the
+    // server session and redirects to '/', which sends us back here in an infinite loop.
+    const { session, networkError } = await fetchSessionSafely();
+    if (networkError || !session) {
+        throw redirect({ to: '/login' });
+    }
+    await hydrateAccountFromSession(db, session);
 }
 
 // Fire-and-forget: if the server confirms the session is gone, force re-login.
