@@ -373,11 +373,13 @@ export class GoogleCalendarProvider implements CalendarProvider {
     async updateEvent(
         calendarId: string,
         eventId: string,
-        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string; colorId?: string | null },
         timeZone: string,
     ): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         // Use patch (not update) so only the provided fields are modified — update would clear omitted fields.
+        // `colorId: null` is forwarded as-is so Google clears the override and the event reverts to the
+        // calendar's default color; `undefined` skips the field entirely.
         await cal.events.patch({
             calendarId,
             eventId,
@@ -386,6 +388,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
                 ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
                 ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
                 ...(updates.description !== undefined ? { description: updates.description } : {}),
+                ...(updates.colorId !== undefined ? { colorId: updates.colorId } : {}),
             },
         });
     }

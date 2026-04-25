@@ -70,11 +70,15 @@ export interface CalendarProvider {
     stopWatch(channelId: string, resourceId: string): Promise<void>;
     /** Creates a single (non-recurring) event. Returns the event ID. */
     createEvent(calendarId: string, event: { title: string; timeStart: string; timeEnd: string; description?: string }, timeZone: string): Promise<string>;
-    /** Updates fields on an existing single event. */
+    /**
+     * Updates fields on an existing single event. `colorId` semantics: `undefined` leaves the
+     * existing colorId untouched; `null` clears it (resets to the calendar's default color);
+     * a string sets it to that palette ID.
+     */
     updateEvent(
         calendarId: string,
         eventId: string,
-        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string; colorId?: string | null },
         timeZone: string,
     ): Promise<void>;
     /**
