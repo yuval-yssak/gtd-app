@@ -3,6 +3,7 @@ import type { CalendarProvider } from '../calendarProviders/CalendarProvider.js'
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import type {
     CalendarIntegrationInterface,
@@ -15,6 +16,7 @@ import type {
 import { propagateRoutineNotesToItems } from './calendarItemNotes.js';
 import { markdownToHtml } from './markdownHtml.js';
 import { recordOperation } from './operationHelpers.js';
+import { regenerateFutureRoutineItems } from './routineItemRegeneration.js';
 
 type ProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
 
@@ -46,13 +48,13 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
     // OperationInterface.snapshot is a union of all entity types — TypeScript cannot narrow it
     // via entityType since it's not a discriminated union. The casts below are safe because
     // the entityType check guarantees the snapshot shape.
-    console.log(`[gcal-pushback] op=${op.opType} entityType=${op.entityType} entityId=${op.entityId}`);
+    console.log(`[gcal-pushback] op=${op.opType} entityType=${op.entityType} entityId=${op.entityId} opId=${op._id} ts=${op.ts}`);
     if (op.entityType === 'item' && op.snapshot) {
         await handleItemPush(op.snapshot as ItemInterface, op.user, buildProvider);
         return;
     }
     if (op.entityType === 'routine' && op.snapshot) {
-        await handleRoutinePush(op.snapshot as RoutineInterface, op.user, op.opType, buildProvider);
+        await handleRoutinePush(op.snapshot as RoutineInterface, op.user, op.opType, op._id, op.ts, buildProvider);
     }
 }
 
@@ -126,6 +128,12 @@ async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: stri
  * Cancels the single GCal occurrence that corresponds to a routine-generated item trashed or
  * completed locally. Mirrors `pushRoutineInstanceOverride` structurally — resolves routine,
  * context, and original rrule date, then calls `provider.cancelRecurringInstance`.
+ *
+ * Skips when the routine is paused: the same batch carries a routine-pause op that caps the
+ * master with UNTIL, making per-instance cancellation patches redundant. Skipping also avoids
+ * a race we observed in production where N parallel cancellations against the just-capped
+ * master caused GCal to drop UNTIL from the master's recurrence.
+ *
  * No-ops gracefully when the routine isn't linked to GCal yet or the item lacks a timeStart.
  */
 async function pushRoutineInstanceCancellation(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
@@ -134,6 +142,9 @@ async function pushRoutineInstanceCancellation(snapshot: ItemInterface, userId: 
     }
     const routine = await routinesDAO.findByOwnerAndId(snapshot.routineId, userId);
     if (!routine?.calendarEventId) {
+        return;
+    }
+    if (!routine.active) {
         return;
     }
     const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
@@ -276,9 +287,37 @@ async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildP
 
 // ── Routine push-back ────────────────────────────────────────────────────────
 
-async function handleRoutinePush(snapshot: RoutineInterface, userId: string, opType: OpType, buildProvider: ProviderFactory): Promise<void> {
+async function handleRoutinePush(
+    snapshot: RoutineInterface,
+    userId: string,
+    opType: OpType,
+    currentOpId: string,
+    currentOpTs: string,
+    buildProvider: ProviderFactory,
+): Promise<void> {
     if (opType === 'delete') {
         await pushRoutineDeletion(snapshot, userId, buildProvider);
+        return;
+    }
+    // Pushback fires after the op has been inserted and the entity has been upserted. Look up the
+    // single newest op strictly before this one in (ts, _id) lex order to compare prior vs current
+    // active flag. Strictly-before is critical: back-to-back pause ops (e.g. flush batches with
+    // identical snapshots) must not see each other as "prior" — the second one would then think
+    // there's no active transition and skip the cap, leaving the first pause un-capped in GCal if
+    // it also raced on the same lookup.
+    const priorActive = await readPriorActiveFlag(snapshot._id, userId, currentOpId, currentOpTs);
+    const activeTransitioned = priorActive !== null && priorActive !== snapshot.active;
+    if (activeTransitioned && !snapshot.active) {
+        await pushRoutinePause(snapshot, userId, buildProvider);
+        return;
+    }
+    if (activeTransitioned && snapshot.active) {
+        await pushRoutineResume(snapshot, userId, buildProvider);
+        return;
+    }
+    // Steady-state update (or first-ever push): no active transition — skip GCal mutation entirely
+    // if the routine is paused to avoid resurrecting a capped series.
+    if (!snapshot.active) {
         return;
     }
     if (snapshot.calendarEventId) {
@@ -286,6 +325,79 @@ async function handleRoutinePush(snapshot: RoutineInterface, userId: string, opT
         return;
     }
     await pushNewRoutineToGCal(snapshot, userId, buildProvider);
+}
+
+/**
+ * Reads the routine's `active` value as of the operation immediately preceding the current push.
+ * "Preceding" means strictly earlier in (ts, _id) lex order — ops with `ts < currentOpTs`, or the
+ * same `ts` but an `_id` that sorts before the current op's `_id`. This ordering:
+ *  - makes same-updatedTs collisions from two devices deterministic (the op with the smaller `_id`
+ *    is treated as "prior"), and
+ *  - makes back-to-back pause ops from one device safe: the second pause op sees the first as prior
+ *    (`active=false`) and correctly skips the cap, while the first sees the pre-pause `active=true`
+ *    op and fires the cap exactly once.
+ * Returns null if this is the routine's first op (no prior op exists).
+ */
+async function readPriorActiveFlag(routineId: string, userId: string, currentOpId: string, currentOpTs: string): Promise<boolean | null> {
+    const [latest] = await operationsDAO.findArray(
+        {
+            user: userId,
+            entityType: 'routine',
+            entityId: routineId,
+            $or: [{ ts: { $lt: currentOpTs } }, { ts: currentOpTs, _id: { $lt: currentOpId } }],
+        },
+        { sort: { ts: -1, _id: -1 }, limit: 1 },
+    );
+    if (!latest) {
+        return null;
+    }
+    const snapshot = latest.snapshot as RoutineInterface | null;
+    return snapshot ? snapshot.active : null;
+}
+
+/**
+ * Pause pushback: trash future generated items and cap the GCal master with UNTIL=<yesterday>.
+ * Keeps calendarEventId stable so a future resume can patch the same series. Past GCal occurrences
+ * remain intact. No-ops gracefully if the routine isn't linked to GCal.
+ */
+async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    const now = dayjs().toISOString();
+    await regenerateFutureRoutineItems(snapshot, userId, now);
+    if (!snapshot.calendarEventId) {
+        return;
+    }
+    const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    if (!ctx) {
+        return;
+    }
+    // UNTIL=<today - 1 day>T235959Z: RFC 5545 format (YYYYMMDDTHHMMSSZ, no separators) in UTC.
+    const untilDate = `${dayjs().subtract(1, 'day').utc().format('YYYYMMDD')}T235959Z`;
+    console.log(`[gcal-pushback] capping GCal master for routine pause | routineId=${snapshot._id} until=${untilDate}`);
+    try {
+        await ctx.provider.capRecurringEvent(snapshot.calendarEventId, untilDate, ctx.config.calendarId, ctx.timeZone);
+    } catch (err) {
+        console.error(`[calendar-pushback] failed to cap recurring event ${snapshot.calendarEventId} for routine ${snapshot._id}:`, err);
+    }
+}
+
+/**
+ * Resume pushback: clears the pause's UNTIL by pushing the full current rrule back to GCal via
+ * events.update, then regenerates future items from the (possibly new) startDate/rrule in the
+ * snapshot. No-ops gracefully if the routine isn't linked to GCal yet.
+ */
+async function pushRoutineResume(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    const now = dayjs().toISOString();
+    if (snapshot.calendarEventId) {
+        try {
+            await pushExistingRoutineToGCal(snapshot, userId, buildProvider);
+        } catch (err) {
+            // Mirror the pause path: don't block local item regen on GCal transient failures. The
+            // next resume-on-save will push the full current rrule and overwrite any stale UNTIL.
+            console.error(`[calendar-pushback] resume: failed to push updated series for routine ${snapshot._id}:`, err);
+        }
+    }
+    await regenerateFutureRoutineItems(snapshot, userId, now);
 }
 
 /**

@@ -336,3 +336,79 @@ describe('splitRoutine', () => {
         expect(itemOps.filter((op) => op.opType === 'create').length).toBeGreaterThan(0);
     });
 });
+
+describe('splitRoutine — startDate + nextAction', () => {
+    it('propagates startDate from editedFields onto the tail routine', async () => {
+        const original = buildRoutine({ _id: 'orig-sd', createdTs: '2025-01-01T00:00:00.000Z' });
+        await db.put('routines', original);
+        await db.put('items', buildItem({ _id: 'past-item', routineId: 'orig-sd', timeStart: '2025-02-01T09:00:00' }));
+
+        const newStart = '2026-06-15';
+        const tail = await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                title: original.title,
+                routineType: original.routineType,
+                rrule: original.rrule,
+                template: original.template,
+                ...(original.calendarItemTemplate ? { calendarItemTemplate: original.calendarItemTemplate } : {}),
+                startDate: newStart,
+            },
+            '2026-04-23',
+        );
+
+        expect(tail.startDate).toBe(newStart);
+        const stored = await db.get('routines', tail._id);
+        expect(stored?.startDate).toBe(newStart);
+    });
+
+    it('nextAction split: does not throw (no calendarItemTemplate) and seeds first item immediately', async () => {
+        const { calendarItemTemplate: _omit, ...base } = buildRoutine({ _id: 'orig-nx', routineType: 'nextAction', rrule: 'FREQ=DAILY' });
+        const original: StoredRoutine = base;
+        await db.put('routines', original);
+
+        const tail = await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                title: original.title,
+                routineType: 'nextAction',
+                rrule: 'FREQ=DAILY',
+                template: original.template,
+            },
+            '2026-04-23',
+        );
+
+        expect(tail.routineType).toBe('nextAction');
+        const tailItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === tail._id);
+        expect(tailItems).toHaveLength(1);
+        expect(tailItems[0]?.status).toBe('nextAction');
+    });
+
+    it('nextAction split with future startDate: skips seeding (boot-tick materializes later)', async () => {
+        const { calendarItemTemplate: _omit2, ...base2 } = buildRoutine({ _id: 'orig-nx-f', routineType: 'nextAction', rrule: 'FREQ=DAILY' });
+        const original: StoredRoutine = base2;
+        await db.put('routines', original);
+
+        const futureStart = dayjs().add(30, 'day').format('YYYY-MM-DD');
+        const tail = await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                title: original.title,
+                routineType: 'nextAction',
+                rrule: 'FREQ=DAILY',
+                template: original.template,
+                startDate: futureStart,
+            },
+            '2026-04-23',
+        );
+
+        const tailItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === tail._id);
+        expect(tailItems).toHaveLength(0);
+    });
+});

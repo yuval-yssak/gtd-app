@@ -103,18 +103,29 @@ These cannot be verified in a real-time observational run. Record the expected m
 - H6 UNTIL vs horizon intersection — attempt if UNTIL can be set inside the 2-month horizon; else N-A
 - H7 Per-instance override on last occurrence before UNTIL
 
-### I. Routine deactivation via GCal master delete (6)
-- I1 Basic deactivation (master deleted in GCal → `R.active=false`, future items trashed, past/done kept)
+### I. Routine deactivation / pause (8)
+- I1 Basic deactivation via GCal delete (master deleted in GCal → `R.active=false`, future items trashed, past/done kept)
 - I2 Deactivate then reactivate in app
 - I3 Exception sync after deactivation (subsequent syncs should skip deactivated routines)
 - I4 GCal user recreates event with same pattern → should be treated as new routine (no resurrection)
 - I5 Split chain: delete original (capped) routine's master (should not affect tail)
 - I6 Split chain: delete tail's master (should deactivate tail only, not original)
+- **I7 App-side pause** — user clicks Pause in app → GCal master capped with `UNTIL=<yesterday>`, future items trashed, `calendarEventId` stable. See `gcal-sync-smoke-case-I7.md`.
+- **I8 App-side resume** — user opens dialog on paused routine, sets new startDate, saves → UNTIL cleared, items regenerate. See `gcal-sync-smoke-case-I8.md`.
 
 **Setup dependencies in I:**
 - I2 requires an I1-deactivated routine
 - I3 requires an I1-deactivated routine and subsequent sync
 - I5/I6 require a split chain from E1 or E2
+- I8 requires an I7-paused routine
+
+### K. startDate edits (5)
+> Labeled K (not J) because `CALENDAR_ROUTINE_SYNC_TESTS.md` already uses J for webhook/sync-token expiry cases.
+- K1 Create calendar routine with future startDate. See `gcal-sync-smoke-case-K1.md`.
+- K2 Edit startDate forward on routine with `done` past items → split gesture. See `gcal-sync-smoke-case-K2.md`.
+- K3 Edit startDate forward on routine without `done` past items → in-place re-anchor. See `gcal-sync-smoke-case-K3.md`.
+- K4 Edit startDate backward → in-place re-anchor. See `gcal-sync-smoke-case-K4.md`.
+- K5 Edit startDate past UNTIL → pushback no-ops + logs. See `gcal-sync-smoke-case-K5.md`.
 
 ## Per-case procedure
 

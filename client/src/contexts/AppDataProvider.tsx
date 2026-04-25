@@ -7,6 +7,7 @@ import { getItemsByUser } from '../db/itemHelpers';
 import { getPeopleByUser } from '../db/personHelpers';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { getRoutinesByUser } from '../db/routineHelpers';
+import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnection, openSseConnection } from '../db/sseClient';
 import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { getWorkContextsByUser } from '../db/workContextHelpers';
@@ -114,6 +115,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // Second pull: calendar sync creates server-side operations that weren't available
             // during the first pull above — fetch them now so items appear in this cycle.
             await pullFromServer(db);
+
+            // After pulling, check for nextAction routines whose startDate has arrived and
+            // materialize their first item. Separate from the disposal-driven generator because
+            // the first item of a future-start routine has no prior item to trigger generation.
+            await materializePendingNextActionRoutines(db, acct.id);
 
             // Guard after the async work — component may have unmounted while awaiting network.
             if (unmountedRef.current) {

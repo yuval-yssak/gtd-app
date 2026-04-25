@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import rrule from 'rrule';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import type { ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { recordOperation } from './operationHelpers.js';
+
+dayjs.extend(utc);
 
 // rrule@2.8.1 ships CJS as `main`; default-import + destructure works across Node ESM/Vitest.
 const { RRule } = rrule;
@@ -38,7 +41,9 @@ function buildExceptionDateSet(routine: RoutineInterface): Set<string> {
 function getValidFutureOccurrences(routine: RoutineInterface): Date[] {
     const startDate = dayjs().startOf('day').subtract(1, 'ms').toDate();
     const endDate = dayjs().add(HORIZON_MONTHS, 'month').endOf('day').toDate();
-    const rule = buildCalendarRule(routine.rrule, dayjs(routine.createdTs).toDate());
+    // Parse the anchor as UTC so a startDate like "2026-06-15" doesn't shift a day in non-UTC TZs.
+    const anchorTs = routine.startDate ?? routine.createdTs;
+    const rule = buildCalendarRule(routine.rrule, dayjs.utc(anchorTs.slice(0, 10)).toDate());
     const exceptionDates = buildExceptionDateSet(routine);
     return rule.between(startDate, endDate, false).filter((d) => !exceptionDates.has(d.toISOString().slice(0, 10)));
 }
@@ -116,7 +121,12 @@ export async function regenerateFutureRoutineItems(routine: RoutineInterface, us
     if (!routine.calendarItemTemplate) {
         return [];
     }
+    // Paused routines: trash future items (if any) but never insert new ones. This preserves the
+    // invariant that a paused routine has zero future open items, even if the caller forgot the check.
     const trashedOps = await trashExistingFutureItems(routine, userId, now);
+    if (!routine.active) {
+        return trashedOps;
+    }
     const createdOps = await insertFreshFutureItems(routine, userId, now);
     return [...trashedOps, ...createdOps];
 }

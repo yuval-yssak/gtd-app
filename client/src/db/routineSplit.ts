@@ -4,16 +4,19 @@ import type { IDBPDatabase } from 'idb';
 import { addUntilToRrule } from '../lib/routineSplitUtils';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { putRoutine } from './routineHelpers';
-import { deleteFutureItemsFromDate, generateCalendarItemsToHorizon } from './routineItemHelpers';
+import { createNextRoutineItem, deleteFutureItemsFromDate, generateCalendarItemsToHorizon } from './routineItemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
 
 dayjs.extend(utc);
 
 /**
- * Split a calendar routine at `splitDate`: cap the original with UNTIL and mark it
- * inactive, delete its future items from that date, create a new tail routine with
- * the edited properties, and generate items for it.
+ * Split a routine at `splitDate`: cap the original with UNTIL and mark it inactive, delete
+ * its future items from that date, create a new tail routine with the edited properties,
+ * and seed the tail's first item(s). Works for both `calendar` and `nextAction` routines —
+ * calendar tails generate items up to the horizon; nextAction tails seed exactly one pending
+ * item (or skip generation when the tail's startDate is in the future — the boot-tick will
+ * materialize it).
  */
 export async function splitRoutine(
     db: IDBPDatabase<MyDB>,
@@ -57,12 +60,27 @@ export async function splitRoutine(
         ...(editedFields.calendarItemTemplate ? { calendarItemTemplate: editedFields.calendarItemTemplate } : {}),
         ...(editedFields.calendarIntegrationId ? { calendarIntegrationId: editedFields.calendarIntegrationId } : {}),
         ...(editedFields.calendarSyncConfigId ? { calendarSyncConfigId: editedFields.calendarSyncConfigId } : {}),
+        ...(editedFields.startDate ? { startDate: editedFields.startDate } : {}),
     };
     await putRoutine(db, tail);
     await queueSyncOp(db, { opType: 'create', entityType: 'routine', entityId: tail._id, snapshot: tail });
 
-    // 4. Generate calendar items for the tail
-    await generateCalendarItemsToHorizon(db, userId, tail);
+    // 4. Seed the tail's first item(s). Calendar tails generate up to the horizon; nextAction
+    //    tails seed one pending occurrence (unless startDate is future — the boot-tick handles it).
+    await seedTailFirstItems(db, userId, tail);
 
     return tail;
+}
+
+async function seedTailFirstItems(db: IDBPDatabase<MyDB>, userId: string, tail: StoredRoutine): Promise<void> {
+    if (tail.routineType === 'calendar') {
+        await generateCalendarItemsToHorizon(db, userId, tail);
+        return;
+    }
+    // nextAction: skip when startDate is in the future — boot-tick materializes it on the day.
+    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+    if (tail.startDate && tail.startDate > todayStr) {
+        return;
+    }
+    await createNextRoutineItem(db, userId, tail, dayjs().toDate());
 }

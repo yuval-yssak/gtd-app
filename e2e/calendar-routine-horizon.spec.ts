@@ -135,4 +135,43 @@ test.describe('calendar routine horizon', () => {
             expect(tuesdayItems).toHaveLength(0);
         });
     });
+
+    test('future startDate produces no items before the startDate', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `cal-future-start-${dayjs().valueOf()}@example.com`, async (page) => {
+            const futureStart = dayjs().add(21, 'day').format('YYYY-MM-DD');
+            const routine = await gtd.createRoutine(page, {
+                title: 'Future cal',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                active: true,
+                startDate: futureStart,
+            });
+
+            await gtd.generateCalendarItemsToHorizon(page, routine._id);
+            const items = (await gtd.listCalendar(page)).filter((i) => i.routineId === routine._id);
+            // All items must be on or after the startDate.
+            expect(items.every((i) => (i.timeStart ?? '').slice(0, 10) >= futureStart)).toBe(true);
+            // Something was generated (horizon extends past startDate).
+            expect(items.length).toBeGreaterThan(0);
+        });
+    });
+
+    test('paused calendar routine: horizon generator no-ops', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `cal-paused-${dayjs().valueOf()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, {
+                title: 'Paused cal',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                active: false, // Start paused — generator must skip.
+            });
+
+            await gtd.generateCalendarItemsToHorizon(page, routine._id);
+            const items = (await gtd.listCalendar(page)).filter((i) => i.routineId === routine._id);
+            expect(items).toHaveLength(0);
+        });
+    });
 });

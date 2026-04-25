@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isCalendarScheduleChanged } from '../components/routines/routineEditDecision';
+import { isCalendarScheduleChanged, isStartDateChanged } from '../components/routines/routineEditDecision';
 import type { StoredRoutine } from '../types/MyDB';
 
 function make(overrides: Partial<StoredRoutine> = {}): StoredRoutine {
@@ -169,5 +169,36 @@ describe('isCalendarScheduleChanged', () => {
                 duration: 30,
             }),
         ).toBe(true);
+    });
+});
+
+describe('isStartDateChanged', () => {
+    it('returns false when both are unset', () => {
+        const previous = make();
+        expect(isStartDateChanged(previous, { routineType: 'calendar', rrule: previous.rrule, timeOfDay: '09:00', duration: 30 })).toBe(false);
+    });
+
+    it('returns false when the same startDate is re-submitted', () => {
+        const previous = make({ startDate: '2026-06-15' });
+        expect(
+            isStartDateChanged(previous, { routineType: 'calendar', rrule: previous.rrule, timeOfDay: '09:00', duration: 30, startDate: '2026-06-15' }),
+        ).toBe(false);
+    });
+
+    it('returns true when adding a startDate', () => {
+        const previous = make();
+        expect(
+            isStartDateChanged(previous, { routineType: 'calendar', rrule: previous.rrule, timeOfDay: '09:00', duration: 30, startDate: '2026-06-15' }),
+        ).toBe(true);
+    });
+
+    it('returns true when clearing a startDate', () => {
+        const previous = make({ startDate: '2026-06-15' });
+        expect(isStartDateChanged(previous, { routineType: 'calendar', rrule: previous.rrule, timeOfDay: '09:00', duration: 30 })).toBe(true);
+    });
+
+    it('treats empty string and undefined as equivalent', () => {
+        const previous = make({ startDate: '' });
+        expect(isStartDateChanged(previous, { routineType: 'calendar', rrule: previous.rrule, timeOfDay: '09:00', duration: 30 })).toBe(false);
     });
 });

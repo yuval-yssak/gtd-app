@@ -22,6 +22,8 @@ import {
     createNextRoutineItem,
     deleteAndRegenerateFutureItems,
     generateCalendarItemsToHorizon,
+    hardDeletePastItems,
+    partitionPastItemsByDoneness,
     regenerateFutureItemContent,
 } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
@@ -32,7 +34,7 @@ import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { FrequencyPicker } from './FrequencyPicker';
 import styles from './RoutineDialog.module.css';
-import { isCalendarScheduleChanged } from './routineEditDecision';
+import { isCalendarScheduleChanged, isStartDateChanged } from './routineEditDecision';
 
 interface Props {
     db: IDBPDatabase<MyDB>;
@@ -65,6 +67,7 @@ interface FormState {
     endsMode: EndsMode;
     endsDate: string; // ISO date — used when endsMode === 'onDate'
     endsCount: string; // positive integer string — used when endsMode === 'afterN'
+    startDate: string; // ISO date — anchors the rrule schedule. Empty = fall back to createdTs.
 }
 
 /**
@@ -128,6 +131,7 @@ function initFormState(routine?: StoredRoutine): FormState {
         timeOfDay: routine?.calendarItemTemplate?.timeOfDay ?? '09:00',
         duration: routine?.calendarItemTemplate?.duration?.toString() ?? '60',
         calendarSyncConfigId: routine?.calendarSyncConfigId ?? '',
+        startDate: routine?.startDate ?? '',
         ...ends,
     };
 }
@@ -199,52 +203,122 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                 // stay in-place; forking a routine just because the user renamed it would be
                 // surprising and leave orphaned chains.
                 const isCalendarEdit = form.routineType === 'calendar';
-                const scheduleChanged = isCalendarScheduleChanged(routine, {
+                const editIntent = {
                     routineType: form.routineType,
                     rrule: finalRrule,
                     timeOfDay: calendarItemTemplate?.timeOfDay,
                     duration: calendarItemTemplate?.duration,
-                });
-                const hasPastItems = scheduleChanged ? await routineHasPastItems(db, userId, routine._id) : false;
-                const splitDate = hasPastItems ? computeSplitDate(routine.rrule, routine.createdTs) : null;
+                    startDate: form.startDate || undefined,
+                };
+                const scheduleChanged = isCalendarScheduleChanged(routine, editIntent);
+                const startDateChanged = isStartDateChanged(routine, editIntent);
+                const formStartDate = form.startDate || undefined;
+                // Saving a paused routine from the dialog counts as a resume — flip active=true so
+                // the server pushback sees the transition and the GCal cap is cleared.
+                const resumeOnSave = !routine.active;
 
-                if (splitDate) {
-                    // "This and all following" split from the next occurrence
-                    await splitRoutine(
-                        db,
-                        userId,
-                        routine,
-                        {
+                // startDate change path: if any `done` past items exist, split to preserve them;
+                // otherwise hard-delete past non-done items and update in place. This happens
+                // before the generic schedule-change split so the startDate branch wins when both
+                // apply (new startDate fully supersedes any rrule-only change semantics).
+                if (startDateChanged) {
+                    const { donePast, nonDonePast } = await partitionPastItemsByDoneness(db, userId, routine._id);
+                    if (donePast.length > 0) {
+                        // Split: cap old routine at yesterday, tail anchored at new startDate.
+                        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+                        await splitRoutine(
+                            db,
+                            userId,
+                            routine,
+                            {
+                                routineType: form.routineType,
+                                title: trimmedTitle,
+                                rrule: finalRrule,
+                                template,
+                                ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                                ...calendarLink,
+                                ...(formStartDate ? { startDate: formStartDate } : {}),
+                            },
+                            yesterday,
+                        );
+                    } else {
+                        await hardDeletePastItems(db, nonDonePast);
+                        const updatedRoutine: StoredRoutine = {
+                            ...routine,
                             routineType: form.routineType,
                             title: trimmedTitle,
                             rrule: finalRrule,
                             template,
+                            active: true,
                             ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
                             ...calendarLink,
-                        },
-                        splitDate,
-                    );
-                } else {
-                    const updatedRoutine = {
-                        ...routine,
-                        routineType: form.routineType,
-                        title: trimmedTitle,
-                        rrule: finalRrule,
-                        template,
-                        ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                        ...calendarLink,
-                    };
-                    await updateRoutine(db, updatedRoutine);
-
-                    if (isCalendarEdit && routine.routineType === 'calendar') {
-                        if (scheduleChanged) {
+                            ...(formStartDate ? { startDate: formStartDate } : {}),
+                        };
+                        if (!formStartDate) {
+                            delete updatedRoutine.startDate;
+                        }
+                        await updateRoutine(db, updatedRoutine);
+                        if (isCalendarEdit) {
                             await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
                         } else {
-                            await regenerateFutureItemContent(db, userId, updatedRoutine);
+                            // nextAction: seed the first item so the user doesn't see an empty routine.
+                            // Skip when startDate is still in the future — the boot-tick picks it up.
+                            const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+                            const futureStart = formStartDate !== undefined && formStartDate > todayStr;
+                            if (!futureStart) {
+                                await createNextRoutineItem(db, userId, updatedRoutine, dayjs().toDate());
+                            }
+                        }
+                    }
+                } else {
+                    const hasPastItems = scheduleChanged ? await routineHasPastItems(db, userId, routine._id) : false;
+                    const splitDate = hasPastItems ? computeSplitDate(routine.rrule, routine.createdTs) : null;
+
+                    if (splitDate) {
+                        await splitRoutine(
+                            db,
+                            userId,
+                            routine,
+                            {
+                                routineType: form.routineType,
+                                title: trimmedTitle,
+                                rrule: finalRrule,
+                                template,
+                                ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                                ...calendarLink,
+                                ...(formStartDate ? { startDate: formStartDate } : {}),
+                            },
+                            splitDate,
+                        );
+                    } else {
+                        const updatedRoutine: StoredRoutine = {
+                            ...routine,
+                            routineType: form.routineType,
+                            title: trimmedTitle,
+                            rrule: finalRrule,
+                            template,
+                            // Resume: flip active=true when saving a paused routine from the dialog.
+                            ...(resumeOnSave ? { active: true } : {}),
+                            ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                            ...calendarLink,
+                            ...(formStartDate ? { startDate: formStartDate } : {}),
+                        };
+                        if (!formStartDate) {
+                            delete updatedRoutine.startDate;
+                        }
+                        await updateRoutine(db, updatedRoutine);
+
+                        if (isCalendarEdit && routine.routineType === 'calendar') {
+                            if (scheduleChanged || resumeOnSave) {
+                                await deleteAndRegenerateFutureItems(db, userId, updatedRoutine);
+                            } else {
+                                await regenerateFutureItemContent(db, userId, updatedRoutine);
+                            }
                         }
                     }
                 }
             } else {
+                const formStartDate = form.startDate || undefined;
                 const created = await createRoutine(db, {
                     userId,
                     routineType: form.routineType,
@@ -254,13 +328,19 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     active: true,
                     ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
                     ...calendarLink,
+                    ...(formStartDate ? { startDate: formStartDate } : {}),
                 });
 
-                // Auto-create items — best-effort so a failure doesn't block saving the routine
+                // Auto-create items — best-effort so a failure doesn't block saving the routine.
+                // For nextAction routines with a future startDate, skip initial creation — the
+                // boot-tick (materializePendingNextActionRoutines) will produce the first item
+                // when the startDate arrives.
+                const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+                const futureStart = formStartDate !== undefined && formStartDate > todayStr;
                 try {
                     if (form.routineType === 'calendar') {
                         await generateCalendarItemsToHorizon(db, userId, created);
-                    } else {
+                    } else if (!futureStart) {
                         await createNextRoutineItem(db, userId, created, dayjs().toDate());
                     }
                 } catch (err) {
@@ -284,6 +364,11 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             <DialogTitle>{isEdit ? 'Edit routine' : 'New routine'}</DialogTitle>
             {/* MUI removes DialogContent top padding when preceded by DialogTitle; restore with sx */}
             <DialogContent className={styles.dialogContent} sx={{ pt: 2 }}>
+                {isEdit && !routine.active && (
+                    <Alert severity="info" variant="outlined">
+                        This routine is paused. Save your changes to resume it.
+                    </Alert>
+                )}
                 {isEndedCalendar && (
                     <Alert severity="info" variant="outlined">
                         This routine has ended. Only title and notes can be edited.
@@ -321,6 +406,17 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     {/* key resets FrequencyPicker internal state when switching between create/edit */}
                     <FrequencyPicker key={routine?._id ?? 'new'} value={form.rrule} onChange={(rrule) => patch({ rrule })} disabled={isEndedCalendar} />
                 </Box>
+
+                <TextField
+                    type="date"
+                    label="Start date"
+                    size="small"
+                    value={form.startDate}
+                    onChange={(e) => patch({ startDate: e.target.value })}
+                    slotProps={{ inputLabel: { shrink: true } }}
+                    helperText="Optional — anchors the schedule. Leave empty to start today."
+                    disabled={isEndedCalendar}
+                />
 
                 <EndsFields form={form} onPatch={patch} disabled={isEndedCalendar} />
 

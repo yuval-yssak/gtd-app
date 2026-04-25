@@ -1,6 +1,8 @@
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
+import PauseIcon from '@mui/icons-material/Pause';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
@@ -20,7 +22,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { RoutineDialog } from '../../components/routines/RoutineDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { removeRoutine } from '../../db/routineMutations';
+import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
 import { formatCalendarRrule, formatRrule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
 import styles from './-routines.module.css';
@@ -34,6 +36,7 @@ function RoutinesPage() {
     const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh } = useAppData();
     const [dialogRoutine, setDialogRoutine] = useState<StoredRoutine | 'new' | null>(null);
     const [routineToDelete, setRoutineToDelete] = useState<StoredRoutine | null>(null);
+    const [routineToPause, setRoutineToPause] = useState<StoredRoutine | null>(null);
 
     async function onConfirmDelete() {
         if (!routineToDelete) {
@@ -47,6 +50,19 @@ function RoutinesPage() {
         await refreshRoutines();
         // Push the delete + pull the server cascade (trashed generated calendar items)
         // so the Calendar view reflects the removal without waiting for an SSE tick.
+        await syncAndRefresh();
+    }
+
+    async function onConfirmPause() {
+        if (!routineToPause || !account) {
+            return;
+        }
+        const target = routineToPause;
+        setRoutineToPause(null);
+        await pauseRoutine(db, account.id, target);
+        await refreshRoutines();
+        await refreshItems();
+        // Sync + pull so the GCal-cap echo lands promptly.
         await syncAndRefresh();
     }
 
@@ -86,6 +102,19 @@ function RoutinesPage() {
                                 className={styles.item}
                                 secondaryAction={
                                     <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                        {routine.active ? (
+                                            <Tooltip title="Pause">
+                                                <IconButton size="small" onClick={() => setRoutineToPause(routine)}>
+                                                    <PauseIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                        ) : (
+                                            <Tooltip title="Resume — opens editor to set a new start date">
+                                                <IconButton size="small" color="success" onClick={() => setDialogRoutine(routine)}>
+                                                    <PlayArrowIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                        )}
                                         <Tooltip title="Edit">
                                             <IconButton size="small" onClick={() => setDialogRoutine(routine)}>
                                                 <EditIcon fontSize="small" />
@@ -152,6 +181,33 @@ function RoutinesPage() {
                     <Button onClick={() => setRoutineToDelete(null)}>Cancel</Button>
                     <Button color="error" onClick={() => void onConfirmDelete()}>
                         Delete
+                    </Button>
+                </DialogActions>
+            </Dialog>
+
+            <Dialog open={routineToPause !== null} onClose={() => setRoutineToPause(null)} maxWidth="sm" fullWidth>
+                <DialogTitle>Pause routine?</DialogTitle>
+                <DialogContent>
+                    <DialogContentText>
+                        {routineToPause ? <>Pause "{routineToPause.title}"?</> : null}
+                        <br />
+                        <br />
+                        Future open items will be trashed. Past-due items are left alone.
+                        {routineToPause?.routineType === 'calendar' && (
+                            <>
+                                <br />
+                                The recurring event on Google Calendar will stop at today; past occurrences stay.
+                            </>
+                        )}
+                        <br />
+                        <br />
+                        To resume, edit the routine and set a new start date.
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setRoutineToPause(null)}>Cancel</Button>
+                    <Button variant="contained" onClick={() => void onConfirmPause()}>
+                        Pause
                     </Button>
                 </DialogActions>
             </Dialog>

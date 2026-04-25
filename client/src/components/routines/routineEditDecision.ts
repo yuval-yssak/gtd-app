@@ -5,6 +5,7 @@ interface RoutineEditIntent {
     rrule: string;
     timeOfDay: string | undefined;
     duration: number | undefined;
+    startDate?: string | undefined;
 }
 
 /**
@@ -71,4 +72,16 @@ export function isCalendarScheduleChanged(previous: StoredRoutine, edited: Routi
         return true;
     }
     return previous.calendarItemTemplate?.duration !== edited.duration;
+}
+
+/**
+ * Returns true when the routine's startDate changed. Treats `undefined` and `''` as equivalent
+ * so a form that emits `''` for an unset field doesn't look like a change to a stored `undefined`.
+ * Applies to both `nextAction` and `calendar` routine types — anywhere a startDate change should
+ * trigger a regenerate or split branch.
+ */
+export function isStartDateChanged(previous: StoredRoutine, edited: RoutineEditIntent) {
+    const prev = previous.startDate ?? '';
+    const next = edited.startDate ?? '';
+    return prev !== next;
 }

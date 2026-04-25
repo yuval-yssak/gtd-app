@@ -24,9 +24,9 @@ import {
 import type { NewPersonFields } from './personMutations';
 import { createPerson } from './personMutations';
 import { getRoutinesByUser } from './routineHelpers';
-import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon } from './routineItemHelpers';
+import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
-import { createRoutine, removeRoutine, updateRoutine } from './routineMutations';
+import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { flushSyncQueue, forcePull, waitForPendingFlush } from './syncHelpers';
 import { createWorkContext } from './workContextMutations';
 
@@ -77,6 +77,15 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         createRoutine: (fields: Omit<NewRoutineFields, 'userId'>) => resolveUserId(db).then((uid) => createRoutine(db, { ...fields, userId: uid })),
         updateRoutine: (routine: Parameters<typeof updateRoutine>[1]) => updateRoutine(db, routine),
         removeRoutine: (routineId: string) => removeRoutine(db, routineId),
+        pauseRoutine: (routineId: string) =>
+            resolveUserId(db).then(async (uid) => {
+                const routine = await db.get('routines', routineId);
+                if (!routine) {
+                    throw new Error(`Routine ${routineId} not found`);
+                }
+                return pauseRoutine(db, uid, routine);
+            }),
+        materializePendingNextActionRoutines: () => resolveUserId(db).then((uid) => materializePendingNextActionRoutines(db, uid)),
         generateCalendarItemsToHorizon: (routineId: string) =>
             resolveUserId(db).then(async (uid) => {
                 const routine = await db.get('routines', routineId);

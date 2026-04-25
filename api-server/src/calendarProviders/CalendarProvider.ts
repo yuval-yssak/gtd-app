@@ -48,6 +48,13 @@ export interface CalendarProvider {
     createRecurringEvent(routine: RoutineInterface, calendarId: string, timeZone: string): Promise<string>; // returns eventId
     updateRecurringEvent(eventId: string, routine: RoutineInterface, calendarId: string, timeZone: string): Promise<void>;
     deleteRecurringEvent(eventId: string, calendarId: string): Promise<void>;
+    /**
+     * Caps an existing recurring series with UNTIL=<untilDate> via provider's update-series primitive,
+     * keeping the eventId stable so past occurrences remain intact. Used by the app-side routine pause
+     * gesture to stop a GCal master from producing future occurrences without deleting the series.
+     * @param untilDate RRULE-formatted UNTIL value (e.g. "20260423T235959Z" — UTC, no separators).
+     */
+    capRecurringEvent(eventId: string, untilDate: string, calendarId: string, timeZone: string): Promise<void>;
     listCalendars(): Promise<Array<{ id: string; name: string }>>;
     /** @param since ISO datetime string — only exceptions after this point are returned */
     getExceptions(eventId: string, calendarId: string, since: string, masterContent?: MasterContent): Promise<GCalException[]>;
