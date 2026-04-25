@@ -28,14 +28,14 @@ interface SortOption {
 }
 
 // Encoded as `${key}:${dir}` so the value lives in a single TextField select.
+const encodeSort = (key: ItemSortKey, dir: ItemSortDir) => `${key}:${dir}`;
+
 const SORT_OPTIONS: SortOption[] = [
     { label: 'Updated · newest first', key: 'updatedTs', dir: 'desc' },
     { label: 'Updated · oldest first', key: 'updatedTs', dir: 'asc' },
     { label: 'Created · newest first', key: 'createdTs', dir: 'desc' },
     { label: 'Created · oldest first', key: 'createdTs', dir: 'asc' },
 ];
-
-const encodeSort = (o: SortOption) => `${o.key}:${o.dir}`;
 
 interface Props {
     status: Extract<StoredItem['status'], 'done' | 'trash'>;
@@ -69,7 +69,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
     }
 
     const onSortChange = (raw: string) => {
-        const found = SORT_OPTIONS.find((o) => encodeSort(o) === raw);
+        const found = SORT_OPTIONS.find((o) => encodeSort(o.key, o.dir) === raw);
         if (!found) return;
         setSortKey(found.key);
         setSortDir(found.dir);
@@ -86,12 +86,12 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                     size="small"
                     select
                     label="Sort by"
-                    value={encodeSort({ key: sortKey, dir: sortDir, label: '' })}
+                    value={encodeSort(sortKey, sortDir)}
                     onChange={(e) => onSortChange(e.target.value)}
                     className={styles.sortField}
                 >
                     {SORT_OPTIONS.map((o) => (
-                        <MenuItem key={encodeSort(o)} value={encodeSort(o)}>
+                        <MenuItem key={encodeSort(o.key, o.dir)} value={encodeSort(o.key, o.dir)}>
                             {o.label}
                         </MenuItem>
                     ))}

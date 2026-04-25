@@ -1,7 +1,6 @@
 import ViewColumnIcon from '@mui/icons-material/ViewColumn';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
-import FormControlLabel from '@mui/material/FormControlLabel';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
@@ -13,7 +12,7 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import { useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { itemContextNames, itemPersonNames } from '../../lib/itemSearch';
 import { SEARCH_TABLE_COLUMNS, type SearchTableColumnId } from '../../lib/searchTableColumns';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -30,12 +29,10 @@ interface Props {
 
 const formatDate = (iso: string | undefined) => (iso ? dayjs(iso).format('MMM D, YYYY') : '—');
 
-const formatDateOnly = (iso: string | undefined) => (iso ? dayjs(iso).format('MMM D, YYYY') : '—');
-
 function ColumnPicker({ visibleColumns, onChange }: { visibleColumns: ReadonlySet<SearchTableColumnId>; onChange: (next: Set<SearchTableColumnId>) => void }) {
     const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
 
-    const togglePicker = (id: SearchTableColumnId) => {
+    const toggleColumn = (id: SearchTableColumnId) => {
         const next = new Set(visibleColumns);
         if (next.has(id)) {
             next.delete(id);
@@ -58,14 +55,11 @@ function ColumnPicker({ visibleColumns, onChange }: { visibleColumns: ReadonlySe
             </Button>
             <Menu anchorEl={anchorEl} open={anchorEl !== null} onClose={() => setAnchorEl(null)}>
                 {SEARCH_TABLE_COLUMNS.map((col) => (
-                    <MenuItem key={col.id} onClick={() => !col.fixed && togglePicker(col.id)} disabled={col.fixed === true}>
-                        <FormControlLabel
-                            control={<Checkbox size="small" checked={visibleColumns.has(col.id)} disabled={col.fixed === true} />}
-                            label={col.label}
-                            // Stop the click reaching the MenuItem when the checkbox itself is clicked,
-                            // otherwise the toggle fires twice (once on the checkbox, once on the row).
-                            onClick={(e) => e.stopPropagation()}
-                        />
+                    // The MenuItem owns the click; the Checkbox is a passive visual indicator.
+                    // A single click target avoids the twice-fired toggle that an onChange-bearing Checkbox would cause.
+                    <MenuItem key={col.id} onClick={() => !col.fixed && toggleColumn(col.id)} disabled={col.fixed === true}>
+                        <Checkbox size="small" checked={visibleColumns.has(col.id)} disabled={col.fixed === true} className={styles.checkbox} />
+                        {col.label}
                     </MenuItem>
                 ))}
             </Menu>
@@ -88,7 +82,7 @@ function ResultCell({
     if (column === 'status') return <StatusChip status={item.status} />;
     if (column === 'updated') return <span>{formatDate(item.updatedTs)}</span>;
     if (column === 'created') return <span>{formatDate(item.createdTs)}</span>;
-    if (column === 'expectedBy') return <span>{formatDateOnly(item.expectedBy)}</span>;
+    if (column === 'expectedBy') return <span>{formatDate(item.expectedBy)}</span>;
     if (column === 'people') {
         const names = itemPersonNames(item, peopleById);
         return <span>{names.length > 0 ? names.join(', ') : '—'}</span>;
@@ -100,9 +94,9 @@ function ResultCell({
 
 export function SearchResultsTable({ items, visibleColumns, onVisibleColumnsChange, people, workContexts }: Props) {
     const navigate = useNavigate();
-    const peopleById = new Map(people.map((p) => [p._id, p]));
-    const contextsById = new Map(workContexts.map((c) => [c._id, c]));
-    const orderedColumns = SEARCH_TABLE_COLUMNS.filter((c) => visibleColumns.has(c.id));
+    const peopleById = useMemo(() => new Map(people.map((p) => [p._id, p])), [people]);
+    const contextsById = useMemo(() => new Map(workContexts.map((c) => [c._id, c])), [workContexts]);
+    const orderedColumns = useMemo(() => SEARCH_TABLE_COLUMNS.filter((c) => visibleColumns.has(c.id)), [visibleColumns]);
 
     return (
         <>

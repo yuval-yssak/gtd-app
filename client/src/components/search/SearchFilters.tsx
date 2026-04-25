@@ -10,7 +10,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { ALL_STATUSES, STATUS_LABELS } from '../../lib/itemSearch';
 import type { SearchUrlState } from '../../lib/searchUrlParams';
-import { DEFAULT_URL_STATE } from '../../lib/searchUrlParams';
+import { DEFAULT_URL_STATE, isDateField } from '../../lib/searchUrlParams';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import styles from './SearchFilters.module.css';
 
@@ -137,7 +137,7 @@ export function SearchFilters({ urlState, queryInput, onQueryInputChange, onUrlS
                     size="small"
                     label="Date field"
                     value={urlState.dateField}
-                    onChange={(e) => onUrlStateChange({ dateField: e.target.value as SearchUrlState['dateField'] })}
+                    onChange={(e) => isDateField(e.target.value) && onUrlStateChange({ dateField: e.target.value })}
                     className={styles.dropdown}
                 >
                     <MenuItem value="updatedTs">Updated</MenuItem>

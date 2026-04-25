@@ -71,6 +71,48 @@ describe('filterItems', () => {
         const result = filterItems(items, { ...DEFAULT_SEARCH_FILTERS, query: 'call', personId: 'p1' });
         expect(result.map((i) => i._id)).toEqual(['1']);
     });
+
+    it('treats dateFrom alone as an open-ended upper bound', () => {
+        const items = [
+            mkItem({ _id: '1', status: 'inbox', updatedTs: '2026-04-10T10:00:00.000Z' }),
+            mkItem({ _id: '2', status: 'inbox', updatedTs: '2026-04-20T10:00:00.000Z' }),
+        ];
+        const result = filterItems(items, { ...DEFAULT_SEARCH_FILTERS, dateFrom: '2026-04-15' });
+        expect(result.map((i) => i._id)).toEqual(['2']);
+    });
+
+    it('treats dateTo alone as an open-ended lower bound', () => {
+        const items = [
+            mkItem({ _id: '1', status: 'inbox', updatedTs: '2026-04-10T10:00:00.000Z' }),
+            mkItem({ _id: '2', status: 'inbox', updatedTs: '2026-04-20T10:00:00.000Z' }),
+        ];
+        const result = filterItems(items, { ...DEFAULT_SEARCH_FILTERS, dateTo: '2026-04-15' });
+        expect(result.map((i) => i._id)).toEqual(['1']);
+    });
+
+    it('returns nothing when dateFrom is after dateTo', () => {
+        const items = [mkItem({ _id: '1', status: 'inbox', updatedTs: '2026-04-15T10:00:00.000Z' })];
+        const result = filterItems(items, { ...DEFAULT_SEARCH_FILTERS, dateFrom: '2026-04-20', dateTo: '2026-04-10' });
+        expect(result).toEqual([]);
+    });
+
+    it('excludes items with no people when a personId filter is set', () => {
+        const items = [mkItem({ _id: '1', status: 'nextAction' }), mkItem({ _id: '2', status: 'nextAction', peopleIds: ['p1'] })];
+        const result = filterItems(items, { ...DEFAULT_SEARCH_FILTERS, personId: 'p1' });
+        expect(result.map((i) => i._id)).toEqual(['2']);
+    });
+
+    it('matches notes case-insensitively', () => {
+        const items = [mkItem({ _id: '1', status: 'inbox', title: 'Other', notes: 'Remember the MILK' })];
+        const result = filterItems(items, { ...DEFAULT_SEARCH_FILTERS, query: 'milk' });
+        expect(result.map((i) => i._id)).toEqual(['1']);
+    });
+
+    it('returns nothing when statuses is the empty set', () => {
+        const items = [mkItem({ _id: '1', status: 'inbox' }), mkItem({ _id: '2', status: 'done' })];
+        const result = filterItems(items, { ...DEFAULT_SEARCH_FILTERS, statuses: new Set() });
+        expect(result).toEqual([]);
+    });
 });
 
 describe('sortItems', () => {
@@ -92,6 +134,19 @@ describe('sortItems', () => {
         sortItems(input, 'createdTs', 'desc');
         expect(input.map((i) => i._id)).toEqual(['a', 'b']);
     });
+
+    it('returns an empty array unchanged', () => {
+        expect(sortItems([], 'createdTs', 'asc')).toEqual([]);
+    });
+
+    it('preserves relative order for items with equal sort keys (stability)', () => {
+        const equal = [
+            mkItem({ _id: 'first', status: 'inbox', createdTs: '2026-01-01T00:00:00.000Z' }),
+            mkItem({ _id: 'second', status: 'inbox', createdTs: '2026-01-01T00:00:00.000Z' }),
+            mkItem({ _id: 'third', status: 'inbox', createdTs: '2026-01-01T00:00:00.000Z' }),
+        ];
+        expect(sortItems(equal, 'createdTs', 'desc').map((i) => i._id)).toEqual(['first', 'second', 'third']);
+    });
 });
 
 describe('groupByStatus', () => {
@@ -106,5 +161,9 @@ describe('groupByStatus', () => {
         expect(groups.map((g) => g.status)).toEqual(['inbox', 'nextAction', 'done']);
         const inboxGroup = groups.find((g) => g.status === 'inbox');
         expect(inboxGroup?.items.map((i) => i._id)).toEqual(['2', '3']);
+    });
+
+    it('returns an empty array for empty input', () => {
+        expect(groupByStatus([])).toEqual([]);
     });
 });

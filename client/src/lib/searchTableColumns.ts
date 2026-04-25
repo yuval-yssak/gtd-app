@@ -19,9 +19,11 @@ export const SEARCH_TABLE_COLUMNS: readonly SearchTableColumnDef[] = [
 
 const STORAGE_KEY = 'gtd:searchTableColumns';
 
-const ALL_IDS: ReadonlySet<string> = new Set(SEARCH_TABLE_COLUMNS.map((c) => c.id));
+const ALL_IDS: ReadonlySet<SearchTableColumnId> = new Set(SEARCH_TABLE_COLUMNS.map((c) => c.id));
 
 const DEFAULT_VISIBLE: ReadonlySet<SearchTableColumnId> = new Set<SearchTableColumnId>(['title', 'status', 'updated', 'expectedBy']);
+
+const isColumnId = (v: unknown): v is SearchTableColumnId => typeof v === 'string' && (ALL_IDS as ReadonlySet<string>).has(v);
 
 // Stored as JSON array. Robust to corrupt values (parse/shape errors fall back to defaults).
 export function loadVisibleColumns(): Set<SearchTableColumnId> {
@@ -31,7 +33,7 @@ export function loadVisibleColumns(): Set<SearchTableColumnId> {
     try {
         const parsed: unknown = JSON.parse(raw);
         if (!Array.isArray(parsed)) return new Set(DEFAULT_VISIBLE);
-        const ids = parsed.filter((v): v is SearchTableColumnId => typeof v === 'string' && ALL_IDS.has(v));
+        const ids = parsed.filter(isColumnId);
         // Title is always visible regardless of stored state — guarantees the table is never blank.
         return new Set<SearchTableColumnId>(['title', ...ids]);
     } catch {
