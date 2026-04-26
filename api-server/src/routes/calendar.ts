@@ -61,9 +61,14 @@ function isOwnEcho(lastPushedTs: string, eventUpdated: string): boolean {
     return Math.abs(dayjs(eventUpdated).diff(dayjs(lastPushedTs), 'second')) < ECHO_WINDOW_SECONDS;
 }
 
-/** Returns true if the event has fully ended (timeEnd is strictly before `now`). */
-function isPastEvent(event: { timeStart: string; timeEnd: string }, now: string): boolean {
-    return dayjs(event.timeEnd).isBefore(dayjs(now));
+/** Start of today (00:00) in the given IANA timezone, returned as ISO. */
+function startOfTodayInTz(nowIso: string, timeZone: string): string {
+    return dayjs(nowIso).tz(timeZone).startOf('day').toISOString();
+}
+
+/** Returns true if the event ended strictly before `cutoffIso`. */
+function isPastEvent(event: { timeEnd: string }, cutoffIso: string): boolean {
+    return dayjs(event.timeEnd).isBefore(dayjs(cutoffIso));
 }
 
 const calendarRoutes = new Hono<{ Variables: AuthVariables }>();
@@ -728,6 +733,9 @@ async function syncSingleCalendar(
  * On 410 Gone (token expired), clears the token and retries as a full sync.
  */
 async function fetchEventsWithSyncToken(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider, now: string): Promise<EventSyncResult> {
+    // Full-sync timeMin uses start-of-today (in the calendar's timezone) so events earlier today
+    // are still returned. Without this, GCal's `timeMin=now` filter drops them at the API layer.
+    const timeMin = startOfTodayInTz(now, config.timeZone ?? 'UTC');
     if (config.syncToken) {
         try {
             return await provider.listEventsIncremental(config.calendarId, config.syncToken);
@@ -735,12 +743,12 @@ async function fetchEventsWithSyncToken(config: CalendarSyncConfigInterface, pro
             if (err instanceof SyncTokenInvalidError) {
                 console.warn(`[calendar] syncToken expired for config ${config._id}, falling back to full sync`);
                 await calendarSyncConfigsDAO.upsertSyncToken(config._id, '', config.lastSyncedTs ?? dayjs(0).toISOString());
-                return provider.listEventsFull(config.calendarId, now);
+                return provider.listEventsFull(config.calendarId, timeMin);
             }
             throw err;
         }
     }
-    return provider.listEventsFull(config.calendarId, now);
+    return provider.listEventsFull(config.calendarId, timeMin);
 }
 
 // ── Calendar event import ─────────────────────────────────────────────────────
@@ -1150,16 +1158,17 @@ async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, 
     }
 
     if (event.status === 'cancelled') {
-        await trashCancelledItem(existing, ctx);
+        await trashItem(existing, ctx);
         return;
     }
 
-    // Past events from Google are only relevant if they already exist locally — update them
-    // to reflect any changes (e.g. title/time edits). New past events are ignored.
-    if (event.timeStart && isPastEvent(event, ctx.now)) {
-        if (existing) {
-            await updateExistingCalendarItem(existing, event, source, ctx);
-        }
+    // Past-event handling: anything that ended before start-of-today (in the calendar's timezone)
+    // is treated as past. New past events are ignored; an existing live `calendar` item moved to
+    // before today is trashed (the user dragged it into the past, so it's no longer on the calendar).
+    // Routine-managed items are preserved (the routine path owns their lifecycle).
+    const cutoffIso = startOfTodayInTz(ctx.now, source.config.timeZone ?? 'UTC');
+    if (event.timeStart && isPastEvent(event, cutoffIso)) {
+        await applyPastEventToExisting(existing, event, source, ctx);
         return;
     }
 
@@ -1170,8 +1179,31 @@ async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, 
     }
 }
 
-async function trashCancelledItem(existing: ItemInterface | undefined, ctx: SyncContext): Promise<void> {
-    if (!existing || existing.routineId) {
+/**
+ * Resolves a past event's effect on the existing local item:
+ * - no local item: nothing to do
+ * - routine-managed: skip (routine path owns lifecycle)
+ * - live `calendar` item: trash (user moved it into the past)
+ * - other statuses (user reclassified to nextAction/done): preserve edit semantics
+ */
+async function applyPastEventToExisting(existing: ItemInterface | undefined, event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    if (!existing || existing.routineId || existing.status === 'trash') {
+        return;
+    }
+    if (existing.status === 'calendar') {
+        await trashItem(existing, ctx);
+        return;
+    }
+    await updateExistingCalendarItem(existing, event, source, ctx);
+}
+
+/**
+ * Idempotently trashes the given item. No-ops on:
+ * - missing item, routine-managed item, or already-trashed item.
+ * Used by both the cancelled-event path and the moved-to-past path.
+ */
+async function trashItem(existing: ItemInterface | undefined, ctx: SyncContext): Promise<void> {
+    if (!existing || existing.routineId || existing.status === 'trash') {
         return;
     }
     const itemId = existing._id;
@@ -1322,16 +1354,43 @@ async function applyExceptionToItems(routine: RoutineInterface, ex: GCalExceptio
     }
 
     if (ex.type === 'modified') {
-        const setFields = {
+        const sharedFields = {
             updatedTs: ctx.now,
             ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
             ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
-            ...(ex.title !== undefined ? { title: ex.title } : {}),
             // ex.notes is raw HTML from GCal — convert to markdown for storage, keep HTML as lastSyncedNotes
             ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
         };
-        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields });
+        // The sync layer owns the "✓ " done marker on GCal — strip it on inbound only when the
+        // local item is already done (e.g. our own pushback echo). Otherwise a routine-instance
+        // round-trip would corrupt the stored title with the marker we ourselves applied.
+        if (ex.title === undefined) {
+            await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields: sharedFields });
+            return;
+        }
+        await applyTitledExceptionToItems(baseFilter, ex.title, sharedFields, ctx);
     }
+}
+
+async function applyTitledExceptionToItems(
+    filter: Record<string, unknown>,
+    incomingTitle: string,
+    sharedFields: Record<string, unknown>,
+    ctx: SyncContext,
+): Promise<void> {
+    const before = await itemsDAO.findArray(filter);
+    const withId = before.filter((item): item is ItemInterface & { _id: string } => Boolean(item._id));
+    if (!hasAtLeastOne(withId)) {
+        return;
+    }
+    await Promise.all(
+        withId.map(async (item) => {
+            const title = item.status === 'done' ? stripDoneMarker(incomingTitle) : incomingTitle;
+            const updated: ItemInterface = { ...item, ...sharedFields, title };
+            await itemsDAO.replaceById(item._id, updated);
+            ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: item._id, snapshot: updated, opType: 'update', now: ctx.now }));
+        }),
+    );
 }
 
 async function syncRoutineExceptions(routine: RoutineInterface, provider: GoogleCalendarProvider, ctx: RoutineSyncCtx): Promise<void> {
