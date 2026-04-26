@@ -86,12 +86,14 @@ export interface CalendarProvider {
      * by `originalDate` (the YYYY-MM-DD the rrule originally generated). Implementations typically
      * resolve the instance-specific event ID via the provider's instances list, then patch it —
      * creating a single-instance override without affecting other occurrences.
-     * Used for matrix cases A2/A3 (per-instance time/title/notes edit on a routine-managed series).
+     * Used for matrix cases A2/A3 (per-instance time/title/notes edit on a routine-managed series)
+     * and A8 (routine-generated item marked done — apply title marker + sage colorId).
+     * `colorId` semantics match `updateEvent`: `undefined` leaves it untouched, `null` clears it.
      */
     updateRecurringInstance(
         masterEventId: string,
         originalDate: string,
-        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string },
+        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string; colorId?: string | null },
         calendarId: string,
         timeZone: string,
     ): Promise<void>;
