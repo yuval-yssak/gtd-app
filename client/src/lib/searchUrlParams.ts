@@ -56,6 +56,11 @@ const readDate = (raw: unknown): string | null => {
 };
 
 const readStatuses = (raw: unknown): StoredItem['status'][] | null => {
+    // TanStack Router JSON-parses search values, so writes from the app round-trip as arrays;
+    // we still accept comma-separated strings so manually-typed URLs work too.
+    if (Array.isArray(raw)) {
+        return raw.filter((v): v is string => typeof v === 'string').filter(isStatus);
+    }
     if (typeof raw !== 'string' || raw.length === 0) return null;
     const parts = raw.split(',').filter(isStatus);
     // An empty list after filtering means every value was invalid — treat as "use default"
