@@ -54,10 +54,23 @@ describe('parseSearchParams', () => {
 
     it('ignores non-string values', () => {
         // Hostile inputs simulating a manually-edited URL or stale link
-        const result = parseSearchParams({ q: 42 as unknown, statuses: ['inbox'] as unknown, view: null as unknown });
+        const result = parseSearchParams({ q: 42 as unknown, view: null as unknown });
         expect(result.q).toBe('');
-        expect(result.statuses).toBeNull();
         expect(result.view).toBe('grouped');
+    });
+
+    it('accepts statuses as an array (from TanStack Router JSON-decoded values)', () => {
+        // TanStack Router JSON-parses search params, so a written array round-trips back as an array.
+        expect(parseSearchParams({ statuses: ['inbox', 'nextAction'] as unknown }).statuses).toEqual(['inbox', 'nextAction']);
+    });
+
+    it('preserves an explicit empty statuses array as "match nothing"', () => {
+        // Empty array is the user's deliberate "show nothing" state — must not silently fall back to defaults.
+        expect(parseSearchParams({ statuses: [] as unknown }).statuses).toEqual([]);
+    });
+
+    it('drops invalid entries from a statuses array', () => {
+        expect(parseSearchParams({ statuses: ['inbox', 'bogus', 42, 'done'] as unknown }).statuses).toEqual(['inbox', 'done']);
     });
 });
 
@@ -70,6 +83,12 @@ describe('urlStateToFilters', () => {
     it('uses the explicit status set when state.statuses is non-null', () => {
         const filters = urlStateToFilters({ ...DEFAULT_URL_STATE, statuses: ['done'] });
         expect([...filters.statuses]).toEqual(['done']);
+    });
+
+    it('produces an empty status set when state.statuses is []', () => {
+        // [] is the user's deliberate "match nothing" state — must not silently fall back to defaults.
+        const filters = urlStateToFilters({ ...DEFAULT_URL_STATE, statuses: [] });
+        expect(filters.statuses.size).toBe(0);
     });
 
     it('passes through query/personId/contextId/date fields verbatim', () => {
