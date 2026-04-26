@@ -2,6 +2,8 @@ import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
 import BoltIcon from '@mui/icons-material/Bolt';
 import BookmarkIcon from '@mui/icons-material/Bookmark';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DoneAllIcon from '@mui/icons-material/DoneAll';
 import EventNoteIcon from '@mui/icons-material/EventNote';
 import GroupIcon from '@mui/icons-material/Group';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
@@ -9,6 +11,7 @@ import InboxIcon from '@mui/icons-material/Inbox';
 import LabelIcon from '@mui/icons-material/Label';
 import LoopIcon from '@mui/icons-material/Loop';
 import MenuIcon from '@mui/icons-material/Menu';
+import SearchIcon from '@mui/icons-material/Search';
 import SettingsIcon from '@mui/icons-material/Settings';
 import Badge from '@mui/material/Badge';
 import BottomNavigation from '@mui/material/BottomNavigation';
@@ -56,7 +59,12 @@ const secondaryItems: NavItemConfig[] = [
     { label: 'Work Contexts', icon: <LabelIcon fontSize="small" />, to: '/work-contexts' },
 ];
 
-const tertiaryItems: NavItemConfig[] = [{ label: 'Weekly Review', icon: <AssignmentTurnedInIcon fontSize="small" />, to: '/weekly-review' }];
+const tertiaryItems: NavItemConfig[] = [
+    { label: 'Search', icon: <SearchIcon fontSize="small" />, to: '/search' },
+    { label: 'Weekly Review', icon: <AssignmentTurnedInIcon fontSize="small" />, to: '/weekly-review' },
+    { label: 'Done', icon: <DoneAllIcon fontSize="small" />, to: '/done' },
+    { label: 'Trash', icon: <DeleteOutlineIcon fontSize="small" />, to: '/trash' },
+];
 
 const settingsNavItem: NavItemConfig = { label: 'Settings', icon: <SettingsIcon fontSize="small" />, to: '/settings' };
 

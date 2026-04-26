@@ -1,0 +1,21 @@
+.toolbar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.5rem;
+}
+
+.columnsButton {
+    text-transform: none;
+}
+
+.row {
+    cursor: pointer;
+}
+
+.titleCell {
+    font-weight: 500;
+}
+
+.checkbox {
+    margin-right: 0.5rem;
+}

@@ -1,0 +1,10 @@
+.countChip {
+    margin-left: 0.75rem;
+    vertical-align: middle;
+}
+
+.viewRow {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 1rem;
+}
