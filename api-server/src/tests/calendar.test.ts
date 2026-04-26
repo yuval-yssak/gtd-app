@@ -966,7 +966,7 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(item).toBeNull();
     });
 
-    it('updates an existing item when its GCal event is moved to the past', async () => {
+    it("trashes an existing 'calendar' item moved to a date before today", async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -996,9 +996,7 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(res.status).toBe(200);
 
         const item = await itemsDAO.findOne({ _id: 'item-moved-past' });
-        expect(item?.status).toBe('calendar');
-        expect(item?.title).toBe('Now past');
-        expect(item?.timeStart).toBe(pastTime);
+        expect(item?.status).toBe('trash');
     });
 
     it('updates (not trashes) an in-progress event whose start is past but end is future', async () => {
@@ -1085,6 +1083,232 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         const item = await itemsDAO.findOne({ _id: 'item-routine-past' });
         // Routine-managed items must not be trashed by the past-event filter.
         expect(item?.status).toBe('calendar');
+    });
+
+    it('creates a new item for an event earlier today', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Earlier today (relative to UTC, but well after start-of-today in any reasonable TZ).
+        const earlierTodayStart = dayjs().startOf('day').add(2, 'hour').toISOString();
+        const earlierTodayEnd = dayjs().startOf('day').add(3, 'hour').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-earlier-today',
+                    title: 'Earlier today',
+                    timeStart: earlierTodayStart,
+                    timeEnd: earlierTodayEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ calendarEventId: 'evt-earlier-today' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('Earlier today');
+    });
+
+    it('updates an existing item moved from later today to earlier today', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const laterTodayStart = dayjs().startOf('day').add(22, 'hour').toISOString();
+        const laterTodayEnd = dayjs().startOf('day').add(23, 'hour').toISOString();
+        const earlierTodayStart = dayjs().startOf('day').add(13, 'hour').toISOString();
+        const earlierTodayEnd = dayjs().startOf('day').add(14, 'hour').toISOString();
+        const createdTime = dayjs().subtract(2, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-moved-earlier-today',
+            user: userId,
+            status: 'calendar',
+            title: 'Late today',
+            timeStart: laterTodayStart,
+            timeEnd: laterTodayEnd,
+            calendarEventId: 'evt-moved-earlier-today',
+            calendarIntegrationId: 'int-1',
+            createdTs: createdTime,
+            updatedTs: createdTime,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-moved-earlier-today',
+                    title: 'Moved earlier',
+                    timeStart: earlierTodayStart,
+                    timeEnd: earlierTodayEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-moved-earlier-today' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('Moved earlier');
+        expect(item?.timeStart).toBe(earlierTodayStart);
+    });
+
+    it('leaves an already-trashed item alone when event remains in past', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const trashedTs = dayjs().subtract(1, 'day').toISOString();
+        const pastStart = dayjs().subtract(2, 'day').toISOString();
+        const pastEnd = dayjs().subtract(2, 'day').add(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-already-trashed',
+            user: userId,
+            status: 'trash',
+            title: 'Already trashed',
+            timeStart: pastStart,
+            timeEnd: pastEnd,
+            calendarEventId: 'evt-already-trashed',
+            calendarIntegrationId: 'int-1',
+            createdTs: trashedTs,
+            updatedTs: trashedTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-already-trashed', title: 'Still past', timeStart: pastStart, timeEnd: pastEnd, updated: trashedTs, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-already-trashed' });
+        expect(item?.status).toBe('trash');
+        // updatedTs unchanged proves the trash branch short-circuited (no operation written).
+        expect(item?.updatedTs).toBe(trashedTs);
+    });
+
+    it('honors calendar timeZone for the today cutoff', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // April 2026 is DST in Asia/Jerusalem (UTC+3). Freeze "now" at 22:30 UTC on April 25.
+        // In JLM that's April 26 01:30 — already "tomorrow". start-of-today JLM = April 26 00:00 JLM = April 25 21:00 UTC.
+        // start-of-today UTC = April 25 00:00 UTC. The cutoffs disagree by 21h.
+        // An event ending at April 25 20:30 UTC is *before* the JLM cutoff (past in JLM)
+        // but *after* the UTC cutoff (today in UTC). So a TZ-aware sync must trash; a UTC-only sync would not.
+        const baseDay = dayjs.utc('2026-04-25T00:00:00Z');
+        vi.useFakeTimers();
+        vi.setSystemTime(baseDay.add(22, 'hour').add(30, 'minute').toDate());
+        try {
+            const eventStart = baseDay.add(20, 'hour').toISOString();
+            const eventEnd = baseDay.add(20, 'hour').add(30, 'minute').toISOString();
+            const createdTs = baseDay.toISOString();
+            await itemsDAO.insertOne({
+                _id: 'item-tz-borderline',
+                user: userId,
+                status: 'calendar',
+                title: 'Borderline',
+                timeStart: eventStart,
+                timeEnd: eventEnd,
+                calendarEventId: 'evt-tz-borderline',
+                calendarIntegrationId: 'int-1',
+                createdTs,
+                updatedTs: createdTs,
+            });
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [
+                    {
+                        id: 'evt-tz-borderline',
+                        title: 'Borderline edited',
+                        timeStart: eventStart,
+                        timeEnd: eventEnd,
+                        updated: dayjs().toISOString(),
+                        status: 'confirmed',
+                    },
+                ],
+                nextSyncToken: 'tok-1',
+            });
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+
+            const item = await itemsDAO.findOne({ _id: 'item-tz-borderline' });
+            expect(item?.status).toBe('trash');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('updates a reclassified nextAction item when its GCal event is moved to past', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // User reclassified the calendar item as a nextAction. Past-event branch must preserve it
+        // (not trash it) and still apply title/time edits from GCal — otherwise users lose work.
+        const createdTs = dayjs().subtract(2, 'day').toISOString();
+        const futureTime = dayjs().add(1, 'day').toISOString();
+        const pastTime = dayjs().subtract(2, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-reclassified-past',
+            user: userId,
+            status: 'nextAction',
+            title: 'Original',
+            timeStart: futureTime,
+            timeEnd: futureTime,
+            calendarEventId: 'evt-reclassified-past',
+            calendarIntegrationId: 'int-1',
+            createdTs,
+            updatedTs: createdTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-reclassified-past',
+                    title: 'Edited title',
+                    timeStart: pastTime,
+                    timeEnd: pastTime,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-reclassified-past' });
+        expect(item?.status).toBe('nextAction');
+        expect(item?.title).toBe('Edited title');
+    });
+
+    it('passes start-of-today (in calendar timeZone) as timeMin on full sync', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const fullSyncSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        expect(fullSyncSpy).toHaveBeenCalledTimes(1);
+        const [, timeMinArg] = fullSyncSpy.mock.calls[0]!;
+        // timeMin must be 00:00 (start of day) when projected into the calendar's TZ.
+        expect(dayjs(timeMinArg).tz('Asia/Jerusalem').format('HH:mm:ss')).toBe('00:00:00');
     });
 
     it('skips update when local item is newer than the GCal event', async () => {
