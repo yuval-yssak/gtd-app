@@ -96,24 +96,30 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
 
     // Extracted so both the mount effect and the isOnline effect can call it.
     const syncAndRefresh = useCallback(async () => {
+        console.log('[debug-gcal-sync][client] syncAndRefresh called', { isSyncing: isSyncingRef.current });
         if (isSyncingRef.current) {
             syncRequestedWhileBusy.current = true;
+            console.log('[debug-gcal-sync][client] syncAndRefresh deferred — already syncing, will catch up');
             return;
         }
         isSyncingRef.current = true;
         try {
             const acct = await getActiveAccount(db);
             if (!acct) {
+                console.log('[debug-gcal-sync][client] syncAndRefresh aborted — no active account');
                 return;
             }
 
+            console.log('[debug-gcal-sync][client] syncAndRefresh: flush + first pull');
             await flushSyncQueue(db);
             await syncFromServerWithBootstrapFallback(db);
             // Pull GCal exceptions for all linked integrations. Runs after the main sync so
             // the routine snapshots are up-to-date before we apply exception patches.
+            console.log('[debug-gcal-sync][client] syncAndRefresh: syncAllCalendarIntegrations');
             await syncAllCalendarIntegrations();
             // Second pull: calendar sync creates server-side operations that weren't available
             // during the first pull above — fetch them now so items appear in this cycle.
+            console.log('[debug-gcal-sync][client] syncAndRefresh: second pull');
             await pullFromServer(db);
 
             // After pulling, check for nextAction routines whose startDate has arrived and
@@ -123,9 +129,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
 
             // Guard after the async work — component may have unmounted while awaiting network.
             if (unmountedRef.current) {
+                console.log('[debug-gcal-sync][client] syncAndRefresh: unmounted — skipping setState');
                 return;
             }
-            setItems(await getItemsByUser(db, acct.id));
+            const freshItems = await getItemsByUser(db, acct.id);
+            console.log('[debug-gcal-sync][client] syncAndRefresh: setItems', { count: freshItems.length });
+            setItems(freshItems);
             setWorkContexts(await getWorkContextsByUser(db, acct.id));
             setPeople(await getPeopleByUser(db, acct.id));
             setRoutines(await getRoutinesByUser(db, acct.id));
@@ -137,12 +146,15 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // pull is sufficient because the SSE event means new ops are on the server.
             if (syncRequestedWhileBusy.current) {
                 syncRequestedWhileBusy.current = false;
+                console.log('[debug-gcal-sync][client] running catch-up pull (event arrived during sync)');
                 pullFromServer(db)
                     .then(async () => {
                         if (unmountedRef.current) return;
                         const acct = await getActiveAccount(db);
                         if (!acct) return;
-                        setItems(await getItemsByUser(db, acct.id));
+                        const freshItems = await getItemsByUser(db, acct.id);
+                        console.log('[debug-gcal-sync][client] catch-up pull: setItems', { count: freshItems.length });
+                        setItems(freshItems);
                         setWorkContexts(await getWorkContextsByUser(db, acct.id));
                         setPeople(await getPeopleByUser(db, acct.id));
                         setRoutines(await getRoutinesByUser(db, acct.id));
