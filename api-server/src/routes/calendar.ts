@@ -1151,9 +1151,14 @@ type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: st
 async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const [existing] = await itemsDAO.findArray({ user: ctx.userId, calendarEventId: event.id });
 
+    console.log(
+        `[debug-gcal-sync][server] upsertCalendarItem | eventId=${event.id} title="${event.title}" status=${event.status} eventUpdated=${event.updated} existing=${!!existing} existingUpdatedTs=${existing?.updatedTs ?? 'n/a'} existingStatus=${existing?.status ?? 'n/a'} lastPushedToGCalTs=${existing?.lastPushedToGCalTs ?? 'n/a'}`,
+    );
+
     // Echo detection: if the item was recently pushed to GCal by the app, skip re-importing
     // the same change back. The 5-second window catches the typical push→webhook roundtrip.
     if (existing?.lastPushedToGCalTs && isOwnEcho(existing.lastPushedToGCalTs, event.updated)) {
+        console.log(`[debug-gcal-sync][server] upsertCalendarItem skipped — own echo | eventId=${event.id}`);
         return;
     }
 
@@ -1236,8 +1241,14 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
     // Structural fields still use the simple timestamp guard.
     const structurallyNewer = event.updated > existing.updatedTs;
     if (!structurallyNewer && !notesUpdate) {
+        console.log(
+            `[debug-gcal-sync][server] updateExistingCalendarItem skipped — not newer | eventId=${event.id} eventUpdated=${event.updated} existingUpdatedTs=${existing.updatedTs} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate}`,
+        );
         return;
     }
+    console.log(
+        `[debug-gcal-sync][server] updateExistingCalendarItem applying | eventId=${event.id} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate}`,
+    );
 
     // Sync layer owns the "✓ " done marker on GCal — strip it on inbound only when this item is
     // already done locally. For an open item, a user-typed "✓ " in GCal must be preserved verbatim.
@@ -1512,6 +1523,7 @@ calendarRoutes.post('/webhooks/google', async (c) => {
 
     const config = await calendarSyncConfigsDAO.findByWebhookChannelId(channelId);
     if (!config || config.webhookResourceId !== resourceId) {
+        console.warn(`[debug-gcal-sync][server] webhook rejected — unknown channel | channelId=${channelId} resourceId=${resourceId} configFound=${!!config}`);
         return c.text('Unknown channel', 404);
     }
 

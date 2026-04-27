@@ -19,22 +19,28 @@ export function openSseConnection(onUpdate: OnUpdateCallback, localDeviceId?: st
     eventSource.onmessage = (event) => {
         try {
             const data = JSON.parse(event.data as string) as { type?: string; sourceDeviceId?: string };
-            console.log('[sse] received update event', data);
+            console.log('[debug-gcal-sync][client] sse onmessage', data);
             if (data.type !== 'update') {
                 return;
             }
             // Skip events that originated from this device's own push
             if (localDeviceId && data.sourceDeviceId === localDeviceId) {
-                console.log('[sse] ignoring own echo');
+                console.log('[debug-gcal-sync][client] sse ignoring own echo', { localDeviceId, sourceDeviceId: data.sourceDeviceId });
                 return;
             }
+            console.log('[debug-gcal-sync][client] sse calling onUpdate');
             onUpdate();
-        } catch {
-            // Malformed event — ignore; EventSource will stay open
+        } catch (err) {
+            console.warn('[debug-gcal-sync][client] sse malformed event', err, event.data);
         }
     };
 
-    // EventSource reconnects automatically on error; no manual retry needed
+    eventSource.onopen = () => {
+        console.log('[debug-gcal-sync][client] sse connection open');
+    };
+    eventSource.onerror = (err) => {
+        console.warn('[debug-gcal-sync][client] sse connection error (EventSource will auto-reconnect)', err, 'readyState=', eventSource?.readyState);
+    };
 }
 
 export function closeSseConnection(): void {

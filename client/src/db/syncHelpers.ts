@@ -247,6 +247,11 @@ async function doPull(db: IDBPDatabase<MyDB>): Promise<void> {
     const since = await getLastSyncedTs(db);
     const { ops, serverTs } = await fetchSyncOps(since, deviceId);
 
+    console.log(
+        `[debug-gcal-sync][client] doPull | since=${since ?? 'epoch'} serverTs=${serverTs} opCount=${ops.length}`,
+        ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}@${(op.snapshot as { updatedTs?: string } | null)?.updatedTs ?? 'n/a'}`),
+    );
+
     for (const op of ops) {
         await applyServerOp(db, op);
     }
@@ -306,5 +311,12 @@ async function applyEntityOp(op: ServerOp, handlers: EntityApplyHandlers): Promi
     const existing = await handlers.getExisting(op.entityId);
     if (!existing || existing.updatedTs <= incoming.updatedTs) {
         await handlers.put(incoming);
+        console.log(
+            `[debug-gcal-sync][client] applyEntityOp put | type=${op.entityType} id=${op.entityId} existingTs=${existing?.updatedTs ?? 'none'} incomingTs=${incoming.updatedTs}`,
+        );
+    } else {
+        console.log(
+            `[debug-gcal-sync][client] applyEntityOp skipped (LWW) | type=${op.entityType} id=${op.entityId} existingTs=${existing.updatedTs} incomingTs=${incoming.updatedTs}`,
+        );
     }
 }
