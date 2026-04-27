@@ -1782,36 +1782,40 @@ describe('POST /calendar/webhooks/google', () => {
         expect(config!.syncToken).toBe('tok-wh');
     });
 
-    it('deduplicates rapid-fire notifications for the same channel', async () => {
+    it('coalesces concurrent notifications into one in-flight sync plus one queued re-run', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
-        // Use a unique channel ID to avoid interference from prior tests' dedup entries.
-        await calendarSyncConfigsDAO.upsertWebhookFields('sync-config-1', 'ch-dedup', 'res-dedup', dayjs().add(7, 'day').toISOString());
+        await calendarSyncConfigsDAO.upsertWebhookFields('sync-config-1', 'ch-coalesce', 'res-coalesce', dayjs().add(7, 'day').toISOString());
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
-        const listEventsSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-dd' });
+        // Make listEventsFull slow enough that the second webhook arrives while the first sync is still running.
+        const listEventsSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockImplementation(async () => {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            return { events: [], nextSyncToken: 'tok-coalesce' };
+        });
 
         const makeWebhookRequest = () =>
             app.fetch(
                 new Request('http://localhost:4000/calendar/webhooks/google', {
                     method: 'POST',
-                    headers: { 'x-goog-channel-id': 'ch-dedup', 'x-goog-resource-id': 'res-dedup', 'x-goog-resource-state': 'exists' },
+                    headers: { 'x-goog-channel-id': 'ch-coalesce', 'x-goog-resource-id': 'res-coalesce', 'x-goog-resource-state': 'exists' },
                 }),
             );
 
-        // Send sequentially so the first request records the channel ID in the dedup map
-        // before the second request checks it (parallel sends race past the async DB lookup).
+        // Three rapid-fire deliveries: the first starts a sync, the next two coalesce into one queued re-run.
         const res1 = await makeWebhookRequest();
         const res2 = await makeWebhookRequest();
+        const res3 = await makeWebhookRequest();
         expect(res1.status).toBe(200);
         expect(res2.status).toBe(200);
+        expect(res3.status).toBe(200);
 
-        // Give the fire-and-forget sync a moment to complete.
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        // Wait long enough for both the in-flight sync and the queued re-run to complete (50ms each + buffer).
+        await new Promise((resolve) => setTimeout(resolve, 300));
 
-        // Only one sync should have run — the second notification was deduped.
-        expect(listEventsSpy).toHaveBeenCalledTimes(1);
+        // Two syncs total: the immediate one and one coalesced re-run covering deliveries 2 and 3.
+        expect(listEventsSpy).toHaveBeenCalledTimes(2);
     });
 });
 

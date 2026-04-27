@@ -1479,30 +1479,33 @@ export { buildProvider, renewWebhookIfExpired };
 
 // ── Webhook receiver ─────────────────────────────────────────────────────────
 
-// In-memory dedup: Google often fires multiple notifications for the same change in rapid succession.
-// Track recently-processed channel IDs to avoid redundant syncs within a short window.
-// Uses raw epoch-ms (Date.now) instead of dayjs because this is a hot path comparing
-// monotonic timestamps — dayjs object allocation would add unnecessary overhead.
-const recentWebhookChannels = new Map<string, number>();
-const WEBHOOK_DEDUP_TTL_MS = 10_000;
+// Coalesce concurrent webhook deliveries per channel. Google can fire multiple notifications
+// for back-to-back edits, and Cloud Run can deliver them faster than syncSingleCalendar finishes.
+// State per channel: 'idle' = no sync in flight, 'running' = a sync is running, 'queued' =
+// a sync is running and another delivery arrived (the running one will re-run when it finishes).
+type WebhookState = 'running' | 'queued';
+const channelStates = new Map<string, WebhookState>();
 
-/** Removes entries older than the TTL to prevent unbounded memory growth. */
-function pruneStaleWebhookEntries(now: number): void {
-    for (const [key, ts] of recentWebhookChannels) {
-        if (now - ts > WEBHOOK_DEDUP_TTL_MS) {
-            recentWebhookChannels.delete(key);
-        }
+/** Returns true if a sync should start now. Returns false if one is already running (which marks 'queued' so it re-runs after). */
+function tryStartWebhookSync(channelId: string): boolean {
+    const state = channelStates.get(channelId);
+    if (state === 'running' || state === 'queued') {
+        channelStates.set(channelId, 'queued');
+        return false;
     }
+    channelStates.set(channelId, 'running');
+    return true;
 }
 
-/** Returns true if this channel was already seen within the dedup window. Records the arrival for future checks. */
-function checkAndRecordWebhook(channelId: string): boolean {
-    const now = Date.now();
-    const lastSeen = recentWebhookChannels.get(channelId);
-    const isDuplicate = Boolean(lastSeen && now - lastSeen < WEBHOOK_DEDUP_TTL_MS);
-    recentWebhookChannels.set(channelId, now);
-    pruneStaleWebhookEntries(now);
-    return isDuplicate;
+/** Called when a sync finishes. Returns true if another run is queued. */
+function finishWebhookSync(channelId: string): boolean {
+    const wasQueued = channelStates.get(channelId) === 'queued';
+    if (wasQueued) {
+        channelStates.set(channelId, 'running');
+    } else {
+        channelStates.delete(channelId);
+    }
+    return wasQueued;
 }
 
 // No authenticateRequest — Google sends these webhooks directly.
@@ -1534,18 +1537,30 @@ calendarRoutes.post('/webhooks/google', async (c) => {
         `[gcal-webhook] received | channelId=${channelId} resourceId=${resourceId} state=${resourceState} configId=${config._id} calendarId=${config.calendarId}`,
     );
 
-    const isDuplicate = checkAndRecordWebhook(channelId);
-    if (isDuplicate) {
-        console.log(`[gcal-webhook] duplicate — skipping sync | channelId=${channelId}`);
+    const shouldStart = tryStartWebhookSync(channelId);
+    if (!shouldStart) {
+        console.log(`[gcal-webhook] coalesced — sync already running, queued re-run | channelId=${channelId}`);
     } else {
         // Fire-and-forget: run the sync in the background so we don't block the webhook response.
-        runWebhookSync(config).catch((err) => {
+        runWebhookSyncLoop(config, channelId).catch((err) => {
             console.error(`[calendar-webhook] sync failed for config ${config._id}:`, err);
         });
     }
 
     return response;
 });
+
+/** Runs runWebhookSync, then re-runs while another delivery has been queued during the current run. */
+async function runWebhookSyncLoop(config: CalendarSyncConfigInterface, channelId: string): Promise<void> {
+    while (true) {
+        await runWebhookSync(config);
+        const hasQueuedRerun = finishWebhookSync(channelId);
+        if (!hasQueuedRerun) {
+            return;
+        }
+        console.log(`[gcal-webhook] running coalesced re-sync | channelId=${channelId}`);
+    }
+}
 
 /** Runs an incremental sync for a single calendar config, triggered by a webhook notification. */
 async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void> {
