@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { emptyCalendar, emptyNextAction, emptyWaitingFor } from '../components/clarify/types';
 import {
     applyCalendarForm,
+    applyCalendarPatch,
     isSaveDisabled,
     mergeFormsIntoItem,
     normalizeTitleAndNotes,
@@ -95,6 +96,16 @@ describe('isSaveDisabled', () => {
         expect(isSaveDisabled('ok', 'done', emptyCalendar, emptyWaitingFor)).toBe(false);
         expect(isSaveDisabled('ok', 'trash', emptyCalendar, emptyWaitingFor)).toBe(false);
     });
+
+    it('disables save when the calendar end time is before the start time on the same date', () => {
+        const cal = { date: '2026-05-04', startTime: '14:00', endTime: '13:00', calendarSyncConfigId: '' };
+        expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(true);
+    });
+
+    it('enables save when start and end times match (zero-duration is permitted)', () => {
+        const cal = { date: '2026-05-04', startTime: '14:00', endTime: '14:00', calendarSyncConfigId: '' };
+        expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(false);
+    });
 });
 
 describe('normalizeTitleAndNotes', () => {
@@ -172,5 +183,49 @@ describe('mergeFormsIntoItem', () => {
         );
         // Any date/time change proves the calendar branch ran.
         expect(updated.timeStart).not.toBe(BASE_ITEM.timeStart);
+    });
+});
+
+describe('applyCalendarPatch', () => {
+    const FORM = { date: '2026-05-04', startTime: '14:00', endTime: '15:00', calendarSyncConfigId: '' };
+
+    it('shifts endTime to preserve duration when startTime changes', () => {
+        const next = applyCalendarPatch(FORM, { startTime: '15:30' });
+        expect(next.startTime).toBe('15:30');
+        expect(next.endTime).toBe('16:30');
+    });
+
+    it('preserves duration when start is dragged past the prior end', () => {
+        const next = applyCalendarPatch(FORM, { startTime: '16:00' });
+        expect(next.startTime).toBe('16:00');
+        expect(next.endTime).toBe('17:00');
+    });
+
+    it('leaves endTime untouched when only endTime is edited (explicit duration change)', () => {
+        const next = applyCalendarPatch(FORM, { endTime: '16:00' });
+        expect(next.startTime).toBe('14:00');
+        expect(next.endTime).toBe('16:00');
+    });
+
+    it('leaves endTime untouched when only date is edited (single-date form shifts both endpoints)', () => {
+        const next = applyCalendarPatch(FORM, { date: '2026-05-05' });
+        expect(next.endTime).toBe('15:00');
+    });
+
+    it('does not auto-shift end past midnight (form cannot represent multi-day events)', () => {
+        const next = applyCalendarPatch(FORM, { startTime: '23:30' });
+        // End is left at the prior value rather than wrapping to 00:30 next day, which would
+        // produce timeEnd < timeStart at save time.
+        expect(next.endTime).toBe('15:00');
+    });
+
+    it('skips duration math when prior endTime is missing', () => {
+        const next = applyCalendarPatch({ ...FORM, endTime: '' }, { startTime: '15:00' });
+        expect(next.endTime).toBe('');
+    });
+
+    it('passes through changes to calendarSyncConfigId', () => {
+        const next = applyCalendarPatch(FORM, { calendarSyncConfigId: 'cfg-1' });
+        expect(next).toEqual({ ...FORM, calendarSyncConfigId: 'cfg-1' });
     });
 });
