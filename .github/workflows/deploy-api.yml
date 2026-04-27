@@ -76,9 +76,14 @@ jobs:
                   CALENDAR_WEBHOOK_URL: "${{ vars.CALENDAR_WEBHOOK_URL }}"
                   CALENDAR_ENCRYPTION_KEY: "${{ secrets.CALENDAR_ENCRYPTION_KEY }}"
                   EOF
+                  # SSE connection registry is in-process — multi-instance fanout would lose
+                  # webhook-triggered notifications when the webhook lands on an instance that
+                  # doesn't hold the user's SSE controller. Revisit when sseConnections.ts moves
+                  # to Redis pub/sub.
                   gcloud run deploy $SERVICE \
                     --image=$IMAGE \
                     --region=${{ env.REGION }} \
                     --platform=managed \
                     --allow-unauthenticated \
+                    --max-instances=1 \
                     --env-vars-file=env.yaml
