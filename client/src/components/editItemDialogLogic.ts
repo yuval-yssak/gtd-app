@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import type { CalendarOption } from '../hooks/useCalendarOptions';
 import type { EnergyLevel, StoredItem } from '../types/MyDB';
 import type { CalendarFormState, NextActionFormState, WaitingForFormState } from './clarify/types';
@@ -37,6 +38,11 @@ export function isSaveDisabled(title: string, status: EditableStatus, cal: Calen
     if (status === 'calendar' && !cal.date) {
         return true;
     }
+    // Zero-padded HH:mm strings (from <input type="time">) compare lexicographically the same as
+    // numerically, so a string compare is sufficient to detect end-before-start on the same date.
+    if (status === 'calendar' && cal.startTime && cal.endTime && cal.endTime < cal.startTime) {
+        return true;
+    }
     if (status === 'waitingFor' && !wf.waitingForPersonId) {
         return true;
     }
@@ -73,6 +79,38 @@ export function applyNextActionForm(item: StoredItem, na: NextActionFormState): 
         ...(na.expectedBy ? { expectedBy: na.expectedBy } : {}),
         ...(na.ignoreBefore ? { ignoreBefore: na.ignoreBefore } : {}),
     };
+}
+
+/**
+ * Returns the new HH:mm `endTime` that preserves the duration `prevEnd - prevStart` after the start
+ * moves to `nextStart`. Returns null when the inputs are unparseable, the prior duration is
+ * negative, or the shifted end would wrap past midnight (the form is single-date).
+ */
+function shiftEndKeepingDuration(prevStart: string, prevEnd: string, nextStart: string): string | null {
+    const start = dayjs(`2000-01-01T${prevStart}`);
+    const end = dayjs(`2000-01-01T${prevEnd}`);
+    const next = dayjs(`2000-01-01T${nextStart}`);
+    const durationMinutes = end.diff(start, 'minute');
+    if (durationMinutes < 0 || !next.isValid()) {
+        return null;
+    }
+    const shifted = next.add(durationMinutes, 'minute');
+    return shifted.isSame(next, 'day') ? shifted.format('HH:mm') : null;
+}
+
+/**
+ * Applies a partial calendar-form edit while preserving the existing duration when the user moves
+ * the start time. Editing `endTime` directly is the explicit "change the duration" gesture, so end
+ * is left untouched in that case. Same-day events only — the form has a single `date` field, so
+ * date changes shift both endpoints together and need no special handling.
+ */
+export function applyCalendarPatch(prev: CalendarFormState, patch: Partial<CalendarFormState>): CalendarFormState {
+    const next = { ...prev, ...patch };
+    if (patch.startTime === undefined || patch.startTime === prev.startTime || !prev.startTime || !prev.endTime) {
+        return next;
+    }
+    const shiftedEnd = shiftEndKeepingDuration(prev.startTime, prev.endTime, patch.startTime);
+    return shiftedEnd ? { ...next, endTime: shiftedEnd } : next;
 }
 
 /**

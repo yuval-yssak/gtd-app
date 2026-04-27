@@ -49,6 +49,7 @@ import {
 import { WaitingForFields } from './clarify/WaitingForFields';
 import styles from './EditItemDialog.module.css';
 import {
+    applyCalendarPatch,
     type EditableStatus,
     isSaveDisabled,
     mergeFormsIntoItem,
@@ -279,7 +280,11 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                 {status === 'calendar' && (
                     <>
                         <Divider />
-                        <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} calendarOptions={calendarOptions} />
+                        <CalendarFields
+                            value={calForm}
+                            onChange={(patch) => setCalForm((f) => applyCalendarPatch(f, patch))}
+                            calendarOptions={calendarOptions}
+                        />
                     </>
                 )}
 
