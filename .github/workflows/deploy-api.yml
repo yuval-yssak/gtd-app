@@ -73,6 +73,8 @@ jobs:
                   VAPID_PRIVATE_KEY: "${{ secrets.VAPID_PRIVATE_KEY }}"
                   VAPID_PUBLIC_KEY: "${{ vars.VAPID_PUBLIC_KEY }}"
                   VAPID_SUBJECT: "${{ vars.VAPID_SUBJECT }}"
+                  CALENDAR_WEBHOOK_URL: "${{ vars.CALENDAR_WEBHOOK_URL }}"
+                  CALENDAR_ENCRYPTION_KEY: "${{ secrets.CALENDAR_ENCRYPTION_KEY }}"
                   EOF
                   gcloud run deploy $SERVICE \
                     --image=$IMAGE \
