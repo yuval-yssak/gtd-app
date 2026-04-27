@@ -521,11 +521,15 @@ describe('calendar routine — clarifyToTrash', () => {
         });
         await generateCalendarItemsToHorizon(db, USER_ID, routine);
 
+        // Pick the first future item — `clarifyToTrash` only records a 'skipped' exception when
+        // trashed before the occurrence's start, so picking today's already-past instance would
+        // skip the exception path entirely. Items use local-time `timeStart` (no Z), so compare via dayjs.
+        const now = dayjs();
         const firstItem = (await db.getAllFromIndex('items', 'userId', USER_ID))
-            .filter((i) => i.routineId === routine._id && i.status === 'calendar')
+            .filter((i) => i.routineId === routine._id && i.status === 'calendar' && i.timeStart !== undefined && now.isBefore(dayjs(i.timeStart)))
             .sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''))[0];
         if (!firstItem) {
-            throw new Error('Expected at least one calendar item from the initial horizon pass');
+            throw new Error('Expected at least one future calendar item from the initial horizon pass');
         }
         const disposedDate = (firstItem.timeStart ?? '').slice(0, 10);
 
