@@ -200,6 +200,8 @@ export const devLoginRoutes = new Hono()
             db.collection('workContexts').deleteMany({}),
             db.collection('deviceUsers').deleteMany({}),
             db.collection('pushSubscriptions').deleteMany({}),
+            db.collection('calendarIntegrations').deleteMany({}),
+            db.collection('calendarSyncConfigs').deleteMany({}),
         ]);
         return c.json({ ok: true });
     })
@@ -228,4 +230,72 @@ export const devLoginRoutes = new Hono()
         // `as never` on _id matches the pattern in pushSubscriptionsDAO — driver widens _id to ObjectId.
         await db.collection('pushSubscriptions').deleteOne({ _id: deviceId } as never);
         return c.json({ ok: true });
+    })
+
+    // POST /dev/calendar/seed-integration — encrypted-token variant. Step 2 e2e specs hit
+    // GET /calendar/integrations (which decrypts tokens), so the seed must round-trip through
+    // calendarIntegrationsDAO.upsertEncrypted. `calendars` is optional: omit it to test the
+    // "no calendar selected" Settings state, pass an array to test disconnect with linked items.
+    .post('/calendar/seed-integration', async (c) => {
+        // Lazy-import the DAO to avoid loading the encryption module unless this dev path is hit.
+        const { default: calendarIntegrationsDAO } = await import('../dataAccess/calendarIntegrationsDAO.js');
+        const { default: calendarSyncConfigsDAO } = await import('../dataAccess/calendarSyncConfigsDAO.js');
+        const body = await c.req.json<{
+            userId: string;
+            integrationId?: string;
+            calendars?: Array<{ configId?: string; calendarId: string; displayName?: string; isDefault?: boolean }>;
+        }>();
+        if (!body.userId) {
+            return c.json({ error: 'userId required' }, 400);
+        }
+        const integrationId = body.integrationId ?? generateId(32);
+        const now = dayjs().toISOString();
+        await calendarIntegrationsDAO.upsertEncrypted({
+            _id: integrationId,
+            user: body.userId,
+            provider: 'google',
+            accessToken: 'dev-at-plaintext',
+            refreshToken: 'dev-rt-plaintext',
+            tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+            createdTs: now,
+            updatedTs: now,
+        });
+        const configs = (body.calendars ?? []).map((calendar) => ({
+            _id: calendar.configId ?? generateId(32),
+            integrationId,
+            user: body.userId,
+            calendarId: calendar.calendarId,
+            ...(calendar.displayName ? { displayName: calendar.displayName } : {}),
+            isDefault: calendar.isDefault ?? false,
+            enabled: true,
+            createdTs: now,
+            updatedTs: now,
+        }));
+        for (const config of configs) {
+            await calendarSyncConfigsDAO.insertOne(config);
+        }
+        return c.json({ ok: true, integrationId, configIds: configs.map((cfg) => cfg._id) });
+    })
+
+    // GET /dev/calendar/simulate-mismatch — drives the OAuth callback's mismatch redirect
+    // server-side without orchestrating the real Google OAuth flow (which can't be driven in
+    // headless Chromium). Mirrors the production code path: revokes nothing (no real tokens
+    // to revoke) and redirects to /settings?calendarConnectError=mismatch. GET (not POST) so
+    // a Playwright `page.goto(...)` works as a top-level navigation.
+    .get('/calendar/simulate-mismatch', (c) => {
+        const clientUrl = process.env.CLIENT_URL ?? 'http://localhost:4173';
+        return c.redirect(`${clientUrl}/settings?calendarConnectError=mismatch`);
+    })
+
+    // GET /dev/calendar/integrations?userId=... — read calendarIntegrations rows for a user
+    // bypassing the auth middleware. Used by e2e tests to assert disconnect actually removed
+    // the row, without forging a session cookie.
+    .get('/calendar/integrations', async (c) => {
+        const userId = c.req.query('userId');
+        if (!userId) {
+            return c.json({ error: 'userId query param required' }, 400);
+        }
+        // Typed shape so we can read `user` with dot notation under noPropertyAccessFromIndexSignature.
+        const rows = await db.collection<{ _id: string; user: string }>('calendarIntegrations').find({ user: userId }).toArray();
+        return c.json({ rows: rows.map((r) => ({ _id: r._id, user: r.user })) });
     });
