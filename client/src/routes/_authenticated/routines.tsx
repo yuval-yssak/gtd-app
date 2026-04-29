@@ -20,6 +20,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
+import { AccountChip } from '../../components/AccountChip';
 import { RoutineDialog } from '../../components/routines/RoutineDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
@@ -139,6 +140,7 @@ function RoutinesPage() {
                                                 color={routine.routineType === 'calendar' ? 'info' : 'default'}
                                             />
                                             <Chip label={routine.active ? 'Active' : 'Paused'} size="small" color={routine.active ? 'success' : 'default'} />
+                                            <AccountChip userId={routine.userId} />
                                         </Box>
                                     }
                                     secondary={routineLabel(routine)}

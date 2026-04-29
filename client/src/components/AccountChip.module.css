@@ -1,0 +1,17 @@
+/* AccountChip — coloured pill rendered next to entities in the unified view to surface
+   the owning account at a glance. The background colour is set inline (per account, picked
+   from accountColors.ts) since the palette is dynamic; everything else lives here so we
+   don't sprinkle inline styles on the chip itself. */
+
+.chip {
+    /* Matches MUI's default chip height to align with surrounding chips inside title rows. */
+    height: 22px;
+    /* White text reads against every palette colour; nudge the size down slightly so the
+       chip isn't visually heavier than the title it tags. */
+    color: #ffffff;
+    font-size: 0.7rem;
+    font-weight: 500;
+    /* Cap label width so a long email doesn't push the title off the row; ellipsis is
+       handled by MUI's chip label slot — this constrains the parent. */
+    max-width: 14rem;
+}

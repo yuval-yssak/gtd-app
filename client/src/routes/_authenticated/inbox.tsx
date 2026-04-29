@@ -34,6 +34,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { AccountChip } from '../../components/AccountChip';
 import { ClarifyDialog } from '../../components/ClarifyDialog';
 import { CalendarFields } from '../../components/clarify/CalendarFields';
 import { NextActionFields } from '../../components/clarify/NextActionFields';
@@ -141,6 +142,7 @@ function InboxSwipeItem({ item, routineTitle, onTap, onSwipeNextAction, onSwipeT
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                             <span>{item.title}</span>
                             {item.routineId && <RoutineIndicator routineId={item.routineId} routineTitle={routineTitle} />}
+                            <AccountChip userId={item.userId} />
                         </Box>
                     }
                     secondary={dayjs(item.createdTs).fromNow()}
@@ -565,6 +567,7 @@ function InboxPage() {
                                                         routineTitle={routines.find((r) => r._id === item.routineId)?.title}
                                                     />
                                                 )}
+                                                <AccountChip userId={item.userId} />
                                             </Box>
                                         }
                                         secondary={dayjs(item.createdTs).fromNow()}

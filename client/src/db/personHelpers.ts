@@ -5,6 +5,12 @@ export async function getPeopleByUser(db: IDBPDatabase<MyDB>, userId: string): P
     return db.getAllFromIndex('people', 'userId', userId);
 }
 
+/** Reads people across multiple user IDs and flattens the result. See itemHelpers.getItemsAcrossUsers for rationale. */
+export async function getPeopleAcrossUsers(db: IDBPDatabase<MyDB>, userIds: string[]): Promise<StoredPerson[]> {
+    const perUser = await Promise.all(userIds.map((uid) => db.getAllFromIndex('people', 'userId', uid)));
+    return perUser.flat();
+}
+
 export async function putPerson(db: IDBPDatabase<MyDB>, person: StoredPerson): Promise<void> {
     await db.put('people', person);
 }

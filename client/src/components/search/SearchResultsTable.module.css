@@ -14,6 +14,12 @@
 
 .titleCell {
     font-weight: 500;
+    /* Inline flex so the AccountChip sits beside the title text when present without
+       breaking the table cell's vertical alignment. Falls back to plain text when no chip
+       renders (single-account users). */
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 .checkbox {

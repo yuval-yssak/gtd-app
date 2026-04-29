@@ -1,6 +1,6 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { deleteWorkContextById, getWorkContextsByUser, putWorkContext } from '../db/workContextHelpers';
+import { deleteWorkContextById, getWorkContextsAcrossUsers, getWorkContextsByUser, putWorkContext } from '../db/workContextHelpers';
 import type { MyDB, StoredWorkContext } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -58,5 +58,21 @@ describe('deleteWorkContextById', () => {
         await deleteWorkContextById(db, 'wc1');
 
         expect(await db.get('workContexts', 'wc1')).toBeUndefined();
+    });
+});
+
+describe('getWorkContextsAcrossUsers', () => {
+    it('returns work contexts owned by any of the supplied user ids, flattened', async () => {
+        await db.put('workContexts', makeWorkContext('wc1', { userId: 'user-a' }));
+        await db.put('workContexts', makeWorkContext('wc2', { userId: 'user-b' }));
+        await db.put('workContexts', makeWorkContext('wc3', { userId: 'user-c' }));
+
+        const merged = await getWorkContextsAcrossUsers(db, ['user-a', 'user-b']);
+        expect(merged.map((wc) => wc._id).sort()).toEqual(['wc1', 'wc2']);
+    });
+
+    it('returns an empty array when no user ids are provided', async () => {
+        await db.put('workContexts', makeWorkContext('wc1'));
+        expect(await getWorkContextsAcrossUsers(db, [])).toEqual([]);
     });
 });

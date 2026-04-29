@@ -1,6 +1,15 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { clearAllAccounts, getActiveAccount, getAllAccounts, removeAccount, setActiveAccount, upsertAccount } from '../db/accountHelpers';
+import {
+    clearAllAccounts,
+    getActiveAccount,
+    getAllAccounts,
+    getLoggedInAccounts,
+    getLoggedInUserIds,
+    removeAccount,
+    setActiveAccount,
+    upsertAccount,
+} from '../db/accountHelpers';
 import type { MyDB, StoredAccount } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -130,5 +139,34 @@ describe('clearAllAccounts', () => {
 
         expect(await getAllAccounts(db)).toEqual([]);
         expect(await getActiveAccount(db)).toBeUndefined();
+    });
+});
+
+// ── getLoggedInAccounts / getLoggedInUserIds ─────────────────────────────────
+
+describe('getLoggedInAccounts', () => {
+    it('returns every account in oldest-added order', async () => {
+        await upsertAccount(makeAccount('u2', 2000), db);
+        await upsertAccount(makeAccount('u1', 1000), db);
+
+        const accounts = await getLoggedInAccounts(db);
+        expect(accounts.map((a) => a.id)).toEqual(['u1', 'u2']);
+    });
+
+    it('returns an empty array when no accounts exist', async () => {
+        expect(await getLoggedInAccounts(db)).toEqual([]);
+    });
+});
+
+describe('getLoggedInUserIds', () => {
+    it('returns every user id in oldest-added order', async () => {
+        await upsertAccount(makeAccount('u2', 2000), db);
+        await upsertAccount(makeAccount('u1', 1000), db);
+
+        expect(await getLoggedInUserIds(db)).toEqual(['u1', 'u2']);
+    });
+
+    it('returns an empty array when no accounts exist', async () => {
+        expect(await getLoggedInUserIds(db)).toEqual([]);
     });
 });

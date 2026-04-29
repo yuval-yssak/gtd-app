@@ -11,6 +11,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { groupByStatus, STATUS_LABELS } from '../../lib/itemSearch';
 import type { SearchView } from '../../lib/searchUrlParams';
 import type { StoredItem } from '../../types/MyDB';
+import { AccountChip } from '../AccountChip';
 import styles from './SearchResultsList.module.css';
 import { StatusChip } from './StatusChip';
 
@@ -33,6 +34,7 @@ function ResultRow({ item, showStatusChip }: { item: StoredItem; showStatusChip:
                             <Box className={styles.titleRow}>
                                 <span>{item.title}</span>
                                 {showStatusChip && <StatusChip status={item.status} />}
+                                <AccountChip userId={item.userId} />
                             </Box>
                         }
                         secondary={renderItemSecondary(item)}

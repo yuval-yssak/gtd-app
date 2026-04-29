@@ -16,6 +16,7 @@ import { useMemo, useState } from 'react';
 import { itemContextNames, itemPersonNames } from '../../lib/itemSearch';
 import { SEARCH_TABLE_COLUMNS, type SearchTableColumnId } from '../../lib/searchTableColumns';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
+import { AccountChip } from '../AccountChip';
 import styles from './SearchResultsTable.module.css';
 import { StatusChip } from './StatusChip';
 
@@ -78,7 +79,15 @@ function ResultCell({
     peopleById: Map<string, StoredPerson>;
     contextsById: Map<string, StoredWorkContext>;
 }) {
-    if (column === 'title') return <span className={styles.titleCell}>{item.title}</span>;
+    if (column === 'title') {
+        // AccountChip is hidden when only one account is logged in, so single-account users see no change.
+        return (
+            <span className={styles.titleCell}>
+                {item.title}
+                <AccountChip userId={item.userId} />
+            </span>
+        );
+    }
     if (column === 'status') return <StatusChip status={item.status} />;
     if (column === 'updated') return <span>{formatDate(item.updatedTs)}</span>;
     if (column === 'created') return <span>{formatDate(item.createdTs)}</span>;

@@ -496,22 +496,53 @@ function CalendarFields({
             </Stack>
             {/* Only show picker when user has 2+ calendars — with 0-1 there's nothing to choose. */}
             {showPicker && (
-                <TextField
-                    select
-                    label="Calendar"
-                    value={form.calendarSyncConfigId}
-                    onChange={(e) => onPatch({ calendarSyncConfigId: e.target.value })}
-                    size="small"
-                >
-                    <MenuItem value="">Default</MenuItem>
-                    {calendarOptions.map((opt) => (
-                        <MenuItem key={opt.configId} value={opt.configId}>
-                            {opt.displayName}
-                        </MenuItem>
-                    ))}
-                </TextField>
+                <CalendarPicker calendarOptions={calendarOptions} value={form.calendarSyncConfigId} onChange={(v) => onPatch({ calendarSyncConfigId: v })} />
             )}
         </Stack>
+    );
+}
+
+/** Groups calendar options by owning account so the picker shows one section per account. */
+function groupCalendarsByAccount(calendarOptions: CalendarOption[]): Map<string, CalendarOption[]> {
+    const groups = new Map<string, CalendarOption[]>();
+    for (const opt of calendarOptions) {
+        const list = groups.get(opt.accountEmail);
+        if (list) {
+            list.push(opt);
+            continue;
+        }
+        groups.set(opt.accountEmail, [opt]);
+    }
+    return groups;
+}
+
+/**
+ * Groups calendars by account email so picker rows are scoped by owner. Headers are skipped
+ * when only one account is connected because there's nothing to disambiguate.
+ */
+function CalendarPicker({ calendarOptions, value, onChange }: { calendarOptions: CalendarOption[]; value: string; onChange: (v: string) => void }) {
+    const grouped = groupCalendarsByAccount(calendarOptions);
+    const showAccountHeaders = grouped.size > 1;
+    return (
+        <TextField select label="Calendar" value={value} onChange={(e) => onChange(e.target.value)} size="small">
+            <MenuItem value="">Default</MenuItem>
+            {Array.from(grouped.entries()).flatMap(([email, opts]) => [
+                ...(showAccountHeaders
+                    ? [
+                          // aria-disabled prevents keyboard activation, pointer-events: none in CSS blocks clicks.
+                          // We avoid `disabled` because MUI dims it below readable contrast.
+                          <MenuItem key={`hdr-${email}`} aria-disabled value="" tabIndex={-1} className={styles.accountHeader}>
+                              {email}
+                          </MenuItem>,
+                      ]
+                    : []),
+                ...opts.map((opt) => (
+                    <MenuItem key={opt.configId} value={opt.configId}>
+                        {opt.displayName}
+                    </MenuItem>
+                )),
+            ])}
+        </TextField>
     );
 }
 

@@ -5,6 +5,12 @@ export async function getRoutinesByUser(db: IDBPDatabase<MyDB>, userId: string):
     return db.getAllFromIndex('routines', 'userId', userId);
 }
 
+/** Reads routines across multiple user IDs and flattens the result. See itemHelpers.getItemsAcrossUsers for rationale. */
+export async function getRoutinesAcrossUsers(db: IDBPDatabase<MyDB>, userIds: string[]): Promise<StoredRoutine[]> {
+    const perUser = await Promise.all(userIds.map((uid) => db.getAllFromIndex('routines', 'userId', uid)));
+    return perUser.flat();
+}
+
 export async function getRoutineById(db: IDBPDatabase<MyDB>, routineId: string): Promise<StoredRoutine | undefined> {
     return db.get('routines', routineId);
 }
