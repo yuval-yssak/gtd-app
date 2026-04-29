@@ -144,16 +144,24 @@ describe('syncAllLoggedInUsers', () => {
         expect(opsPerCall).toEqual([['a-item'], ['b-item']]);
     });
 
-    it('skips the pass for a user whose device session has expired', async () => {
+    it('skips the multi-session pivot when no entry exists but still runs the per-user pass', async () => {
+        // user-c is in IDB but Better Auth's multi-session list doesn't carry an entry for it
+        // (typical for a single-account dev login: only the primary session_token cookie is set).
+        // The pass should still flush + pull under the existing active session — without this
+        // behaviour, single-account users would never trigger an authenticated request and the
+        // server-side deviceUsers join wouldn't get populated.
         await seedAccount(db, 'user-a', 'a@example.com');
         await seedAccount(db, 'user-c', 'c@example.com'); // not in mocked sessions list
         await db.put('activeAccount', { userId: 'user-a' }, 'active');
 
         await syncAllLoggedInUsers(db);
 
-        // Only user-a should have triggered a setActive call (user-c had no live session).
         const tokens = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
         expect(tokens.filter((t) => t === 'token-a').length).toBeGreaterThanOrEqual(1);
         expect(tokens).not.toContain('token-c');
+
+        // Both users got a pull — user-c via the no-pivot fallback under whichever session is
+        // currently active (user-b at that point in the loop, but the assertion is on call count).
+        expect(vi.mocked(fetchSyncOps).mock.calls.length).toBeGreaterThanOrEqual(2);
     });
 });

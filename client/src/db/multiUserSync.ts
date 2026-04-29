@@ -60,19 +60,18 @@ async function loadDeviceSessionsByUserId(): Promise<Map<string, DeviceSession>>
 }
 
 /**
- * One pass of the orchestrator. Pivots the active session, then runs flush + pull + the
- * caller-supplied per-user hook (typically calendar-integration sync). Skips silently when
- * Better Auth has no session row for the user — that means the session expired between the
- * IDB account list and now, and the next mount cycle will reconcile.
+ * One pass of the orchestrator. Pivots the active session when a multi-session entry exists for
+ * this user, then runs flush + pull + the caller-supplied per-user hook. The pivot is skipped
+ * when no entry exists — single-account flows (and the dev-login bypass used by e2e tests) only
+ * carry the primary `better-auth.session_token` cookie, so `listDeviceSessions()` returns empty
+ * and no swap is needed: the existing active session already belongs to this user.
  */
 async function syncOneUser(db: IDBPDatabase<MyDB>, userId: string, sessions: Map<string, DeviceSession>, options: SyncAllLoggedInUsersOptions): Promise<void> {
     const session = sessions.get(userId);
-    if (!session) {
-        console.warn(`[multi-sync] no device session for userId=${userId}; skipping pass`);
-        return;
+    if (session) {
+        await authClient.multiSession.setActive({ sessionToken: session.sessionToken });
+        await setActiveAccount(userId, db);
     }
-    await authClient.multiSession.setActive({ sessionToken: session.sessionToken });
-    await setActiveAccount(userId, db);
     await flushSyncQueue(db, { userIdFilter: userId });
     await pullOrBootstrap(db);
     if (options.onUserSynced) {

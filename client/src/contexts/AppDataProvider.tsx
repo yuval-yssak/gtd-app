@@ -1,7 +1,8 @@
+import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
-import { getActiveAccount, getLoggedInAccounts } from '../db/accountHelpers';
+import { getActiveAccount, getLoggedInAccounts, upsertAccount } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
 import { getItemsAcrossUsers } from '../db/itemHelpers';
 import { syncAllLoggedInUsers } from '../db/multiUserSync';
@@ -13,7 +14,8 @@ import { closeSseConnections, openSseConnections } from '../db/sseClient';
 import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { getWorkContextsAcrossUsers } from '../db/workContextHelpers';
 import { useOnline } from '../hooks/useOnline';
-import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import { authClient } from '../lib/authClient';
+import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 
 export interface AppData {
     /** The active session's account — the default-owner for newly created entities. */
@@ -90,15 +92,47 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         setRoutines(await getRoutinesAcrossUsers(db, loggedInUserIdsRef.current));
     }, [db]);
 
+    // Mirrors Better Auth's device-multi-session list into the IDB `accounts` store before
+    // reading from it. Without this seed, only the active session's account row exists at boot
+    // (auth.callback.tsx hydrates one), so SSE would open only one channel on a multi-account
+    // device. Skips silently when offline — the IDB cache then represents the last known state.
+    const seedAccountsFromMultiSession = useCallback(async (): Promise<void> => {
+        try {
+            const { data: sessions } = await authClient.multiSession.listDeviceSessions();
+            if (!sessions) {
+                return;
+            }
+            await Promise.all(
+                sessions.map((s) =>
+                    upsertAccount(
+                        {
+                            id: s.user.id,
+                            email: s.user.email,
+                            name: s.user.name,
+                            image: s.user.image ?? null,
+                            // Better Auth's session type omits provider — cast to access the field persisted at sign-in.
+                            provider: (s.user as { provider?: OAuthProvider }).provider ?? 'google',
+                            addedAt: dayjs(s.session.createdAt).valueOf(),
+                        },
+                        db,
+                    ),
+                ),
+            );
+        } catch {
+            // Offline or server unreachable — fall through to load from IDB cache.
+        }
+    }, [db]);
+
     // Re-reads accounts from IDB so add/remove-account flows can drive a unified-view
     // refresh without driving a full sync round-trip. Returns the freshly read list so
     // consumers (e.g. boot/online effects) can chain entity refreshes off the new ids.
     const refreshAccounts = useCallback(async (): Promise<StoredAccount[]> => {
+        await seedAccountsFromMultiSession();
         const accounts = await getLoggedInAccounts(db);
         setLoggedInAccounts(accounts);
         loggedInUserIdsRef.current = accounts.map((a) => a.id);
         return accounts;
-    }, [db]);
+    }, [db, seedAccountsFromMultiSession]);
 
     // Guards against concurrent invocations from three independent paths: boot effect,
     // SSE callback, and SW push message. flushSyncQueue/pullFromServer have their own
