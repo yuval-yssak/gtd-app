@@ -24,6 +24,11 @@ let db: IDBPDatabase<MyDB>;
 
 beforeEach(async () => {
     db = await openTestDB();
+    // queueSyncOp now derives the op's owning userId from the active account when one isn't passed
+    // explicitly. Seeding an account + activeAccount keeps the existing coalescing tests focused on
+    // the merge logic instead of the ownership inference path (which has its own dedicated tests).
+    await db.put('accounts', { id: USER_ID, email: 'a@example.com', name: 'A', image: null, provider: 'google', addedAt: 1 });
+    await db.put('activeAccount', { userId: USER_ID }, 'active');
 });
 
 afterEach(async () => {

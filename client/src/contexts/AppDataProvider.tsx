@@ -4,12 +4,13 @@ import { listIntegrations, syncIntegration } from '../api/calendarApi';
 import { getActiveAccount, getLoggedInAccounts } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
 import { getItemsAcrossUsers } from '../db/itemHelpers';
+import { syncAllLoggedInUsers } from '../db/multiUserSync';
 import { getPeopleAcrossUsers } from '../db/personHelpers';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { getRoutinesAcrossUsers } from '../db/routineHelpers';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
-import { closeSseConnection, openSseConnection } from '../db/sseClient';
-import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
+import { closeSseConnections, openSseConnections } from '../db/sseClient';
+import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { getWorkContextsAcrossUsers } from '../db/workContextHelpers';
 import { useOnline } from '../hooks/useOnline';
 import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
@@ -46,21 +47,12 @@ export function useAppData(): AppData {
     return useContext(AppDataContext);
 }
 
-async function syncAllCalendarIntegrations(): Promise<void> {
+async function syncCalendarIntegrationsForActiveSession(): Promise<void> {
+    // Reads through the active Better Auth session — the caller (multiUserSync) pivots the active
+    // session per user, so this implicitly scopes the listed integrations to that user.
     const integrations = await listIntegrations().catch(() => []);
     // Fire-and-forget each integration — a single calendar failure shouldn't block the rest.
     await Promise.allSettled(integrations.map((i) => syncIntegration(i._id)));
-}
-
-async function syncFromServerWithBootstrapFallback(db: IDBPDatabase<MyDB>) {
-    // Bootstrap instead of pull when the device has never synced — historical ops may
-    // have been purged before this device registered, so pull-from-epoch would miss data.
-    const syncState = await db.get('deviceSyncState', 'local');
-    if (!syncState) {
-        await bootstrapFromServer(db);
-        return;
-    }
-    await pullFromServer(db);
 }
 
 export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDatabase<MyDB> }>) {
@@ -153,21 +145,13 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                 return;
             }
 
-            console.log('[debug-gcal-sync][client] syncAndRefresh: flush + first pull');
-            await flushSyncQueue(db);
-            await syncFromServerWithBootstrapFallback(db);
-            // Pull GCal exceptions for all linked integrations. Runs after the main sync so
-            // the routine snapshots are up-to-date before we apply exception patches.
-            console.log('[debug-gcal-sync][client] syncAndRefresh: syncAllCalendarIntegrations');
-            await syncAllCalendarIntegrations();
-            // Second pull: calendar sync creates server-side operations that weren't available
-            // during the first pull above — fetch them now so items appear in this cycle.
-            console.log('[debug-gcal-sync][client] syncAndRefresh: second pull');
-            await pullFromServer(db);
+            console.log('[debug-gcal-sync][client] syncAndRefresh: per-user flush + pull + calendar sync');
+            // Multi-account orchestrator: pivots active session per logged-in user, flushes that
+            // user's queue, pulls (or bootstraps), then runs that user's calendar integrations.
+            await syncAllLoggedInUsers(db, { onUserSynced: async () => syncCalendarIntegrationsForActiveSession() });
 
-            // After pulling, check for nextAction routines whose startDate has arrived and
-            // materialize their first item. Separate from the disposal-driven generator because
-            // the first item of a future-start routine has no prior item to trigger generation.
+            // After pulling for the active account, materialize startDate-due routines so the
+            // user sees today's first occurrence without waiting for the next disposal event.
             await materializePendingNextActionRoutines(db, acct.id);
 
             // Guard after the async work — component may have unmounted while awaiting network.
@@ -194,6 +178,25 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             }
         }
     }, [db, refreshAllEntitiesAcrossUsers]);
+
+    // SSE callback receives the userId of the channel that fired. We trigger a per-user pull only —
+    // re-syncing every account on every event would multiply network round-trips by N for no
+    // benefit, since changes on user A's channel can't affect user B's data.
+    const onSseUpdateForUser = useCallback(
+        (userId: string) => {
+            void (async () => {
+                try {
+                    await flushSyncQueue(db, { userIdFilter: userId });
+                    await pullFromServer(db);
+                    if (unmountedRef.current) return;
+                    await refreshAllEntitiesAcrossUsers();
+                } catch (err) {
+                    console.error('[sse] per-user sync failed:', err);
+                }
+            })();
+        },
+        [db, refreshAllEntitiesAcrossUsers],
+    );
 
     const initializeFromCache = useCallback(
         async (acct: StoredAccount, accounts: StoredAccount[]) => {
@@ -308,7 +311,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                         if (unmounted) {
                             return;
                         }
-                        openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)), deviceId);
+                        // Open one SSE channel per logged-in account. The orchestrator inside
+                        // loadAll has already populated `loggedInUserIdsRef`, so reading it here
+                        // covers every signed-in session — single-account devices still get one channel.
+                        openSseConnections(onSseUpdateForUser, deviceId, loggedInUserIdsRef.current);
                     });
                     registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
                 }
@@ -318,10 +324,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             unmounted = true; // guards the .then() callback below (local scope)
             unmountedRef.current = true; // guards setState inside syncAndRefresh / initializeFromCache (shared scope)
             isFirstOnlineRender.current = true; // reset so the isOnline effect skips correctly on Strict Mode remount
-            closeSseConnection();
+            closeSseConnections();
             navigator.serviceWorker?.removeEventListener('message', onSwMessage);
         };
-    }, [loadAll, onSwMessage, db, syncAndRefresh]);
+    }, [loadAll, onSwMessage, db, onSseUpdateForUser]);
 
     /**
      * Online/offline effect: when the device comes back online, flushes the sync queue,
@@ -342,19 +348,19 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             flushSyncQueue(db).catch((err) => console.error('[online] flush failed:', err));
             syncAndRefresh().catch((err) => console.error('[online] sync failed:', err));
             getOrCreateDeviceId(db).then((deviceId) => {
-                openSseConnection(() => syncAndRefresh().catch((err) => console.error('[sse] sync failed:', err)), deviceId);
+                openSseConnections(onSseUpdateForUser, deviceId, loggedInUserIdsRef.current);
             });
             // Re-register push in case the subscription was lost or expired while offline.
             registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
         } else {
-            // Close the SSE connection; it will be re-opened when online fires
-            closeSseConnection();
+            // Close every SSE channel; they'll be re-opened when online fires
+            closeSseConnections();
         }
         // No cleanup: the boot effect's cleanup already resets isFirstOnlineRender on unmount
         // for Strict Mode remounts. If this effect returned a cleanup that also reset it, the
         // offline→online transition would set the flag back to true (via the offline run's
         // cleanup), making the online run skip entirely — silently dropping the reconnect flush.
-    }, [isOnline, db, syncAndRefresh]);
+    }, [isOnline, db, syncAndRefresh, onSseUpdateForUser]);
 
     return <AppDataContext.Provider value={appData}>{children}</AppDataContext.Provider>;
 }

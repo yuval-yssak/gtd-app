@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // import of '#api/syncClient' is also intercepted — no resolve.conditions config needed.
 vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
 
+import dayjs from 'dayjs';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
-import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
+import { bootstrapFromServer, flushSyncQueue, pullFromServer, queueSyncOp, waitForPendingFlush } from '../db/syncHelpers';
 import type { MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 // StoredPerson/Routine/WorkContext are still needed for the db.put() casts below
 import { openTestDB } from './openTestDB';
@@ -62,6 +63,63 @@ afterEach(() => {
     db.close();
 });
 
+// ── queueSyncOp ────────────────────────────────────────────────────────────────
+
+describe('queueSyncOp — userId field', () => {
+    afterEach(async () => {
+        // queueSyncOp fire-and-forgets a flush — wait so the in-flight network mock settles
+        // before we close the DB and other tests start.
+        await waitForPendingFlush();
+    });
+
+    it('writes an explicitly-passed userId onto the queued row', async () => {
+        await queueSyncOp(db, {
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'q-item',
+            snapshot: makeItem('q-item'),
+            userId: 'explicit-user',
+        });
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        expect(ops[0]?.userId).toBe('explicit-user');
+    });
+
+    it('falls back to the active account when no userId is passed', async () => {
+        await db.put('accounts', {
+            id: 'fallback-user',
+            email: 'a@example.com',
+            name: 'A',
+            image: null,
+            provider: 'google',
+            addedAt: 1,
+        });
+        await db.put('activeAccount', { userId: 'fallback-user' }, 'active');
+
+        await queueSyncOp(db, {
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'q-item-2',
+            snapshot: makeItem('q-item-2'),
+        });
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops[0]?.userId).toBe('fallback-user');
+    });
+
+    it('throws when no userId is passed and no active account exists', async () => {
+        await expect(
+            queueSyncOp(db, {
+                opType: 'create',
+                entityType: 'item',
+                entityId: 'q-item-3',
+                snapshot: makeItem('q-item-3'),
+            }),
+        ).rejects.toThrow('no active account');
+    });
+});
+
 // ── flushSyncQueue ─────────────────────────────────────────────────────────────
 
 describe('flushSyncQueue', () => {
@@ -75,6 +133,7 @@ describe('flushSyncQueue', () => {
         // Seed IDB directly rather than via queueSyncOp: queueSyncOp fires an immediate
         // fire-and-forget flush that races with mock setup when Node's native fetch is present.
         await db.add('syncOperations', {
+            userId: USER_ID,
             opType: 'create',
             entityType: 'item',
             entityId: 'item-1',
@@ -90,11 +149,68 @@ describe('flushSyncQueue', () => {
         expect(ops).toHaveLength(0);
     });
 
+    it('userIdFilter sends only ops belonging to that user; other users stay queued', async () => {
+        await db.add('syncOperations', {
+            userId: 'user-a',
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'a-item',
+            queuedAt: dayjs().toISOString(),
+            snapshot: makeItem('a-item'),
+        });
+        await db.add('syncOperations', {
+            userId: 'user-b',
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'b-item',
+            queuedAt: dayjs().toISOString(),
+            snapshot: makeItem('b-item'),
+        });
+
+        await flushSyncQueue(db, { userIdFilter: 'user-a' });
+
+        // Only user-a's op was pushed.
+        const calls = vi.mocked(pushSyncOps).mock.calls;
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.[1].map((op) => op.entityId)).toEqual(['a-item']);
+
+        // user-b's op is still queued.
+        const remaining = await db.getAll('syncOperations');
+        expect(remaining.map((op) => op.entityId)).toEqual(['b-item']);
+    });
+
+    it('omitted userIdFilter flushes every queued op (back-compat)', async () => {
+        await db.add('syncOperations', {
+            userId: 'user-a',
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'a-item',
+            queuedAt: dayjs().toISOString(),
+            snapshot: makeItem('a-item'),
+        });
+        await db.add('syncOperations', {
+            userId: 'user-b',
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'b-item',
+            queuedAt: dayjs().toISOString(),
+            snapshot: makeItem('b-item'),
+        });
+
+        await flushSyncQueue(db);
+
+        // Both ops were pushed (in a single batch in this case).
+        const sent = vi.mocked(pushSyncOps).mock.calls.flatMap(([, ops]) => ops.map((op) => op.entityId));
+        expect(sent.sort()).toEqual(['a-item', 'b-item']);
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+    });
+
     it('preserves the queue when the server returns an error', async () => {
         // Seed IDB directly (avoid queueSyncOp's fire-and-forget racing with the mock rejection).
         // Configure rejection before seeding so the fire-and-forget also uses the rejecting mock.
         vi.mocked(pushSyncOps).mockRejectedValueOnce(new Error('POST /sync/push 500'));
         await db.add('syncOperations', {
+            userId: USER_ID,
             opType: 'create',
             entityType: 'item',
             entityId: 'item-2',

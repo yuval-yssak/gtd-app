@@ -30,7 +30,7 @@ export async function collectItem(db: IDBPDatabase<MyDB>, userId: string, { titl
     // exactOptionalPropertyTypes: omit key rather than assigning undefined
     const item = notes?.trim() ? { ...base, notes: notes.trim() } : base;
     await putItem(db, item);
-    await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item });
+    await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
     return item;
 }
 
@@ -60,7 +60,7 @@ export async function clarifyToNextAction(db: IDBPDatabase<MyDB>, item: StoredIt
     } = item;
     const updated: StoredItem = { ...rest, status: 'nextAction', ...meta, updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
 }
 
@@ -95,7 +95,7 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
         updatedTs: nowIso(),
     };
     await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
 }
 
@@ -123,7 +123,7 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
     } = item;
     const updated: StoredItem = { ...rest, status: 'waitingFor', ...meta, updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
 }
 
@@ -147,7 +147,7 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
     } = item;
     const updated: StoredItem = { ...rest, status: 'inbox', updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
 }
 
@@ -171,14 +171,14 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
     } = item;
     const updated: StoredItem = { ...rest, status: 'somedayMaybe', updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
 }
 
 export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     await maybeCreateNextRoutineItem(db, item, 'done');
     return updated;
 }
@@ -186,7 +186,7 @@ export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): P
 export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'trash', updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     await maybeCreateNextRoutineItem(db, item, 'trash');
     return updated;
 }
@@ -260,7 +260,7 @@ async function createNextCalendarRoutineItem(db: IDBPDatabase<MyDB>, item: Store
 export async function updateItem(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, updatedTs: nowIso() };
     await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
 }
 
@@ -299,6 +299,16 @@ export async function recordRoutineInstanceModification(
 // ── Delete ────────────────────────────────────────────────────────────────────
 
 export async function removeItem(db: IDBPDatabase<MyDB>, itemId: string): Promise<void> {
+    // Read the owning userId before delete so the queued op is scoped to the right account.
+    // Falling back to the active account (queueSyncOp's default) is wrong when the deleted
+    // item belongs to a non-active session (unified-view world).
+    const existing = await db.get('items', itemId);
     await deleteItemById(db, itemId);
-    await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: itemId, snapshot: null });
+    await queueSyncOp(db, {
+        opType: 'delete',
+        entityType: 'item',
+        entityId: itemId,
+        snapshot: null,
+        ...(existing?.userId ? { userId: existing.userId } : {}),
+    });
 }

@@ -13,6 +13,7 @@ import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
 import { notifyViaWebPush, vapidPublicKey } from '../lib/webPush.js';
+import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import type {
     EntitySnapshot,
@@ -130,6 +131,24 @@ async function purgeOldOperations(userId: string): Promise<void> {
     const minLastSyncedTs = deviceStates.map((d) => d.lastSyncedTs).reduce((min, ts) => (ts < min ? ts : min));
 
     await operationsDAO.deleteOlderThan(userId, minLastSyncedTs);
+}
+
+/**
+ * Validates that the SSE channel request targets a user with a session on this device.
+ * Returns the resolved channel userId, or `null` if the requested userId is not a member
+ * of the device's session set. Falls back to `activeUserId` when no `?userId` is provided
+ * so legacy single-channel callers keep working.
+ */
+async function resolveSseChannelUserId(headers: Headers, activeUserId: string, requestedUserId: string | undefined): Promise<string | null> {
+    if (!requestedUserId) {
+        return activeUserId;
+    }
+    if (requestedUserId === activeUserId) {
+        return activeUserId;
+    }
+    const sessions = await auth.api.listDeviceSessions({ headers });
+    const isMember = sessions.some((s) => s.user.id === requestedUserId);
+    return isMember ? requestedUserId : null;
 }
 
 export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -257,19 +276,29 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     // ---------------------------------------------------------------------------
     // GET /events  — SSE stream; server pushes { type: 'update', ts } on changes
     // ---------------------------------------------------------------------------
+    // When `?userId=<uuid>` is present, the client is asking for the channel of a
+    // specific session on this device (multi-account support — one EventSource per
+    // logged-in user). We validate the requested user is one of the device's sessions
+    // (via the multi-session cookie) and reject with 403 otherwise. Without the param,
+    // we fall back to the active session's user id for backward compatibility.
     .get('/events', authenticateRequest, async (c) => {
         const { user } = c.get('session');
+        const requestedUserId = c.req.query('userId');
+        const channelUserId = await resolveSseChannelUserId(c.req.raw.headers, user.id, requestedUserId);
+        if (!channelUserId) {
+            return c.json({ error: 'Forbidden: requested userId is not a session on this device' }, 403);
+        }
 
         const stream = new ReadableStream<Uint8Array>({
             start(controller) {
-                addSseConnection(user.id, controller);
+                addSseConnection(channelUserId, controller);
 
                 // Initial comment keeps the connection open and confirms it's alive to the client
                 controller.enqueue(new TextEncoder().encode(': connected\n\n'));
 
                 // Remove from map when client disconnects; EventSource will auto-reconnect
                 c.req.raw.signal.addEventListener('abort', () => {
-                    removeSseConnection(user.id, controller);
+                    removeSseConnection(channelUserId, controller);
                     try {
                         controller.close();
                     } catch {

@@ -15,20 +15,28 @@ export async function createRoutine(db: IDBPDatabase<MyDB>, fields: NewRoutineFi
     const now = nowIso();
     const routine: StoredRoutine = { ...fields, _id: crypto.randomUUID(), createdTs: now, updatedTs: now };
     await putRoutine(db, routine);
-    await queueSyncOp(db, { opType: 'create', entityType: 'routine', entityId: routine._id, snapshot: routine });
+    await queueSyncOp(db, { opType: 'create', entityType: 'routine', entityId: routine._id, snapshot: routine, userId: routine.userId });
     return routine;
 }
 
 export async function updateRoutine(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<StoredRoutine> {
     const updated: StoredRoutine = { ...routine, updatedTs: nowIso() };
     await putRoutine(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'routine', entityId: updated._id, snapshot: updated });
+    await queueSyncOp(db, { opType: 'update', entityType: 'routine', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
 }
 
 export async function removeRoutine(db: IDBPDatabase<MyDB>, routineId: string): Promise<void> {
+    // Read the owning userId before delete so the queued delete op is scoped to the right account.
+    const existing = await db.get('routines', routineId);
     await deleteRoutineById(db, routineId);
-    await queueSyncOp(db, { opType: 'delete', entityType: 'routine', entityId: routineId, snapshot: null });
+    await queueSyncOp(db, {
+        opType: 'delete',
+        entityType: 'routine',
+        entityId: routineId,
+        snapshot: null,
+        ...(existing?.userId ? { userId: existing.userId } : {}),
+    });
 }
 
 /**

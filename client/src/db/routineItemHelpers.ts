@@ -48,7 +48,7 @@ async function persistRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routin
     };
 
     await putItem(db, item);
-    await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item });
+    await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
 }
 
 /**
@@ -188,7 +188,7 @@ export async function createNextCalendarItem(db: IDBPDatabase<MyDB>, userId: str
     };
 
     await putItem(db, item);
-    await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item });
+    await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
 
     // Record the generated date so the next completion can advance from here without scanning items
     await updateRoutine(db, { ...routine, lastGeneratedDate: dayjs(nextDate).format('YYYY-MM-DD') });
@@ -307,7 +307,7 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
     for (const date of newDates) {
         const item = buildCalendarItem(userId, routine, date, now, calendarItemTemplate);
         await putItem(db, item);
-        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item });
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
     }
 
     const lastDate = validOccurrences.at(-1);
@@ -326,7 +326,7 @@ export async function deleteFutureItemsFromDate(db: IDBPDatabase<MyDB>, userId: 
 
     for (const item of futureItems) {
         await db.delete('items', item._id);
-        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId });
     }
 }
 
@@ -350,7 +350,7 @@ export async function trashFutureItemsFromDate(db: IDBPDatabase<MyDB>, userId: s
     for (const item of futureOpenItems) {
         const updated: StoredItem = { ...item, status: 'trash', updatedTs: now };
         await putItem(db, updated);
-        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     }
 }
 
@@ -390,7 +390,7 @@ export async function partitionPastItemsByDoneness(
 export async function hardDeletePastItems(db: IDBPDatabase<MyDB>, items: StoredItem[]): Promise<void> {
     for (const item of items) {
         await db.delete('items', item._id);
-        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId });
     }
 }
 
@@ -440,7 +440,7 @@ export async function deleteAndRegenerateFutureItems(db: IDBPDatabase<MyDB>, use
 
     for (const item of futureItems) {
         await db.delete('items', item._id);
-        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null, userId: item.userId });
     }
 
     await generateCalendarItemsToHorizon(db, userId, routine);
@@ -479,6 +479,6 @@ export async function regenerateFutureItemContent(db: IDBPDatabase<MyDB>, userId
             delete updated.notes;
         }
         await putItem(db, updated);
-        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated });
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     }
 }
