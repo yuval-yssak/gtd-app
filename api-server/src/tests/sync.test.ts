@@ -624,6 +624,59 @@ describe('Multi-device round-trip', () => {
     });
 });
 
+// ─── Auth middleware deviceUsers upsert ─────────────────────────────────────
+
+describe('Auth middleware deviceUsers upsert', () => {
+    // Direct fetch carrying both the session cookie and an explicit X-Device-Id header — the
+    // existing pull() helper sets only the query param, but the middleware reads the header.
+    async function pullWithDeviceHeader(sessionCookie: string, deviceId: string | undefined): Promise<Response> {
+        const headers: Record<string, string> = { Cookie: `${SESSION_COOKIE}=${sessionCookie}` };
+        if (deviceId !== undefined) {
+            headers['X-Device-Id'] = deviceId;
+        }
+        return app.fetch(new Request('http://localhost:4000/sync/pull', { headers }));
+    }
+
+    it('upserts a deviceUsers row when an authenticated request carries X-Device-Id', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        // The middleware's upsert is fire-and-forget — poll briefly because the request resolves
+        // before the upsert completes.
+        const res = await pullWithDeviceHeader(cookie, 'dev-via-header');
+        expect(res.status).toBe(200);
+        await tick();
+
+        const row = await db.collection('deviceUsers').findOne({ _id: `dev-via-header:${userId}` });
+        expect(row).not.toBeNull();
+        expect(row?.deviceId).toBe('dev-via-header');
+        expect(row?.userId).toBe(userId);
+    });
+
+    it('does not upsert a deviceUsers row when X-Device-Id is missing from the request', async () => {
+        const cookie = await loginAsAlice();
+
+        const res = await pullWithDeviceHeader(cookie, undefined);
+        expect(res.status).toBe(200);
+        await tick();
+
+        expect(await db.collection('deviceUsers').countDocuments()).toBe(0);
+    });
+
+    it('does not upsert a deviceUsers row for an unauthenticated request even when X-Device-Id is set', async () => {
+        // No session cookie — middleware rejects with 401 before reaching the upsert call.
+        const res = await app.fetch(
+            new Request('http://localhost:4000/sync/pull', {
+                headers: { 'X-Device-Id': 'dev-unauth' },
+            }),
+        );
+        expect(res.status).toBe(401);
+        await tick();
+
+        expect(await db.collection('deviceUsers').countDocuments()).toBe(0);
+    });
+});
+
 // ─── SSE endpoint smoke test ─────────────────────────────────────────────────
 
 describe('GET /sync/events', () => {

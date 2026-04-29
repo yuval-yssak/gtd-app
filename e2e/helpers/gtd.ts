@@ -243,4 +243,14 @@ export const gtd = {
                 workContexts: StoredWorkContext[];
             }>;
         }),
+
+    // ── Device + notifications introspection (Step 1 multi-account work) ─────
+    getDeviceId: (page: Page): Promise<string> =>
+        page.evaluate(() => (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd.getDeviceId()),
+
+    getActiveAccountId: (page: Page): Promise<string | null> =>
+        page.evaluate(() => (window as unknown as { __gtd: { getActiveAccountId(): Promise<string | null> } }).__gtd.getActiveAccountId()),
+
+    getPushStatus: (page: Page): Promise<{ registered: boolean }> =>
+        page.evaluate(() => (window as unknown as { __gtd: { getPushStatus(): Promise<{ registered: boolean }> } }).__gtd.getPushStatus()),
 };

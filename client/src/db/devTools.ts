@@ -3,8 +3,10 @@
 // Not included in production builds (main.tsx guards with import.meta.env.DEV).
 
 import type { IDBPDatabase } from 'idb';
+import { getPushStatus } from '../api/pushApi';
 import type { MyDB, StoredItem } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
+import { getOrCreateDeviceId } from './deviceId';
 import type { NextActionFilters } from './itemHelpers';
 import { getActiveNextActions, getItemsByUser, getOverdueItems, getUpcomingCalendarItems } from './itemHelpers';
 import type { CalendarMeta, NextActionMeta, WaitingForMeta } from './itemMutations';
@@ -111,6 +113,22 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
             await flushSyncQueue(db);
         },
         pull: () => forcePull(db),
+
+        // ── Device + notifications introspection (used by e2e specs) ─────────
+        // Stable per-device UUID — exposed so e2e tests can correlate the deviceUsers join
+        // collection on the server with the IDB-side state without poking IDB directly.
+        getDeviceId: () => getOrCreateDeviceId(db),
+        // Active account ID (Better Auth user id) — distinct from getActiveAccount which returns
+        // the full StoredAccount. Convenient when the test only needs the user id.
+        getActiveAccountId: async () => {
+            const account = await getActiveAccount(db);
+            return account?.id ?? null;
+        },
+        // Server-side push registration status for this device — wraps /push/status.
+        getPushStatus: async () => {
+            const deviceId = await getOrCreateDeviceId(db);
+            return getPushStatus(deviceId);
+        },
     };
 
     (window as unknown as { __gtd: typeof gtd }).__gtd = gtd;
