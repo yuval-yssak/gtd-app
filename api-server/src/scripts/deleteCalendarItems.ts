@@ -31,6 +31,7 @@ import dayjs from 'dayjs';
 import type { Db, Filter } from 'mongodb';
 import { type GoogleCalendarProvider, isGoogleApiError } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
+import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
@@ -156,17 +157,61 @@ async function resolveIntegrations(userId: string, opts: CliOptions): Promise<{ 
         return { integrations: match, allowList: match.map((i) => i._id) };
     }
     if (opts.calendarId) {
-        const match = all.filter((i) => i.calendarId === opts.calendarId);
+        // Check both the deprecated integration.calendarId field (legacy rows) and the per-config
+        // calendarId on CalendarSyncConfigInterface (Step 2+ rows). A match in either signals the
+        // integration owns the requested calendar.
+        const targetId = opts.calendarId;
+        const matchedIntegrationIds = await collectIntegrationIdsForCalendar(all, targetId);
+        const match = all.filter((i) => matchedIntegrationIds.has(i._id));
         if (!match.length) {
-            throw new Error(`No integration targeting calendarId ${opts.calendarId} for this user`);
+            throw new Error(`No integration targeting calendarId ${targetId} for this user`);
         }
         return { integrations: match, allowList: match.map((i) => i._id) };
     }
     return { integrations: all, allowList: null };
 }
 
-function buildProviderMap(integrations: CalendarIntegrationInterface[], userId: string): Map<string, ProviderEntry> {
-    return new Map(integrations.map((i) => [i._id, { provider: buildCalendarProvider(i, userId), calendarId: i.calendarId }]));
+/** Returns the set of integrationIds whose legacy field OR sync-config calendarId matches the target. */
+async function collectIntegrationIdsForCalendar(integrations: CalendarIntegrationInterface[], calendarId: string): Promise<Set<string>> {
+    const matchedIds = new Set<string>();
+    for (const integration of integrations) {
+        if (integration.calendarId === calendarId) {
+            matchedIds.add(integration._id);
+            continue;
+        }
+        const configs = await calendarSyncConfigsDAO.findByIntegration(integration._id);
+        if (configs.some((c) => c.calendarId === calendarId)) {
+            matchedIds.add(integration._id);
+        }
+    }
+    return matchedIds;
+}
+
+async function buildProviderMap(integrations: CalendarIntegrationInterface[], userId: string): Promise<Map<string, ProviderEntry>> {
+    const entries = await Promise.all(
+        integrations.map(async (i) => {
+            const calendarId = await resolveProviderCalendarId(i);
+            return [i._id, { provider: buildCalendarProvider(i, userId), calendarId }] as const;
+        }),
+    );
+    return new Map(entries);
+}
+
+/**
+ * Resolves the calendarId to use when calling GCal for an integration. Falls back to the default
+ * sync config when the deprecated `integration.calendarId` field is absent (Step-2+ rows).
+ * Throws if neither source has a value — the script can't operate on such an integration.
+ */
+async function resolveProviderCalendarId(integration: CalendarIntegrationInterface): Promise<string> {
+    if (integration.calendarId) {
+        return integration.calendarId;
+    }
+    const configs = await calendarSyncConfigsDAO.findByIntegration(integration._id);
+    const defaultConfig = configs.find((c) => c.isDefault) ?? configs[0];
+    if (!defaultConfig) {
+        throw new Error(`Integration ${integration._id} has no calendarId — connect a calendar in settings first`);
+    }
+    return defaultConfig.calendarId;
 }
 
 async function deleteGCalEventForItem(item: ItemInterface, providers: Map<string, ProviderEntry>): Promise<GCalResult> {
@@ -290,7 +335,7 @@ async function deleteCalendarItemsAndRoutinesFor(opts: CliOptions): Promise<void
     console.log(`Resolved user ${opts.email} -> ${userId}`);
 
     const { integrations, allowList } = await resolveIntegrations(userId, opts);
-    const providers = buildProviderMap(integrations, userId);
+    const providers = await buildProviderMap(integrations, userId);
 
     // findArray loads all matches into memory — fine for realistic GTD datasets (10²–10⁴ lifetime items per user).
     const [items, routines] = await Promise.all([

@@ -1,12 +1,16 @@
 import { API_SERVER } from '../constants/globals';
 import type { StoredCalendarSyncConfig } from '../types/MyDB';
 
-export type UnlinkAction = 'keepEvents' | 'deleteEvents' | 'deleteAll';
+export type UnlinkAction = 'keepLinkedEntities' | 'removeLinkedEntities';
 
 export interface CalendarIntegration {
     _id: string;
     provider: 'google';
-    calendarId: string;
+    /**
+     * @deprecated Per-calendar state lives on `CalendarSyncConfig`. Step-2+ integrations omit this
+     * field. Kept optional to read legacy rows.
+     */
+    calendarId?: string;
     lastSyncedTs?: string;
     createdTs: string;
     updatedTs: string;
@@ -87,7 +91,13 @@ export async function deleteSyncConfig(integrationId: string, configId: string):
     await apiFetch(`/calendar/integrations/${integrationId}/sync-configs/${configId}`, { method: 'DELETE' });
 }
 
-/** Navigates the browser to the Google Calendar OAuth flow on the API server. */
-export function initiateGoogleCalendarAuth(): void {
-    window.location.href = `${API_SERVER}/calendar/auth/google`;
+/**
+ * Navigates the browser to the Google Calendar OAuth flow on the API server.
+ * `loginHint` pre-selects an account in Google's picker; the server validates the eventually
+ * authorized email matches both the hint and the active session before storing tokens.
+ */
+export function initiateGoogleCalendarAuth(loginHint: string): void {
+    const url = new URL(`${API_SERVER}/calendar/auth/google`);
+    url.searchParams.set('login_hint', loginHint);
+    window.location.href = url.toString();
 }

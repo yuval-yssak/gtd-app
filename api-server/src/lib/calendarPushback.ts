@@ -439,9 +439,20 @@ async function pushRoutineResume(snapshot: RoutineInterface, userId: string, bui
  * occurrences of a routine that no longer exists. Each trashed item records its own
  * server-origin update op so other devices converge via the sync pull.
  * GCal deletion is best-effort — a provider failure does not block the item cascade.
+ *
+ * `skipGCalDelete: true` keeps the GCal master event intact — used by the integration-disconnect
+ * path, which trashes the routine app-side but leaves the user's Google Calendar untouched.
  */
-async function pushRoutineDeletion(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+export async function pushRoutineDeletion(
+    snapshot: RoutineInterface,
+    userId: string,
+    buildProvider: ProviderFactory,
+    options: { skipGCalDelete?: boolean } = {},
+): Promise<void> {
     await trashGeneratedCalendarItems(snapshot._id, userId);
+    if (options.skipGCalDelete) {
+        return;
+    }
     if (!snapshot.calendarEventId) {
         return;
     }

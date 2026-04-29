@@ -1,5 +1,6 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import dayjs from 'dayjs';
+import { google } from 'googleapis';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
@@ -184,9 +185,11 @@ describe('GET /calendar/auth/google/callback', () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
 
+        // login_hint is required so the callback's email-mismatch check has both a hint
+        // and session email to compare against the authorized userinfo email.
         const redirectRes = await authenticatedRequest(app, {
             method: 'GET',
-            path: '/calendar/auth/google',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
             sessionCookie,
         });
         const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
@@ -195,8 +198,15 @@ describe('GET /calendar/auth/google/callback', () => {
         vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
             tokens: { access_token: 'test-at', refresh_token: 'test-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
         } as never);
+        // The callback fetches userinfo to validate the authorized account email — mock it inline so
+        // the test doesn't depend on the global helpers' fetch mock.
+        mockUserInfoEmail('alice@example.com');
 
-        const res = await app.fetch(new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`));
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
         expect(res.status).toBe(302);
         expect(res.headers.get('location')).toContain('calendarConnected=1');
 
@@ -206,8 +216,55 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(integrations[0]!.provider).toBe('google');
         expect(integrations[0]!.accessToken).toBe('test-at');
         expect(integrations[0]!.refreshToken).toBe('test-rt');
+        // Step 2: integrations no longer carry a `calendarId` field — the user picks one or more
+        // calendars via ChooseCalendarDialog after the redirect, which creates CalendarSyncConfig rows.
+        expect(integrations[0]!.calendarId).toBeUndefined();
+    });
+
+    it('redirects to settings with calendarConnectError=mismatch when authorized email differs from login_hint', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'test-at', refresh_token: 'test-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        const revokeSpy = vi.spyOn(google.auth.OAuth2.prototype, 'revokeToken').mockResolvedValueOnce({} as never);
+        // User picked a different account in Google's picker — userinfo returns a non-matching email.
+        mockUserInfoEmail('imposter@example.com');
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnectError=mismatch');
+
+        // Tokens revoked, no integration row written.
+        expect(revokeSpy).toHaveBeenCalledWith('test-at');
+        const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        expect(integrations).toHaveLength(0);
     });
 });
+
+/**
+ * Mocks the Google userinfo endpoint to return a fixed email — used by callback tests.
+ * Patches the prototype of the oauth2.userinfo Resource so any new client instance built by the
+ * route under test inherits the mock without coupling to gaxios internals.
+ */
+function mockUserInfoEmail(email: string): void {
+    // biome-ignore lint/suspicious/noExplicitAny: googleapis Resource$Userinfo type is internal; cast to access prototype.
+    const userinfoCtor = Object.getPrototypeOf(google.oauth2('v2').userinfo) as { constructor: any };
+    vi.spyOn(userinfoCtor.constructor.prototype, 'get').mockResolvedValue({ data: { email } } as never);
+}
 
 // ─── GET /calendar/integrations ───────────────────────────────────────────
 
@@ -1489,35 +1546,38 @@ describe('DELETE /calendar/integrations/:id', () => {
         expect(res.status).toBe(404);
     });
 
-    it('removes the integration with action=keepEvents', async () => {
+    it('removes the integration with action=keepLinkedEntities and never touches GCal', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
-        vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
 
         const res = await authenticatedRequest(app, {
             method: 'DELETE',
-            path: '/calendar/integrations/int-1?action=keepEvents',
+            path: '/calendar/integrations/int-1?action=keepLinkedEntities',
             sessionCookie,
         });
         expect(res.status).toBe(200);
         expect(await calendarIntegrationsDAO.findByOwnerAndIdDecrypted('int-1', userId)).toBeNull();
+        expect(deleteSpy).not.toHaveBeenCalled();
     });
 
-    it('deletes GCal events but does not trash items with action=deleteEvents', async () => {
+    it('clears calendar links on items + routines with action=keepLinkedEntities, preserving status', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
-        const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-del', calendarIntegrationId: 'int-1' });
+        const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-keep', calendarIntegrationId: 'int-1' });
         await routinesDAO.insertOne(routine);
 
         const now = dayjs().toISOString();
         await itemsDAO.insertOne({
-            _id: 'item-del',
+            _id: 'item-keep',
             user: userId,
             status: 'calendar',
-            title: 'Standup Mon',
-            routineId: 'routine-1',
+            title: 'Coffee chat',
+            calendarEventId: 'gcal-evt-keep-item',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
             createdTs: now,
             updatedTs: now,
         });
@@ -1526,21 +1586,28 @@ describe('DELETE /calendar/integrations/:id', () => {
 
         const res = await authenticatedRequest(app, {
             method: 'DELETE',
-            path: '/calendar/integrations/int-1?action=deleteEvents',
+            path: '/calendar/integrations/int-1?action=keepLinkedEntities',
             sessionCookie,
         });
         expect(res.status).toBe(200);
 
-        // GCal event must be deleted.
-        expect(deleteSpy).toHaveBeenCalledWith('gcal-evt-del', 'primary');
-        // The item must NOT be trashed — only the GCal event is removed.
-        const item = await itemsDAO.findOne({ _id: 'item-del' });
+        // Item retains status but loses its calendar links.
+        const item = await itemsDAO.findOne({ _id: 'item-keep' });
         expect(item?.status).toBe('calendar');
-        // The integration must be removed.
-        expect(await calendarIntegrationsDAO.findByOwnerAndIdDecrypted('int-1', userId)).toBeNull();
+        expect(item?.calendarEventId).toBeUndefined();
+        expect(item?.calendarIntegrationId).toBeUndefined();
+        expect(item?.calendarSyncConfigId).toBeUndefined();
+
+        // Routine retains its row but loses its calendar links.
+        const updatedRoutine = await routinesDAO.findOne({ _id: 'routine-1' });
+        expect(updatedRoutine?.calendarEventId).toBeUndefined();
+        expect(updatedRoutine?.calendarIntegrationId).toBeUndefined();
+
+        // Disconnect must never call GCal.
+        expect(deleteSpy).not.toHaveBeenCalled();
     });
 
-    it('trashes linked items and records operations with action=deleteAll', async () => {
+    it('trashes items + routines with action=removeLinkedEntities and never touches GCal', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
@@ -1548,6 +1615,7 @@ describe('DELETE /calendar/integrations/:id', () => {
         await routinesDAO.insertOne(routine);
 
         const now = dayjs().toISOString();
+        // Routine-generated calendar item — cascaded by trashRoutinesForIntegration via pushRoutineDeletion.
         await itemsDAO.insertOne({
             _id: 'item-r1',
             user: userId,
@@ -1557,22 +1625,38 @@ describe('DELETE /calendar/integrations/:id', () => {
             createdTs: now,
             updatedTs: now,
         });
+        // Standalone calendar item linked to the integration directly — trashed by trashItemsForIntegration.
+        await itemsDAO.insertOne({
+            _id: 'item-direct',
+            user: userId,
+            status: 'calendar',
+            title: 'One-off meeting',
+            calendarEventId: 'gcal-evt-direct',
+            calendarIntegrationId: 'int-1',
+            createdTs: now,
+            updatedTs: now,
+        });
 
-        vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
 
         const res = await authenticatedRequest(app, {
             method: 'DELETE',
-            path: '/calendar/integrations/int-1?action=deleteAll',
+            path: '/calendar/integrations/int-1?action=removeLinkedEntities',
             sessionCookie,
         });
         expect(res.status).toBe(200);
 
-        const item = await itemsDAO.findOne({ _id: 'item-r1' });
-        expect(item?.status).toBe('trash');
+        const generatedItem = await itemsDAO.findOne({ _id: 'item-r1' });
+        expect(generatedItem?.status).toBe('trash');
+        const directItem = await itemsDAO.findOne({ _id: 'item-direct' });
+        expect(directItem?.status).toBe('trash');
 
         const ops = await operationsDAO.findArray({ entityId: 'item-r1' });
         expect(ops).toHaveLength(1);
         expect(ops[0]).toMatchObject({ opType: 'update', snapshot: expect.objectContaining({ status: 'trash' }) });
+
+        // Disconnect must never call GCal — even when the routine has a calendarEventId.
+        expect(deleteSpy).not.toHaveBeenCalled();
     });
 
     it('cascade-deletes sync configs when integration is removed', async () => {
@@ -1586,7 +1670,7 @@ describe('DELETE /calendar/integrations/:id', () => {
 
         const res = await authenticatedRequest(app, {
             method: 'DELETE',
-            path: '/calendar/integrations/int-1?action=keepEvents',
+            path: '/calendar/integrations/int-1?action=keepLinkedEntities',
             sessionCookie,
         });
         expect(res.status).toBe(200);

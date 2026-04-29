@@ -285,7 +285,12 @@ export interface CalendarIntegrationInterface {
     accessToken: string; // OAuth access token — must be encrypted at rest
     refreshToken: string; // OAuth refresh token — must be encrypted at rest
     tokenExpiry: string; // ISO datetime
-    calendarId: string; // Google Calendar ID to sync against
+    /**
+     * @deprecated Per-calendar sync state moved to `CalendarSyncConfigInterface` (one config row per
+     * synced calendar). New integrations no longer write this field; legacy rows keep it for lazy
+     * migration in `ensureSyncConfigExists`. New code paths must read sync configs instead.
+     */
+    calendarId?: string;
     lastSyncedTs?: string; // ISO datetime of last successful pull from this calendar
     createdTs: string;
     updatedTs: string;

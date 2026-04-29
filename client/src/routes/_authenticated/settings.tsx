@@ -26,10 +26,21 @@ import { getRoutineIndicatorStyle, type RoutineIndicatorStyle, setRoutineIndicat
 import type { MyDB } from '../../types/MyDB';
 import styles from './-settings.module.css';
 
+// Search schema is declared with both fields optional so navigate({ search: (prev) => ({ ...prev, calendarConnected: undefined }) })
+// can clear one param without being forced to also re-supply the sibling.
+interface SettingsSearch {
+    calendarConnected?: string | undefined;
+    /** Surfaces an inline error when the post-OAuth callback rejects a mismatched account. */
+    calendarConnectError?: string | undefined;
+}
+
 export const Route = createFileRoute('/_authenticated/settings')({
-    validateSearch: (search) => {
-        const { calendarConnected: raw } = search;
-        return { calendarConnected: typeof raw === 'string' ? raw : undefined };
+    validateSearch: (search): SettingsSearch => {
+        const { calendarConnected, calendarConnectError } = search;
+        return {
+            ...(typeof calendarConnected === 'string' ? { calendarConnected } : {}),
+            ...(typeof calendarConnectError === 'string' ? { calendarConnectError } : {}),
+        };
     },
     component: SettingsPage,
 });
@@ -70,7 +81,7 @@ function SettingsPage() {
                         automatically.
                     </Typography>
                     <Divider className={styles.divider} />
-                    <CalendarIntegrations />
+                    <CalendarIntegrations db={db} />
                 </Box>
             </Paper>
 

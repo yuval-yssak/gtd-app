@@ -5,6 +5,7 @@ import { SettingsRouterDecorator } from '../../../.storybook/RouterDecorator';
 import type { CalendarIntegration } from '../../api/calendarApi';
 import type { AppData } from '../../contexts/AppDataProvider';
 import { AppDataContext } from '../../contexts/AppDataProvider';
+import { mockDb } from '../../test-utils/storybookMocks';
 import { CalendarIntegrations } from './CalendarIntegrations';
 
 // ── Mock AppData context value ─────────────────────────────────────────────────
@@ -85,6 +86,7 @@ const meta = {
     parameters: { layout: 'padded' },
     tags: ['autodocs'],
     decorators: [MockAppDataDecorator, SettingsRouterDecorator],
+    args: { db: mockDb },
 } satisfies Meta<typeof CalendarIntegrations>;
 
 export default meta;
@@ -116,7 +118,6 @@ export const WithOneIntegration: Story = {
                 {
                     _id: 'int-1',
                     provider: 'google',
-                    calendarId: 'primary',
                     createdTs: '2024-01-15T10:00:00.000Z',
                     updatedTs: '2024-01-15T10:00:00.000Z',
                     lastSyncedTs: '2024-03-20T08:30:00.000Z',
