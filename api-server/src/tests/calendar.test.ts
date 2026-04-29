@@ -146,6 +146,41 @@ describe('GET /calendar/auth/google', () => {
         // state must be present and HMAC-signed (verified below in callback test)
         expect(new URL(location).searchParams.get('state')).toBeTruthy();
     });
+
+    it('forwards login_hint to Google and signs it into the state payload', async () => {
+        const sessionCookie = await loginAsAlice();
+        const res = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        expect(res.status).toBe(302);
+        const location = new URL(res.headers.get('location') ?? '');
+        // Google's authorization URL must carry the hint so the picker pre-selects the account.
+        expect(location.searchParams.get('login_hint')).toBe('alice@example.com');
+
+        // The HMAC-signed state envelope must round-trip the loginHint so the callback can
+        // compare it to the userinfo email and reject mismatches.
+        const stateParam = location.searchParams.get('state');
+        expect(stateParam).toBeTruthy();
+        const envelope = JSON.parse(Buffer.from(stateParam!, 'base64url').toString('utf8')) as { payload: string };
+        const inner = JSON.parse(envelope.payload) as { loginHint?: string };
+        expect(inner.loginHint).toBe('alice@example.com');
+    });
+
+    it('omits login_hint when the query value is empty', async () => {
+        const sessionCookie = await loginAsAlice();
+        const res = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=',
+            sessionCookie,
+        });
+        const location = new URL(res.headers.get('location') ?? '');
+        expect(location.searchParams.get('login_hint')).toBeNull();
+        const envelope = JSON.parse(Buffer.from(location.searchParams.get('state')!, 'base64url').toString('utf8')) as { payload: string };
+        const inner = JSON.parse(envelope.payload) as { loginHint?: string };
+        expect(inner.loginHint).toBeUndefined();
+    });
 });
 
 // ─── GET /calendar/auth/google/callback ───────────────────────────────────
@@ -252,6 +287,67 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(revokeSpy).toHaveBeenCalledWith('test-at');
         const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
         expect(integrations).toHaveLength(0);
+    });
+
+    it('redirects to mismatch when authorized email differs from the active session email', async () => {
+        // Active session is alice@example.com (from mockGoogleOAuth profile). We craft a state
+        // payload WITHOUT a loginHint so the callback's only corroboration source is the session
+        // email — and we make userinfo return a different email. The session-email check must reject.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google', // no login_hint
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'test-at', refresh_token: 'test-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        const revokeSpy = vi.spyOn(google.auth.OAuth2.prototype, 'revokeToken').mockResolvedValueOnce({} as never);
+        // userinfo email differs from the active session email.
+        mockUserInfoEmail('different-account@example.com');
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnectError=mismatch');
+        expect(revokeSpy).toHaveBeenCalledWith('test-at');
+        expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toHaveLength(0);
+    });
+
+    it('redirects to mismatch when there is no login hint AND no active session', async () => {
+        // No login_hint, no session cookie attached to the callback request → no corroboration
+        // source → reject. This guards against authorizing any account when both checks are absent.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'test-at', refresh_token: 'test-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        const revokeSpy = vi.spyOn(google.auth.OAuth2.prototype, 'revokeToken').mockResolvedValueOnce({} as never);
+        mockUserInfoEmail('alice@example.com');
+
+        // Note: NO Cookie header → /auth/get-session resolves null → sessionEmail is null.
+        const res = await app.fetch(new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`));
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnectError=mismatch');
+        expect(revokeSpy).toHaveBeenCalled();
+        expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toHaveLength(0);
     });
 });
 
@@ -1535,6 +1631,47 @@ describe('POST /calendar/integrations/:id/link-routine/:routineId', () => {
         expect(ops).toHaveLength(1);
         expect(ops[0]).toMatchObject({ opType: 'update', entityType: 'routine' });
     });
+
+    it("uses the integration's default sync config calendarId when integration.calendarId is undefined (Step 2+ rows)", async () => {
+        // New (Step 2+) integrations carry no calendarId field — only sync configs do. Verify the
+        // resolveDefaultCalendarId fallback picks the default config's calendarId.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const integration = makeIntegration(userId);
+        delete integration.calendarId; // simulate Step 2+ shape
+        await calendarIntegrationsDAO.insertEncrypted(integration);
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, 'int-1', { calendarId: 'work@group.calendar.google.com', isDefault: true }));
+        await routinesDAO.insertOne(makeRoutine(userId));
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-new-id');
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/integrations/int-1/link-routine/routine-1',
+            sessionCookie,
+        });
+        expect(res.status).toBe(201);
+        // The default sync config's calendarId must be passed to provider.createRecurringEvent.
+        expect(createSpy).toHaveBeenCalledWith(expect.anything(), 'work@group.calendar.google.com', expect.any(String));
+    });
+
+    it('returns 400 when integration has no calendarId AND no sync configs', async () => {
+        // Defensive: a Step 2+ integration where the user dismissed the post-OAuth dialog has no
+        // configs. resolveDefaultCalendarId returns null → route returns 400.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const integration = makeIntegration(userId);
+        delete integration.calendarId;
+        await calendarIntegrationsDAO.insertEncrypted(integration);
+        await routinesDAO.insertOne(makeRoutine(userId));
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/integrations/int-1/link-routine/routine-1',
+            sessionCookie,
+        });
+        expect(res.status).toBe(400);
+    });
 });
 
 // ─── DELETE /calendar/integrations/:id ────────────────────────────────────
@@ -1676,6 +1813,178 @@ describe('DELETE /calendar/integrations/:id', () => {
         expect(res.status).toBe(200);
 
         expect(await calendarSyncConfigsDAO.findByIntegration('int-1')).toHaveLength(0);
+    });
+
+    it('rejects unknown action values with 400', async () => {
+        // parseUnlinkAction must reject any value other than the two allowed verbs so a typo
+        // never silently falls through to the default branch.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=deleteEverything',
+            sessionCookie,
+        });
+        expect(res.status).toBe(400);
+        // Integration must remain so the user can retry with a valid action.
+        expect(await calendarIntegrationsDAO.findByOwnerAndIdDecrypted('int-1', userId)).not.toBeNull();
+    });
+
+    it('defaults to keepLinkedEntities when no action query param is provided', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-default',
+            user: userId,
+            status: 'calendar',
+            title: 'Coffee',
+            calendarEventId: 'gcal-evt-1',
+            calendarIntegrationId: 'int-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1', // no ?action=
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        // Default = keepLinkedEntities → status preserved, links cleared.
+        const item = await itemsDAO.findOne({ _id: 'item-default' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.calendarIntegrationId).toBeUndefined();
+    });
+
+    it('does not affect items whose calendarIntegrationId points elsewhere', async () => {
+        // The (user, provider) unique index allows only one google integration per user, so we
+        // simulate "another integration" with a phantom id on the items themselves. unlinkItems'
+        // filter `calendarIntegrationId === <this>` must skip the phantom rows.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-int-1',
+            user: userId,
+            status: 'calendar',
+            title: 'In int-1',
+            calendarEventId: 'gcal-1',
+            calendarIntegrationId: 'int-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+        await itemsDAO.insertOne({
+            _id: 'item-other',
+            user: userId,
+            status: 'calendar',
+            title: 'In other integration',
+            calendarEventId: 'gcal-other',
+            calendarIntegrationId: 'int-other-phantom',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=keepLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const itemInt1 = await itemsDAO.findOne({ _id: 'item-int-1' });
+        const itemOther = await itemsDAO.findOne({ _id: 'item-other' });
+        // int-1's link cleared; the other-integration item's link preserved verbatim.
+        expect(itemInt1?.calendarIntegrationId).toBeUndefined();
+        expect(itemOther?.calendarIntegrationId).toBe('int-other-phantom');
+        expect(itemOther?.calendarEventId).toBe('gcal-other');
+    });
+
+    it('records an op for every unlinked item with cleared link fields in the snapshot', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-op',
+            user: userId,
+            status: 'calendar',
+            title: 'Track me',
+            calendarEventId: 'gcal-op',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-X',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=keepLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const ops = await operationsDAO.findArray({ entityId: 'item-op' });
+        expect(ops).toHaveLength(1);
+        expect(ops[0]).toMatchObject({ opType: 'update', entityType: 'item' });
+        const snapshot = ops[0]!.snapshot as ItemInterface;
+        expect(snapshot.calendarEventId).toBeUndefined();
+        expect(snapshot.calendarIntegrationId).toBeUndefined();
+        expect(snapshot.calendarSyncConfigId).toBeUndefined();
+        // Status untouched in keepLinkedEntities.
+        expect(snapshot.status).toBe('calendar');
+    });
+
+    it('removeLinkedEntities cascades routine-generated items to trash without ever calling provider.deleteRecurringEvent', async () => {
+        // skipGCalDelete: pushRoutineDeletion must short-circuit so a fake-tokens integration
+        // never triggers a real GCal API call. Asserts the call count is zero — the strongest
+        // signal that disconnect can never reach Google.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        await routinesDAO.insertOne(makeRoutine(userId, { calendarEventId: 'gcal-master', calendarIntegrationId: 'int-1' }));
+
+        const now = dayjs().toISOString();
+        // Three generated items so the cascade path has real work to do.
+        for (let i = 0; i < 3; i++) {
+            await itemsDAO.insertOne({
+                _id: `item-gen-${i}`,
+                user: userId,
+                status: 'calendar',
+                title: `Standup #${i}`,
+                routineId: 'routine-1',
+                calendarEventId: `gcal-evt-${i}`,
+                calendarIntegrationId: 'int-1',
+                createdTs: now,
+                updatedTs: now,
+            });
+        }
+
+        const deleteRecurringSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteRecurringEvent').mockResolvedValue(undefined);
+        const deleteEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=removeLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        for (let i = 0; i < 3; i++) {
+            const it = await itemsDAO.findOne({ _id: `item-gen-${i}` });
+            expect(it?.status).toBe('trash');
+        }
+        const routine = await routinesDAO.findOne({ _id: 'routine-1' });
+        expect(routine?.active).toBe(false);
+
+        // Critical: GCal must not be touched even though the routine had a calendarEventId.
+        expect(deleteRecurringSpy).not.toHaveBeenCalled();
+        expect(deleteEventSpy).not.toHaveBeenCalled();
     });
 });
 
