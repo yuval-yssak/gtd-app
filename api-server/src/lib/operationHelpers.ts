@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import operationsDAO from '../dataAccess/operationsDAO.js';
-import type { ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
+import type { EntitySnapshot, OperationInterface } from '../types/entities.js';
 
 // Discriminated on opType: create/update require a full snapshot; delete carries null.
+// `entityType` widened to all four entity types so the reassign endpoint (which moves
+// people / workContexts as well as items / routines) can publish ops without a parallel helper.
 type RecordOperationInput =
-    | { entityType: 'item' | 'routine'; entityId: string; snapshot: ItemInterface | RoutineInterface; opType: 'create' | 'update'; now: string }
-    | { entityType: 'item' | 'routine'; entityId: string; snapshot: null; opType: 'delete'; now: string };
+    | { entityType: 'item' | 'routine' | 'person' | 'workContext'; entityId: string; snapshot: EntitySnapshot; opType: 'create' | 'update'; now: string }
+    | { entityType: 'item' | 'routine' | 'person' | 'workContext'; entityId: string; snapshot: null; opType: 'delete'; now: string };
 
 /** Records a server-originated operation so all devices learn about the change via sync pull. Returns the created operation. */
 export async function recordOperation(userId: string, op: RecordOperationInput): Promise<OperationInterface> {

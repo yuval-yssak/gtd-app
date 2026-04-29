@@ -11,6 +11,7 @@ import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
+import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
 import { notifyViaWebPush, vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
@@ -319,4 +320,53 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     })
 
     // GET /sync/config — exposes the VAPID public key so the client can subscribe without a secret
-    .get('/config', (c) => c.json({ vapidPublicKey }));
+    .get('/config', (c) => c.json({ vapidPublicKey }))
+
+    // ---------------------------------------------------------------------------
+    // POST /sync/reassign  — atomically move an entity from fromUserId to toUserId
+    // ---------------------------------------------------------------------------
+    // Both fromUserId and toUserId must be sessions on this device (we read the device-multi-session
+    // cookie so a single tab can drive cross-account moves). The handler validates membership before
+    // touching the DB so a forged userId in the body can't be used to delete another user's data.
+    // For calendar-linked items, the helper does the GCal create-on-target → delete-on-source dance
+    // and rolls back to a 502 with no DB writes if the create fails.
+    .post('/reassign', authenticateRequest, async (c) => {
+        const params = await c.req.json<ReassignParams>();
+        const guard = await validateReassignSessions(c.req.raw.headers, params);
+        if (!guard.ok) {
+            return c.json({ error: guard.error }, guard.status);
+        }
+        const result = await reassignEntity(params, buildCalendarProvider);
+        if (!result.ok) {
+            return c.json({ error: result.error }, result.status);
+        }
+        // Notify both source and target SSE channels so each device-side consumer can pull the
+        // delete and create ops respectively. Without these the user would have to wait for the
+        // next pull cycle to see the entity move across views.
+        const now = dayjs().toISOString();
+        notifyUserViaSse(params.fromUserId, { type: 'update', ts: now });
+        notifyUserViaSse(params.toUserId, { type: 'update', ts: now });
+        return c.json({ ok: true, ...(result.crossUserReferences ? { crossUserReferences: result.crossUserReferences } : {}) }, 200);
+    });
+
+type ReassignGuardResult = { ok: true } | { ok: false; status: 400 | 403; error: string };
+
+/**
+ * Validates the body and ensures both fromUserId and toUserId have a Better Auth session on this
+ * device. Reads `auth.api.listDeviceSessions` exactly like the SSE channel guard. Without this
+ * check, a logged-in attacker could forge `fromUserId` in the body to delete another user's data.
+ */
+async function validateReassignSessions(headers: Headers, params: ReassignParams): Promise<ReassignGuardResult> {
+    if (!params.entityType || !params.entityId || !params.fromUserId || !params.toUserId) {
+        return { ok: false, status: 400, error: 'entityType, entityId, fromUserId, toUserId are required' };
+    }
+    if (params.fromUserId === params.toUserId) {
+        return { ok: false, status: 400, error: 'fromUserId and toUserId must differ' };
+    }
+    const sessions = await auth.api.listDeviceSessions({ headers });
+    const sessionUserIds = new Set(sessions.map((s) => s.user.id));
+    if (!sessionUserIds.has(params.fromUserId) || !sessionUserIds.has(params.toUserId)) {
+        return { ok: false, status: 403, error: 'Forbidden: both fromUserId and toUserId must be sessions on this device' };
+    }
+    return { ok: true };
+}

@@ -287,6 +287,122 @@ export const devLoginRoutes = new Hono()
         return c.redirect(`${clientUrl}/settings?calendarConnectError=mismatch`);
     })
 
+    // GET /dev/reassign/find-entity?collection=items&entityId=... — read a single entity by _id
+    // for e2e assertions that need to verify server-side state without poking MongoDB directly.
+    .get('/reassign/find-entity', async (c) => {
+        const collection = c.req.query('collection');
+        const entityId = c.req.query('entityId');
+        if (!collection || !entityId) {
+            return c.json({ error: 'collection and entityId required' }, 400);
+        }
+        if (!['items', 'routines', 'people', 'workContexts'].includes(collection)) {
+            return c.json({ error: 'disallowed collection' }, 400);
+        }
+        const doc = await db.collection(collection).findOne({ _id: entityId } as never);
+        return c.json({ doc });
+    })
+
+    // POST /dev/reassign/seed-entity — direct MongoDB insert + op record so e2e devices that
+    // already bootstrapped past the entity's createdTs still pull it on the next /sync/pull.
+    // Without the op record, the device's incremental pull cursor would skip the seed entirely.
+    // Bypasses auth because dev routes are non-production-only.
+    .post('/reassign/seed-entity', async (c) => {
+        const { collection, doc } = await c.req.json<{ collection: string; doc: Record<string, unknown> & { _id: string; user: string } }>();
+        const collectionToEntityType: Record<string, 'item' | 'routine' | 'person' | 'workContext'> = {
+            items: 'item',
+            routines: 'routine',
+            people: 'person',
+            workContexts: 'workContext',
+        };
+        const entityType = collectionToEntityType[collection];
+        if (!entityType) {
+            return c.json({ error: `disallowed collection: ${collection}` }, 400);
+        }
+        await db.collection(collection).insertOne(doc as never);
+        // Record an op so the device's next pull surfaces the seeded entity.
+        const now = dayjs().toISOString();
+        await db.collection('operations').insertOne({
+            _id: generateId(32),
+            user: doc.user,
+            deviceId: 'dev-seed',
+            ts: now,
+            entityType,
+            entityId: doc._id,
+            opType: 'create',
+            snapshot: doc,
+        } as never);
+        return c.json({ ok: true });
+    })
+
+    // POST /dev/calendar/simulate-event-move — exercises the full /sync/reassign DB-side semantics
+    // without calling Google Calendar. Used by e2e specs that need a calendar-linked item to move
+    // across accounts (real GCal can't be driven from headless Chromium). Mirrors the production
+    // endpoint's payload shape: accepts the same body and runs the same `reassignEntity` helper,
+    // but stubs `buildCalendarProvider` so create/delete on the provider become no-ops.
+    .post('/calendar/simulate-event-move', async (c) => {
+        const { reassignEntity } = await import('../lib/reassignEntity.js');
+        const body = await c.req.json<{
+            entityType: 'item' | 'routine' | 'person' | 'workContext';
+            entityId: string;
+            fromUserId: string;
+            toUserId: string;
+            targetCalendar?: { integrationId: string; syncConfigId: string };
+            simulatedEventId?: string;
+        }>();
+        const fakeEventId = body.simulatedEventId ?? `sim-${generateId(16)}`;
+        // Stub provider mirrors only the methods reassignEntity actually invokes — createEvent
+        // returns the simulated event id and deleteEvent is a no-op. The unused interface methods
+        // throw so an unexpected call surfaces immediately rather than silently succeeding.
+        const stubProvider = {
+            createEvent: async () => fakeEventId,
+            deleteEvent: async () => {},
+            getCalendarTimeZone: async () => 'UTC',
+            // Methods that aren't expected to be called in this dev path — surface programming errors loudly.
+            updateEvent: () => {
+                throw new Error('stub: updateEvent not implemented');
+            },
+            updateRecurringInstance: () => {
+                throw new Error('stub: updateRecurringInstance not implemented');
+            },
+            cancelRecurringInstance: () => {
+                throw new Error('stub: cancelRecurringInstance not implemented');
+            },
+            createRecurringEvent: () => {
+                throw new Error('stub: createRecurringEvent not implemented');
+            },
+            updateRecurringEvent: () => {
+                throw new Error('stub: updateRecurringEvent not implemented');
+            },
+            deleteRecurringEvent: () => {
+                throw new Error('stub: deleteRecurringEvent not implemented');
+            },
+            capRecurringEvent: () => {
+                throw new Error('stub: capRecurringEvent not implemented');
+            },
+            listEventsIncremental: () => {
+                throw new Error('stub: listEventsIncremental not implemented');
+            },
+            listCalendars: () => {
+                throw new Error('stub: listCalendars not implemented');
+            },
+            renewWebhook: () => {
+                throw new Error('stub: renewWebhook not implemented');
+            },
+            stopWebhook: () => {
+                throw new Error('stub: stopWebhook not implemented');
+            },
+        };
+        // Cast through unknown is safe here — `reassignEntity` only calls the three methods stubbed
+        // above (createEvent / deleteEvent / getCalendarTimeZone) on this dev-only code path.
+        type ProviderFactoryType = Parameters<typeof reassignEntity>[1];
+        const factory: ProviderFactoryType = () => stubProvider as unknown as ReturnType<ProviderFactoryType>;
+        const result = await reassignEntity(body, factory);
+        if (!result.ok) {
+            return c.json({ error: result.error }, result.status);
+        }
+        return c.json({ ok: true, simulatedEventId: fakeEventId, ...(result.crossUserReferences ? { crossUserReferences: result.crossUserReferences } : {}) });
+    })
+
     // GET /dev/calendar/integrations?userId=... — read calendarIntegrations rows for a user
     // bypassing the auth middleware. Used by e2e tests to assert disconnect actually removed
     // the row, without forging a session cookie.
