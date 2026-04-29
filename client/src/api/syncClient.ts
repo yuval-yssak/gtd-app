@@ -29,24 +29,34 @@ export interface PullPayload {
 // All fetch() calls in the client must live here. Import via the '#api/syncClient'
 // alias — never via a relative path — so tests automatically get the mock companion.
 
+// Sent on every authenticated request so the auth middleware can keep `deviceUsers`
+// fresh — see api-server/src/auth/middleware.ts.
+const DEVICE_ID_HEADER = 'X-Device-Id';
+
 export async function pushSyncOps(deviceId: string, ops: SyncOperation[]): Promise<void> {
     const res = await fetch(`${API_SERVER}/sync/push`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', [DEVICE_ID_HEADER]: deviceId },
         body: JSON.stringify({ deviceId, ops }),
     });
     if (!res.ok) throw new Error(`POST /sync/push ${res.status}`);
 }
 
-export async function fetchBootstrap(): Promise<BootstrapPayload> {
-    const res = await fetch(`${API_SERVER}/sync/bootstrap`, { credentials: 'include' });
+export async function fetchBootstrap(deviceId: string): Promise<BootstrapPayload> {
+    const res = await fetch(`${API_SERVER}/sync/bootstrap`, {
+        credentials: 'include',
+        headers: { [DEVICE_ID_HEADER]: deviceId },
+    });
     if (!res.ok) throw new Error(`GET /sync/bootstrap ${res.status}`);
     return res.json() as Promise<BootstrapPayload>;
 }
 
 export async function fetchSyncOps(since: string, deviceId: string): Promise<PullPayload> {
-    const res = await fetch(`${API_SERVER}/sync/pull?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(deviceId)}`, { credentials: 'include' });
+    const res = await fetch(`${API_SERVER}/sync/pull?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(deviceId)}`, {
+        credentials: 'include',
+        headers: { [DEVICE_ID_HEADER]: deviceId },
+    });
     if (!res.ok) throw new Error(`GET /sync/pull ${res.status}`);
     return res.json() as Promise<PullPayload>;
 }
@@ -62,7 +72,7 @@ export async function registerPushEndpoint(deviceId: string, subscription: PushS
     await fetch(`${API_SERVER}/push/subscribe`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', [DEVICE_ID_HEADER]: deviceId },
         body: JSON.stringify({ deviceId, endpoint: subscription.endpoint, keys: subscription.keys }),
     });
 }

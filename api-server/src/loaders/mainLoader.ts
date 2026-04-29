@@ -4,6 +4,7 @@ import { mongoDBConfig } from '../config.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
+import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
@@ -37,6 +38,7 @@ async function loadDataAccess(customDBName?: string) {
         itemsDAO.init(dbClient, resolvedDBName),
         operationsDAO.init(dbClient, resolvedDBName),
         deviceSyncStateDAO.init(dbClient, resolvedDBName),
+        deviceUsersDAO.init(dbClient, resolvedDBName),
         pushSubscriptionsDAO.init(dbClient, resolvedDBName),
         routinesDAO.init(dbClient, resolvedDBName),
         peopleDAO.init(dbClient, resolvedDBName),

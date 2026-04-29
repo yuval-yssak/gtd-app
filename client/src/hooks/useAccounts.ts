@@ -1,7 +1,9 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useState } from 'react';
+import { signOutDevice } from '../api/pushApi';
 import { clearAllAccounts, getActiveAccount, getAllAccounts, removeAccount, setActiveAccount } from '../db/accountHelpers';
+import { getOrCreateDeviceId } from '../db/deviceId';
 import { authClient } from '../lib/authClient';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
 
@@ -116,6 +118,12 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
 
     const switchToNextAndRevoke = useCallback(
         async (next: StoredAccount, currentSessionToken: string | undefined, targetSessionToken: string) => {
+            // Drop the about-to-be-signed-out (deviceId, currentUserId) join row BEFORE switching
+            // active session — once we switch, the auth middleware can no longer identify
+            // "currentUser" by cookie alone. Order matters: signoutDevice authenticates via
+            // the still-active current session.
+            const deviceId = await getOrCreateDeviceId(db);
+            await signOutDevice(deviceId);
             // Switch first so we have an active session — multiSession.revoke validates
             // ownership via the device multi-session cookie (not userId), so it can revoke
             // the old session even though we're now authenticated as the next user.
@@ -158,6 +166,10 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
         const next = remaining[0];
 
         if (!next) {
+            // Drop the (deviceId, currentUserId) join row before authClient.signOut — the
+            // signoutDevice endpoint authenticates via the still-active current session.
+            const deviceId = await getOrCreateDeviceId(db);
+            await signOutDevice(deviceId);
             await authClient.signOut();
             window.location.href = '/login';
             return;
@@ -172,6 +184,11 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
     }, [db, revokeCurrentFromIDB, switchToNextAndRevoke, reauthAsNext]);
 
     const signOutAll = useCallback(async () => {
+        // Best-effort: drop the (deviceId, activeUserId) join row before Better Auth tears down
+        // every session on this device. Other accounts' join rows fall through to the
+        // 410-on-push and stale-device cleanup paths.
+        const deviceId = await getOrCreateDeviceId(db);
+        await signOutDevice(deviceId);
         await authClient.signOut();
         await clearAllAccounts(db);
         window.location.href = '/login';
