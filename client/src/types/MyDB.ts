@@ -152,6 +152,13 @@ export interface StoredDeviceSyncState {
 
 export interface SyncOperation {
     id?: number; // auto-increment — omitted before insertion
+    /**
+     * Owning user id (Better Auth UUID). Required so the multi-account flush can fan out per user
+     * — `flushSyncQueue({ userIdFilter })` keeps each per-account flush scoped to ops queued under
+     * that account's active session, avoiding cross-account leakage when the active session is
+     * pivoted between flushes by `syncAllLoggedInUsers`.
+     */
+    userId: string;
     entityType: EntityType;
     entityId: string;
     opType: OpType;

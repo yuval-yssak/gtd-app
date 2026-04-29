@@ -63,7 +63,7 @@ export async function splitRoutine(
         ...(editedFields.startDate ? { startDate: editedFields.startDate } : {}),
     };
     await putRoutine(db, tail);
-    await queueSyncOp(db, { opType: 'create', entityType: 'routine', entityId: tail._id, snapshot: tail });
+    await queueSyncOp(db, { opType: 'create', entityType: 'routine', entityId: tail._id, snapshot: tail, userId: tail.userId });
 
     // 4. Seed the tail's first item(s). Calendar tails generate up to the horizon; nextAction
     //    tails seed one pending occurrence (unless startDate is future — the boot-tick handles it).

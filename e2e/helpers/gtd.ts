@@ -255,6 +255,13 @@ export const gtd = {
         page.evaluate(() => (window as unknown as { __gtd: { getPushStatus(): Promise<{ registered: boolean }> } }).__gtd.getPushStatus()),
 
     /**
+     * Returns the userIds with an open SSE channel right now. The multi-account-sync spec asserts
+     * the device opens one channel per signed-in account.
+     */
+    sseChannelUserIds: (page: Page): Promise<string[]> =>
+        page.evaluate(() => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds()),
+
+    /**
      * Returns the multi-account calendar bundles — wraps `GET /calendar/all-sync-configs`.
      * Used by the unified-view spec to assert the server returns one bundle per signed-in account.
      */

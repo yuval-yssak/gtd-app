@@ -4,6 +4,7 @@ import type { ServerOp } from '#api/syncClient';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
+import { getActiveAccount } from './accountHelpers';
 import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
 import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
 import { deletePersonById, putPerson } from './personHelpers';
@@ -17,6 +18,12 @@ export interface SyncOpParams {
     // Snapshot of the entity at the moment of the change; null for deletes.
     // Stored at queue-time so flush can send it directly without re-reading IndexedDB.
     snapshot: StoredEntity | null;
+    /**
+     * Owning user id. Optional — defaults to the active account so existing call sites that
+     * always queue under the active session don't need to be updated. Pass explicitly when
+     * the entity belongs to a non-active session (e.g. the future reassign flow).
+     */
+    userId?: string;
 }
 
 function remapUser<T extends Record<string, unknown>>(doc: T & { user: string }) {
@@ -26,7 +33,7 @@ function remapUser<T extends Record<string, unknown>>(doc: T & { user: string })
 
 // Update the snapshot on the pending 'create' rather than adding a second op.
 // The single create will carry the latest state to the server.
-async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOperation[], op: SyncOpParams) {
+async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOperation[], op: SyncOpParams, userId: string) {
     // id is always present on records fetched from IDB; the type reflects pre-insert optionality
     const pendingCreates = existing.filter((q): q is SyncOperation & { id: number } => q.opType === 'create' && q.id !== undefined);
     // Invariant: at most one pending create per entity. Extra creates would be a queue
@@ -35,6 +42,7 @@ async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOpera
     const [queued] = pendingCreates;
     await db.delete('syncOperations', queued.id);
     await db.add('syncOperations', {
+        userId,
         opType: 'create',
         entityType: op.entityType,
         entityId: op.entityId,
@@ -62,11 +70,12 @@ function registerBackgroundSync(): void {
 
 export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Promise<void> {
     const { opType, entityType, entityId, snapshot } = op;
+    const userId = await resolveQueueUserId(db, op.userId);
     const existing = (await db.getAll('syncOperations')).filter((q) => q.entityId === entityId);
     const hasPendingCreate = existing.some((q) => q.opType === 'create');
 
     if (opType === 'update' && hasPendingCreate) {
-        await mergeUpdateIntoCreate(db, existing, op);
+        await mergeUpdateIntoCreate(db, existing, op, userId);
         return;
     }
 
@@ -78,13 +87,29 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
         }
     }
 
-    await db.add('syncOperations', { opType, entityType, entityId, queuedAt: dayjs().toISOString(), snapshot });
+    await db.add('syncOperations', { userId, opType, entityType, entityId, queuedAt: dayjs().toISOString(), snapshot });
 
     // Attempt an immediate flush. Safari and Firefox don't support the Background Sync API,
     // so without this the op would sit in IDB until the next mount or online event.
     // Fire-and-forget — errors are non-fatal; the online handler and mount effect will retry.
     void flushSyncQueue(db).catch((e) => console.warn('Failed to flush sync queue after adding op', e));
     registerBackgroundSync();
+}
+
+/**
+ * Resolves the userId to attach to a queued op. Caller-provided wins; otherwise we infer the
+ * active account. Throws if neither is available — that would mean we'd write an op with no
+ * owner, which the multi-account flush would silently drop.
+ */
+async function resolveQueueUserId(db: IDBPDatabase<MyDB>, explicitUserId: string | undefined): Promise<string> {
+    if (explicitUserId) {
+        return explicitUserId;
+    }
+    const active = await getActiveAccount(db);
+    if (!active) {
+        throw new Error('queueSyncOp: no active account and no explicit userId provided');
+    }
+    return active.id;
 }
 
 // Module-level guard so concurrent callers (queueSyncOp fire-and-forget, mount effect,
@@ -98,9 +123,18 @@ export function waitForPendingFlush(): Promise<void> {
     return flushInFlight ?? Promise.resolve();
 }
 
-export function flushSyncQueue(db: IDBPDatabase<MyDB>): Promise<void> {
+export interface FlushOptions {
+    /**
+     * When set, only ops with `op.userId === userIdFilter` are flushed in this pass. Used by the
+     * multi-account orchestrator to flush each user's queue under that user's active session,
+     * keeping cross-account auth boundaries strict. Omitting flushes everything (back-compat).
+     */
+    userIdFilter?: string;
+}
+
+export function flushSyncQueue(db: IDBPDatabase<MyDB>, options: FlushOptions = {}): Promise<void> {
     if (flushInFlight) return flushInFlight;
-    flushInFlight = doFlush(db).finally(() => {
+    flushInFlight = doFlush(db, options).finally(() => {
         flushInFlight = null;
     });
     return flushInFlight;
@@ -145,7 +179,7 @@ async function releaseFlushLock(db: IDBPDatabase<MyDB>): Promise<void> {
     await tx.done;
 }
 
-async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
+async function doFlush(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<void> {
     const lockResult = await acquireFlushLock(db);
     if (lockResult === 'heldByOther') {
         console.log('[sync-flush] skipping — another context holds the flush lock');
@@ -159,13 +193,13 @@ async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
         // a subsequent mutation added more ops. Without the loop, those late-arriving ops
         // stay in IDB because the in-flight flush already read its batch before they existed.
         while (true) {
-            const ops = await db.getAll('syncOperations');
+            const ops = await readQueuedOpsForFlush(db, options);
             if (!ops.length) {
                 return;
             }
 
             console.log(
-                `[sync-flush] pushing ${ops.length} ops to server`,
+                `[sync-flush] pushing ${ops.length} ops to server (filter=${options.userIdFilter ?? 'all'})`,
                 ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`),
             );
 
@@ -184,6 +218,19 @@ async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
     } finally {
         await releaseFlushLock(db).catch((e) => console.warn('[sync-flush] failed to release flush lock', e));
     }
+}
+
+/**
+ * Reads the queued ops that this flush pass should send. When `userIdFilter` is set we keep only
+ * the ops owned by that user; the multi-account orchestrator pivots `multiSession.setActive`
+ * between calls so the server always sees a session matching the ops it receives.
+ */
+async function readQueuedOpsForFlush(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<SyncOperation[]> {
+    const all = await db.getAll('syncOperations');
+    if (!options.userIdFilter) {
+        return all;
+    }
+    return all.filter((op) => op.userId === options.userIdFilter);
 }
 
 // bootstrapFromServer performs a full entity snapshot hydration for new devices.

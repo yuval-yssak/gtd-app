@@ -30,6 +30,7 @@ import { getRoutinesByUser } from './routineHelpers';
 import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
+import { getOpenSseUserIds } from './sseClient';
 import { flushSyncQueue, forcePull, waitForPendingFlush } from './syncHelpers';
 import { createWorkContext } from './workContextMutations';
 
@@ -133,6 +134,11 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // Multi-account aggregated calendar bundles — used by Step 3 e2e specs to assert
         // that the unified picker enumerates calendars across every signed-in account.
         getAllSyncConfigs: () => getAllSyncConfigs(),
+
+        // ── Multi-account sync introspection (Step 4) ──────────────────────────
+        // Returns the set of userIds with an open SSE channel right now. Used by the
+        // multi-account-sync e2e spec to assert the device opened one channel per account.
+        sseChannelUserIds: () => getOpenSseUserIds(),
     };
 
     (window as unknown as { __gtd: typeof gtd }).__gtd = gtd;
