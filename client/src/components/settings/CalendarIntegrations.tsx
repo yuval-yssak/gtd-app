@@ -14,6 +14,7 @@ import IconButton from '@mui/material/IconButton';
 import InputLabel from '@mui/material/InputLabel';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
+import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Radio from '@mui/material/Radio';
@@ -23,6 +24,7 @@ import Switch from '@mui/material/Switch';
 import Typography from '@mui/material/Typography';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
     type CalendarIntegration,
@@ -40,7 +42,10 @@ import {
     updateSyncConfig,
 } from '../../api/calendarApi';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useAccounts } from '../../hooks/useAccounts';
+import { authClient } from '../../lib/authClient';
 import { hasAtLeastOne } from '../../lib/typeUtils';
+import type { MyDB, StoredAccount } from '../../types/MyDB';
 
 /** Fetches the calendar list for an integration, with unmount-safe cancellation. */
 function useCalendarList(integrationId: string): { calendars: GoogleCalendar[]; isLoading: boolean; fetchError: string | null } {
@@ -68,15 +73,21 @@ function useCalendarList(integrationId: string): { calendars: GoogleCalendar[]; 
     return { calendars, isLoading, fetchError };
 }
 
-export function CalendarIntegrations() {
+interface CalendarIntegrationsProps {
+    db: IDBPDatabase<MyDB>;
+}
+
+export function CalendarIntegrations({ db }: CalendarIntegrationsProps) {
     const [integrations, setIntegrations] = useState<CalendarIntegration[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [chooseCalendarFor, setChooseCalendarFor] = useState<CalendarIntegration | null>(null);
+    const [isPickerOpen, setIsPickerOpen] = useState(false);
     const { syncAndRefresh } = useAppData();
     const navigate = useNavigate();
-    // calendarConnected is set by the OAuth callback redirect so we can auto-open the picker.
-    const { calendarConnected } = useSearch({ from: '/_authenticated/settings' });
+    // calendarConnected and calendarConnectError are set by the OAuth callback redirect; the first
+    // auto-opens the calendar picker, the second renders a mismatch error inline.
+    const { calendarConnected, calendarConnectError } = useSearch({ from: '/_authenticated/settings' });
     // isMountedRef guards setState calls in loadIntegrations against post-unmount updates.
     const isMountedRef = useRef(true);
 
@@ -119,10 +130,12 @@ export function CalendarIntegrations() {
                 return;
             }
             // Auto-open the calendar picker for the most recently connected integration and
-            // clear the query param so a reload doesn't reopen it.
+            // clear the query param so a reload doesn't reopen it. Use the functional form of
+            // `search` so we strip only this one param without clobbering siblings (e.g. an
+            // existing calendarConnectError that the user hasn't dismissed yet).
             const newest = loaded.reduce((a, b) => (a.createdTs > b.createdTs ? a : b));
             setChooseCalendarFor(newest);
-            navigate({ to: '/settings', search: { calendarConnected: undefined }, replace: true }).catch(() => {});
+            navigate({ to: '/settings', search: (prev) => ({ ...prev, calendarConnected: undefined }), replace: true }).catch(() => {});
         });
         return () => {
             cancelled = true;
@@ -130,6 +143,11 @@ export function CalendarIntegrations() {
             isMountedRef.current = false;
         };
     }, [calendarConnected, loadIntegrations, navigate]);
+
+    function dismissMismatchError() {
+        // Clear the query param via navigate(replace) so refreshing the page doesn't re-show the error.
+        navigate({ to: '/settings', search: (prev) => ({ ...prev, calendarConnectError: undefined }), replace: true }).catch(() => {});
+    }
 
     if (isLoading) {
         return <CircularProgress size={20} />;
@@ -145,17 +163,25 @@ export function CalendarIntegrations() {
 
     return (
         <Box>
+            {calendarConnectError === 'mismatch' && <ConnectMismatchError onDismiss={dismissMismatchError} />}
             {integrations.length === 0 && (
                 <Typography variant="body2" color="text.secondary" fontStyle="italic" mb={2}>
                     No calendars connected.
                 </Typography>
             )}
             {integrations.map((integration) => (
-                <IntegrationRow key={integration._id} integration={integration} onDisconnected={loadIntegrations} />
+                <IntegrationRow
+                    key={integration._id}
+                    integration={integration}
+                    onDisconnected={loadIntegrations}
+                    onChooseCalendar={() => setChooseCalendarFor(integration)}
+                />
             ))}
-            <Button variant="outlined" size="small" onClick={initiateGoogleCalendarAuth}>
+            <Button variant="outlined" size="small" onClick={() => setIsPickerOpen(true)}>
                 Connect Google Calendar
             </Button>
+
+            {isPickerOpen && <ConnectAccountPickerDialog db={db} onClose={() => setIsPickerOpen(false)} />}
 
             {chooseCalendarFor && (
                 <ChooseCalendarDialog
@@ -163,12 +189,122 @@ export function CalendarIntegrations() {
                     onClose={() => setChooseCalendarFor(null)}
                     onSaved={() => {
                         setChooseCalendarFor(null);
+                        loadIntegrations();
                         syncAndRefresh().catch(() => {});
                     }}
                 />
             )}
         </Box>
     );
+}
+
+function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
+    return (
+        <Box sx={{ mb: 2, p: 1.5, border: 1, borderColor: 'error.main', borderRadius: 1 }}>
+            <Typography variant="body2" color="error.main" fontWeight={500} mb={0.5}>
+                Couldn't connect that Google Calendar account
+            </Typography>
+            <Typography variant="caption" color="text.secondary" display="block">
+                The Google account you authorized didn't match the one you selected. Tokens were revoked and no calendar was added.
+            </Typography>
+            <Button size="small" sx={{ mt: 1 }} onClick={onDismiss}>
+                Dismiss
+            </Button>
+        </Box>
+    );
+}
+
+interface ConnectAccountPickerDialogProps {
+    db: IDBPDatabase<MyDB>;
+    onClose: () => void;
+}
+
+/**
+ * Pre-OAuth picker: lists every Google account already signed into GTD on this device. Choosing
+ * one redirects to `/calendar/auth/google?login_hint=<email>`; if the chosen account isn't the
+ * currently active session, we first call `multiSession.setActive` so the OAuth callback resolves
+ * the same identity via cookie. The server still validates userinfo + session emails before
+ * storing tokens.
+ */
+function ConnectAccountPickerDialog({ db, onClose }: ConnectAccountPickerDialogProps) {
+    const { activeAccount, allAccounts } = useAccounts(db);
+    const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
+    const [pickerError, setPickerError] = useState<string | null>(null);
+
+    const googleAccounts = allAccounts.filter((a) => a.provider === 'google');
+
+    async function onChooseAccount(account: StoredAccount) {
+        setPendingAccountId(account.id);
+        setPickerError(null);
+        try {
+            await switchToAccountIfNeeded(account, activeAccount?.id);
+            initiateGoogleCalendarAuth(account.email);
+        } catch (err) {
+            console.error('[calendar] failed to switch session before OAuth:', err);
+            setPickerError('Could not switch to that account. Please try again.');
+            setPendingAccountId(null);
+        }
+    }
+
+    return (
+        <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+            <DialogTitle>Connect Google Calendar</DialogTitle>
+            <DialogContent>
+                <DialogContentText mb={2}>Choose which Google account's calendar you want to connect. We'll only ask for calendar access.</DialogContentText>
+                {googleAccounts.length === 0 ? (
+                    <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                        No Google accounts are signed into GTD on this device. Add a Google account from the account switcher first, then come back here to
+                        connect its calendar.
+                    </Typography>
+                ) : (
+                    <List dense disablePadding>
+                        {googleAccounts.map((acct) => (
+                            <ListItem key={acct.id} disableGutters disablePadding>
+                                <ListItemButton onClick={() => onChooseAccount(acct)} disabled={pendingAccountId !== null}>
+                                    <ListItemText
+                                        primary={acct.name ?? acct.email}
+                                        secondary={acct.email}
+                                        primaryTypographyProps={{ variant: 'body2' }}
+                                        secondaryTypographyProps={{ variant: 'caption' }}
+                                    />
+                                    <Typography variant="caption" color="primary">
+                                        {pendingAccountId === acct.id ? 'Redirecting…' : 'Connect this calendar account'}
+                                    </Typography>
+                                </ListItemButton>
+                            </ListItem>
+                        ))}
+                    </List>
+                )}
+                {pickerError && (
+                    <Typography variant="body2" color="error" mt={1}>
+                        {pickerError}
+                    </Typography>
+                )}
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose} disabled={pendingAccountId !== null}>
+                    Cancel
+                </Button>
+            </DialogActions>
+        </Dialog>
+    );
+}
+
+/**
+ * If the picked account isn't the current active session, switch to it first via Better Auth's
+ * multi-session API so the OAuth callback's session-email check resolves the chosen identity.
+ * Throws if the target session can't be found (e.g. expired) — caller surfaces the error.
+ */
+async function switchToAccountIfNeeded(account: StoredAccount, activeAccountId: string | undefined): Promise<void> {
+    if (account.id === activeAccountId) {
+        return;
+    }
+    const { data: sessions } = await authClient.multiSession.listDeviceSessions();
+    const target = sessions?.find((s) => s.user.id === account.id);
+    if (!target) {
+        throw new Error('No device session found for the chosen account');
+    }
+    await authClient.multiSession.setActive({ sessionToken: target.session.token });
 }
 
 /** Fetches sync configs for an integration, with unmount-safe cancellation. */
@@ -211,6 +347,7 @@ function useSyncConfigs(integrationId: string): {
 interface IntegrationRowProps {
     integration: CalendarIntegration;
     onDisconnected: () => void;
+    onChooseCalendar: () => void;
 }
 
 /** Manages sync config mutations with error handling and optimistic state updates. */
@@ -292,7 +429,7 @@ function useSyncNow(integrationId: string): { onSyncNow: () => void; isSyncing: 
     return { onSyncNow, isSyncing, syncError };
 }
 
-function IntegrationRow({ integration, onDisconnected }: IntegrationRowProps) {
+function IntegrationRow({ integration, onDisconnected, onChooseCalendar }: IntegrationRowProps) {
     const { calendars, fetchError: calendarFetchError } = useCalendarList(integration._id);
     const { configs, isLoading: configsLoading, reload: reloadConfigs, setConfigs } = useSyncConfigs(integration._id);
     const { actions, actionError } = useSyncConfigActions(integration._id, setConfigs);
@@ -311,6 +448,9 @@ function IntegrationRow({ integration, onDisconnected }: IntegrationRowProps) {
 
     const connectedSince = dayjs(integration.createdTs).format('MMM D, YYYY');
     const errorMessage = calendarFetchError ?? actionError ?? syncError;
+    // Step 2: integrations require an explicit calendar choice. If the user dismissed the
+    // post-OAuth dialog without picking one, surface a "choose one" CTA so they can resume.
+    const hasNoCalendarChosen = !configsLoading && configs.length === 0;
 
     return (
         <Box mb={2}>
@@ -330,6 +470,8 @@ function IntegrationRow({ integration, onDisconnected }: IntegrationRowProps) {
 
             {configsLoading ? (
                 <CircularProgress size={16} sx={{ mt: 1 }} />
+            ) : hasNoCalendarChosen ? (
+                <NoCalendarChosenRow onChooseCalendar={onChooseCalendar} />
             ) : (
                 <SyncConfigList configs={configs} resolveCalendarName={resolveCalendarName} actions={actions} />
             )}
@@ -359,6 +501,19 @@ function IntegrationRow({ integration, onDisconnected }: IntegrationRowProps) {
                     }}
                 />
             )}
+        </Box>
+    );
+}
+
+function NoCalendarChosenRow({ onChooseCalendar }: { onChooseCalendar: () => void }) {
+    return (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+            <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                No calendar selected — choose one
+            </Typography>
+            <Button size="small" onClick={onChooseCalendar}>
+                Choose calendar
+            </Button>
         </Box>
     );
 }
@@ -583,9 +738,9 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
                 </Typography>
             )}
             <DialogActions>
-                <Button onClick={onClose} disabled={isSaving}>
-                    Skip
-                </Button>
+                {/* No "Skip" button: Step 2 makes calendar choice mandatory. The integration row
+                    surfaces a "No calendar selected — choose one" CTA if the user dismisses the
+                    dialog by clicking outside. */}
                 <Button onClick={onConfirm} variant="contained" disabled={isSaving || isLoading || !selectedId}>
                     {isSaving ? 'Saving…' : 'Save & sync'}
                 </Button>
@@ -602,7 +757,7 @@ interface DisconnectDialogProps {
 }
 
 function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: DisconnectDialogProps) {
-    const [action, setAction] = useState<UnlinkAction>('keepEvents');
+    const [action, setAction] = useState<UnlinkAction>('keepLinkedEntities');
     const [isDeleting, setIsDeleting] = useState(false);
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const { syncAndRefresh } = useAppData();
@@ -618,7 +773,7 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: Disc
     // doesn't bleed into a fresh disconnect attempt for a different integration.
     useEffect(() => {
         if (open) {
-            setAction('keepEvents');
+            setAction('keepLinkedEntities');
             setDeleteError(null);
         }
     }, [open]);
@@ -643,33 +798,29 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: Disc
         <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Disconnect Google Calendar</DialogTitle>
             <DialogContent>
-                <DialogContentText mb={2}>What would you like to do with routines currently synced to this Google Calendar?</DialogContentText>
+                <DialogContentText mb={2}>
+                    What would you like to do with calendar items and calendar routines linked to this integration? Disconnecting never modifies your Google
+                    Calendar.
+                </DialogContentText>
                 <RadioGroup value={action} onChange={(e) => setAction(e.target.value as UnlinkAction)}>
                     <FormControlLabel
-                        value="keepEvents"
+                        value="keepLinkedEntities"
                         control={<Radio size="small" />}
                         label={
                             <Box>
-                                <Typography variant="body2">Keep routines in GTD, leave Google Calendar events as-is</Typography>
+                                <Typography variant="body2">
+                                    Keep calendar items and calendar routines in GTD. Google Calendar events will not be touched.
+                                </Typography>
                             </Box>
                         }
                     />
                     <FormControlLabel
-                        value="deleteEvents"
-                        control={<Radio size="small" />}
-                        label={
-                            <Box>
-                                <Typography variant="body2">Keep routines in GTD, remove them from Google Calendar</Typography>
-                            </Box>
-                        }
-                    />
-                    <FormControlLabel
-                        value="deleteAll"
+                        value="removeLinkedEntities"
                         control={<Radio size="small" />}
                         label={
                             <Box>
                                 <Typography variant="body2" color="error.main">
-                                    Delete routines from both GTD and Google Calendar
+                                    Remove calendar items and calendar routines from GTD. Google Calendar events will not be touched.
                                 </Typography>
                             </Box>
                         }

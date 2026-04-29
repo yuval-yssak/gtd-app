@@ -18,7 +18,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
-import { ensureTimeZone } from '../lib/calendarPushback.js';
+import { ensureTimeZone, pushRoutineDeletion } from '../lib/calendarPushback.js';
 import { stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
@@ -27,6 +27,7 @@ import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
+import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import type {
     CalendarIntegrationInterface,
@@ -37,10 +38,21 @@ import type {
     RoutineItemTemplate,
 } from '../types/entities.js';
 
-type UnlinkAction = 'keepEvents' | 'deleteEvents' | 'deleteAll';
+type UnlinkAction = 'keepLinkedEntities' | 'removeLinkedEntities';
+
+/** Parses the disconnect-action query string into a typed UnlinkAction. Defaults to keepLinkedEntities when omitted; rejects unknown values. */
+function parseUnlinkAction(raw: string | undefined): UnlinkAction | null {
+    if (raw === undefined) {
+        return 'keepLinkedEntities';
+    }
+    if (raw === 'keepLinkedEntities' || raw === 'removeLinkedEntities') {
+        return raw;
+    }
+    return null;
+}
 type SyncContext = { userId: string; now: string; ops: OperationInterface[] };
 type RoutineSyncCtx = { userId: string; since: string; now: string; calendarId: string; ops: OperationInterface[] };
-type UnlinkSideEffectCtx = { provider: GoogleCalendarProvider; calendarId: string; userId: string; now: string };
+type UnlinkSideEffectCtx = { userId: string; now: string };
 /** Groups the integration + sync config identity needed by import/upsert functions. */
 type CalendarSource = { integration: CalendarIntegrationInterface; config: CalendarSyncConfigInterface };
 // Discriminated union to distinguish network failures from missing-token responses in the OAuth flow.
@@ -87,11 +99,17 @@ function authSecret(): string {
     return process.env.BETTER_AUTH_SECRET ?? 'dev_better_auth_secret_change_in_production';
 }
 
+interface OAuthStatePayload {
+    userId: string;
+    /** Email of the Google account the user expects to authorize. Verified against userinfo + active session. */
+    loginHint?: string;
+}
+
 /** Signs a state payload with HMAC-SHA256 to prevent CSRF / userId injection in the OAuth callback. */
-function signState(userId: string): string {
-    const payload = JSON.stringify({ userId });
-    const sig = createHmac('sha256', authSecret()).update(payload).digest('hex');
-    return Buffer.from(JSON.stringify({ payload, sig })).toString('base64url');
+function signState(payload: OAuthStatePayload): string {
+    const serialized = JSON.stringify(payload);
+    const sig = createHmac('sha256', authSecret()).update(serialized).digest('hex');
+    return Buffer.from(JSON.stringify({ payload: serialized, sig })).toString('base64url');
 }
 
 /**
@@ -106,8 +124,8 @@ function parseStateEnvelope(stateParam: string): { payload: string; sig: string 
     }
 }
 
-/** Verifies the HMAC signature and extracts userId. Throws if the signature is invalid. */
-function verifyState(stateParam: string): string {
+/** Verifies the HMAC signature and extracts the state payload. Throws if the signature is invalid. */
+function verifyState(stateParam: string): OAuthStatePayload {
     // JSON.parse is wrapped in parseStateEnvelope — a non-JSON or non-base64url value would
     // otherwise produce an uncaught SyntaxError that Hono turns into a 500 instead of a 400.
     const { payload, sig } = parseStateEnvelope(stateParam);
@@ -119,7 +137,7 @@ function verifyState(stateParam: string): string {
         throw new Error('Invalid state signature');
     }
     try {
-        return (JSON.parse(payload) as { userId: string }).userId;
+        return JSON.parse(payload) as OAuthStatePayload;
     } catch {
         throw new Error('Malformed state payload');
     }
@@ -131,7 +149,7 @@ function verifyState(stateParam: string): string {
  * without wrapping a second try/catch around the call.
  */
 /** Wraps verifyState so the OAuth callback can use const — verifyState throws, which would require a let across a try/catch. */
-function tryVerifyState(stateParam: string): string | null {
+function tryVerifyState(stateParam: string): OAuthStatePayload | null {
     try {
         return verifyState(stateParam);
     } catch {
@@ -155,12 +173,19 @@ calendarRoutes.get('/auth/google', authenticateRequest, (c) => {
     const oauth2 = buildOAuthClient();
     const userId = c.get('session').user.id;
 
+    // login_hint pre-selects an account in Google's picker. The callback verifies the authorized
+    // account email matches both the hint and the active session — preventing a user signed in
+    // as a@ from accidentally authorizing an unrelated b@ Google identity.
+    const rawHint = c.req.query('login_hint');
+    const loginHint = typeof rawHint === 'string' && rawHint.trim() !== '' ? rawHint.trim() : undefined;
+
     // state is HMAC-signed so the callback can verify it wasn't tampered with.
     const url = oauth2.generateAuthUrl({
         access_type: 'offline', // request refresh token
         prompt: 'consent', // always show consent screen so we always get a refresh token
         scope: ['https://www.googleapis.com/auth/calendar'],
-        state: signState(userId),
+        state: signState({ userId, ...(loginHint ? { loginHint } : {}) }),
+        ...(loginHint ? { login_hint: loginHint } : {}),
     });
 
     return c.redirect(url);
@@ -173,10 +198,11 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
         return c.text('Missing code or state', 400);
     }
 
-    const userId = tryVerifyState(stateParam);
-    if (!userId) {
+    const state = tryVerifyState(stateParam);
+    if (!state) {
         return c.text('Invalid state parameter', 400);
     }
+    const { userId, loginHint } = state;
 
     const oauth2 = buildOAuthClient();
     const tokenResult = await tryExchangeOAuthTokens(oauth2, code);
@@ -187,6 +213,18 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     }
     const { accessToken, refreshToken, expiryDate } = tokenResult;
 
+    // Verify the user actually authorized the account they targeted: compare the authorized
+    // identity (Google userinfo) against both the login_hint we sent and the active GTD session.
+    // Mismatch means the user picked a different account in Google's picker — revoke the just-
+    // -granted tokens and bounce back to settings with an error.
+    oauth2.setCredentials({ access_token: accessToken, refresh_token: refreshToken });
+    const authorizedEmail = await tryFetchAuthorizedEmail(oauth2);
+    const sessionEmail = await tryFetchSessionEmail(c.req.raw.headers);
+    if (!authorizedEmailMatches(authorizedEmail, loginHint, sessionEmail)) {
+        await oauth2.revokeToken(accessToken).catch(() => {});
+        return c.redirect(`${clientUrl}/settings?calendarConnectError=mismatch`);
+    }
+
     const now = dayjs().toISOString();
     const integration: CalendarIntegrationInterface = {
         _id: randomUUID(),
@@ -195,8 +233,8 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
         accessToken,
         refreshToken,
         tokenExpiry: expiryDate ? dayjs(expiryDate).toISOString() : dayjs().add(1, 'hour').toISOString(),
-        // calendarId is set to 'primary' initially; the user can change it in settings.
-        calendarId: 'primary',
+        // calendarId intentionally omitted — per-calendar state lives on CalendarSyncConfigInterface.
+        // The client picks one or more calendars via ChooseCalendarDialog after this redirect.
         createdTs: now,
         updatedTs: now,
     };
@@ -206,6 +244,49 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     // Redirect back to client settings page so the user sees the new integration.
     return c.redirect(`${clientUrl}/settings?calendarConnected=1`);
 });
+
+/** Reads the authorized account email from Google's userinfo endpoint. Returns null on any error. */
+async function tryFetchAuthorizedEmail(oauth2: ReturnType<typeof buildOAuthClient>): Promise<string | null> {
+    try {
+        const { data } = await google.oauth2({ auth: oauth2, version: 'v2' }).userinfo.get();
+        return typeof data.email === 'string' ? data.email : null;
+    } catch (err) {
+        console.error('[calendar] failed to fetch authorized userinfo:', err);
+        return null;
+    }
+}
+
+/** Resolves the active Better Auth session email from the request cookies. Returns null if no session. */
+async function tryFetchSessionEmail(headers: Headers): Promise<string | null> {
+    try {
+        const session = await auth.api.getSession({ headers });
+        return session?.user.email ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * All three of (authorizedEmail, loginHint, sessionEmail) must match case-insensitively for the
+ * connect to proceed. authorizedEmail is required (we just got it from Google). loginHint and
+ * sessionEmail are each compared when present — but at least one must match so we don't allow a
+ * silent fallback to "no validation" if userinfo or session resolution fails.
+ */
+function authorizedEmailMatches(authorizedEmail: string | null, loginHint: string | undefined, sessionEmail: string | null): boolean {
+    if (!authorizedEmail) {
+        return false;
+    }
+    const authorized = authorizedEmail.toLowerCase();
+    if (loginHint && authorized !== loginHint.toLowerCase()) {
+        return false;
+    }
+    if (sessionEmail && authorized !== sessionEmail.toLowerCase()) {
+        return false;
+    }
+    // Require at least one corroborating source so a missing session + missing hint can't
+    // accept any authorized account.
+    return Boolean(loginHint) || Boolean(sessionEmail);
+}
 
 // ── Provider factory ─────────────────────────────────────────────────────────
 
@@ -236,6 +317,17 @@ async function resolveTimeZoneForIntegration(integrationId: string, provider: Go
     return ensureTimeZone(config, provider);
 }
 
+/**
+ * Resolves the default calendar ID for an integration by reading the default sync config first,
+ * falling back to the deprecated `integration.calendarId` for legacy rows.
+ * Returns null when neither source has a value (caller should reject the request).
+ */
+async function resolveDefaultCalendarId(integrationId: string, integration: CalendarIntegrationInterface): Promise<string | null> {
+    const configs = await calendarSyncConfigsDAO.findEnabledByIntegration(integrationId);
+    const defaultConfig = configs.find((c) => c.isDefault) ?? configs[0];
+    return defaultConfig?.calendarId ?? integration.calendarId ?? null;
+}
+
 // ── Integration management ────────────────────────────────────────────────────
 
 calendarRoutes.get('/integrations', authenticateRequest, async (c) => {
@@ -250,28 +342,18 @@ calendarRoutes.get('/integrations', authenticateRequest, async (c) => {
     return c.json(safe);
 });
 
-/** Deletes the Google Calendar recurring event for each routine that has one. Errors are swallowed — the integration is removed regardless. */
-async function deleteLinkedCalendarEvents(provider: GoogleCalendarProvider, routines: RoutineInterface[], calendarId: string): Promise<void> {
-    await Promise.all(
-        routines.flatMap((r) => {
-            if (!r.calendarEventId) {
-                return [];
-            }
-            return [provider.deleteRecurringEvent(r.calendarEventId, calendarId).catch(() => {})];
-        }),
-    );
-}
-
-/** Moves all items belonging to the given routine IDs to 'trash' and records operations so other devices learn about the deletion. */
-async function trashRoutineItems(userId: string, routineIds: string[], now: string): Promise<void> {
-    if (!hasAtLeastOne(routineIds)) {
+/** Trashes every item linked to the integration (status → 'trash'), records ops for cross-device convergence. Never touches GCal. */
+async function trashItemsForIntegration(userId: string, integrationId: string, now: string): Promise<void> {
+    const linked = await itemsDAO.findArray({ user: userId, calendarIntegrationId: integrationId });
+    const ids = linked.map((item) => item._id).filter((id): id is string => Boolean(id));
+    if (!hasAtLeastOne(ids)) {
         return;
     }
-    await itemsDAO.updateMany({ user: userId, routineId: { $in: routineIds } }, { $set: { status: 'trash', updatedTs: now } });
-    // Fetch after the write so operation snapshots reflect the persisted state, not stale pre-update reads.
-    const trashedItems = await itemsDAO.findArray({ user: userId, routineId: { $in: routineIds } });
+    await itemsDAO.updateMany({ _id: { $in: ids }, user: userId }, { $set: { status: 'trash', updatedTs: now } });
+    // Re-fetch so operation snapshots reflect the persisted state.
+    const trashed = await itemsDAO.findArray({ _id: { $in: ids }, user: userId });
     await Promise.all(
-        trashedItems.flatMap((item) => {
+        trashed.flatMap((item) => {
             const itemId = item._id;
             if (!itemId) {
                 return [];
@@ -281,18 +363,78 @@ async function trashRoutineItems(userId: string, routineIds: string[], now: stri
     );
 }
 
-/** Handles calendar-side cleanup based on the unlink action: deletes GCal events and/or trashes generated items. */
-async function applyUnlinkSideEffects(action: UnlinkAction, routines: RoutineInterface[], ctx: UnlinkSideEffectCtx): Promise<void> {
-    if (action === 'deleteEvents' || action === 'deleteAll') {
-        await deleteLinkedCalendarEvents(ctx.provider, routines, ctx.calendarId);
+/**
+ * Handles app-side cleanup when the user disconnects. Never touches GCal.
+ * - keepLinkedEntities: items + routines stay; their calendar links are cleared (`unlinkItems` + `unlinkRoutines`).
+ * - removeLinkedEntities: items and routines are trashed. Routine cascade reuses `pushRoutineDeletion`
+ *   with `skipGCalDelete` so the GCal master events are preserved.
+ */
+async function applyUnlinkSideEffects(action: UnlinkAction, integrationId: string, routines: RoutineInterface[], ctx: UnlinkSideEffectCtx): Promise<void> {
+    if (action === 'keepLinkedEntities') {
+        await unlinkItems(ctx.userId, integrationId, ctx.now);
+        await unlinkRoutines(ctx.userId, routines, ctx.now);
+        return;
     }
-    if (action === 'deleteAll') {
-        await trashRoutineItems(
-            ctx.userId,
-            routines.map((r) => r._id),
-            ctx.now,
-        );
+    // removeLinkedEntities: trash items first, then trash routines + cascade their generated items.
+    await trashItemsForIntegration(ctx.userId, integrationId, ctx.now);
+    await trashRoutinesForIntegration(ctx.userId, routines, ctx.now);
+}
+
+/**
+ * Clears `calendarEventId` / `calendarIntegrationId` / `calendarSyncConfigId` on every item linked
+ * to the integration, leaving the item's status untouched. Records ops for cross-device convergence.
+ * Parallel to `unlinkRoutines` — both publish the cleared snapshot via the operation log.
+ */
+async function unlinkItems(userId: string, integrationId: string, now: string): Promise<void> {
+    const linked = await itemsDAO.findArray({ user: userId, calendarIntegrationId: integrationId });
+    const ids = linked.map((item) => item._id).filter((id): id is string => Boolean(id));
+    if (!hasAtLeastOne(ids)) {
+        return;
     }
+    await itemsDAO.updateMany(
+        { _id: { $in: ids }, user: userId },
+        { $unset: { calendarEventId: '', calendarIntegrationId: '', calendarSyncConfigId: '' }, $set: { updatedTs: now } },
+    );
+    // Re-fetch by stable IDs so snapshots reflect the cleared fields.
+    const updated = await itemsDAO.findArray({ _id: { $in: ids }, user: userId });
+    await Promise.all(
+        updated.flatMap((item) => {
+            const itemId = item._id;
+            if (!itemId) {
+                return [];
+            }
+            return [recordOperation(userId, { entityType: 'item', entityId: itemId, snapshot: item, opType: 'update', now })];
+        }),
+    );
+}
+
+/**
+ * Trashes routines linked to the integration and cascades generated items via `pushRoutineDeletion`,
+ * passing `skipGCalDelete: true` so the GCal master event is preserved (disconnect must never touch GCal).
+ */
+async function trashRoutinesForIntegration(userId: string, routines: RoutineInterface[], now: string): Promise<void> {
+    if (!hasAtLeastOne(routines)) {
+        return;
+    }
+    const ids = routines.map((r) => r._id);
+    await routinesDAO.updateMany({ _id: { $in: ids }, user: userId }, { $set: { active: false, updatedTs: now } });
+    const updated = await routinesDAO.findArray({ _id: { $in: ids }, user: userId });
+    await Promise.all(
+        updated.map(async (r) => {
+            await recordOperation(userId, { entityType: 'routine', entityId: r._id, snapshot: r, opType: 'update', now });
+            // Cascade generated items via the existing routine-delete cascade, but skip the GCal call.
+            await pushRoutineDeletion(r, userId, () => buildLocalProvider(), { skipGCalDelete: true });
+        }),
+    );
+}
+
+/**
+ * Local provider stub used when `pushRoutineDeletion` is invoked with `skipGCalDelete: true` — no
+ * GCal call will be made, but the function signature still requires a provider factory. Throws if
+ * accidentally invoked, surfacing the bug rather than silently calling Google.
+ */
+function buildLocalProvider(): GoogleCalendarProvider {
+    throw new Error('buildLocalProvider must not be invoked — disconnect path uses skipGCalDelete=true');
 }
 
 /** Clears calendarEventId and calendarIntegrationId from routines in the DB and records operations so other devices sync the cleared fields. */
@@ -323,7 +465,10 @@ async function unlinkRoutines(userId: string, routines: RoutineInterface[], now:
 calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
     const userId = c.get('session').user.id;
     const integrationId = c.req.param('id');
-    const action = (c.req.query('action') ?? 'keepEvents') as UnlinkAction;
+    const action = parseUnlinkAction(c.req.query('action'));
+    if (!action) {
+        return c.json({ error: 'Invalid action — must be keepLinkedEntities or removeLinkedEntities' }, 400);
+    }
 
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(integrationId, userId);
     if (!integration) {
@@ -334,8 +479,7 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
     const provider = buildProvider(integration, userId);
     const linkedRoutines = await routinesDAO.findArray({ user: userId, calendarIntegrationId: integrationId });
 
-    await applyUnlinkSideEffects(action, linkedRoutines, { provider, calendarId: integration.calendarId, userId, now });
-    await unlinkRoutines(userId, linkedRoutines, now);
+    await applyUnlinkSideEffects(action, integrationId, linkedRoutines, { userId, now });
     // Stop all webhook channels before deleting configs so Google stops sending notifications.
     const configs = await calendarSyncConfigsDAO.findByIntegration(integrationId);
     await Promise.all(configs.map((cfg) => teardownWatch(cfg, provider).catch(() => {})));
@@ -387,10 +531,21 @@ calendarRoutes.get('/integrations/:id/calendars', authenticateRequest, async (c)
 
 // ── Sync config management ───────────────────────────────────────────────────
 
-/** Creates a default CalendarSyncConfig for an integration if none exists yet (lazy migration). */
+/**
+ * Creates a default CalendarSyncConfig for an integration if none exists yet.
+ *
+ * Lazy migration for legacy integrations created before multi-calendar support — those rows have
+ * `integration.calendarId` set, which we use to seed the config. New (Step 2+) integrations skip
+ * this path because `calendarId` is no longer written; instead, the client picks one or more
+ * calendars via `ChooseCalendarDialog` immediately after the OAuth redirect.
+ */
 async function ensureSyncConfigExists(integration: CalendarIntegrationInterface): Promise<void> {
     const existing = await calendarSyncConfigsDAO.findByIntegration(integration._id);
     if (hasAtLeastOne(existing)) {
+        return;
+    }
+    if (!integration.calendarId) {
+        // New-style integration awaiting an explicit calendar choice — nothing to migrate.
         return;
     }
     const now = dayjs().toISOString();
@@ -631,9 +786,17 @@ calendarRoutes.post('/integrations/:id/link-routine/:routineId', authenticateReq
         return c.json({ error: 'Only calendar routines can be linked' }, 400);
     }
 
+    // Resolve the target calendar from the integration's default sync config — Step 2 deprecates
+    // `integration.calendarId`, so new integrations only have it on the sync config. Falls back to
+    // the legacy field for pre-Step-2 rows still in the DB.
+    const targetCalendarId = await resolveDefaultCalendarId(integrationId, integration);
+    if (!targetCalendarId) {
+        return c.json({ error: 'Integration has no default calendar selected' }, 400);
+    }
+
     const provider = buildProvider(integration, userId);
-    const timeZone = await resolveTimeZoneForIntegration(integrationId, provider, integration.calendarId);
-    const createResult = await tryCreateRecurringEvent(provider, routine, integration.calendarId, timeZone);
+    const timeZone = await resolveTimeZoneForIntegration(integrationId, provider, targetCalendarId);
+    const createResult = await tryCreateRecurringEvent(provider, routine, targetCalendarId, timeZone);
     if (!createResult.ok) {
         console.error(`[calendar] createRecurringEvent failed for integration ${integrationId}:`, createResult.error);
         return c.json({ error: 'Failed to create Google Calendar event' }, 502);
