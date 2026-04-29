@@ -19,7 +19,9 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
+import { AccountPicker } from '../../components/AccountPicker';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { reassignEntity } from '../../db/reassignMutations';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
 import type { StoredWorkContext } from '../../types/MyDB';
 import styles from './-work-contexts.module.css';
@@ -30,20 +32,23 @@ export const Route = createFileRoute('/_authenticated/work-contexts')({
 
 function WorkContextsPage() {
     const { db } = Route.useRouteContext();
-    const { account, workContexts, refreshWorkContexts } = useAppData();
+    const { account, workContexts, refreshWorkContexts, loggedInAccounts } = useAppData();
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<StoredWorkContext | null>(null);
     const [nameInput, setNameInput] = useState('');
+    const [ownerUserId, setOwnerUserId] = useState<string>('');
 
     function openCreate() {
         setEditing(null);
         setNameInput('');
+        setOwnerUserId(account?.id ?? '');
         setDialogOpen(true);
     }
 
     function openEdit(ctx: StoredWorkContext) {
         setEditing(ctx);
         setNameInput(ctx.name);
+        setOwnerUserId(ctx.userId);
         setDialogOpen(true);
     }
 
@@ -53,8 +58,13 @@ function WorkContextsPage() {
         }
         if (editing) {
             await updateWorkContext(db, { ...editing, name: nameInput.trim() });
+            // Reassign after the local update so the source-user copy carries the rename;
+            // the server then moves that updated entity to the new owner.
+            if (ownerUserId !== editing.userId) {
+                await reassignEntity(db, { entityType: 'workContext', entityId: editing._id, fromUserId: editing.userId, toUserId: ownerUserId });
+            }
         } else {
-            await createWorkContext(db, { userId: account.id, name: nameInput.trim() });
+            await createWorkContext(db, { userId: ownerUserId || account.id, name: nameInput.trim() });
         }
         setDialogOpen(false);
         await refreshWorkContexts();
@@ -134,6 +144,8 @@ function WorkContextsPage() {
                             if (e.key === 'Enter') void onSave();
                         }}
                     />
+                    {/* Auto-hides on single-account devices */}
+                    {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} />}
                 </DialogContent>
                 <DialogActions>
                     <Button onClick={() => setDialogOpen(false)}>Cancel</Button>

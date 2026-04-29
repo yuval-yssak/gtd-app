@@ -20,8 +20,9 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { useAppData } from '../contexts/AppDataProvider';
 import {
     clarifyToCalendar,
     clarifyToDone,
@@ -33,8 +34,10 @@ import {
     recordRoutineInstanceModification,
     updateItem,
 } from '../db/itemMutations';
+import { reassignEntity } from '../db/reassignMutations';
 import { useCalendarOptions } from '../hooks/useCalendarOptions';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
+import { AccountPicker } from './AccountPicker';
 import { CalendarFields } from './clarify/CalendarFields';
 import { NextActionFields } from './clarify/NextActionFields';
 import {
@@ -101,12 +104,20 @@ function itemToCalendarForm(item: StoredItem): CalendarFormState {
 
 export function EditItemDialog({ item, db, people, workContexts, onClose, onSaved }: Props) {
     const { options: calendarOptions } = useCalendarOptions();
+    const { loggedInAccounts } = useAppData();
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
     const [status, setStatus] = useState<EditableStatus>(item.status);
+    // Owner of the item — when changed and saved, triggers `/sync/reassign`. Defaults to the
+    // current owner so single-account devices and unchanged saves are no-ops on the reassign path.
+    const [ownerUserId, setOwnerUserId] = useState(item.userId);
+    // Reassign error surfaced inline (e.g. "select a target calendar before saving").
+    const [reassignError, setReassignError] = useState<string | null>(null);
     // Re-entry guard — rapid double-clicks on Save must not fire two mutations.
     const [isSaving, setIsSaving] = useState(false);
+    // Routine-generated items can't be reassigned — disable the picker and show a hint instead.
+    const isRoutineGenerated = Boolean(item.routineId);
 
     // Pre-populate each status's form from the current item so edits are incremental.
     const [naForm, setNaForm] = useState<NextActionFormState>({
@@ -120,6 +131,14 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
         expectedBy: item.expectedBy ?? '',
     });
     const [calForm, setCalForm] = useState<CalendarFormState>(itemToCalendarForm(item));
+    // When the owner is the entity's current user, show every calendar option so the user can
+    // re-pick within their account. When reassigning, restrict to the target account's calendars
+    // only — picking a calendar from the source account would silently drop the cross-account move
+    // because /sync/reassign rejects items linked to a different user's calendar.
+    const visibleCalendarOptions = useMemo(
+        () => (ownerUserId === item.userId ? calendarOptions : calendarOptions.filter((opt) => opt.userId === ownerUserId)),
+        [calendarOptions, ownerUserId, item.userId],
+    );
     const [wfForm, setWfForm] = useState<WaitingForFormState>({
         waitingForPersonId: item.waitingForPersonId ?? '',
         expectedBy: item.expectedBy ?? '',
@@ -136,7 +155,12 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
         if (!trimmedTitle) {
             return;
         }
+        const ownerChanged = ownerUserId !== item.userId;
+        if (ownerChanged && !validateReassign()) {
+            return;
+        }
         setIsSaving(true);
+        setReassignError(null);
         try {
             const itemNormalized = normalizeTitleAndNotes(item, trimmedTitle, notes.trim());
             const statusChanged = status !== item.status;
@@ -145,6 +169,15 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
             } else {
                 await saveInPlace(itemNormalized);
             }
+            // Reassignment runs last so the in-place edits land on the source-user copy first;
+            // the server then moves that updated entity across to the new owner. Doing it in the
+            // other order would mean the source delete races against the local update.
+            if (ownerChanged) {
+                const reassignOk = await runReassign();
+                if (!reassignOk) {
+                    return; // error already set via setReassignError; keep dialog open for retry
+                }
+            }
             await onSaved();
             onClose();
         } finally {
@@ -152,9 +185,61 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
         }
     }
 
+    /**
+     * Pre-flight checks for the reassign path. Returns false (and sets `reassignError`) when the
+     * user picked a different owner but didn't pick a target calendar for a calendar-linked item.
+     * Routine-generated items are blocked in the picker itself, so they can't reach this point.
+     */
+    function validateReassign(): boolean {
+        if (status !== 'calendar' || !item.calendarEventId) {
+            return true;
+        }
+        const targetConfigId = calForm.calendarSyncConfigId;
+        const targetOption = visibleCalendarOptions.find((opt) => opt.configId === targetConfigId);
+        if (!targetOption || targetOption.userId !== ownerUserId) {
+            setReassignError(`Pick a calendar from ${loggedInAccounts.find((a) => a.id === ownerUserId)?.email ?? 'the target account'} before saving.`);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Calls `/sync/reassign`. The target calendar is required for calendar-linked items —
+     * `validateReassign` already enforced presence; here we look up the option and forward
+     * its integration + sync config ids to the server.
+     */
+    async function runReassign(): Promise<boolean> {
+        const targetCalendar = resolveTargetCalendar();
+        const result = await reassignEntity(db, {
+            entityType: 'item',
+            entityId: item._id,
+            fromUserId: item.userId,
+            toUserId: ownerUserId,
+            ...(targetCalendar ? { targetCalendar } : {}),
+        });
+        if (!result.ok) {
+            setReassignError(result.error);
+            return false;
+        }
+        return true;
+    }
+
+    function resolveTargetCalendar(): { integrationId: string; syncConfigId: string } | null {
+        if (status !== 'calendar' || !item.calendarEventId) {
+            return null;
+        }
+        const targetOption = visibleCalendarOptions.find((opt) => opt.configId === calForm.calendarSyncConfigId);
+        if (!targetOption) {
+            return null;
+        }
+        return { integrationId: targetOption.integrationId, syncConfigId: targetOption.configId };
+    }
+
     /** Status unchanged: merge form state into the item directly and persist via updateItem. */
     async function saveInPlace(itemNormalized: StoredItem) {
-        const merged = mergeFormsIntoItem(itemNormalized, status, naForm, calForm, wfForm, calendarOptions);
+        // visibleCalendarOptions narrows to the target account when reassigning — the merged item
+        // then carries the target account's integration/syncConfig ids without an extra branch.
+        const merged = mergeFormsIntoItem(itemNormalized, status, naForm, calForm, wfForm, visibleCalendarOptions);
         await updateItem(db, merged);
         await maybeRecordRoutineException(merged);
     }
@@ -200,7 +285,7 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                 await clarifyToNextAction(db, baseItem, buildNextActionMeta(naForm));
                 break;
             case 'calendar':
-                await clarifyToCalendar(db, baseItem, buildCalendarMeta(calForm, calendarOptions));
+                await clarifyToCalendar(db, baseItem, buildCalendarMeta(calForm, visibleCalendarOptions));
                 break;
             case 'waitingFor':
                 await clarifyToWaitingFor(db, baseItem, buildWaitingForMeta(wfForm));
@@ -265,6 +350,26 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                     </Stack>
                 </Box>
 
+                {/* Hidden on single-account devices via the picker's own short-circuit. */}
+                {loggedInAccounts.length > 1 && (
+                    <Box>
+                        <AccountPicker
+                            value={ownerUserId}
+                            onChange={(uid) => {
+                                setOwnerUserId(uid);
+                                setReassignError(null);
+                            }}
+                            disabled={isRoutineGenerated || isSaving}
+                            {...(reassignError ? { error: reassignError } : {})}
+                        />
+                        {isRoutineGenerated && (
+                            <Typography variant="caption" color="text.secondary" mt={0.5} display="block">
+                                To move this, edit the routine itself.
+                            </Typography>
+                        )}
+                    </Box>
+                )}
+
                 {status === 'nextAction' && (
                     <>
                         <Divider />
@@ -283,7 +388,7 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                         <CalendarFields
                             value={calForm}
                             onChange={(patch) => setCalForm((f) => applyCalendarPatch(f, patch))}
-                            calendarOptions={calendarOptions}
+                            calendarOptions={visibleCalendarOptions}
                         />
                     </>
                 )}
