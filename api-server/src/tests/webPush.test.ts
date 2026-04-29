@@ -117,4 +117,70 @@ describe('Reactive push subscription cleanup', () => {
         expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-shared' })).toBe(0);
         expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-shared' })).toBe(0);
     });
+
+    it('also removes deviceUsers join rows when subscription returns 404', async () => {
+        // 404 has the same "endpoint is gone" semantics as 410 — both must clear deviceUsers.
+        await pushSubscriptionsDAO.upsert(makePushSub('dev-404-multi'));
+        await deviceUsersDAO.upsert('dev-404-multi', TEST_USER);
+        await deviceUsersDAO.upsert('dev-404-multi', 'other-user');
+        mockSendNotification.mockRejectedValueOnce(Object.assign(new Error('Not Found'), { statusCode: 404 }));
+
+        await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
+        await new Promise<void>((r) => setTimeout(r, 5));
+
+        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-404-multi' })).toBe(0);
+        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-404-multi' })).toBe(0);
+    });
+
+    it('does NOT remove deviceUsers rows on a 5xx (transient error must not invalidate registration)', async () => {
+        await pushSubscriptionsDAO.upsert(makePushSub('dev-500-multi'));
+        await deviceUsersDAO.upsert('dev-500-multi', TEST_USER);
+        mockSendNotification.mockRejectedValueOnce(Object.assign(new Error('Internal'), { statusCode: 500 }));
+
+        await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
+        await new Promise<void>((r) => setTimeout(r, 5));
+
+        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-500-multi' })).toBe(1);
+        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-500-multi' })).toBe(1);
+    });
+});
+
+describe('Push fan-out via deviceUsers join', () => {
+    it('a user with two registered devices receives one push per device', async () => {
+        // Two devices share the same user — both join rows AND both subscription rows are present.
+        await seedSubscribedDevice('dev-a');
+        await seedSubscribedDevice('dev-b');
+        mockSendNotification.mockResolvedValue(undefined as unknown as never);
+
+        await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
+
+        expect(mockSendNotification).toHaveBeenCalledTimes(2);
+        const targetedEndpoints = mockSendNotification.mock.calls.map((call) => (call[0] as { endpoint: string }).endpoint).sort();
+        expect(targetedEndpoints).toEqual(['https://push.example.com/dev-a', 'https://push.example.com/dev-b']);
+    });
+
+    it('a user with zero deviceUsers rows receives no push, even if a subscription row exists', async () => {
+        // Subscription is present but the join row is missing — fan-out resolves zero targets.
+        // This models the post-410 cleanup window where deviceUsers was wiped before the
+        // subscription row was deleted (or vice versa during a partial failure).
+        await pushSubscriptionsDAO.upsert(makePushSub('dev-orphan'));
+        // intentionally not calling deviceUsersDAO.upsert
+        mockSendNotification.mockResolvedValue(undefined as unknown as never);
+
+        await notifyViaWebPush(TEST_USER, null, [makeOp()], dayjs().toISOString());
+
+        expect(mockSendNotification).not.toHaveBeenCalled();
+    });
+
+    it('excludeDeviceId filters out the originating device on multi-device fan-out', async () => {
+        await seedSubscribedDevice('dev-source');
+        await seedSubscribedDevice('dev-target');
+        mockSendNotification.mockResolvedValue(undefined as unknown as never);
+
+        await notifyViaWebPush(TEST_USER, 'dev-source', [makeOp()], dayjs().toISOString());
+
+        expect(mockSendNotification).toHaveBeenCalledTimes(1);
+        const endpoint = (mockSendNotification.mock.calls[0]?.[0] as { endpoint: string }).endpoint;
+        expect(endpoint).toBe('https://push.example.com/dev-target');
+    });
 });

@@ -111,6 +111,82 @@ export const devLoginRoutes = new Hono()
         });
     })
 
+    // POST /dev/multi-login — produce cookies for *several* accounts on a single browser context.
+    // Better Auth's multiSession plugin keeps additional sessions in `better-auth.session_token_multi-<token>`
+    // cookies; the active session lives at `better-auth.session_token`. We mirror that format
+    // so e2e tests can preload a context with two simultaneous accounts without driving the
+    // OAuth + addAnotherAccount UI flow.
+    .post('/multi-login', async (c) => {
+        const { emails, activeIndex = 0 } = await c.req.json<{ emails: string[]; activeIndex?: number }>();
+        if (!Array.isArray(emails) || emails.length === 0) {
+            return c.json({ error: 'emails array required' }, 400);
+        }
+        if (activeIndex < 0 || activeIndex >= emails.length) {
+            return c.json({ error: 'activeIndex out of range' }, 400);
+        }
+
+        const secret = readAuthSecret();
+        const now = dayjs();
+        const expiresAt = now.add(SESSION_EXPIRY_MS, 'ms');
+
+        // Provision a fresh session for each email — userId is reused via the email upsert
+        // so repeated calls for the same email don't create duplicate Better Auth users.
+        const sessions = await Promise.all(
+            emails.map(async (email) => {
+                const normalizedEmail = email.toLowerCase();
+                const userId = await getOrCreateUserId(normalizedEmail);
+                const rawToken = generateId(32);
+                const sessionId = generateId(32);
+                await db.collection('session').insertOne({
+                    _id: sessionId,
+                    userId,
+                    token: rawToken,
+                    expiresAt: expiresAt.toDate(),
+                    createdAt: now.toDate(),
+                    updatedAt: now.toDate(),
+                    ipAddress: '',
+                    userAgent: 'playwright-e2e',
+                } as never);
+                return { email: normalizedEmail, userId, rawToken, signedToken: signSessionToken(rawToken, secret) };
+            }),
+        );
+
+        // Cookie shape Playwright's BrowserContext.addCookies expects.
+        const baseCookie = {
+            domain: 'localhost',
+            path: '/',
+            httpOnly: true,
+            secure: false,
+            sameSite: 'Lax' as const,
+            expires: expiresAt.unix(),
+        };
+
+        const active = sessions[activeIndex];
+        if (!active) {
+            // unreachable given the activeIndex validation above; satisfies noUncheckedIndexedAccess
+            return c.json({ error: 'invalid activeIndex' }, 400);
+        }
+
+        // Each session also lives at `<sessionTokenName>_multi-<rawToken_lowercased>`. The cookie
+        // value must be the SIGNED token (matches setSignedCookie behaviour in the multiSession hook).
+        const cookies = [
+            { ...baseCookie, name: SESSION_COOKIE_NAME, value: active.signedToken },
+            ...sessions.map((s) => ({
+                ...baseCookie,
+                name: `${SESSION_COOKIE_NAME}_multi-${s.rawToken.toLowerCase()}`,
+                value: s.signedToken,
+            })),
+        ];
+
+        return c.json({
+            ok: true,
+            // Raw token included so e2e tests can pivot to a different session via Better Auth's
+            // /auth/multi-session/set-active endpoint (which expects the raw, unsigned token).
+            sessions: sessions.map((s) => ({ email: s.email, userId: s.userId, rawToken: s.rawToken })),
+            cookies,
+        });
+    })
+
     // DELETE /dev/reset — wipe all collections so tests can start with a clean slate.
     .delete('/reset', async (c) => {
         await Promise.all([
@@ -122,6 +198,34 @@ export const devLoginRoutes = new Hono()
             db.collection('routines').deleteMany({}),
             db.collection('people').deleteMany({}),
             db.collection('workContexts').deleteMany({}),
+            db.collection('deviceUsers').deleteMany({}),
+            db.collection('pushSubscriptions').deleteMany({}),
         ]);
+        return c.json({ ok: true });
+    })
+
+    // GET /dev/device-users?deviceId=... — surface deviceUsers join rows so e2e specs can
+    // assert which (deviceId, userId) pairs the server has recorded without reaching into
+    // MongoDB directly. Auth-free because tests need to read the collection across sign-out
+    // boundaries; safe because the route is only registered in non-production builds.
+    .get('/device-users', async (c) => {
+        const deviceId = c.req.query('deviceId');
+        if (!deviceId) {
+            return c.json({ error: 'deviceId query param required' }, 400);
+        }
+        const rows = await db.collection<{ _id: string; deviceId: string; userId: string }>('deviceUsers').find({ deviceId }).toArray();
+        return c.json({ rows: rows.map((r) => ({ deviceId: r.deviceId, userId: r.userId })) });
+    })
+
+    // POST /dev/drop-push-subscription — simulate a server-side subscription loss so the
+    // Settings page can be exercised against a {registered:false} response without going
+    // through the actual 410-from-Apple-or-Google fan-out path.
+    .post('/drop-push-subscription', async (c) => {
+        const { deviceId } = await c.req.json<{ deviceId: string }>();
+        if (!deviceId) {
+            return c.json({ error: 'deviceId required' }, 400);
+        }
+        // `as never` on _id matches the pattern in pushSubscriptionsDAO — driver widens _id to ObjectId.
+        await db.collection('pushSubscriptions').deleteOne({ _id: deviceId } as never);
         return c.json({ ok: true });
     });
