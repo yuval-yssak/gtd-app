@@ -17,6 +17,7 @@ import { useState } from 'react';
 
 dayjs.extend(relativeTime);
 
+import { AccountChip } from '../../components/AccountChip';
 import { EditItemDialog } from '../../components/EditItemDialog';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -82,6 +83,7 @@ function SomedayPage() {
                                         {item.routineId && (
                                             <RoutineIndicator routineId={item.routineId} routineTitle={routines.find((r) => r._id === item.routineId)?.title} />
                                         )}
+                                        <AccountChip userId={item.userId} />
                                     </Box>
                                 }
                                 secondary={dayjs(item.createdTs).fromNow()}

@@ -16,6 +16,7 @@ import { useState } from 'react';
 import { useAppData } from '../contexts/AppDataProvider';
 import { type ItemSortDir, type ItemSortKey, sortItems } from '../lib/itemSearch';
 import type { StoredItem } from '../types/MyDB';
+import { AccountChip } from './AccountChip';
 import styles from './ArchivedItemsView.module.css';
 import { RoutineIndicator } from './RoutineIndicator';
 
@@ -116,6 +117,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                                                             routineTitle={routines.find((r) => r._id === item.routineId)?.title}
                                                         />
                                                     )}
+                                                    <AccountChip userId={item.userId} />
                                                 </Box>
                                             }
                                             secondary={`${verb} ${dayjs(ts).fromNow()}`}

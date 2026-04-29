@@ -18,6 +18,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
+import { AccountChip } from '../../components/AccountChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
 import type { StoredWorkContext } from '../../types/MyDB';
@@ -102,7 +103,15 @@ function WorkContextsPage() {
                                     </Box>
                                 }
                             >
-                                <ListItemText primary={ctx.name} className={styles.listItemText} />
+                                <ListItemText
+                                    primary={
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                            <span>{ctx.name}</span>
+                                            <AccountChip userId={ctx.userId} />
+                                        </Box>
+                                    }
+                                    className={styles.listItemText}
+                                />
                             </ListItem>
                             {idx < workContexts.length - 1 && <Divider />}
                         </Box>

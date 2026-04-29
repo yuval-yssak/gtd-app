@@ -12,6 +12,8 @@ import { CalendarIntegrations } from './CalendarIntegrations';
 
 const mockAppData: AppData = {
     account: null,
+    loggedInAccounts: [],
+    loggedInUserIds: [],
     items: [],
     workContexts: [],
     people: [],
@@ -20,6 +22,7 @@ const mockAppData: AppData = {
     refreshWorkContexts: fn().mockResolvedValue(undefined),
     refreshPeople: fn().mockResolvedValue(undefined),
     refreshRoutines: fn().mockResolvedValue(undefined),
+    refreshAccounts: fn().mockResolvedValue(undefined),
     syncAndRefresh: fn().mockResolvedValue(undefined),
 };
 

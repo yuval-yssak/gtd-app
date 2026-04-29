@@ -12,6 +12,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
+import { AccountChip } from '../../components/AccountChip';
 import { EditItemDialog } from '../../components/EditItemDialog';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -122,6 +123,7 @@ function CalendarPage() {
                                                             routineTitle={routines.find((r) => r._id === item.routineId)?.title}
                                                         />
                                                     )}
+                                                    <AccountChip userId={item.userId} />
                                                 </Box>
                                             }
                                             className={styles.listItemText}

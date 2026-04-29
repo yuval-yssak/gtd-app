@@ -158,7 +158,7 @@ describe('applyCalendarForm', () => {
 
     it('sets the chosen config and integration IDs when meta resolves to an option', () => {
         const updated = applyCalendarForm(BASE_ITEM, { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-1' }, [
-            { configId: 'cfg-1', integrationId: 'int-1', displayName: 'Work', isDefault: false },
+            { configId: 'cfg-1', integrationId: 'int-1', userId: 'user-1', accountEmail: 'user@example.com', displayName: 'Work', isDefault: false },
         ]);
         expect(updated.calendarSyncConfigId).toBe('cfg-1');
         expect(updated.calendarIntegrationId).toBe('int-1');

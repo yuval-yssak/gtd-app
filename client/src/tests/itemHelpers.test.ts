@@ -1,6 +1,6 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getActiveNextActions, getItemsByStatus, getOverdueItems, getUpcomingCalendarItems } from '../db/itemHelpers';
+import { getActiveNextActions, getItemsAcrossUsers, getItemsByStatus, getOverdueItems, getUpcomingCalendarItems } from '../db/itemHelpers';
 import type { MyDB, StoredItem } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -165,6 +165,32 @@ describe('getUpcomingCalendarItems', () => {
 });
 
 // ── getOverdueItems ────────────────────────────────────────────────────────────
+
+// ── getItemsAcrossUsers ────────────────────────────────────────────────────────
+
+describe('getItemsAcrossUsers', () => {
+    it('returns items owned by any of the supplied user ids, flattened', async () => {
+        await seed([
+            baseItem('a1', { userId: 'user-a' }),
+            baseItem('a2', { userId: 'user-a' }),
+            baseItem('b1', { userId: 'user-b' }),
+            baseItem('c1', { userId: 'user-c' }),
+        ]);
+
+        const merged = await getItemsAcrossUsers(db, ['user-a', 'user-b']);
+        expect(merged.map((i) => i._id).sort()).toEqual(['a1', 'a2', 'b1']);
+    });
+
+    it('returns an empty array when no user ids are provided', async () => {
+        await seed([baseItem('x', { userId: 'user-a' })]);
+        expect(await getItemsAcrossUsers(db, [])).toEqual([]);
+    });
+
+    it('returns an empty array when none of the user ids own any items', async () => {
+        await seed([baseItem('x', { userId: 'user-a' })]);
+        expect(await getItemsAcrossUsers(db, ['ghost'])).toEqual([]);
+    });
+});
 
 describe('getOverdueItems', () => {
     it('returns nextAction and waitingFor items where expectedBy is in the past', async () => {

@@ -91,6 +91,30 @@ export async function deleteSyncConfig(integrationId: string, configId: string):
     await apiFetch(`/calendar/integrations/${integrationId}/sync-configs/${configId}`, { method: 'DELETE' });
 }
 
+// ── Aggregated multi-account view ─────────────────────────────────────────────
+
+/** One bundle per logged-in account on this device — flattened integrations + sync configs. */
+export interface AccountSyncConfigsBundle {
+    userId: string;
+    accountEmail: string;
+    /**
+     * Strips OAuth tokens (the server never returns them on this endpoint). The shape mirrors
+     * `CalendarIntegration` but always includes the per-integration sync configs inline so the
+     * picker can render every (account, integration, calendar) row in one read.
+     */
+    integrations: Array<Omit<CalendarIntegration, 'calendarId'> & { syncConfigs: CalendarSyncConfig[] }>;
+}
+
+/**
+ * Returns one bundle per logged-in Better Auth session on this device. Used by the unified
+ * calendar picker to enumerate every connected calendar across every logged-in account
+ * without driving an active-session pivot per account.
+ */
+export async function getAllSyncConfigs(): Promise<AccountSyncConfigsBundle[]> {
+    const res = await apiFetch('/calendar/all-sync-configs');
+    return res.json();
+}
+
 /**
  * Navigates the browser to the Google Calendar OAuth flow on the API server.
  * `loginHint` pre-selects an account in Google's picker; the server validates the eventually

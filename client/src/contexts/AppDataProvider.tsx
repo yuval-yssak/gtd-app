@@ -1,21 +1,30 @@
 import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
-import { getActiveAccount } from '../db/accountHelpers';
+import { getActiveAccount, getLoggedInAccounts } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
-import { getItemsByUser } from '../db/itemHelpers';
-import { getPeopleByUser } from '../db/personHelpers';
+import { getItemsAcrossUsers } from '../db/itemHelpers';
+import { getPeopleAcrossUsers } from '../db/personHelpers';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
-import { getRoutinesByUser } from '../db/routineHelpers';
+import { getRoutinesAcrossUsers } from '../db/routineHelpers';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnection, openSseConnection } from '../db/sseClient';
 import { bootstrapFromServer, flushSyncQueue, pullFromServer } from '../db/syncHelpers';
-import { getWorkContextsByUser } from '../db/workContextHelpers';
+import { getWorkContextsAcrossUsers } from '../db/workContextHelpers';
 import { useOnline } from '../hooks/useOnline';
 import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 
 export interface AppData {
+    /** The active session's account — the default-owner for newly created entities. */
     account: StoredAccount | null;
+    /**
+     * Every account currently signed in on this device. Reads in unified-view paths span all of
+     * these, but mutations still write under `account.id`. Stays empty until the boot effect
+     * loads accounts from IDB.
+     */
+    loggedInAccounts: StoredAccount[];
+    /** Convenience: same as `loggedInAccounts.map(a => a.id)`. Memoized at the provider level. */
+    loggedInUserIds: string[];
     items: StoredItem[];
     workContexts: StoredWorkContext[];
     people: StoredPerson[];
@@ -24,6 +33,8 @@ export interface AppData {
     refreshWorkContexts: () => Promise<void>;
     refreshPeople: () => Promise<void>;
     refreshRoutines: () => Promise<void>;
+    /** Re-reads accounts from IDB after a sign-in/out. Triggers refreshes for unified-view consumers. */
+    refreshAccounts: () => Promise<void>;
     syncAndRefresh: () => Promise<void>;
 }
 
@@ -54,6 +65,7 @@ async function syncFromServerWithBootstrapFallback(db: IDBPDatabase<MyDB>) {
 
 export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDatabase<MyDB> }>) {
     const [account, setAccount] = useState<StoredAccount | null>(null);
+    const [loggedInAccounts, setLoggedInAccounts] = useState<StoredAccount[]>([]);
     const [items, setItems] = useState<StoredItem[]>([]);
     const [workContexts, setWorkContexts] = useState<StoredWorkContext[]>([]);
     const [people, setPeople] = useState<StoredPerson[]>([]);
@@ -61,25 +73,39 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     const isOnline = useOnline();
     const isFirstOnlineRender = useRef(true); // Skips the first render of the isOnline effect — mount-time handling is done in loadAll()
 
+    // Cached id list — stable identity when the account ids didn't change so consumers
+    // memoizing on it don't re-run for every accounts-array re-creation.
+    const loggedInUserIds = useMemo(() => loggedInAccounts.map((a) => a.id), [loggedInAccounts]);
+
+    // Mirror state into a ref so the refresh* callbacks can read the freshest list
+    // without depending on `loggedInAccounts` (whose change would re-create every callback
+    // and ripple through child memoization). useEffect below keeps the ref synced.
+    const loggedInUserIdsRef = useRef<string[]>([]);
+    useEffect(() => {
+        loggedInUserIdsRef.current = loggedInUserIds;
+    }, [loggedInUserIds]);
+
     const refreshItems = useCallback(async () => {
-        const acct = await getActiveAccount(db);
-        if (!acct) return;
-        setItems(await getItemsByUser(db, acct.id));
+        setItems(await getItemsAcrossUsers(db, loggedInUserIdsRef.current));
     }, [db]);
     const refreshWorkContexts = useCallback(async () => {
-        const acct = await getActiveAccount(db);
-        if (!acct) return;
-        setWorkContexts(await getWorkContextsByUser(db, acct.id));
+        setWorkContexts(await getWorkContextsAcrossUsers(db, loggedInUserIdsRef.current));
     }, [db]);
     const refreshPeople = useCallback(async () => {
-        const acct = await getActiveAccount(db);
-        if (!acct) return;
-        setPeople(await getPeopleByUser(db, acct.id));
+        setPeople(await getPeopleAcrossUsers(db, loggedInUserIdsRef.current));
     }, [db]);
     const refreshRoutines = useCallback(async () => {
-        const acct = await getActiveAccount(db);
-        if (!acct) return;
-        setRoutines(await getRoutinesByUser(db, acct.id));
+        setRoutines(await getRoutinesAcrossUsers(db, loggedInUserIdsRef.current));
+    }, [db]);
+
+    // Re-reads accounts from IDB so add/remove-account flows can drive a unified-view
+    // refresh without driving a full sync round-trip. Returns the freshly read list so
+    // consumers (e.g. boot/online effects) can chain entity refreshes off the new ids.
+    const refreshAccounts = useCallback(async (): Promise<StoredAccount[]> => {
+        const accounts = await getLoggedInAccounts(db);
+        setLoggedInAccounts(accounts);
+        loggedInUserIdsRef.current = accounts.map((a) => a.id);
+        return accounts;
     }, [db]);
 
     // Guards against concurrent invocations from three independent paths: boot effect,
@@ -93,6 +119,23 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // Prevents setState calls from in-flight syncAndRefresh/initializeFromCache after unmount
     // (e.g. React Strict Mode double-mount, or fast navigation away during a network round-trip).
     const unmountedRef = useRef(false);
+
+    // Reads every entity store once across all logged-in users and pushes the result into
+    // React state. Extracted so syncAndRefresh and the catch-up pull share one definition
+    // and so each call is a single concise level of abstraction.
+    const refreshAllEntitiesAcrossUsers = useCallback(async () => {
+        const userIds = loggedInUserIdsRef.current;
+        const [freshItems, freshWorkContexts, freshPeople, freshRoutines] = await Promise.all([
+            getItemsAcrossUsers(db, userIds),
+            getWorkContextsAcrossUsers(db, userIds),
+            getPeopleAcrossUsers(db, userIds),
+            getRoutinesAcrossUsers(db, userIds),
+        ]);
+        setItems(freshItems);
+        setWorkContexts(freshWorkContexts);
+        setPeople(freshPeople);
+        setRoutines(freshRoutines);
+    }, [db]);
 
     // Extracted so both the mount effect and the isOnline effect can call it.
     const syncAndRefresh = useCallback(async () => {
@@ -132,12 +175,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                 console.log('[debug-gcal-sync][client] syncAndRefresh: unmounted — skipping setState');
                 return;
             }
-            const freshItems = await getItemsByUser(db, acct.id);
-            console.log('[debug-gcal-sync][client] syncAndRefresh: setItems', { count: freshItems.length });
-            setItems(freshItems);
-            setWorkContexts(await getWorkContextsByUser(db, acct.id));
-            setPeople(await getPeopleByUser(db, acct.id));
-            setRoutines(await getRoutinesByUser(db, acct.id));
+            await refreshAllEntitiesAcrossUsers();
         } finally {
             isSyncingRef.current = false;
             // If an SSE/push event arrived while we were syncing, do a lightweight catch-up
@@ -150,28 +188,23 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                 pullFromServer(db)
                     .then(async () => {
                         if (unmountedRef.current) return;
-                        const acct = await getActiveAccount(db);
-                        if (!acct) return;
-                        const freshItems = await getItemsByUser(db, acct.id);
-                        console.log('[debug-gcal-sync][client] catch-up pull: setItems', { count: freshItems.length });
-                        setItems(freshItems);
-                        setWorkContexts(await getWorkContextsByUser(db, acct.id));
-                        setPeople(await getPeopleByUser(db, acct.id));
-                        setRoutines(await getRoutinesByUser(db, acct.id));
+                        await refreshAllEntitiesAcrossUsers();
                     })
                     .catch((err) => console.error('[sync] catch-up pull failed:', err));
             }
         }
-    }, [db]);
+    }, [db, refreshAllEntitiesAcrossUsers]);
 
     const initializeFromCache = useCallback(
-        async (acct: StoredAccount) => {
-            // Show cached data immediately — works offline with no network round-trip
+        async (acct: StoredAccount, accounts: StoredAccount[]) => {
+            // Show cached data immediately — works offline with no network round-trip.
+            // Reads span every logged-in account so the unified view is correct from frame 1.
+            const userIds = accounts.map((a) => a.id);
             const [items, workContexts, people, routines] = await Promise.all([
-                getItemsByUser(db, acct.id),
-                getWorkContextsByUser(db, acct.id),
-                getPeopleByUser(db, acct.id),
-                getRoutinesByUser(db, acct.id),
+                getItemsAcrossUsers(db, userIds),
+                getWorkContextsAcrossUsers(db, userIds),
+                getPeopleAcrossUsers(db, userIds),
+                getRoutinesAcrossUsers(db, userIds),
             ]);
             // Skip setState if the component unmounted while the IDB reads were in flight.
             if (unmountedRef.current) {
@@ -204,16 +237,52 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         if (!acct) {
             return;
         }
-        await initializeFromCache(acct);
+        // Refresh accounts BEFORE initializing from cache so cross-user reads see every
+        // account; otherwise the very first render would only show the active account's
+        // entities, then flicker once accounts loaded.
+        const accounts = await refreshAccounts();
+        await initializeFromCache(acct, accounts);
         if (!navigator.onLine) {
             return;
         }
         await syncAndRefresh();
-    }, [db, initializeFromCache, syncAndRefresh]);
+    }, [db, initializeFromCache, refreshAccounts, syncAndRefresh]);
 
     const appData: AppData = useMemo(
-        () => ({ account, items, workContexts, people, routines, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines, syncAndRefresh }),
-        [account, items, workContexts, people, routines, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines, syncAndRefresh],
+        () => ({
+            account,
+            loggedInAccounts,
+            loggedInUserIds,
+            items,
+            workContexts,
+            people,
+            routines,
+            refreshItems,
+            refreshWorkContexts,
+            refreshPeople,
+            refreshRoutines,
+            // Cast away the extra accounts return value — consumers don't need it; the
+            // internal call sites that do (loadAll) use it directly via refreshAccounts.
+            refreshAccounts: async () => {
+                await refreshAccounts();
+            },
+            syncAndRefresh,
+        }),
+        [
+            account,
+            loggedInAccounts,
+            loggedInUserIds,
+            items,
+            workContexts,
+            people,
+            routines,
+            refreshItems,
+            refreshWorkContexts,
+            refreshPeople,
+            refreshRoutines,
+            refreshAccounts,
+            syncAndRefresh,
+        ],
     );
 
     /**

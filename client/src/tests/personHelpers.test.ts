@@ -1,6 +1,6 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { deletePersonById, getPeopleByUser, putPerson } from '../db/personHelpers';
+import { deletePersonById, getPeopleAcrossUsers, getPeopleByUser, putPerson } from '../db/personHelpers';
 import type { MyDB, StoredPerson } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -59,5 +59,21 @@ describe('deletePersonById', () => {
         await deletePersonById(db, 'p1');
 
         expect(await db.get('people', 'p1')).toBeUndefined();
+    });
+});
+
+describe('getPeopleAcrossUsers', () => {
+    it('returns people owned by any of the supplied user ids, flattened', async () => {
+        await db.put('people', makePerson('p1', { userId: 'user-a' }));
+        await db.put('people', makePerson('p2', { userId: 'user-b' }));
+        await db.put('people', makePerson('p3', { userId: 'user-c' }));
+
+        const merged = await getPeopleAcrossUsers(db, ['user-a', 'user-b']);
+        expect(merged.map((p) => p._id).sort()).toEqual(['p1', 'p2']);
+    });
+
+    it('returns an empty array when no user ids are provided', async () => {
+        await db.put('people', makePerson('p1'));
+        expect(await getPeopleAcrossUsers(db, [])).toEqual([]);
     });
 });

@@ -20,3 +20,17 @@
     flex-wrap: wrap;
     margin-top: 0.5rem;
 }
+
+/* Used as a non-selectable group label for the multi-account calendar picker. MUI's
+   <ListSubheader> doesn't render correctly inside <Select>, so we restyle a normal
+   <MenuItem> as a header. We don't disable the menu item — disabling would dim the text
+   below readable contrast and require !important to override Biome's ban-list. Instead we
+   block clicks via pointer-events and style the text. The aria-disabled prop on the JSX
+   side still keeps it out of the keyboard tab order. */
+.accountHeader {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    pointer-events: none;
+    cursor: default;
+}

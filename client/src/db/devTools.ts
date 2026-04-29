@@ -3,6 +3,7 @@
 // Not included in production builds (main.tsx guards with import.meta.env.DEV).
 
 import type { IDBPDatabase } from 'idb';
+import { getAllSyncConfigs } from '../api/calendarApi';
 import { getPushStatus } from '../api/pushApi';
 import type { MyDB, StoredItem } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
@@ -129,6 +130,9 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
             const deviceId = await getOrCreateDeviceId(db);
             return getPushStatus(deviceId);
         },
+        // Multi-account aggregated calendar bundles — used by Step 3 e2e specs to assert
+        // that the unified picker enumerates calendars across every signed-in account.
+        getAllSyncConfigs: () => getAllSyncConfigs(),
     };
 
     (window as unknown as { __gtd: typeof gtd }).__gtd = gtd;

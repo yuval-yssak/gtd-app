@@ -53,6 +53,22 @@ export async function getAllAccounts(db: IDBPDatabase<MyDB>): Promise<StoredAcco
     return all.sort((a, b) => a.addedAt - b.addedAt);
 }
 
+/**
+ * Returns every account currently signed in on this device. Same as `getAllAccounts` semantically —
+ * the IDB `accounts` store is mirrored from `multiSession.listDeviceSessions()` on every load
+ * (see useAccounts.ts), so an account is in IDB iff a server-side session for it exists on this
+ * device. The dedicated name is kept so call sites in the unified-view path can read as the
+ * domain concept ("logged-in accounts") rather than "all known accounts".
+ */
+export async function getLoggedInAccounts(db: IDBPDatabase<MyDB>): Promise<StoredAccount[]> {
+    return getAllAccounts(db);
+}
+
+export async function getLoggedInUserIds(db: IDBPDatabase<MyDB>): Promise<string[]> {
+    const accounts = await getLoggedInAccounts(db);
+    return accounts.map((a) => a.id);
+}
+
 export async function removeAccount(userId: string, db: IDBPDatabase<MyDB>): Promise<void> {
     await db.delete('accounts', userId);
     const active = await db.get('activeAccount', 'active');

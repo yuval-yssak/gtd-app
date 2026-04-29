@@ -253,4 +253,33 @@ export const gtd = {
 
     getPushStatus: (page: Page): Promise<{ registered: boolean }> =>
         page.evaluate(() => (window as unknown as { __gtd: { getPushStatus(): Promise<{ registered: boolean }> } }).__gtd.getPushStatus()),
+
+    /**
+     * Returns the multi-account calendar bundles — wraps `GET /calendar/all-sync-configs`.
+     * Used by the unified-view spec to assert the server returns one bundle per signed-in account.
+     */
+    getAllSyncConfigs: (
+        page: Page,
+    ): Promise<
+        Array<{
+            userId: string;
+            accountEmail: string;
+            integrations: Array<{ _id: string; syncConfigs: Array<{ _id: string; calendarId: string; displayName?: string }> }>;
+        }>
+    > =>
+        page.evaluate(() =>
+            (
+                window as unknown as {
+                    __gtd: {
+                        getAllSyncConfigs(): Promise<
+                            Array<{
+                                userId: string;
+                                accountEmail: string;
+                                integrations: Array<{ _id: string; syncConfigs: Array<{ _id: string; calendarId: string; displayName?: string }> }>;
+                            }>
+                        >;
+                    };
+                }
+            ).__gtd.getAllSyncConfigs(),
+        ),
 };

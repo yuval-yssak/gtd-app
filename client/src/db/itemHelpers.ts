@@ -6,6 +6,17 @@ export async function getItemsByUser(db: IDBPDatabase<MyDB>, userId: string): Pr
     return db.getAllFromIndex('items', 'userId', userId);
 }
 
+/**
+ * Reads items owned by any of the given userIds and returns them flattened. Used by the
+ * unified-view code path to merge every logged-in account's items into a single list. Issues
+ * one indexed read per user in parallel rather than a full scan + filter — the `userId`
+ * index keeps each per-user fetch O(matches), so cost scales with results, not store size.
+ */
+export async function getItemsAcrossUsers(db: IDBPDatabase<MyDB>, userIds: string[]): Promise<StoredItem[]> {
+    const perUser = await Promise.all(userIds.map((uid) => db.getAllFromIndex('items', 'userId', uid)));
+    return perUser.flat();
+}
+
 export async function putItem(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<void> {
     await db.put('items', item);
 }

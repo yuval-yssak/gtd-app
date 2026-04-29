@@ -18,6 +18,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
+import { AccountChip } from '../../components/AccountChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
 import type { StoredPerson } from '../../types/MyDB';
@@ -115,7 +116,12 @@ function PeoplePage() {
                                 }
                             >
                                 <ListItemText
-                                    primary={person.name}
+                                    primary={
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                            <span>{person.name}</span>
+                                            <AccountChip userId={person.userId} />
+                                        </Box>
+                                    }
                                     secondary={[person.email, person.phone].filter(Boolean).join(' · ') || undefined}
                                     className={styles.listItemText}
                                 />
