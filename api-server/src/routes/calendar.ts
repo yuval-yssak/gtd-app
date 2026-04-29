@@ -342,6 +342,64 @@ calendarRoutes.get('/integrations', authenticateRequest, async (c) => {
     return c.json(safe);
 });
 
+// ── Aggregated sync configs across all logged-in accounts on this device ─────
+//
+// Used by the unified calendar picker — the picker needs to show every connected
+// integration + sync config for every Better Auth session present on this device,
+// not just the active one. Authenticates normally; the multi-session cookie tells
+// us which other sessions exist, and we aggregate per-user data from there.
+type IntegrationWithConfigs = Omit<CalendarIntegrationInterface, 'accessToken' | 'refreshToken'> & {
+    syncConfigs: CalendarSyncConfigInterface[];
+};
+type AccountSyncConfigsBundle = {
+    userId: string;
+    accountEmail: string;
+    integrations: IntegrationWithConfigs[];
+};
+
+/** Strips OAuth tokens from a decrypted integration row before sending to the client. */
+function stripIntegrationTokens(integration: CalendarIntegrationInterface): Omit<CalendarIntegrationInterface, 'accessToken' | 'refreshToken'> {
+    const { accessToken: _a, refreshToken: _r, ...rest } = integration;
+    return rest;
+}
+
+/** Fetches one user's integrations + sync configs and pairs them. Used inside the per-session aggregation. */
+async function loadIntegrationsWithConfigs(userId: string): Promise<IntegrationWithConfigs[]> {
+    const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+    // Lazy migration parity with /integrations — keep behavior consistent across reads.
+    await Promise.all(integrations.map((integration) => ensureSyncConfigExists(integration)));
+    const allConfigs = await calendarSyncConfigsDAO.findByUser(userId);
+    return integrations.map((integration) => ({
+        ...stripIntegrationTokens(integration),
+        syncConfigs: allConfigs.filter((config) => config.integrationId === integration._id),
+    }));
+}
+
+calendarRoutes.get('/all-sync-configs', authenticateRequest, async (c) => {
+    const sessions = await auth.api.listDeviceSessions({ headers: c.req.raw.headers });
+    // De-duplicate by userId — a single user can have multiple sessions on one device
+    // (e.g. after a session-revoke + re-auth for the same email). We only want one bundle per user.
+    const seen = new Set<string>();
+    const bundles = await Promise.all(
+        sessions
+            .filter((s) => {
+                if (seen.has(s.user.id)) {
+                    return false;
+                }
+                seen.add(s.user.id);
+                return true;
+            })
+            .map(
+                async (s): Promise<AccountSyncConfigsBundle> => ({
+                    userId: s.user.id,
+                    accountEmail: s.user.email,
+                    integrations: await loadIntegrationsWithConfigs(s.user.id),
+                }),
+            ),
+    );
+    return c.json(bundles);
+});
+
 /** Trashes every item linked to the integration (status → 'trash'), records ops for cross-device convergence. Never touches GCal. */
 async function trashItemsForIntegration(userId: string, integrationId: string, now: string): Promise<void> {
     const linked = await itemsDAO.findArray({ user: userId, calendarIntegrationId: integrationId });
