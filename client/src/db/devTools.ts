@@ -26,6 +26,7 @@ import {
 } from './itemMutations';
 import type { NewPersonFields } from './personMutations';
 import { createPerson } from './personMutations';
+import { reassignEntity } from './reassignMutations';
 import { getRoutinesByUser } from './routineHelpers';
 import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
@@ -139,6 +140,28 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // Returns the set of userIds with an open SSE channel right now. Used by the
         // multi-account-sync e2e spec to assert the device opened one channel per account.
         sseChannelUserIds: () => getOpenSseUserIds(),
+
+        // ── Reassign (Step 5) ──────────────────────────────────────────────────
+        // Drives the cross-account move via /sync/reassign. Returns the discriminated server
+        // response so e2e specs can assert ok/error branches without network introspection.
+        reassign: (params: Parameters<typeof reassignEntity>[1]) => reassignEntity(db, params),
+
+        // Test-only: simulates a calendar-linked item move via the dev /simulate-event-move
+        // endpoint that stubs out Google Calendar. Used by the calendar-reassign e2e spec.
+        simulateCalendarMove: async (body: {
+            entityType: 'item';
+            entityId: string;
+            fromUserId: string;
+            toUserId: string;
+            targetCalendar: { integrationId: string; syncConfigId: string };
+        }) => {
+            const res = await fetch('http://localhost:4000/dev/calendar/simulate-event-move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            return res.json();
+        },
     };
 
     (window as unknown as { __gtd: typeof gtd }).__gtd = gtd;

@@ -261,6 +261,51 @@ export const gtd = {
     sseChannelUserIds: (page: Page): Promise<string[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds()),
 
+    // ── Reassign (Step 5) ────────────────────────────────────────────────────
+    /** Calls /sync/reassign via the harness. Returns the discriminated server response. */
+    reassign: (
+        page: Page,
+        params: {
+            entityType: 'item' | 'routine' | 'person' | 'workContext';
+            entityId: string;
+            fromUserId: string;
+            toUserId: string;
+            targetCalendar?: { integrationId: string; syncConfigId: string };
+        },
+    ): Promise<{ ok: true; crossUserReferences?: { peopleIds?: string[]; workContextIds?: string[] } } | { ok: false; status: number; error: string }> =>
+        page.evaluate(
+            (p) =>
+                (
+                    window as unknown as {
+                        __gtd: {
+                            reassign(p: unknown): Promise<{ ok: true } | { ok: false; status: number; error: string }>;
+                        };
+                    }
+                ).__gtd.reassign(p),
+            params,
+        ),
+
+    /** Calls /dev/calendar/simulate-event-move so an e2e can move a calendar-linked item without driving real GCal. */
+    simulateCalendarMove: (
+        page: Page,
+        body: {
+            entityType: 'item';
+            entityId: string;
+            fromUserId: string;
+            toUserId: string;
+            targetCalendar: { integrationId: string; syncConfigId: string };
+        },
+    ): Promise<{ ok: boolean; simulatedEventId?: string; error?: string }> =>
+        page.evaluate(
+            (b) =>
+                (
+                    window as unknown as {
+                        __gtd: { simulateCalendarMove(b: unknown): Promise<{ ok: boolean; simulatedEventId?: string; error?: string }> };
+                    }
+                ).__gtd.simulateCalendarMove(b),
+            body,
+        ),
+
     /**
      * Returns the multi-account calendar bundles — wraps `GET /calendar/all-sync-configs`.
      * Used by the unified-view spec to assert the server returns one bundle per signed-in account.

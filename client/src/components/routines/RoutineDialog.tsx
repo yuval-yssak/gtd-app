@@ -18,6 +18,8 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
+import { useAppData } from '../../contexts/AppDataProvider';
+import { reassignEntity } from '../../db/reassignMutations';
 import {
     createFirstRoutineItem,
     deleteAndRegenerateFutureItems,
@@ -32,6 +34,7 @@ import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendar
 import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
+import { AccountPicker } from '../AccountPicker';
 import { FrequencyPicker } from './FrequencyPicker';
 import styles from './RoutineDialog.module.css';
 import { isCalendarScheduleChanged, isStartDateChanged } from './routineEditDecision';
@@ -165,6 +168,11 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
     const [isSaving, setIsSaving] = useState(false);
     const { options: calendarOptions } = useCalendarOptions();
+    const { loggedInAccounts } = useAppData();
+    // Reassignment owner. For new routines defaults to the (caller-provided) active userId;
+    // for edits defaults to the routine's current owner. Save runs reassign after the
+    // local update so the source-user copy carries the latest fields before being moved.
+    const [ownerUserId, setOwnerUserId] = useState<string>(routine?.userId ?? userId);
 
     function patch(update: Partial<FormState>) {
         setForm((f) => ({ ...f, ...update }));
@@ -348,6 +356,11 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                 }
             }
 
+            // Reassignment runs last so the local update lands on the source user first; the
+            // server then atomically moves the routine and its generated items to the new owner.
+            if (isEdit && ownerUserId !== routine.userId) {
+                await reassignEntity(db, { entityType: 'routine', entityId: routine._id, fromUserId: routine.userId, toUserId: ownerUserId });
+            }
             await onSaved();
             onClose();
         } finally {
@@ -442,6 +455,9 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                     rows={3}
                     placeholder="Notes copied onto every generated item"
                 />
+
+                {/* Account picker — auto-hides on single-account devices */}
+                {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} disabled={isSaving} />}
             </DialogContent>
 
             <DialogActions>

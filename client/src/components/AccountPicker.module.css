@@ -1,0 +1,14 @@
+.colorDot {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+
+.error {
+    color: var(--mui-palette-error-main);
+    font-size: 0.75rem;
+    margin-top: 4px;
+}

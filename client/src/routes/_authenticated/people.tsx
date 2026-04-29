@@ -19,8 +19,10 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
+import { AccountPicker } from '../../components/AccountPicker';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
+import { reassignEntity } from '../../db/reassignMutations';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './-people.module.css';
 
@@ -38,38 +40,67 @@ const emptyForm: PersonFormState = { name: '', email: '', phone: '' };
 
 function PeoplePage() {
     const { db } = Route.useRouteContext();
-    const { account, people, refreshPeople } = useAppData();
+    const { account, people, refreshPeople, loggedInAccounts } = useAppData();
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<StoredPerson | null>(null);
     const [form, setForm] = useState<PersonFormState>(emptyForm);
+    // Owner of the entity. New persons default to the active account; edits default to the
+    // current owner. A change here drives `/sync/reassign` after the local update is saved.
+    const [ownerUserId, setOwnerUserId] = useState<string>('');
 
     function openCreate() {
         setEditing(null);
         setForm(emptyForm);
+        setOwnerUserId(account?.id ?? '');
         setDialogOpen(true);
     }
 
     function openEdit(person: StoredPerson) {
         setEditing(person);
         setForm({ name: person.name, email: person.email ?? '', phone: person.phone ?? '' });
+        setOwnerUserId(person.userId);
         setDialogOpen(true);
     }
 
     async function onSave() {
         if (!account || !form.name.trim()) return;
-        const fields = {
-            userId: account.id,
+        if (editing) {
+            await saveEdit(editing);
+            return;
+        }
+        await saveCreate();
+    }
+
+    /** Persist the form fields locally first, then move ownership server-side if the picker changed. */
+    async function saveEdit(target: StoredPerson) {
+        const fields = buildPersonFields(target.userId);
+        await updatePerson(db, { ...target, ...fields });
+        if (ownerUserId !== target.userId) {
+            await reassignEntity(db, { entityType: 'person', entityId: target._id, fromUserId: target.userId, toUserId: ownerUserId });
+        }
+        setDialogOpen(false);
+        await refreshPeople();
+    }
+
+    async function saveCreate() {
+        // New persons always belong to the picked owner — when the user changes the picker for
+        // a brand-new entity, we just create it under that owner directly (no reassign needed).
+        const ownerForCreate = ownerUserId || account?.id;
+        if (!ownerForCreate) {
+            return;
+        }
+        await createPerson(db, buildPersonFields(ownerForCreate));
+        setDialogOpen(false);
+        await refreshPeople();
+    }
+
+    function buildPersonFields(userId: string) {
+        return {
+            userId,
             name: form.name.trim(),
             ...(form.email.trim() ? { email: form.email.trim() } : {}),
             ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
         };
-        if (editing) {
-            await updatePerson(db, { ...editing, ...fields });
-        } else {
-            await createPerson(db, fields);
-        }
-        setDialogOpen(false);
-        await refreshPeople();
     }
 
     async function onDelete(person: StoredPerson) {
@@ -152,6 +183,8 @@ function PeoplePage() {
                             type="email"
                         />
                         <TextField label="Phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} fullWidth />
+                        {/* AccountPicker auto-hides on single-account devices */}
+                        {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} />}
                     </Box>
                 </DialogContent>
                 <DialogActions>

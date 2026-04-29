@@ -38,6 +38,10 @@
         "#api/syncClient": {
             "test": "./src/api/syncClient.mock.ts",
             "default": "./src/api/syncClient.ts"
+        },
+        "#api/syncApi": {
+            "test": "./src/api/syncApi.mock.ts",
+            "default": "./src/api/syncApi.ts"
         }
     },
     "devDependencies": {
