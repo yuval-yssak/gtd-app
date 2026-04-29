@@ -97,20 +97,25 @@ test.describe('unified view — items + AccountChips', () => {
             await expect(page.getByText('A — write report')).toBeVisible();
             await expect(page.getByText('B — review draft')).toBeVisible();
 
-            // Drop the secondary account from IDB — that's the unified-view source of truth for
-            // logged-in accounts. After a reload, the provider re-reads accounts and excludes
-            // entities owned by users no longer in the list.
-            await page.evaluate(async (uid) => {
-                type DBHandle = {
-                    delete(store: 'accounts', key: string): Promise<unknown>;
-                    getAll(store: 'items'): Promise<Array<{ _id: string; userId: string }>>;
-                    delete(store: 'items', key: string): Promise<unknown>;
-                };
-                const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-                await dbHandle.delete('accounts', uid);
-                // Tearing down the IDB row mirrors what removeAccount does in production. Items
-                // owned by the secondary still live in IDB but the cross-user reads ignore them.
-            }, secondary.userId);
+            // Sign the secondary account out via Better Auth's multi-session revoke endpoint plus
+            // an IDB account-row delete. The provider's seedAccountsFromMultiSession reads
+            // listDeviceSessions(), so a server-side revoke is required for the secondary to
+            // disappear after a reload — without it, the next refresh re-mirrors the server list
+            // and resurrects the row.
+            await page.evaluate(
+                async ({ rawToken, uid }) => {
+                    await fetch('http://localhost:4000/auth/multi-session/revoke', {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ sessionToken: rawToken }),
+                    });
+                    type DBHandle = { delete(store: 'accounts', key: string): Promise<unknown> };
+                    const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
+                    await dbHandle.delete('accounts', uid);
+                },
+                { rawToken: secondary.rawToken, uid: secondary.userId },
+            );
             await reloadInbox(page);
 
             // The secondary account's item disappears from the unified list.
