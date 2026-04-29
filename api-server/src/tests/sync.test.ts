@@ -32,6 +32,7 @@ beforeEach(async () => {
         db.collection('operations').deleteMany({}),
         db.collection('deviceSyncState').deleteMany({}),
         db.collection('pushSubscriptions').deleteMany({}),
+        db.collection('deviceUsers').deleteMany({}),
     ]);
     vi.restoreAllMocks();
 });

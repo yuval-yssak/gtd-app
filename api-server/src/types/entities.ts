@@ -253,10 +253,29 @@ export interface DeviceSyncStateInterface {
 
 export interface PushSubscriptionRecord {
     _id: string; // deviceId — one record per device, so upsert by deviceId keeps it current
+    /**
+     * Better Auth user ID of the account that registered the subscription.
+     * Informational only: a single device may host several logged-in accounts; reads of
+     * "which devices to push to for user X" go through `deviceUsers` joined on `deviceId`.
+     */
     user: string;
     endpoint: string;
     keys: { p256dh: string; auth: string };
     updatedTs: string;
+}
+
+/**
+ * Join row recording every (device, user) pair the device currently hosts a Better Auth session for.
+ * Maintained by the auth middleware on every authenticated request and removed on signOut /
+ * push subscription expiry.
+ */
+export interface DeviceUserInterface {
+    /** Composite key `<deviceId>:<userId>` — one row per (device, user) pair. */
+    _id: string;
+    deviceId: string;
+    userId: string;
+    createdTs: string; // ISO datetime — first time this device announced this user
+    lastSeenTs: string; // ISO datetime — most recent authenticated request from this device for this user
 }
 
 export interface CalendarIntegrationInterface {

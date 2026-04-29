@@ -6,6 +6,7 @@ import { cors } from 'hono/cors';
 import { clientUrl } from './config.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
+import { deviceRoutes } from './routes/devices.js';
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
 
@@ -25,7 +26,8 @@ const app = new Hono()
             // Allow all origins in dev; restrict to clientUrl in production
             origin: (origin) => (process.env.NODE_ENV !== 'production' ? origin : origin === clientUrl ? origin : null),
             credentials: true, // required so browsers send cookies cross-origin
-            allowHeaders: ['Content-Type'],
+            // X-Device-Id lets the auth middleware track which devices host which accounts
+            allowHeaders: ['Content-Type', 'X-Device-Id'],
             // PATCH needed for partial updates (e.g., calendar sync config)
             allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         }),
@@ -34,6 +36,7 @@ const app = new Hono()
     .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
     .route('/sync', syncRoutes)
     .route('/push', pushRoutes)
+    .route('/devices', deviceRoutes)
     .route('/calendar', calendarRoutes)
     .get('/version', (c) => c.json({ commitHash: COMMIT_HASH }));
 

@@ -193,7 +193,7 @@ async function doFlush(db: IDBPDatabase<MyDB>): Promise<void> {
 export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
     const deviceId = await getOrCreateDeviceId(db);
 
-    const { items, routines, people, workContexts, serverTs } = await fetchBootstrap();
+    const { items, routines, people, workContexts, serverTs } = await fetchBootstrap(deviceId);
 
     const mappedItems = items.map((doc) => remapUser(doc) as unknown as StoredItem);
     const mappedRoutines = routines.map((doc) => remapUser(doc) as unknown as StoredRoutine);

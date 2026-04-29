@@ -13,9 +13,11 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import classNames from 'classnames';
 import type { IDBPDatabase } from 'idb';
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { getPushStatus } from '../../api/pushApi';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { getOrCreateDeviceId } from '../../db/deviceId';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
 import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
@@ -308,20 +310,55 @@ function RoutineIndicatorSection() {
     );
 }
 
-function NotificationsSection({ db }: { db: IDBPDatabase<MyDB> }) {
-    // Inline capability check — avoids exporting a private helper from pushSubscription.ts.
-    const isSupported = typeof Notification !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window;
+// State machine driving the Notifications UI.
+// - 'unsupported'    — browser lacks Notification / SW / PushManager APIs.
+// - 'denied'         — user (or browser) blocked permission; only fixable via site settings.
+// - 'needsPermission'— permission is 'default'; show "Enable notifications".
+// - 'needsRegister'  — permission OK but the server has no subscription row for this device.
+// - 'enabled'        — both browser permission and server-side row are present.
+// - 'loading'        — pre-flight while polling /push/status.
+type NotificationStatus = 'unsupported' | 'denied' | 'needsPermission' | 'needsRegister' | 'enabled' | 'loading';
 
-    const [permission, setPermission] = useState<NotificationPermission>(() => (isSupported ? Notification.permission : 'denied'));
+function isBrowserPushCapable() {
+    return typeof Notification !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window;
+}
+
+function NotificationsSection({ db }: { db: IDBPDatabase<MyDB> }) {
+    const [status, setStatus] = useState<NotificationStatus>(() => (isBrowserPushCapable() ? 'loading' : 'unsupported'));
     const [isRequesting, setIsRequesting] = useState(false);
 
-    async function onEnable() {
+    // Resolves the current state by combining the browser's authoritative `Notification.permission`
+    // with a `/push/status` round-trip — both must be OK for the section to show "enabled".
+    const refreshStatus = useCallback(async () => {
+        if (!isBrowserPushCapable()) {
+            setStatus('unsupported');
+            return;
+        }
+        if (Notification.permission === 'denied') {
+            setStatus('denied');
+            return;
+        }
+        if (Notification.permission === 'default') {
+            setStatus('needsPermission');
+            return;
+        }
+        // Permission is granted — verify the server still holds a subscription row.
+        const deviceId = await getOrCreateDeviceId(db);
+        const { registered } = await getPushStatus(deviceId);
+        setStatus(registered ? 'enabled' : 'needsRegister');
+    }, [db]);
+
+    useEffect(() => {
+        void refreshStatus();
+    }, [refreshStatus]);
+
+    async function onEnableOrRegister() {
         setIsRequesting(true);
         try {
             await requestAndRegisterPushSubscription(db);
         } finally {
-            // Re-read from the browser — it's authoritative regardless of whether the call succeeded.
-            setPermission(Notification.permission);
+            // Re-derive status from the browser + server regardless of whether the call succeeded.
+            await refreshStatus();
             setIsRequesting(false);
         }
     }
@@ -335,27 +372,53 @@ function NotificationsSection({ db }: { db: IDBPDatabase<MyDB> }) {
                 <Typography variant="body2" color="text.secondary" mb={2}>
                     Push notifications keep your items in sync across devices, even when the app is closed.
                 </Typography>
-                {!isSupported && (
-                    <Typography variant="body2" color="text.secondary" fontStyle="italic">
-                        Push notifications are not supported in this browser.
-                    </Typography>
-                )}
-                {isSupported && permission === 'granted' && (
-                    <Typography variant="body2" color="success.main">
-                        Notifications enabled.
-                    </Typography>
-                )}
-                {isSupported && permission === 'denied' && (
-                    <Typography variant="body2" color="text.secondary" fontStyle="italic">
-                        Notifications are blocked. To enable them, update your browser's site permissions.
-                    </Typography>
-                )}
-                {isSupported && permission === 'default' && (
-                    <Button variant="outlined" size="small" onClick={onEnable} disabled={isRequesting}>
-                        {isRequesting ? 'Requesting…' : 'Enable notifications'}
-                    </Button>
-                )}
+                <NotificationsBody status={status} isRequesting={isRequesting} onEnableOrRegister={onEnableOrRegister} />
             </Box>
         </Paper>
+    );
+}
+
+interface NotificationsBodyProps {
+    status: NotificationStatus;
+    isRequesting: boolean;
+    onEnableOrRegister: () => void;
+}
+
+function NotificationsBody({ status, isRequesting, onEnableOrRegister }: NotificationsBodyProps) {
+    if (status === 'loading') {
+        return (
+            <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                Checking notification status…
+            </Typography>
+        );
+    }
+    if (status === 'unsupported') {
+        return (
+            <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                Push notifications are not supported in this browser.
+            </Typography>
+        );
+    }
+    if (status === 'denied') {
+        return (
+            <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                Notifications are blocked. To enable them, update your browser's site permissions.
+            </Typography>
+        );
+    }
+    if (status === 'enabled') {
+        return (
+            <Typography variant="body2" color="success.main">
+                Notifications enabled.
+            </Typography>
+        );
+    }
+    // needsPermission or needsRegister — both resolve via the same one-click flow:
+    // requestAndRegisterPushSubscription handles both prompting and re-subscribing.
+    const label = status === 'needsPermission' ? 'Enable notifications' : 'Re-enable notifications';
+    return (
+        <Button variant="outlined" size="small" onClick={onEnableOrRegister} disabled={isRequesting}>
+            {isRequesting ? 'Requesting…' : label}
+        </Button>
     );
 }
