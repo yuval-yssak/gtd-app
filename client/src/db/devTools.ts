@@ -24,6 +24,7 @@ import {
     removeItem,
     updateItem,
 } from './itemMutations';
+import { syncAllLoggedInUsers } from './multiUserSync';
 import type { NewPersonFields } from './personMutations';
 import { createPerson } from './personMutations';
 import { reassignEntity } from './reassignMutations';
@@ -32,7 +33,7 @@ import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materia
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { getOpenSseUserIds } from './sseClient';
-import { flushSyncQueue, forcePull, waitForPendingFlush } from './syncHelpers';
+import { flushSyncQueue, waitForPendingFlush } from './syncHelpers';
 import { createWorkContext } from './workContextMutations';
 
 async function resolveUserId(db: IDBPDatabase<MyDB>): Promise<string> {
@@ -45,7 +46,12 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
     const gtd = {
         // ── Inspect ─────────────────────────────────────────────────────────
         db,
-        syncState: () => db.get('deviceSyncState', 'local'),
+        // Surfaces both halves of the v4 split so e2e specs and console debugging can correlate
+        // the device identity with each per-user cursor in one read.
+        syncState: async () => ({
+            deviceMeta: await db.get('deviceMeta', 'local'),
+            syncCursors: await db.getAll('syncCursors'),
+        }),
         queuedOps: () => db.getAll('syncOperations'),
 
         // ── List / query ─────────────────────────────────────────────────────
@@ -115,7 +121,10 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
             await waitForPendingFlush();
             await flushSyncQueue(db);
         },
-        pull: () => forcePull(db),
+        // Pulls for every logged-in account on this device. Uses the orchestrator so each pass
+        // pivots the active session before its pull — without that, only the active account gets
+        // fresh data and other accounts' channels are silently missed.
+        pull: () => syncAllLoggedInUsers(db),
 
         // ── Device + notifications introspection (used by e2e specs) ─────────
         // Stable per-device UUID — exposed so e2e tests can correlate the deviceUsers join

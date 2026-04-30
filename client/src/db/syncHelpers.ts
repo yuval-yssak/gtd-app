@@ -142,7 +142,7 @@ export function flushSyncQueue(db: IDBPDatabase<MyDB>, options: FlushOptions = {
 
 // Cross-context flush lock: the main thread and Service Worker each have their own
 // module-level flushInFlight guard, so they can race and POST the same ops twice.
-// This IDB-based lock coordinates across JS contexts via the shared deviceSyncState record.
+// This IDB-based lock coordinates across JS contexts via the singleton deviceMeta record.
 const FLUSH_LOCK_TTL_MS = 30_000;
 
 type AcquireLockResult = 'acquired' | 'noDeviceState' | 'heldByOther';
@@ -150,11 +150,11 @@ type AcquireLockResult = 'acquired' | 'noDeviceState' | 'heldByOther';
 // Uses a single readwrite transaction so the check-then-set is atomic — IDB serializes
 // overlapping readwrite transactions on the same store, preventing TOCTOU races.
 async function acquireFlushLock(db: IDBPDatabase<MyDB>): Promise<AcquireLockResult> {
-    const tx = db.transaction('deviceSyncState', 'readwrite');
-    const store = tx.objectStore('deviceSyncState');
+    const tx = db.transaction('deviceMeta', 'readwrite');
+    const store = tx.objectStore('deviceMeta');
     const state = await store.get('local');
     if (!state) {
-        // No device state yet — can't write a lock. No deviceId means pushSyncOps
+        // No device meta yet — can't write a lock. No deviceId means pushSyncOps
         // would fail anyway, so skipping is safe.
         return 'noDeviceState';
     }
@@ -170,8 +170,8 @@ async function acquireFlushLock(db: IDBPDatabase<MyDB>): Promise<AcquireLockResu
 }
 
 async function releaseFlushLock(db: IDBPDatabase<MyDB>): Promise<void> {
-    const tx = db.transaction('deviceSyncState', 'readwrite');
-    const store = tx.objectStore('deviceSyncState');
+    const tx = db.transaction('deviceMeta', 'readwrite');
+    const store = tx.objectStore('deviceMeta');
     const state = await store.get('local');
     if (state) {
         await store.put({ ...state, flushingTs: null });
@@ -233,11 +233,35 @@ async function readQueuedOpsForFlush(db: IDBPDatabase<MyDB>, options: FlushOptio
     return all.filter((op) => op.userId === options.userIdFilter);
 }
 
-// bootstrapFromServer performs a full entity snapshot hydration for new devices.
-// New devices cannot rely on /sync/pull because historical operations may have been purged
-// before the device registered. Bootstrap reads from entity collections (permanent ground truth)
-// and sets lastSyncedTs = serverTs so the device starts incremental pull from now, not epoch.
-export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void> {
+/**
+ * Throws if the active Better Auth session does not belong to `userId`. Per-user pulls and
+ * bootstraps depend on the cookie pivot landing the request on the right server-side user — if
+ * the active session is stale or belongs to a different account, the response would be attributed
+ * to the wrong cursor and the wrong user's IDB rows. Used as a defensive guard inside `doPull` and
+ * `bootstrapFromServer` so callers (orchestrator, SSE handler, devTools) cannot accidentally pull
+ * for a user without first pivoting the session.
+ */
+async function assertActiveSessionMatches(db: IDBPDatabase<MyDB>, userId: string, callerName: string): Promise<void> {
+    const active = await getActiveAccount(db);
+    if (!active || active.id !== userId) {
+        throw new Error(
+            `${callerName}: active Better Auth session is ${active?.id ?? 'none'} but pull/bootstrap was requested for ${userId}. The orchestrator must pivot the active session before calling.`,
+        );
+    }
+}
+
+// bootstrapFromServer performs a full entity snapshot hydration for a (device, user) pair on its
+// first sync. New (device, user) pairs cannot rely on /sync/pull because historical operations may
+// have been purged before this user registered on this device. Bootstrap reads from the user's
+// entity collections (permanent ground truth) and sets the per-user cursor to serverTs so
+// incremental pull starts from now, not epoch.
+export function bootstrapFromServer(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    return withSessionGate(() => bootstrapFromServerUnguarded(db, userId));
+}
+
+/** Bootstrap without acquiring the session gate. Caller must already hold it. */
+export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    await assertActiveSessionMatches(db, userId, 'bootstrapFromServer');
     const deviceId = await getOrCreateDeviceId(db);
 
     const { items, routines, people, workContexts, serverTs } = await fetchBootstrap(deviceId);
@@ -258,44 +282,77 @@ export async function bootstrapFromServer(db: IDBPDatabase<MyDB>): Promise<void>
     const workContextsTx = db.transaction('workContexts', 'readwrite');
     await Promise.all([...mappedWorkContexts.map((wc) => workContextsTx.store.put(wc)), workContextsTx.done]);
 
-    // Register device cursor at serverTs — skips replaying all historical ops since bootstrap
-    // already gives us the current snapshot; incremental pull takes over from here.
-    await db.put('deviceSyncState', { _id: 'local', deviceId, lastSyncedTs: serverTs, flushingTs: null });
+    // Per-user cursor at serverTs — skips replaying historical ops because bootstrap already
+    // delivered the current snapshot; incremental pull takes over from here.
+    await setLastSyncedTs(db, userId, serverTs);
 }
 
-// Module-level guard so concurrent callers (SSE callback and SW-message handler arriving
-// for the same server change) collapse into a single in-flight pull. Without this, two
-// simultaneous pulls can race on setLastSyncedTs and cause one of them to advance the
-// cursor past ops the other hasn't applied yet, silently dropping changes.
-let pullInFlight: Promise<void> | null = null;
+// Active-session-dependent operations (pulls, orchestrator passes) all read or mutate the global
+// Better Auth session cookie. We serialize them through a single mutex so two parallel pulls for
+// different users can't observe one user's session pivot mid-fetch and attribute that response to
+// the wrong user's cursor (the failure mode H1/M1 in the per-user-cursor review). Per-user dedup
+// (an SSE event arriving while a SW-push pull is in flight for the same user) is layered on top
+// via `pullInFlight`.
+let sessionGate: Promise<void> = Promise.resolve();
 
-export function pullFromServer(db: IDBPDatabase<MyDB>) {
-    if (pullInFlight) return pullInFlight;
-    pullInFlight = doPull(db).finally(() => (pullInFlight = null));
-    return pullInFlight;
+/** Run `task` after any in-flight session-dependent op completes. Returns the task's result. */
+export function withSessionGate<T>(task: () => Promise<T>): Promise<T> {
+    const previous = sessionGate;
+    let release!: () => void;
+    sessionGate = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    return previous.then(task).finally(release);
 }
 
-/** Wait for any in-flight pull to settle, then start a guaranteed-fresh pull.
- *  Sets pullInFlight directly so no SSE-triggered pull can slip in between the
- *  await and the new pull (JS microtask ordering guarantees no gap). */
-export async function forcePull(db: IDBPDatabase<MyDB>): Promise<void> {
-    if (pullInFlight) await pullInFlight;
-    pullInFlight = doPull(db).finally(() => (pullInFlight = null));
-    return pullInFlight;
+const pullInFlight = new Map<string, Promise<void>>();
+
+/**
+ * Per-user pull that acquires the session gate. Use from any caller outside the orchestrator
+ * (SSE handler, devTools). The orchestrator calls `pullFromServerUnguarded` to avoid recursing
+ * into the gate it already holds.
+ *
+ * Same-user dedup happens before the gate — two SSE events arriving for the same user collapse
+ * into one queue entry rather than two sequential gate acquisitions.
+ */
+export function pullFromServer(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    const existing = pullInFlight.get(userId);
+    if (existing) return existing;
+    const promise = withSessionGate(() => doPull(db, userId)).finally(() => pullInFlight.delete(userId));
+    pullInFlight.set(userId, promise);
+    return promise;
 }
 
 /**
- * Fetches and applies server operations from the sync endpoint.
- * Must not run concurrently — call through `pullFromServer()` which provides a guard.
- * Parallel runs can race on `setLastSyncedTs` and silently drop ops from one run.
+ * Per-user pull WITHOUT acquiring the session gate. Caller must already hold it. Same-user dedup
+ * still applies — the orchestrator serializes its own loop so this rarely matters, but defending
+ * against re-entrancy is cheap.
  */
-async function doPull(db: IDBPDatabase<MyDB>): Promise<void> {
+export function pullFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    const existing = pullInFlight.get(userId);
+    if (existing) return existing;
+    const promise = doPull(db, userId).finally(() => pullInFlight.delete(userId));
+    pullInFlight.set(userId, promise);
+    return promise;
+}
+
+/**
+ * Fetches and applies server operations for a single user from the sync endpoint.
+ * Must not run concurrently for the same userId — call through `pullFromServer()` which provides a guard.
+ * Parallel runs for the same user can race on `setLastSyncedTs` and silently drop ops from one run.
+ *
+ * The `userId` argument names which per-user cursor to read/write — it must match the user whose
+ * Better Auth session is *currently active*, since the server scopes the pull response to
+ * `session.user.id`. Callers using `syncAllLoggedInUsers` pivot the active session per-pass.
+ */
+async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    await assertActiveSessionMatches(db, userId, 'doPull');
     const deviceId = await getOrCreateDeviceId(db);
-    const since = await getLastSyncedTs(db);
+    const since = await getLastSyncedTs(db, userId);
     const { ops, serverTs } = await fetchSyncOps(since, deviceId);
 
     console.log(
-        `[debug-gcal-sync][client] doPull | since=${since ?? 'epoch'} serverTs=${serverTs} opCount=${ops.length}`,
+        `[debug-gcal-sync][client] doPull | userId=${userId} since=${since} serverTs=${serverTs} opCount=${ops.length}`,
         ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}@${(op.snapshot as { updatedTs?: string } | null)?.updatedTs ?? 'n/a'}`),
     );
 
@@ -303,7 +360,7 @@ async function doPull(db: IDBPDatabase<MyDB>): Promise<void> {
         await applyServerOp(db, op);
     }
 
-    await setLastSyncedTs(db, serverTs);
+    await setLastSyncedTs(db, userId, serverTs);
 }
 
 // Handlers for each entity type used by applyEntityOp to stay DRY across entity types.
