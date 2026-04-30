@@ -16,15 +16,16 @@ import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/
 import { notifyViaWebPush, vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import type {
-    EntitySnapshot,
-    EntityType,
-    ItemInterface,
-    OperationInterface,
-    OpType,
-    PersonInterface,
-    RoutineInterface,
-    WorkContextInterface,
+import {
+    deviceSyncStateId,
+    type EntitySnapshot,
+    type EntityType,
+    type ItemInterface,
+    type OperationInterface,
+    type OpType,
+    type PersonInterface,
+    type RoutineInterface,
+    type WorkContextInterface,
 } from '../types/entities.js';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
@@ -240,9 +241,11 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             console.error('[calendar-pushback] failed:', err);
         });
 
+        // Per-(device, user) cursor — see DeviceSyncStateInterface. A single shared per-device row
+        // would let user A's pull advance the cursor past user B's boundary op on the same device.
         await deviceSyncStateDAO.updateOne(
-            { _id: deviceId },
-            { $set: { lastSeenTs: now, user: user.id }, $setOnInsert: { lastSyncedTs: dayjs(0).toISOString() } },
+            { _id: deviceSyncStateId(deviceId, user.id) },
+            { $set: { lastSeenTs: now, deviceId, user: user.id }, $setOnInsert: { lastSyncedTs: dayjs(0).toISOString() } },
             { upsert: true },
         );
 
@@ -278,14 +281,15 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         const serverTs = lastOp ? lastOp.ts : since;
 
         if (deviceId) {
-            // Track per-device pull cursor so old operations can eventually be purged
+            // Track per-(device, user) pull cursor so old operations can eventually be purged.
+            // Composite _id keeps each user's cursor independent — see DeviceSyncStateInterface.
             await deviceSyncStateDAO.updateOne(
-                { _id: deviceId },
-                { $set: { lastSyncedTs: serverTs, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
+                { _id: deviceSyncStateId(deviceId, user.id) },
+                { $set: { lastSyncedTs: serverTs, deviceId, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
                 { upsert: true },
             );
 
-            // Fire-and-forget: purge ops all devices have already seen to cap storage growth.
+            // Fire-and-forget: purge ops all (device, user) rows have already seen to cap storage growth.
             // Async so the pull response isn't blocked by the deletion query.
             purgeOldOperations(user.id).catch(() => {});
         }

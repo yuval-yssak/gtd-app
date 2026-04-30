@@ -300,14 +300,17 @@ describe('GET /sync/pull', () => {
         expect(ops[0]!.entityId).toBe(id2);
     });
 
-    it('pull with deviceId updates deviceSyncState lastSyncedTs', async () => {
+    it('pull with deviceId updates deviceSyncState lastSyncedTs (composite per-user _id)', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
 
         const res = await pull(cookie, { deviceId: 'dev-2' });
         const { serverTs } = (await res.json()) as { serverTs: string };
 
-        const state = await db.collection('deviceSyncState').findOne({ _id: 'dev-2' });
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-2::${userId}` });
         expect(state?.lastSyncedTs).toBe(serverTs);
+        expect(state?.deviceId).toBe('dev-2');
+        expect(state?.user).toBe(userId);
     });
 
     it('pull without deviceId does not create a deviceSyncState doc', async () => {
@@ -316,6 +319,99 @@ describe('GET /sync/pull', () => {
         await pull(cookie);
 
         expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
+    });
+
+    it('per-user cursor: explicit since=T does not exclude another user’s op also at ts=T (strict-$gt regression)', async () => {
+        // Drives the failure mode at the API level: even when a client explicitly passes since=T
+        // (which is what doPull does after a stale shared cursor), per-user cursors mean user B's
+        // pull is independent of user A's cursor. The bug was that a second user's pull at the
+        // same timestamp boundary returned 0 ops because the cursor was already advanced.
+        // Here we simulate by inserting two ops with the same artificial ts directly into the
+        // operations collection — bypassing dayjs() differences in the push handler.
+        const aliceCookie = await loginAsAlice();
+        const aliceId = await getUserId(aliceCookie);
+        vi.restoreAllMocks();
+        const bobCookie = await loginAsBob();
+        const bobId = await getUserId(bobCookie);
+
+        const sharedTs = '2025-04-30T19:38:54.754Z';
+        const aliceItemId = crypto.randomUUID();
+        const bobItemId = crypto.randomUUID();
+        await db.collection('operations').insertMany([
+            {
+                _id: crypto.randomUUID(),
+                user: aliceId,
+                deviceId: 'shared-dev',
+                ts: sharedTs,
+                entityType: 'item',
+                entityId: aliceItemId,
+                opType: 'create',
+                snapshot: { _id: aliceItemId, user: aliceId, status: 'inbox', title: 'A', createdTs: sharedTs, updatedTs: sharedTs },
+            },
+            {
+                _id: crypto.randomUUID(),
+                user: bobId,
+                deviceId: 'shared-dev',
+                ts: sharedTs,
+                entityType: 'item',
+                entityId: bobItemId,
+                opType: 'create',
+                snapshot: { _id: bobItemId, user: bobId, status: 'inbox', title: 'B', createdTs: sharedTs, updatedTs: sharedTs },
+            },
+        ]);
+
+        // Alice pulls — gets her op, advances her own cursor to sharedTs.
+        const aliceRes = await pull(aliceCookie, { deviceId: 'shared-dev' });
+        const { ops: aliceOps } = (await aliceRes.json()) as { ops: { entityId: string }[] };
+        expect(aliceOps.map((o) => o.entityId)).toEqual([aliceItemId]);
+
+        // Bob pulls. Under the old shared-cursor model his pull would be { since: sharedTs },
+        // strict-$gt would exclude his own op at sharedTs, and bobOps would be empty.
+        // With per-user cursors his cursor is independent (still epoch), so he gets his op.
+        const bobRes = await pull(bobCookie, { deviceId: 'shared-dev' });
+        const { ops: bobOps } = (await bobRes.json()) as { ops: { entityId: string }[] };
+        expect(bobOps.map((o) => o.entityId)).toEqual([bobItemId]);
+    });
+
+    it('per-user cursor: two users on the same device each track their own pull cursor (boundary-op regression)', async () => {
+        // Repro of the cross-account-move bug: when two users share a device, a strict ts > since
+        // filter combined with a single device-shared cursor lets one user's pull advance past
+        // the other user's boundary op. Per-(device, user) cursors fix it.
+        const aliceCookie = await loginAsAlice();
+        const aliceId = await getUserId(aliceCookie);
+        vi.restoreAllMocks();
+        const bobCookie = await loginAsBob();
+        const bobId = await getUserId(bobCookie);
+
+        const aliceItemId = crypto.randomUUID();
+        const bobItemId = crypto.randomUUID();
+
+        // Alice and Bob both push from the same deviceId. We capture the operations' actual ts
+        // values rather than asserting they share one — the test is meaningful even if they differ.
+        await push(aliceCookie, 'shared-dev', [makeClientOp('item', aliceItemId, 'create', makeItemSnapshot(aliceItemId, '2024-01-01T00:00:00.000Z'))]);
+        await push(bobCookie, 'shared-dev', [makeClientOp('item', bobItemId, 'create', makeItemSnapshot(bobItemId, '2024-01-01T00:00:00.000Z'))]);
+
+        // Alice pulls first — under per-user cursors, this should not affect Bob's pull cursor.
+        const aliceRes = await pull(aliceCookie, { deviceId: 'shared-dev' });
+        const { ops: aliceOps } = (await aliceRes.json()) as { ops: { entityId: string }[] };
+        expect(aliceOps.map((o) => o.entityId)).toEqual([aliceItemId]);
+
+        // Bob pulls from the same device — under the old shared cursor, Bob's cursor would already
+        // be at Alice's serverTs and Bob would miss his own boundary op. Under per-user cursors, Bob
+        // still gets his create op.
+        const bobRes = await pull(bobCookie, { deviceId: 'shared-dev' });
+        const { ops: bobOps } = (await bobRes.json()) as { ops: { entityId: string }[] };
+        expect(bobOps.map((o) => o.entityId)).toEqual([bobItemId]);
+
+        // Both per-(device, user) cursor rows exist independently.
+        const aliceState = await db.collection('deviceSyncState').findOne({ _id: `shared-dev::${aliceId}` });
+        const bobState = await db.collection('deviceSyncState').findOne({ _id: `shared-dev::${bobId}` });
+        expect(aliceState).not.toBeNull();
+        expect(bobState).not.toBeNull();
+        expect(aliceState?.user).toBe(aliceId);
+        expect(bobState?.user).toBe(bobId);
+        expect(aliceState?.deviceId).toBe('shared-dev');
+        expect(bobState?.deviceId).toBe('shared-dev');
     });
 
     it('user isolation: Bob pulls zero ops after Alice pushes', async () => {
@@ -502,8 +598,11 @@ describe('Stale device cleanup', () => {
         const userId = await getUserId(cookie);
         const staleTs = dayjs().subtract(91, 'day').toISOString();
 
-        // Insert stale device records directly
-        await db.collection('deviceSyncState').insertOne({ _id: 'dev-stale', user: userId, lastSeenTs: staleTs, lastSyncedTs: staleTs });
+        // Per-(device, user) row for the stale device. The push subscription is still keyed by
+        // raw deviceId (subscriptions are device-scoped, not user-scoped).
+        await db
+            .collection('deviceSyncState')
+            .insertOne({ _id: `dev-stale::${userId}`, deviceId: 'dev-stale', user: userId, lastSeenTs: staleTs, lastSyncedTs: staleTs });
         await db
             .collection('pushSubscriptions')
             .insertOne({ _id: 'dev-stale', user: userId, endpoint: 'https://push.example.com/stale', keys: { p256dh: 'k1', auth: 'k2' }, updatedTs: staleTs });
@@ -515,10 +614,10 @@ describe('Stale device cleanup', () => {
         await pull(cookie, { deviceId: 'dev-active' });
         await tick();
 
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-stale' })).toBe(0);
+        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
         expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-stale' })).toBe(0);
         // Active device still exists
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-active' })).toBe(1);
+        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-active' })).toBe(1);
     });
 
     it('devices active within 90 days are not pruned', async () => {
@@ -526,7 +625,9 @@ describe('Stale device cleanup', () => {
         const userId = await getUserId(cookie);
         const recentTs = dayjs().subtract(30, 'day').toISOString();
 
-        await db.collection('deviceSyncState').insertOne({ _id: 'dev-recent', user: userId, lastSeenTs: recentTs, lastSyncedTs: recentTs });
+        await db
+            .collection('deviceSyncState')
+            .insertOne({ _id: `dev-recent::${userId}`, deviceId: 'dev-recent', user: userId, lastSeenTs: recentTs, lastSyncedTs: recentTs });
 
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
@@ -534,7 +635,7 @@ describe('Stale device cleanup', () => {
         await pull(cookie, { deviceId: 'dev-active' });
         await tick();
 
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-recent' })).toBe(1);
+        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-recent' })).toBe(1);
     });
 
     it('stale device removal unblocks operation purging', async () => {
@@ -543,7 +644,9 @@ describe('Stale device cleanup', () => {
         const staleTs = dayjs().subtract(91, 'day').toISOString();
 
         // Abandoned device with epoch lastSyncedTs blocks purge
-        await db.collection('deviceSyncState').insertOne({ _id: 'dev-abandoned', user: userId, lastSeenTs: staleTs, lastSyncedTs: dayjs(0).toISOString() });
+        await db
+            .collection('deviceSyncState')
+            .insertOne({ _id: `dev-abandoned::${userId}`, deviceId: 'dev-abandoned', user: userId, lastSeenTs: staleTs, lastSyncedTs: dayjs(0).toISOString() });
 
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
@@ -551,8 +654,8 @@ describe('Stale device cleanup', () => {
         await pull(cookie, { deviceId: 'dev-active' });
         await tick();
 
-        // Abandoned device pruned, so ops can be purged
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-abandoned' })).toBe(0);
+        // Abandoned (device, user) row pruned, so ops can be purged
+        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-abandoned' })).toBe(0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
     });
 
@@ -563,7 +666,9 @@ describe('Stale device cleanup', () => {
         const recentTs = dayjs().subtract(1, 'day').toISOString();
 
         // lastSeenTs is stale but lastSyncedTs is recent — device still pulls, just doesn't push
-        await db.collection('deviceSyncState').insertOne({ _id: 'dev-pull-only', user: userId, lastSeenTs: staleTs, lastSyncedTs: recentTs });
+        await db
+            .collection('deviceSyncState')
+            .insertOne({ _id: `dev-pull-only::${userId}`, deviceId: 'dev-pull-only', user: userId, lastSeenTs: staleTs, lastSyncedTs: recentTs });
 
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
@@ -571,7 +676,48 @@ describe('Stale device cleanup', () => {
         await pull(cookie, { deviceId: 'dev-active' });
         await tick();
 
-        expect(await db.collection('deviceSyncState').countDocuments({ _id: 'dev-pull-only' })).toBe(1);
+        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-pull-only' })).toBe(1);
+    });
+
+    it('multi-user device: prunes only the stale (device, user) row and keeps the push subscription alive', async () => {
+        // dev-multi has two logged-in users; alice's row is stale, bob's is active. The stale row
+        // should be pruned, but the device's push subscription (keyed by raw deviceId) must stay
+        // because bob still uses it. The DAO returns deviceIds whose *every* row was wiped, so
+        // dev-multi is not returned and the subscription survives.
+        const aliceCookie = await loginAsAlice();
+        const aliceId = await getUserId(aliceCookie);
+        vi.restoreAllMocks();
+        const bobCookie = await loginAsBob();
+        const bobId = await getUserId(bobCookie);
+
+        const staleTs = dayjs().subtract(91, 'day').toISOString();
+        const recentTs = dayjs().subtract(1, 'day').toISOString();
+
+        await db
+            .collection('deviceSyncState')
+            .insertOne({ _id: `dev-multi::${aliceId}`, deviceId: 'dev-multi', user: aliceId, lastSeenTs: staleTs, lastSyncedTs: staleTs });
+        await db
+            .collection('deviceSyncState')
+            .insertOne({ _id: `dev-multi::${bobId}`, deviceId: 'dev-multi', user: bobId, lastSeenTs: recentTs, lastSyncedTs: recentTs });
+        await db.collection('pushSubscriptions').insertOne({
+            _id: 'dev-multi',
+            user: aliceId,
+            endpoint: 'https://push.example.com/multi',
+            keys: { p256dh: 'k1', auth: 'k2' },
+            updatedTs: recentTs,
+        });
+
+        // Alice's pull triggers her purge — only her stale row should go.
+        const entityId = crypto.randomUUID();
+        await push(aliceCookie, 'dev-alice-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+        await tick();
+        await pull(aliceCookie, { deviceId: 'dev-alice-active' });
+        await tick();
+
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })).toBe(0);
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-multi::${bobId}` })).toBe(1);
+        // bob still uses dev-multi → push subscription survives
+        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-multi' })).toBe(1);
     });
 });
 
