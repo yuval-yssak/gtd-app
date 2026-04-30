@@ -11,6 +11,7 @@ import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { migrateDeviceSyncStateToPerUserCursor } from './deviceSyncStateMigration.js';
 
 // Assigned in loadDataAccess(); kept as let so closeDataAccess() can close it
 let dbClient: MongoClient;
@@ -46,6 +47,9 @@ async function loadDataAccess(customDBName?: string) {
         calendarIntegrationsDAO.init(dbClient, resolvedDBName),
         calendarSyncConfigsDAO.init(dbClient, resolvedDBName),
     ]);
+    // Convert any legacy single-cursor-per-device rows to per-(device, user) shape.
+    // Idempotent + boot-only — see deviceSyncStateMigration.ts.
+    await migrateDeviceSyncStateToPerUserCursor(db);
     auth = createAuth(db);
 }
 

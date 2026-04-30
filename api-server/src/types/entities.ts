@@ -235,20 +235,44 @@ export interface OperationInterface {
 
 export interface DeviceSyncStateInterface {
     /**
-     * Stable device UUID (client-generated on first launch). Used as the document _id.
+     * Composite id `${deviceId}::${userId}`. One row per (device, user) pair so two
+     * Better Auth sessions on the same device each track their own pull cursor — a
+     * single shared cursor would let one user's pull advance past the other user's
+     * boundary op (the bug fixed by per-user cursors).
      */
     _id: string;
+    /**
+     * Stable device UUID (client-generated on first launch). Duplicated as a queryable
+     * field so device-scoped operations (stale-device cleanup, push-subscription
+     * removal) can scan by deviceId without parsing `_id`.
+     */
+    deviceId: string;
     user: string;
     /**
-     * ISO datetime of the most recent operation this device has pulled from the server.
-     * Operations older than the minimum lastSyncedTs across all devices for a user can be purged.
+     * ISO datetime of the most recent operation this (device, user) pair has pulled
+     * from the server. Operations older than the minimum lastSyncedTs across all
+     * (device, user) rows for a user can be purged.
      */
     lastSyncedTs: string;
     /**
-     * ISO datetime of the most recent operation this device has pushed to the server.
+     * ISO datetime of the most recent operation this (device, user) pair has pushed
+     * to the server.
      */
     lastSeenTs: string;
     name?: string; // user-given label, e.g. "iPhone", "Work laptop"
+}
+
+/**
+ * Compose the deviceSyncState document _id from a (deviceId, userId) pair.
+ * Invariant: neither deviceId nor userId may contain `::` — UUIDs (deviceIds) and Better Auth
+ * user IDs never do, but we throw defensively so a future ID-format change can't silently
+ * corrupt the legacy-row detection in `migrateDeviceSyncStateToPerUserCursor`.
+ */
+export function deviceSyncStateId(deviceId: string, userId: string): string {
+    if (deviceId.includes('::') || userId.includes('::')) {
+        throw new Error(`deviceSyncStateId: '::' is reserved as the deviceId/userId separator (deviceId=${deviceId}, userId=${userId})`);
+    }
+    return `${deviceId}::${userId}`;
 }
 
 export interface PushSubscriptionRecord {
