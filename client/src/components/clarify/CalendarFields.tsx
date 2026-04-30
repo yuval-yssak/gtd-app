@@ -13,6 +13,12 @@ interface Props {
     onChange: (patch: Partial<CalendarFormState>) => void;
     /** Available calendars for the picker. Omit or pass empty to hide the picker. */
     calendarOptions?: CalendarOption[];
+    /**
+     * Show the picker even when there is only one option. Default is false — single-calendar
+     * users get a cleaner form. Used by EditItemDialog's cross-account reassign flow, where
+     * validateReassign requires an explicit pick even if the target has only one calendar.
+     */
+    forceShowPicker?: boolean;
 }
 
 /** Groups calendars by owning account email so the picker can render one section per account. */
@@ -29,8 +35,11 @@ function groupByAccount(calendarOptions: CalendarOption[]): Map<string, Calendar
     return groups;
 }
 
-export function CalendarFields({ value, onChange, calendarOptions }: Props) {
-    const showPicker = calendarOptions !== undefined && calendarOptions.length > 1;
+export function CalendarFields({ value, onChange, calendarOptions, forceShowPicker = false }: Props) {
+    // Default rule: hide the picker until there's an actual choice (2+ options). EditItemDialog's
+    // cross-account reassign opts in via forceShowPicker so the user can confirm even a single-option list.
+    const minOptions = forceShowPicker ? 1 : 2;
+    const showPicker = calendarOptions !== undefined && calendarOptions.length >= minOptions;
     // Pre-group when rendering — Select can't accept fragments around its children, so we
     // flatten ListSubheader + MenuItem pairs into a single array of nodes.
     const grouped = calendarOptions ? groupByAccount(calendarOptions) : new Map<string, CalendarOption[]>();
@@ -65,7 +74,6 @@ export function CalendarFields({ value, onChange, calendarOptions }: Props) {
                     slotProps={{ inputLabel: { shrink: true } }}
                 />
             </Stack>
-            {/* Only show picker when user has 2+ calendars — with 0-1 there's nothing to choose. */}
             {showPicker && (
                 <FormControl size="small">
                     <InputLabel>Calendar</InputLabel>

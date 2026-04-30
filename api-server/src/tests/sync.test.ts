@@ -65,10 +65,12 @@ function makeClientOp(entityType: EntityType, entityId: string, opType: OpType, 
     return { entityType, entityId, opType, queuedAt: dayjs().toISOString(), snapshot };
 }
 
+// Snapshots in tests omit the `userId` field — the server strips it from inbound ops anyway, and
+// the /sync/push mismatch guard rejects ops whose snapshot.userId disagrees with the session.
+// Real clients always set `userId === session.user.id` (validated separately in sync.push.mismatch).
 function makeItemSnapshot(entityId: string, updatedTs: string, overrides?: Record<string, unknown>) {
     return {
         _id: entityId,
-        userId: 'client-user-id', // server strips this and injects its own user.id from the session
         status: 'inbox',
         title: 'Test Item',
         createdTs: '2024-01-01T00:00:00.000Z',
@@ -193,6 +195,7 @@ describe('POST /sync/push', () => {
 
     it('all four entity types are stored in their respective collections', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
         const itemId = crypto.randomUUID();
         const routineId = crypto.randomUUID();
         const personId = crypto.randomUUID();
@@ -203,7 +206,7 @@ describe('POST /sync/push', () => {
             makeClientOp('item', itemId, 'create', makeItemSnapshot(itemId, ts)),
             makeClientOp('routine', routineId, 'create', {
                 _id: routineId,
-                userId: 'x',
+                userId,
                 title: 'Daily standup',
                 routineType: 'nextAction',
                 rrule: 'FREQ=DAILY',
@@ -212,8 +215,8 @@ describe('POST /sync/push', () => {
                 createdTs: ts,
                 updatedTs: ts,
             }),
-            makeClientOp('person', personId, 'create', { _id: personId, userId: 'x', name: 'Alice', createdTs: ts, updatedTs: ts }),
-            makeClientOp('workContext', workContextId, 'create', { _id: workContextId, userId: 'x', name: 'At desk', createdTs: ts, updatedTs: ts }),
+            makeClientOp('person', personId, 'create', { _id: personId, userId, name: 'Alice', createdTs: ts, updatedTs: ts }),
+            makeClientOp('workContext', workContextId, 'create', { _id: workContextId, userId, name: 'At desk', createdTs: ts, updatedTs: ts }),
         ]);
 
         expect(await db.collection('items').countDocuments({ _id: itemId })).toBe(1);
@@ -247,12 +250,13 @@ describe('POST /sync/push', () => {
         const userId = await getUserId(cookie);
         const entityId = crypto.randomUUID();
 
-        await push(cookie, 'dev-1', [
-            makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z', { userId: 'injected-client-id' })),
-        ]);
+        // Real clients tag the snapshot with their session userId; the server still strips and
+        // re-injects from the session. We pass userId=session.user.id so the mismatch guard
+        // (which rejects forged userIds) doesn't fire on the legitimate-but-tagged path.
+        await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z', { userId }))]);
 
         const op = await db.collection('operations').findOne({ entityId });
-        // Verify the server replaced the client-supplied userId with its own authoritative user.id
+        // The snapshot stored on the op should expose `user`, not `userId` — the server's strip+remap.
         expect((op?.snapshot as Record<string, unknown>)?.user).toBe(userId);
         expect((op?.snapshot as Record<string, unknown>)?.userId).toBeUndefined();
     });
@@ -411,11 +415,12 @@ describe('GET /sync/bootstrap', () => {
 
     it('round-trips routine.startDate through push + bootstrap', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
         const routineId = crypto.randomUUID();
         const ts = dayjs().toISOString();
         const snapshot = {
             _id: routineId,
-            userId: 'client-user-id',
+            userId,
             title: 'Daily',
             routineType: 'nextAction',
             rrule: 'FREQ=DAILY',

@@ -44,7 +44,7 @@ export function AccountSwitcher({ db }: Props) {
 
     return (
         <>
-            <IconButton onClick={openMenu} size="small" className={styles.menuButton}>
+            <IconButton onClick={openMenu} size="small" className={styles.menuButton} data-testid="accountSwitcherTrigger">
                 <AccountAvatar account={activeAccount} size={32} />
             </IconButton>
 
@@ -52,6 +52,7 @@ export function AccountSwitcher({ db }: Props) {
                 {allAccounts.map((account) => (
                     <MenuItem
                         key={account.id}
+                        data-testid={`accountSwitcherItem-${account.id}`}
                         onClick={() => {
                             if (account.id !== activeAccount?.id) {
                                 void switchToAccount(account.id);

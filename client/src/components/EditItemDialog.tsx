@@ -22,6 +22,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import type { ReassignItemEditPatch } from '../api/syncApi';
 import { useAppData } from '../contexts/AppDataProvider';
 import {
     clarifyToCalendar,
@@ -53,10 +54,13 @@ import { WaitingForFields } from './clarify/WaitingForFields';
 import styles from './EditItemDialog.module.css';
 import {
     applyCalendarPatch,
+    buildEditPatch,
+    decideSavePath,
     type EditableStatus,
     isSaveDisabled,
     mergeFormsIntoItem,
     normalizeTitleAndNotes,
+    pickDefaultConfigForUser,
     shouldDetachFromRoutine,
     stripRoutineId,
 } from './editItemDialogLogic';
@@ -156,27 +160,30 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
             return;
         }
         const ownerChanged = ownerUserId !== item.userId;
-        if (ownerChanged && !validateReassign()) {
+        const statusChanged = status !== item.status;
+        const path = decideSavePath(ownerChanged, statusChanged);
+        if (path.kind === 'block') {
+            setReassignError(path.error);
+            return;
+        }
+        if (path.kind === 'reassign' && !validateReassign()) {
             return;
         }
         setIsSaving(true);
         setReassignError(null);
         try {
-            const itemNormalized = normalizeTitleAndNotes(item, trimmedTitle, notes.trim());
-            const statusChanged = status !== item.status;
-            if (statusChanged) {
-                await saveViaStatusTransition(itemNormalized);
-            } else {
-                await saveInPlace(itemNormalized);
-            }
-            // Reassignment runs last so the in-place edits land on the source-user copy first;
-            // the server then moves that updated entity across to the new owner. Doing it in the
-            // other order would mean the source delete races against the local update.
-            if (ownerChanged) {
-                const reassignOk = await runReassign();
+            if (path.kind === 'reassign') {
+                // Cross-account: do NOT touch IDB under the source user. The server is the only
+                // writer here — it applies the edits + moves atomically via /sync/reassign with
+                // an editPatch. This avoids both the misroute corruption and the double-write.
+                const reassignOk = await runReassign(buildEditPatch(item, trimmedTitle, notes.trim(), status, naForm, calForm, wfForm));
                 if (!reassignOk) {
                     return; // error already set via setReassignError; keep dialog open for retry
                 }
+            } else if (path.kind === 'statusTransition') {
+                await saveViaStatusTransition(normalizeTitleAndNotes(item, trimmedTitle, notes.trim()));
+            } else {
+                await saveInPlace(normalizeTitleAndNotes(item, trimmedTitle, notes.trim()));
             }
             await onSaved();
             onClose();
@@ -206,16 +213,20 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
     /**
      * Calls `/sync/reassign`. The target calendar is required for calendar-linked items —
      * `validateReassign` already enforced presence; here we look up the option and forward
-     * its integration + sync config ids to the server.
+     * its integration + sync config ids to the server. The optional `editPatch` carries the
+     * dialog's field edits so the server applies them atomically with the move (no source-user
+     * pre-write).
      */
-    async function runReassign(): Promise<boolean> {
+    async function runReassign(editPatch: ReassignItemEditPatch): Promise<boolean> {
         const targetCalendar = resolveTargetCalendar();
+        const hasEdits = Object.keys(editPatch).length > 0;
         const result = await reassignEntity(db, {
             entityType: 'item',
             entityId: item._id,
             fromUserId: item.userId,
             toUserId: ownerUserId,
             ...(targetCalendar ? { targetCalendar } : {}),
+            ...(hasEdits ? { editPatch } : {}),
         });
         if (!result.ok) {
             setReassignError(result.error);
@@ -358,6 +369,11 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                             onChange={(uid) => {
                                 setOwnerUserId(uid);
                                 setReassignError(null);
+                                // The previously-picked calendar belongs to the old owner and is filtered out of
+                                // visibleCalendarOptions for the new owner — leaving it would render the Select as empty
+                                // (looks like nothing is picked) and fail validateReassign on save. Pre-pick the target's
+                                // default (or sole calendar) so the user only has to confirm.
+                                setCalForm((f) => ({ ...f, calendarSyncConfigId: pickDefaultConfigForUser(calendarOptions, uid, item) }));
                             }}
                             disabled={isRoutineGenerated || isSaving}
                             {...(reassignError ? { error: reassignError } : {})}
@@ -389,6 +405,9 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                             value={calForm}
                             onChange={(patch) => setCalForm((f) => applyCalendarPatch(f, patch))}
                             calendarOptions={visibleCalendarOptions}
+                            // Reassign requires an explicit pick (validateReassign), so show the picker
+                            // even if the target account only has one calendar.
+                            forceShowPicker={ownerUserId !== item.userId}
                         />
                     </>
                 )}

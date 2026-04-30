@@ -271,6 +271,10 @@ export const gtd = {
             fromUserId: string;
             toUserId: string;
             targetCalendar?: { integrationId: string; syncConfigId: string };
+            // Mirrors ReassignItemEditPatch / ReassignRoutineEditPatch on the client. Optional —
+            // most reassign-only e2es leave both undefined; the cross-account edit specs use them.
+            editPatch?: Record<string, unknown>;
+            editRoutinePatch?: Record<string, unknown>;
         },
     ): Promise<{ ok: true; crossUserReferences?: { peopleIds?: string[]; workContextIds?: string[] } } | { ok: false; status: number; error: string }> =>
         page.evaluate(
@@ -294,6 +298,8 @@ export const gtd = {
             fromUserId: string;
             toUserId: string;
             targetCalendar: { integrationId: string; syncConfigId: string };
+            // Cross-account "edit + move" patch — mirrors ReassignItemEditPatch on the client.
+            editPatch?: Record<string, unknown>;
         },
     ): Promise<{ ok: boolean; simulatedEventId?: string; error?: string }> =>
         page.evaluate(
