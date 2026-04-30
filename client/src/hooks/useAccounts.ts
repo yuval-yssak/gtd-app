@@ -112,6 +112,12 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
             await authClient.multiSession.setActive({ sessionToken: target.session.token });
             await setActiveAccount(userId, db);
             await refreshAccountState();
+            // Hard reload back to the current route so AppDataProvider re-runs its boot effect
+            // and every component reads the new active account. Without this, useAppData().account
+            // stays stuck on the previous account — Settings shows stale name/email, and worse,
+            // mutations on Inbox/Routines/People/Work Contexts get written under the wrong userId.
+            // Matches the reload pattern already used by signOutCurrent and switchToNextAndRevoke.
+            window.location.href = window.location.pathname + window.location.search;
         },
         [db, reauthForUserId, refreshAccountState],
     );

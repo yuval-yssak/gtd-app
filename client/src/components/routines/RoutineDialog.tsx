@@ -18,6 +18,7 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
+import type { ReassignRoutineEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { reassignEntity } from '../../db/reassignMutations';
 import {
@@ -151,6 +152,53 @@ function resolveCalendarLink(configId: string, options: CalendarOption[]): { cal
     return fallback ? { calendarIntegrationId: fallback.integrationId } : {};
 }
 
+/**
+ * Builds the editRoutinePatch for a cross-account routine reassign. Diffs each whitelisted field
+ * against the routine's current value and emits only those that changed (template is always
+ * emitted because it's a small object that's cheap to ship and the user may have toggled chips).
+ *
+ * Exported for unit-testing — verifies the diffing matches the same-account local-update logic.
+ */
+export function buildRoutineEditPatch(args: {
+    routine: StoredRoutine;
+    title: string;
+    rrule: string;
+    routineType: 'nextAction' | 'calendar';
+    template: { workContextIds?: string[]; peopleIds?: string[]; energy?: EnergyLevel; time?: number; focus?: boolean; urgent?: boolean; notes?: string };
+    calendarItemTemplate?: { timeOfDay: string; duration: number };
+    startDate?: string;
+    /**
+     * True when the dialog was opened on a paused routine and Save should also resume it.
+     * Mirrors the same-account path's `resumeOnSave = !routine.active` semantics so a cross-account
+     * save honours the "Save your changes to resume it" banner shown above paused routines.
+     */
+    resumeOnSave?: boolean;
+}): ReassignRoutineEditPatch {
+    const patch: ReassignRoutineEditPatch = {};
+    if (args.title !== args.routine.title) {
+        patch.title = args.title;
+    }
+    if (args.rrule !== args.routine.rrule) {
+        patch.rrule = args.rrule;
+    }
+    if (args.routineType !== args.routine.routineType) {
+        patch.routineType = args.routineType;
+    }
+    patch.template = args.template;
+    if (args.calendarItemTemplate !== undefined) {
+        patch.calendarItemTemplate = args.calendarItemTemplate;
+    }
+    const originalStartDate = args.routine.startDate ?? '';
+    const nextStartDate = args.startDate ?? '';
+    if (nextStartDate !== originalStartDate) {
+        patch.startDate = nextStartDate;
+    }
+    if (args.resumeOnSave) {
+        patch.active = true;
+    }
+    return patch;
+}
+
 function buildTemplate(form: FormState) {
     return {
         ...(form.workContextIds.length ? { workContextIds: form.workContextIds } : {}),
@@ -206,6 +254,33 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
+                // Cross-account move: route through /sync/reassign with an editRoutinePatch and
+                // skip the entire local-update + generate path. The server applies edits + moves
+                // the routine and its generated items atomically — a pre-write under the source
+                // user would race against the active session and silently misroute the snapshot.
+                if (ownerUserId !== routine.userId) {
+                    const ok = await reassignRoutineCrossAccount({
+                        routine,
+                        toUserId: ownerUserId,
+                        title: trimmedTitle,
+                        rrule: finalRrule,
+                        routineType: form.routineType,
+                        template,
+                        ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
+                        ...(form.startDate ? { startDate: form.startDate } : {}),
+                        // Honour the "Save your changes to resume it" banner shown above paused routines —
+                        // even when the same Save is also moving the routine to a different account.
+                        resumeOnSave: !routine.active,
+                    });
+                    if (!ok) {
+                        // Server rejected the move (rare — picker only lists eligible targets).
+                        // Keep the dialog open so the user can retry; the error is logged to console.
+                        return;
+                    }
+                    await onSaved();
+                    onClose();
+                    return;
+                }
                 // Split only when a calendar routine's schedule changed AND it has past items —
                 // past items should keep their original schedule. Title/notes-only edits always
                 // stay in-place; forking a routine just because the user renamed it would be
@@ -356,16 +431,47 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                 }
             }
 
-            // Reassignment runs last so the local update lands on the source user first; the
-            // server then atomically moves the routine and its generated items to the new owner.
-            if (isEdit && ownerUserId !== routine.userId) {
-                await reassignEntity(db, { entityType: 'routine', entityId: routine._id, fromUserId: routine.userId, toUserId: ownerUserId });
-            }
+            // Cross-account moves return early above. We reach here only on same-account saves
+            // and on new-routine creates (which can't be cross-account by definition).
             await onSaved();
             onClose();
         } finally {
             setIsSaving(false);
         }
+    }
+
+    /**
+     * Sends one atomic /sync/reassign with editRoutinePatch carrying the dialog's current form
+     * state. We don't pre-write under the source user (the corruption fingerprint from before)
+     * — the server is the only writer. Generated items follow via reassignGeneratedItems on
+     * the server, and the new owner's pull replays the resulting create + child-item ops.
+     */
+    async function reassignRoutineCrossAccount(args: {
+        routine: StoredRoutine;
+        toUserId: string;
+        title: string;
+        rrule: string;
+        routineType: 'nextAction' | 'calendar';
+        template: ReturnType<typeof buildTemplate>;
+        calendarItemTemplate?: { timeOfDay: string; duration: number };
+        startDate?: string;
+        resumeOnSave?: boolean;
+    }): Promise<boolean> {
+        const editRoutinePatch = buildRoutineEditPatch(args);
+        const result = await reassignEntity(db, {
+            entityType: 'routine',
+            entityId: args.routine._id,
+            fromUserId: args.routine.userId,
+            toUserId: args.toUserId,
+            editRoutinePatch,
+        });
+        if (!result.ok) {
+            // Rare — the picker only lists eligible target accounts. Log for dev visibility and
+            // return false so the caller keeps the dialog open instead of silently closing.
+            console.error('[routine reassign] failed:', result.error);
+            return false;
+        }
+        return true;
     }
 
     const isCalendar = form.routineType === 'calendar';

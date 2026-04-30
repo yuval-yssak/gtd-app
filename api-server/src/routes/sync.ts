@@ -183,6 +183,25 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             return c.json({ ok: true }, 200);
         }
 
+        // Misroute guard: the contract is "ops in this batch belong to the active session".
+        // Cross-account flushes must use syncAllLoggedInUsers/syncOneUser, which pivots the
+        // active session before flushing. If a snapshot still carries a userId tag and it
+        // disagrees with the session, the previous flow would silently overwrite and corrupt
+        // data (the bug that put item ebd197ea-… under the wrong user). Fail loudly instead.
+        // We check `snapshot.userId` (IndexedDB field name) — server entities use `user`, but
+        // the client's remapUser stamps the IDB-style `userId` onto outbound op snapshots.
+        // `snapshot: null` (delete ops) flows through unchecked — the active session is the only
+        // signal we have for ownership and the deleteByOwner path scopes by session.user.id anyway.
+        const mismatched = ops.find((op) => op.snapshot?.userId !== undefined && op.snapshot.userId !== user.id);
+        if (mismatched) {
+            return c.json(
+                {
+                    error: `Op userId mismatch: ${mismatched.opType}:${mismatched.entityType}:${mismatched.entityId} tagged userId=${mismatched.snapshot?.userId} but session user.id=${user.id}. Use syncAllLoggedInUsers/syncOneUser for cross-account flushes.`,
+                },
+                400,
+            );
+        }
+
         console.log(
             `[sync-push] received from device=${deviceId} | ops=${ops.length}`,
             ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`),

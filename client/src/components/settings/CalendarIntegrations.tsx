@@ -42,10 +42,32 @@ import {
     updateSyncConfig,
 } from '../../api/calendarApi';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { setActiveAccount } from '../../db/accountHelpers';
 import { useAccounts } from '../../hooks/useAccounts';
 import { authClient } from '../../lib/authClient';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { MyDB, StoredAccount } from '../../types/MyDB';
+
+/**
+ * Maps a `createSyncConfig` failure to a user-facing message. The thrown Error from `apiFetch`
+ * carries the format `Calendar API error <status>: <body>`, so we sniff for the 409 conflict to
+ * tell the user the calendar is already linked instead of a generic "try again".
+ */
+function formatSaveCalendarError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : '';
+    if (msg.includes('409')) {
+        return 'This calendar is already being synced. Choose a different calendar.';
+    }
+    return 'Failed to save calendar selection. Please try again.';
+}
+
+function formatAddCalendarError(err: unknown): string {
+    const msg = err instanceof Error ? err.message : '';
+    if (msg.includes('409')) {
+        return 'This calendar is already being synced.';
+    }
+    return 'Failed to add calendar. Please try again.';
+}
 
 /** Fetches the calendar list for an integration, with unmount-safe cancellation. */
 function useCalendarList(integrationId: string): { calendars: GoogleCalendar[]; isLoading: boolean; fetchError: string | null } {
@@ -238,6 +260,12 @@ function ConnectAccountPickerDialog({ db, onClose }: ConnectAccountPickerDialogP
         setPickerError(null);
         try {
             await switchToAccountIfNeeded(account, activeAccount?.id);
+            // Persist the chosen account in IDB so that after the OAuth redirect the multi-user
+            // sync orchestrator restores THIS account as the active session — not the one IDB had
+            // before the picker was opened. Without this, the integration is created under the
+            // newly-OAuth'd userId but later POSTs (e.g. /sync-configs) run under the restored
+            // session and get 404'd by the integration ownership check.
+            await setActiveAccount(account.id, db);
             initiateGoogleCalendarAuth(account.email);
         } catch (err) {
             console.error('[calendar] failed to switch session before OAuth:', err);
@@ -623,8 +651,9 @@ function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded
             const displayName = availableCalendars.find((c) => c.id === selectedId)?.name;
             await createSyncConfig(integrationId, { calendarId: selectedId, ...(displayName ? { displayName } : {}) });
             onAdded();
-        } catch {
-            setSaveError('Failed to add calendar. Please try again.');
+        } catch (err) {
+            console.error('[calendar] add sync config failed:', err);
+            setSaveError(formatAddCalendarError(err));
             setIsSaving(false);
         }
     }
@@ -699,9 +728,10 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
             // First calendar added via the post-OAuth dialog becomes the default sync target.
             await createSyncConfig(integration._id, { calendarId: selectedId, isDefault: true, ...(displayName ? { displayName } : {}) });
             onSaved();
-        } catch {
+        } catch (err) {
+            console.error('[calendar] save initial sync config failed:', err);
             if (isMountedRef.current) {
-                setSaveError('Failed to save calendar selection. Please try again.');
+                setSaveError(formatSaveCalendarError(err));
             }
         } finally {
             if (isMountedRef.current) setIsSaving(false);

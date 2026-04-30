@@ -1,14 +1,18 @@
+import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 import { emptyCalendar, emptyNextAction, emptyWaitingFor } from '../components/clarify/types';
 import {
     applyCalendarForm,
     applyCalendarPatch,
+    buildEditPatch,
     isSaveDisabled,
     mergeFormsIntoItem,
     normalizeTitleAndNotes,
+    pickDefaultConfigForUser,
     shouldDetachFromRoutine,
     stripRoutineId,
 } from '../components/editItemDialogLogic';
+import type { CalendarOption } from '../hooks/useCalendarOptions';
 import type { StoredItem } from '../types/MyDB';
 
 const BASE_ITEM: StoredItem = {
@@ -229,3 +233,262 @@ describe('applyCalendarPatch', () => {
         expect(next).toEqual({ ...FORM, calendarSyncConfigId: 'cfg-1' });
     });
 });
+
+describe('pickDefaultConfigForUser', () => {
+    function makeOption(overrides: Partial<CalendarOption> & Pick<CalendarOption, 'configId' | 'userId'>): CalendarOption {
+        return {
+            integrationId: `int-${overrides.configId}`,
+            accountEmail: 'user@example.com',
+            displayName: overrides.configId,
+            isDefault: false,
+            ...overrides,
+        };
+    }
+
+    const ITEM_USER_A = { ...BASE_ITEM, userId: 'user-A', calendarSyncConfigId: 'cfg-a-original' };
+
+    it('restores the item original configId when reverting to the original owner', () => {
+        const options = [makeOption({ configId: 'cfg-b-1', userId: 'user-B', isDefault: true })];
+        expect(pickDefaultConfigForUser(options, 'user-A', ITEM_USER_A)).toBe('cfg-a-original');
+    });
+
+    it('returns "" when reverting to original owner and the item had no config', () => {
+        const item: StoredItem = { ...BASE_ITEM, userId: 'user-A' };
+        expect(pickDefaultConfigForUser([], 'user-A', item)).toBe('');
+    });
+
+    it("picks the target account's default calendar when reassigning to a new owner", () => {
+        const options = [
+            makeOption({ configId: 'cfg-b-other', userId: 'user-B' }),
+            makeOption({ configId: 'cfg-b-default', userId: 'user-B', isDefault: true }),
+            makeOption({ configId: 'cfg-c-other', userId: 'user-C', isDefault: true }),
+        ];
+        expect(pickDefaultConfigForUser(options, 'user-B', ITEM_USER_A)).toBe('cfg-b-default');
+    });
+
+    // Regression: when the target account exposes exactly one calendar, the picker hides itself
+    // unless we pre-select that sole option — otherwise validateReassign blocks save with
+    // "Pick a calendar from {email} before saving" and there's no UI to satisfy it.
+    it("falls back to the target's sole calendar when no default is flagged", () => {
+        const options = [makeOption({ configId: 'cfg-b-sole', userId: 'user-B', isDefault: false })];
+        expect(pickDefaultConfigForUser(options, 'user-B', ITEM_USER_A)).toBe('cfg-b-sole');
+    });
+
+    it('returns "" when the target has no calendars at all (user must connect one first)', () => {
+        expect(pickDefaultConfigForUser([], 'user-B', ITEM_USER_A)).toBe('');
+    });
+
+    it('returns "" when the target has multiple calendars and none is flagged default (forces explicit pick)', () => {
+        const options = [
+            makeOption({ configId: 'cfg-b-1', userId: 'user-B', isDefault: false }),
+            makeOption({ configId: 'cfg-b-2', userId: 'user-B', isDefault: false }),
+        ];
+        expect(pickDefaultConfigForUser(options, 'user-B', ITEM_USER_A)).toBe('');
+    });
+
+    it('ignores options owned by other accounts when scanning for the target default', () => {
+        const options = [
+            makeOption({ configId: 'cfg-a-default', userId: 'user-A', isDefault: true }),
+            makeOption({ configId: 'cfg-b-sole', userId: 'user-B', isDefault: false }),
+        ];
+        // Reassigning A → B must pick cfg-b-sole, not cfg-a-default (which belongs to the source).
+        expect(pickDefaultConfigForUser(options, 'user-B', ITEM_USER_A)).toBe('cfg-b-sole');
+    });
+});
+
+describe('buildEditPatch', () => {
+    const CALENDAR_ITEM: StoredItem = {
+        _id: 'item-1',
+        userId: 'user-1',
+        status: 'calendar',
+        title: 'Standup',
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: '2026-01-01T00:00:00.000Z',
+        notes: 'old notes',
+        timeStart: '2026-05-04T09:00:00.000Z',
+        timeEnd: '2026-05-04T09:30:00.000Z',
+    };
+
+    const NEXT_ACTION_ITEM: StoredItem = {
+        _id: 'item-2',
+        userId: 'user-1',
+        status: 'nextAction',
+        title: 'Pay bill',
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: '2026-01-01T00:00:00.000Z',
+        workContextIds: ['ctx-1'],
+        peopleIds: ['p-1'],
+        energy: 'medium',
+        time: 15,
+        urgent: false,
+        focus: false,
+        expectedBy: '2026-12-31',
+    };
+
+    function calForm(date: string, startTime: string, endTime: string, configId = ''): typeof emptyCalendar {
+        return { date, startTime, endTime, calendarSyncConfigId: configId };
+    }
+
+    it('returns an empty object when nothing changed', () => {
+        const patch = buildEditPatch(
+            CALENDAR_ITEM,
+            CALENDAR_ITEM.title,
+            CALENDAR_ITEM.notes ?? '',
+            'calendar',
+            emptyNextAction,
+            // Same wall-clock as item.timeStart/timeEnd (UTC ISO ↔ local form depends on TZ; the
+            // helper compares by computed ISO so we feed back values that round-trip cleanly).
+            calForm('2026-05-04', dayJsHHmm('2026-05-04T09:00:00.000Z'), dayJsHHmm('2026-05-04T09:30:00.000Z')),
+            emptyWaitingFor,
+        );
+        expect(patch).toEqual({});
+    });
+
+    it('emits title only when the trimmed title differs from the original', () => {
+        const patch = buildEditPatch(CALENDAR_ITEM, 'New title', CALENDAR_ITEM.notes ?? '', 'calendar', emptyNextAction, emptyCalendar, emptyWaitingFor);
+        expect(patch.title).toBe('New title');
+        expect(patch.notes).toBeUndefined();
+    });
+
+    it('emits notes when changed; emits "" when cleared', () => {
+        const cleared = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, '', 'calendar', emptyNextAction, emptyCalendar, emptyWaitingFor);
+        expect(cleared.notes).toBe('');
+
+        const updated = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, 'new notes', 'calendar', emptyNextAction, emptyCalendar, emptyWaitingFor);
+        expect(updated.notes).toBe('new notes');
+    });
+
+    // Calendar wall-clock — only emit timeStart/timeEnd when the resolved ISO actually changes.
+    // Same configId edits are NOT in the patch (those flow via targetCalendar on the reassign call).
+    it('emits timeStart/timeEnd only when the wall-clock changed', () => {
+        const sameTime = buildEditPatch(
+            CALENDAR_ITEM,
+            CALENDAR_ITEM.title,
+            CALENDAR_ITEM.notes ?? '',
+            'calendar',
+            emptyNextAction,
+            calForm('2026-05-04', dayJsHHmm('2026-05-04T09:00:00.000Z'), dayJsHHmm('2026-05-04T09:30:00.000Z')),
+            emptyWaitingFor,
+        );
+        expect(sameTime.timeStart).toBeUndefined();
+        expect(sameTime.timeEnd).toBeUndefined();
+
+        const newTime = buildEditPatch(
+            CALENDAR_ITEM,
+            CALENDAR_ITEM.title,
+            CALENDAR_ITEM.notes ?? '',
+            'calendar',
+            emptyNextAction,
+            calForm('2026-05-04', dayJsHHmm('2026-05-04T10:00:00.000Z'), dayJsHHmm('2026-05-04T11:00:00.000Z')),
+            emptyWaitingFor,
+        );
+        expect(newTime.timeStart).toBeDefined();
+        expect(newTime.timeEnd).toBeDefined();
+    });
+
+    it('emits each nextAction field 1:1 when changed; omits unchanged fields', () => {
+        const naChange = {
+            ignoreBefore: '',
+            workContextIds: ['ctx-1', 'ctx-2'],
+            peopleIds: ['p-1'], // unchanged
+            energy: 'high' as const,
+            time: '30',
+            urgent: true,
+            focus: false, // unchanged
+            expectedBy: '2026-12-31', // unchanged
+        };
+        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', naChange, emptyCalendar, emptyWaitingFor);
+        expect(patch.workContextIds).toEqual(['ctx-1', 'ctx-2']);
+        expect(patch.peopleIds).toBeUndefined(); // unchanged
+        expect(patch.energy).toBe('high');
+        expect(patch.time).toBe(30);
+        expect(patch.urgent).toBe(true);
+        expect(patch.focus).toBeUndefined(); // unchanged from false
+        expect(patch.expectedBy).toBeUndefined(); // unchanged
+    });
+
+    it('emits energy="" when the user clears a previously-set energy', () => {
+        const naCleared = {
+            ignoreBefore: '',
+            workContextIds: NEXT_ACTION_ITEM.workContextIds ?? [],
+            peopleIds: NEXT_ACTION_ITEM.peopleIds ?? [],
+            energy: '' as const,
+            time: '15',
+            urgent: false,
+            focus: false,
+            expectedBy: '2026-12-31',
+        };
+        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', naCleared, emptyCalendar, emptyWaitingFor);
+        expect(patch.energy).toBe('');
+    });
+
+    it('emits time="" when the user clears a previously-set time estimate', () => {
+        const naCleared = {
+            ignoreBefore: '',
+            workContextIds: NEXT_ACTION_ITEM.workContextIds ?? [],
+            peopleIds: NEXT_ACTION_ITEM.peopleIds ?? [],
+            energy: 'medium' as const,
+            time: '',
+            urgent: false,
+            focus: false,
+            expectedBy: '2026-12-31',
+        };
+        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', naCleared, emptyCalendar, emptyWaitingFor);
+        expect(patch.time).toBe('');
+    });
+
+    it('emits empty array when the user clears workContextIds or peopleIds', () => {
+        const naCleared = {
+            ignoreBefore: '',
+            workContextIds: [],
+            peopleIds: [],
+            energy: 'medium' as const,
+            time: '15',
+            urgent: false,
+            focus: false,
+            expectedBy: '2026-12-31',
+        };
+        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', naCleared, emptyCalendar, emptyWaitingFor);
+        expect(patch.workContextIds).toEqual([]);
+        expect(patch.peopleIds).toEqual([]);
+    });
+
+    it('treats "" as unchanged for fields that default to empty (e.g. expectedBy when unset)', () => {
+        const itemNoExpectedBy: StoredItem = { ...NEXT_ACTION_ITEM };
+        delete itemNoExpectedBy.expectedBy;
+        const patch = buildEditPatch(
+            itemNoExpectedBy,
+            itemNoExpectedBy.title,
+            '',
+            'nextAction',
+            {
+                ...emptyNextAction,
+                workContextIds: itemNoExpectedBy.workContextIds ?? [],
+                peopleIds: itemNoExpectedBy.peopleIds ?? [],
+                energy: 'medium',
+                time: '15',
+            },
+            emptyCalendar,
+            emptyWaitingFor,
+        );
+        expect(patch.expectedBy).toBeUndefined();
+    });
+
+    it('emits waitingForPersonId when changed (waitingFor status)', () => {
+        const wfItem: StoredItem = {
+            ...NEXT_ACTION_ITEM,
+            status: 'waitingFor',
+            waitingForPersonId: 'p-1',
+        };
+        delete wfItem.workContextIds;
+        delete wfItem.peopleIds;
+        const wf = { waitingForPersonId: 'p-2', expectedBy: '2026-12-31', ignoreBefore: '' };
+        const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', emptyNextAction, emptyCalendar, wf);
+        expect(patch.waitingForPersonId).toBe('p-2');
+    });
+});
+
+/** Local helper — rebuilds the form's HH:mm value from a stored ISO timestamp using dayjs (matches the dialog's parser). */
+function dayJsHHmm(iso: string): string {
+    return dayjs(iso).format('HH:mm');
+}

@@ -1,5 +1,7 @@
 import dayjs from 'dayjs';
+import type { ReassignItemEditPatch } from '../api/syncApi';
 import type { CalendarOption } from '../hooks/useCalendarOptions';
+import { hasAtLeastOne } from '../lib/typeUtils';
 import type { EnergyLevel, StoredItem } from '../types/MyDB';
 import type { CalendarFormState, NextActionFormState, WaitingForFormState } from './clarify/types';
 import { buildCalendarMeta, type CalendarMeta } from './clarify/types';
@@ -140,6 +142,168 @@ export function applyWaitingForForm(item: StoredItem, wf: WaitingForFormState): 
         ...(wf.expectedBy ? { expectedBy: wf.expectedBy } : {}),
         ...(wf.ignoreBefore ? { ignoreBefore: wf.ignoreBefore } : {}),
     };
+}
+
+/**
+ * Picks which calendarSyncConfigId to pre-fill when the dialog's owner switches to `userId`.
+ * - Switching back to the item's original owner restores the item's original configId.
+ * - Switching to a different owner pre-selects that account's default calendar; falls back to its
+ *   sole calendar when there's exactly one. Otherwise returns '' so the user is forced to choose.
+ *
+ * Without this, the previously-picked configId belongs to the source account and is filtered out
+ * of the picker when the owner changes — leaving the Select rendered empty and failing
+ * validateReassign on save with "Pick a calendar from {email} before saving" but no way to satisfy it.
+ */
+export function pickDefaultConfigForUser(calendarOptions: CalendarOption[], userId: string, item: StoredItem): string {
+    if (userId === item.userId) {
+        return item.calendarSyncConfigId ?? '';
+    }
+    const ownedByTarget = calendarOptions.filter((opt) => opt.userId === userId);
+    const defaultOption = ownedByTarget.find((opt) => opt.isDefault);
+    if (defaultOption) {
+        return defaultOption.configId;
+    }
+    if (hasAtLeastOne(ownedByTarget) && ownedByTarget.length === 1) {
+        return ownedByTarget[0].configId;
+    }
+    return '';
+}
+
+/**
+ * Discriminated path the dialog's Save button takes for a given (ownerChanged, statusChanged) pair.
+ * Centralised here so the rule can be unit-tested without rendering — guards against regressions
+ * to the "ownerChanged → never write under source user" invariant that the old buggy flow violated.
+ */
+export type SavePath = { kind: 'reassign' } | { kind: 'statusTransition' } | { kind: 'saveInPlace' } | { kind: 'block'; error: string };
+
+export function decideSavePath(ownerChanged: boolean, statusChanged: boolean): SavePath {
+    if (ownerChanged && statusChanged) {
+        return { kind: 'block', error: 'Change either the status or the account, not both, in a single save.' };
+    }
+    if (ownerChanged) {
+        return { kind: 'reassign' };
+    }
+    if (statusChanged) {
+        return { kind: 'statusTransition' };
+    }
+    return { kind: 'saveInPlace' };
+}
+
+/**
+ * Diffs the dialog's form state against the original item and returns a patch containing only
+ * fields the user actually changed. Used by the cross-account reassign flow to ship edits along
+ * with the move in a single atomic /sync/reassign call — without writing the source-user copy
+ * first (which would silently corrupt data when the active session is the target).
+ *
+ * Empty string ('') and empty array ([]) are the server's "clear this field" sentinels; the
+ * helper emits them only when the original had a value and the form now has none, so a clear
+ * action distinguishes from an unchanged-empty field.
+ *
+ * Calendar refs (calendarSyncConfigId / calendarIntegrationId / calendarEventId) are NOT in
+ * the patch — those are conveyed via `targetCalendar` on the reassign call instead.
+ */
+export function buildEditPatch(
+    item: StoredItem,
+    trimmedTitle: string,
+    trimmedNotes: string,
+    status: EditableStatus,
+    na: NextActionFormState,
+    cal: CalendarFormState,
+    wf: WaitingForFormState,
+): ReassignItemEditPatch {
+    const patch: ReassignItemEditPatch = {};
+    if (trimmedTitle !== item.title) {
+        patch.title = trimmedTitle;
+    }
+    const originalNotes = item.notes ?? '';
+    if (trimmedNotes !== originalNotes) {
+        patch.notes = trimmedNotes;
+    }
+    if (status === 'calendar') {
+        addCalendarPatchFields(patch, item, cal);
+    }
+    if (status === 'nextAction') {
+        addNextActionPatchFields(patch, item, na);
+    }
+    if (status === 'waitingFor') {
+        addWaitingForPatchFields(patch, item, wf);
+    }
+    return patch;
+}
+
+/** Calendar wall-clock changes flow into timeStart/timeEnd. The configId is NOT in the patch — see buildEditPatch. */
+function addCalendarPatchFields(patch: ReassignItemEditPatch, item: StoredItem, cal: CalendarFormState): void {
+    if (!cal.date || !cal.startTime || !cal.endTime) {
+        return;
+    }
+    const nextStart = dayjs(`${cal.date}T${cal.startTime}`).toISOString();
+    const nextEnd = dayjs(`${cal.date}T${cal.endTime}`).toISOString();
+    if (nextStart !== item.timeStart) {
+        patch.timeStart = nextStart;
+    }
+    if (nextEnd !== item.timeEnd) {
+        patch.timeEnd = nextEnd;
+    }
+}
+
+/** Each nextAction field maps 1:1 from form state to a patch key when changed. */
+function addNextActionPatchFields(patch: ReassignItemEditPatch, item: StoredItem, na: NextActionFormState): void {
+    const originalContexts = item.workContextIds ?? [];
+    if (!arraysSetEqual(na.workContextIds, originalContexts)) {
+        patch.workContextIds = na.workContextIds;
+    }
+    const originalPeople = item.peopleIds ?? [];
+    if (!arraysSetEqual(na.peopleIds, originalPeople)) {
+        patch.peopleIds = na.peopleIds;
+    }
+    const originalEnergy = item.energy ?? '';
+    if (na.energy !== originalEnergy) {
+        // '' is the server's "clear this field" sentinel — emit it explicitly so the move drops
+        // a previously-set energy. Server's whitelist accepts '' here too.
+        patch.energy = na.energy === '' ? '' : (na.energy as EnergyLevel);
+    }
+    const originalTime = item.time?.toString() ?? '';
+    if (na.time !== originalTime) {
+        // Same '' clear sentinel for the numeric time estimate.
+        patch.time = na.time === '' ? '' : Number(na.time);
+    }
+    if (na.urgent !== Boolean(item.urgent)) {
+        patch.urgent = na.urgent;
+    }
+    if (na.focus !== Boolean(item.focus)) {
+        patch.focus = na.focus;
+    }
+    if (na.expectedBy !== (item.expectedBy ?? '')) {
+        patch.expectedBy = na.expectedBy;
+    }
+    if (na.ignoreBefore !== (item.ignoreBefore ?? '')) {
+        patch.ignoreBefore = na.ignoreBefore;
+    }
+}
+
+function addWaitingForPatchFields(patch: ReassignItemEditPatch, item: StoredItem, wf: WaitingForFormState): void {
+    if (wf.waitingForPersonId !== (item.waitingForPersonId ?? '')) {
+        patch.waitingForPersonId = wf.waitingForPersonId;
+    }
+    if (wf.expectedBy !== (item.expectedBy ?? '')) {
+        patch.expectedBy = wf.expectedBy;
+    }
+    if (wf.ignoreBefore !== (item.ignoreBefore ?? '')) {
+        patch.ignoreBefore = wf.ignoreBefore;
+    }
+}
+
+/**
+ * Set-equality on two string arrays — the dialog's chip toggle doesn't preserve the original
+ * storage order, so order-sensitive comparison would emit phantom diffs whenever a user
+ * unticks-then-reticks the same chip.
+ */
+function arraysSetEqual(a: string[], b: string[]): boolean {
+    if (a.length !== b.length) {
+        return false;
+    }
+    const setA = new Set(a);
+    return b.every((v) => setA.has(v));
 }
 
 export function mergeFormsIntoItem(

@@ -25,12 +25,52 @@ export interface TargetCalendar {
     syncConfigId: string;
 }
 
+/**
+ * Whitelisted user-edited fields that ride along on a reassign for items. Lets the dialog
+ * "edit + move" in one atomic call so we never write the source-user copy first (which the
+ * old flow did, and which silently corrupted the row when the active session was the target).
+ * The handler enforces the whitelist — `user`, `_id`, `updatedTs`, `routineId`, and any other
+ * key not listed here are dropped before being merged onto the snapshot.
+ */
+export interface ReassignItemEditPatch {
+    title?: string;
+    notes?: string;
+    timeStart?: string;
+    timeEnd?: string;
+    workContextIds?: string[];
+    peopleIds?: string[];
+    /** Energy level — empty string '' clears a previously-set value (matches the form's clear gesture). */
+    energy?: ItemInterface['energy'] | '';
+    /** Time estimate in minutes — empty string '' clears a previously-set value. */
+    time?: number | '';
+    urgent?: boolean;
+    focus?: boolean;
+    expectedBy?: string;
+    ignoreBefore?: string;
+    waitingForPersonId?: string;
+}
+
+/** Whitelisted edit fields that ride along on a routine reassign. Same rationale as ReassignItemEditPatch. */
+export interface ReassignRoutineEditPatch {
+    title?: string;
+    rrule?: string;
+    startDate?: string;
+    routineType?: RoutineInterface['routineType'];
+    template?: RoutineInterface['template'];
+    calendarItemTemplate?: RoutineInterface['calendarItemTemplate'];
+    active?: boolean;
+}
+
 export interface ReassignParams {
     entityType: EntityType;
     entityId: string;
     fromUserId: string;
     toUserId: string;
     targetCalendar?: TargetCalendar;
+    /** Item edits that ride along atomically. Ignored for non-item entityTypes. */
+    editPatch?: ReassignItemEditPatch;
+    /** Routine edits that ride along atomically. Ignored for non-routine entityTypes. */
+    editRoutinePatch?: ReassignRoutineEditPatch;
 }
 
 export type ReassignProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
@@ -64,20 +104,95 @@ async function reassignItem(params: ReassignParams, buildProvider: ReassignProvi
     if (item.routineId) {
         return { ok: false, status: 400, error: 'Routine-generated items cannot be reassigned — edit the routine itself' };
     }
-    const isCalendarLinked = Boolean(item.calendarEventId);
+    // Apply the user's edits to the in-memory item before any GCal call so create-on-target
+    // reflects the updated title/time, and persistItemMove writes the patched snapshot.
+    const patchedItem = applyItemEditPatch(item, params.editPatch);
+    const isCalendarLinked = Boolean(patchedItem.calendarEventId);
     if (isCalendarLinked && !params.targetCalendar) {
         return { ok: false, status: 400, error: 'targetCalendar is required for calendar-linked items' };
     }
     if (isCalendarLinked && params.targetCalendar) {
-        const moved = await moveItemAcrossCalendars(item, params, buildProvider);
+        const moved = await moveItemAcrossCalendars(patchedItem, params, buildProvider);
         if (!moved.ok) {
             return moved;
         }
         await persistItemMove(moved.item, params);
         return { ok: true };
     }
-    await persistItemMove(item, params);
+    await persistItemMove(patchedItem, params);
     return { ok: true };
+}
+
+/**
+ * Returns the item with whitelisted edit fields applied. Unrecognised keys (e.g. a forged `user`
+ * or `updatedTs`) are silently dropped so a malicious client can't override server-authoritative
+ * fields via the patch. Empty strings are treated as "clear this field" only for the optional
+ * date/string fields where '' is the canonical empty value; for required fields like `title`
+ * we keep the original when the patch's value is empty.
+ */
+function applyItemEditPatch(item: ItemInterface, patch: ReassignItemEditPatch | undefined): ItemInterface {
+    if (!patch) {
+        return item;
+    }
+    const next: ItemInterface = { ...item };
+    // `title` is required on ItemInterface, so we ignore an empty patch.title (the dialog already
+    // blocks save on an empty title); the rest of the optional fields use the standard empty-string
+    // / empty-array semantics: '' or [] clears, anything else replaces.
+    if (typeof patch.title === 'string' && patch.title.length > 0) {
+        next.title = patch.title;
+    }
+    assignOptionalString(next, 'notes', patch.notes);
+    assignOptionalString(next, 'timeStart', patch.timeStart);
+    assignOptionalString(next, 'timeEnd', patch.timeEnd);
+    assignOptionalString(next, 'expectedBy', patch.expectedBy);
+    assignOptionalString(next, 'ignoreBefore', patch.ignoreBefore);
+    assignOptionalString(next, 'waitingForPersonId', patch.waitingForPersonId);
+    assignOptionalArray(next, 'workContextIds', patch.workContextIds);
+    assignOptionalArray(next, 'peopleIds', patch.peopleIds);
+    // Empty string '' is the "clear this field" sentinel — matches the form's clear gesture.
+    // Invalid values (e.g. 'banana', NaN) are silently ignored so a malformed client request
+    // can't break the move; legitimate clears go through the explicit '' branch.
+    if (patch.energy === '') {
+        delete next.energy;
+    } else if (patch.energy === 'low' || patch.energy === 'medium' || patch.energy === 'high') {
+        next.energy = patch.energy;
+    }
+    if (patch.time === '') {
+        delete next.time;
+    } else if (typeof patch.time === 'number' && Number.isFinite(patch.time)) {
+        next.time = patch.time;
+    }
+    if (typeof patch.urgent === 'boolean') {
+        next.urgent = patch.urgent;
+    }
+    if (typeof patch.focus === 'boolean') {
+        next.focus = patch.focus;
+    }
+    return next;
+}
+
+/** Set or clear an optional string field — '' clears so the dialog can drop a value cleanly. */
+function assignOptionalString<T extends object, K extends keyof T>(target: T, key: K, value: unknown): void {
+    if (typeof value !== 'string') {
+        return;
+    }
+    if (value.length === 0) {
+        delete target[key];
+        return;
+    }
+    target[key] = value as T[K];
+}
+
+/** Set or clear an optional string-array field — [] clears so the dialog can drop all entries. */
+function assignOptionalArray<T extends object, K extends keyof T>(target: T, key: K, value: unknown): void {
+    if (!Array.isArray(value)) {
+        return;
+    }
+    if (value.length === 0) {
+        delete target[key];
+        return;
+    }
+    target[key] = value as T[K];
 }
 
 interface MovedItemResult {
@@ -213,11 +328,45 @@ async function persistRoutineMove(routine: RoutineInterface, params: ReassignPar
     // Destructure to drop the keys entirely (rather than assigning undefined) to keep
     // exactOptionalPropertyTypes happy.
     const { calendarEventId: _ce, calendarIntegrationId: _ci, calendarSyncConfigId: _cs, ...routineWithoutCalLinks } = routine;
-    const newSnapshot: RoutineInterface = { ...routineWithoutCalLinks, user: params.toUserId, updatedTs: now };
+    const patched = applyRoutineEditPatch(routineWithoutCalLinks as RoutineInterface, params.editRoutinePatch);
+    const newSnapshot: RoutineInterface = { ...patched, user: params.toUserId, updatedTs: now };
     await routinesDAO.deleteByOwner(params.entityId, params.fromUserId);
     await routinesDAO.replaceById(params.entityId, newSnapshot);
     await recordOperation(params.fromUserId, { entityType: 'routine', entityId: params.entityId, snapshot: null, opType: 'delete', now });
     await recordOperation(params.toUserId, { entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot, opType: 'create', now });
+}
+
+/**
+ * Returns the routine with whitelisted edit fields applied. Unrecognised keys are silently
+ * dropped — same trust-boundary rationale as applyItemEditPatch.
+ */
+function applyRoutineEditPatch(routine: RoutineInterface, patch: ReassignRoutineEditPatch | undefined): RoutineInterface {
+    if (!patch) {
+        return routine;
+    }
+    const next: RoutineInterface = { ...routine };
+    // `title` and `rrule` are required on RoutineInterface — we only replace when given a non-empty
+    // value. `startDate` is optional, so '' clears via the same convention as item fields.
+    if (typeof patch.title === 'string' && patch.title.length > 0) {
+        next.title = patch.title;
+    }
+    if (typeof patch.rrule === 'string' && patch.rrule.length > 0) {
+        next.rrule = patch.rrule;
+    }
+    assignOptionalString(next, 'startDate', patch.startDate);
+    if (patch.routineType === 'nextAction' || patch.routineType === 'calendar') {
+        next.routineType = patch.routineType;
+    }
+    if (patch.template !== undefined && typeof patch.template === 'object' && patch.template !== null) {
+        next.template = patch.template;
+    }
+    if (patch.calendarItemTemplate !== undefined && typeof patch.calendarItemTemplate === 'object' && patch.calendarItemTemplate !== null) {
+        next.calendarItemTemplate = patch.calendarItemTemplate;
+    }
+    if (typeof patch.active === 'boolean') {
+        next.active = patch.active;
+    }
+    return next;
 }
 
 /** Moves every generated item belonging to the routine across to the target user. Returns the count moved. */

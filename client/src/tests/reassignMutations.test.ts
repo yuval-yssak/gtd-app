@@ -69,4 +69,36 @@ describe('reassignEntity (client mutation helper)', () => {
         }
         expect(result.crossUserReferences?.peopleIds).toEqual(['ref-1']);
     });
+
+    it('forwards editPatch end-to-end to the server endpoint', async () => {
+        vi.mocked(reassignEntityOnServer).mockResolvedValueOnce({ ok: true });
+        await reassignEntity(db, {
+            entityType: 'item',
+            entityId: 'item-1',
+            fromUserId: 'a',
+            toUserId: 'b',
+            editPatch: { title: 'Renamed', urgent: true, workContextIds: ['ctx-1'] },
+        });
+        expect(reassignEntityOnServer).toHaveBeenCalledWith(
+            expect.objectContaining({
+                editPatch: { title: 'Renamed', urgent: true, workContextIds: ['ctx-1'] },
+            }),
+        );
+    });
+
+    it('forwards editRoutinePatch end-to-end to the server endpoint', async () => {
+        vi.mocked(reassignEntityOnServer).mockResolvedValueOnce({ ok: true });
+        await reassignEntity(db, {
+            entityType: 'routine',
+            entityId: 'r-1',
+            fromUserId: 'a',
+            toUserId: 'b',
+            editRoutinePatch: { title: 'Renamed', rrule: 'FREQ=DAILY' },
+        });
+        expect(reassignEntityOnServer).toHaveBeenCalledWith(
+            expect.objectContaining({
+                editRoutinePatch: { title: 'Renamed', rrule: 'FREQ=DAILY' },
+            }),
+        );
+    });
 });
