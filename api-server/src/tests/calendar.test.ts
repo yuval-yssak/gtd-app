@@ -142,7 +142,11 @@ describe('GET /calendar/auth/google', () => {
         expect(res.status).toBe(302);
         const location = res.headers.get('location') ?? '';
         expect(location).toContain('accounts.google.com');
-        expect(location).toContain('calendar');
+        // Both scopes must be requested: `calendar` for events, `userinfo.email` so the
+        // callback can verify the authorized account matches the active session.
+        const scope = new URL(location).searchParams.get('scope') ?? '';
+        expect(scope).toContain('https://www.googleapis.com/auth/calendar');
+        expect(scope).toContain('https://www.googleapis.com/auth/userinfo.email');
         // state must be present and HMAC-signed (verified below in callback test)
         expect(new URL(location).searchParams.get('state')).toBeTruthy();
     });
