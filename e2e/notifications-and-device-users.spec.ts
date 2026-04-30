@@ -60,8 +60,9 @@ async function signOutCurrentInPage(page: Page): Promise<void> {
         const apiServer = 'http://localhost:4000';
         type IDBDatabase = { get(store: string, key: string): Promise<{ deviceId: string } | undefined> };
         const dbHandle = (window as unknown as { __gtd: { db: IDBDatabase } }).__gtd.db;
-        const state = await dbHandle.get('deviceSyncState', 'local');
-        const deviceId = state?.deviceId;
+        // Post-v4 the device identity lives in `deviceMeta` (split from per-user `syncCursors`).
+        const meta = await dbHandle.get('deviceMeta', 'local');
+        const deviceId = meta?.deviceId;
         await fetch(`${apiServer}/devices/signout`, {
             method: 'POST',
             credentials: 'include',
