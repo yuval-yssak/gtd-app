@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import type { NextActionFilters } from '../../client/src/db/itemHelpers';
 import type { CalendarMeta, NextActionMeta, WaitingForMeta } from '../../client/src/db/itemMutations';
-import type { StoredDeviceSyncState, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../../client/src/types/MyDB';
+import type { StoredDeviceMeta, StoredItem, StoredPerson, StoredRoutine, StoredSyncCursor, StoredWorkContext, SyncOperation } from '../../client/src/types/MyDB';
 
 // Typed wrappers around window.__gtd.* that hide the page.evaluate() boilerplate.
 // All functions accept a Page as the first argument and run the corresponding __gtd
@@ -223,11 +223,13 @@ export const gtd = {
     queuedOps: (page: Page): Promise<SyncOperation[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { queuedOps(): Promise<SyncOperation[]> } }).__gtd.queuedOps()),
 
-    syncState: (page: Page): Promise<StoredDeviceSyncState | undefined> =>
+    // After the v3→v4 split, `syncState` returns the device singleton plus every per-user cursor row.
+    // E2e specs use this to assert that each Better Auth account's pull cursor advances independently.
+    syncState: (page: Page): Promise<{ deviceMeta: StoredDeviceMeta | undefined; syncCursors: StoredSyncCursor[] }> =>
         page.evaluate(() =>
             (
                 window as unknown as {
-                    __gtd: { syncState(): Promise<StoredDeviceSyncState | undefined> };
+                    __gtd: { syncState(): Promise<{ deviceMeta: StoredDeviceMeta | undefined; syncCursors: StoredSyncCursor[] }> };
                 }
             ).__gtd.syncState(),
         ),
