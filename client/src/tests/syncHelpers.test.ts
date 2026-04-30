@@ -52,8 +52,14 @@ let db: IDBPDatabase<MyDB>;
 
 beforeEach(async () => {
     db = await openTestDB();
-    // Seed a deviceSyncState so flushSyncQueue/pullFromServer can read deviceId and lastSyncedTs.
-    await db.put('deviceSyncState', { _id: 'local', deviceId: 'device-test', lastSyncedTs: '1970-01-01T00:00:00.000Z', flushingTs: null });
+    // Seed deviceMeta so flushSyncQueue can read the deviceId + acquire/release the flush lock,
+    // plus a per-user cursor so pullFromServer has a value to read/advance.
+    await db.put('deviceMeta', { _id: 'local', deviceId: 'device-test', flushingTs: null });
+    await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: '1970-01-01T00:00:00.000Z' });
+    // Seed the active account matching USER_ID so `assertActiveSessionMatches` (the guard inside
+    // doPull/bootstrap) lets these tests through without each one having to set it up.
+    await db.put('accounts', { id: USER_ID, email: 'u@example.com', name: 'U', image: null, provider: 'google', addedAt: 1 });
+    await db.put('activeAccount', { userId: USER_ID }, 'active');
 });
 
 afterEach(() => {
@@ -109,6 +115,9 @@ describe('queueSyncOp — userId field', () => {
     });
 
     it('throws when no userId is passed and no active account exists', async () => {
+        // The global beforeEach seeds an active account for the rest of the file; clear it here
+        // to assert the no-active-account error path of `queueSyncOp.resolveQueueUserId`.
+        await db.delete('activeAccount', 'active');
         await expect(
             queueSyncOp(db, {
                 opType: 'create',
@@ -234,7 +243,7 @@ describe('pullFromServer — item ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const item = await db.get('items', 'item-10');
         expect(item?.userId).toBe(USER_ID);
@@ -250,7 +259,7 @@ describe('pullFromServer — item ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const item = await db.get('items', 'item-11');
         expect(item?.updatedTs).toBe('2025-06-01T00:00:00.000Z');
@@ -264,7 +273,7 @@ describe('pullFromServer — item ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const item = await db.get('items', 'item-12');
         // Local is newer — must not be overwritten
@@ -279,29 +288,98 @@ describe('pullFromServer — item ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const item = await db.get('items', 'item-13');
         expect(item).toBeUndefined();
     });
 
-    it('updates lastSyncedTs to serverTs after a successful pull', async () => {
+    it('updates the per-user cursor to serverTs after a successful pull', async () => {
         const serverTs = '2025-09-01T12:00:00.000Z';
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
-        const state = await db.get('deviceSyncState', 'local');
-        expect(state?.lastSyncedTs).toBe(serverTs);
+        const cursor = await db.get('syncCursors', USER_ID);
+        expect(cursor?.lastSyncedTs).toBe(serverTs);
     });
 
-    it('throws and does not update lastSyncedTs when server returns non-200', async () => {
+    it('throws and does not update the per-user cursor when server returns non-200', async () => {
         vi.mocked(fetchSyncOps).mockRejectedValueOnce(new Error('GET /sync/pull 503'));
 
-        await expect(pullFromServer(db)).rejects.toThrow('GET /sync/pull 503');
+        await expect(pullFromServer(db, USER_ID)).rejects.toThrow('GET /sync/pull 503');
 
-        const state = await db.get('deviceSyncState', 'local');
-        expect(state?.lastSyncedTs).toBe('1970-01-01T00:00:00.000Z');
+        const cursor = await db.get('syncCursors', USER_ID);
+        expect(cursor?.lastSyncedTs).toBe('1970-01-01T00:00:00.000Z');
+    });
+
+    it('per-user cursor independence: pulling for user A does not move user B’s cursor', async () => {
+        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '2024-01-01T00:00:00.000Z' });
+        const serverTs = '2025-09-01T12:00:00.000Z';
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs });
+
+        await pullFromServer(db, USER_ID);
+
+        const cursorA = await db.get('syncCursors', USER_ID);
+        const cursorB = await db.get('syncCursors', 'user-b');
+        expect(cursorA?.lastSyncedTs).toBe(serverTs);
+        expect(cursorB?.lastSyncedTs).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('same-user dedup: two simultaneous pullFromServer calls for the same user collapse into one fetch', async () => {
+        // The session gate's job is to serialize *across* users. Same-user dedup is a separate
+        // property — two SSE events arriving for the same user shouldn't fire two fetches.
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: '2025-09-01T12:00:00.000Z' });
+        const a = pullFromServer(db, USER_ID);
+        const b = pullFromServer(db, USER_ID);
+        await Promise.all([a, b]);
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+    });
+
+    it('bootstrap rejects when the active Better Auth session does not match the requested userId', async () => {
+        // Symmetric guard for bootstrap: if a user has no cursor row, `pullOrBootstrap` reaches
+        // for bootstrap, and that path must also refuse if the active session doesn't match.
+        await expect(bootstrapFromServer(db, 'user-not-active')).rejects.toThrow(/active Better Auth session is/);
+    });
+
+    it('rejects when the active Better Auth session does not match the requested userId', async () => {
+        // The IDB active account is USER_ID, but we ask for a pull on user-b. The guard must
+        // refuse — pulling under the wrong session would attribute USER_ID's data to user-b.
+        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '1970-01-01T00:00:00.000Z' });
+        await expect(pullFromServer(db, 'user-b')).rejects.toThrow(/active Better Auth session is/);
+    });
+
+    it('boundary-op regression: a pull for user B picks up an op at ts=T even if user A’s cursor was already at T', async () => {
+        // Repro of the cross-account move bug at the helper level: two users on the same device,
+        // user A's cursor is already at T (the server timestamp of the op user B is about to pull).
+        // Under the old shared cursor + strict-$gt filter, user B would get nothing. Per-user
+        // cursors mean user B pulls from user B's cursor (here epoch), independent of user A.
+        const sharedTs = '2026-04-30T19:38:54.754Z';
+        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: sharedTs });
+        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '1970-01-01T00:00:00.000Z' });
+        // The pull-for-user-B requires the active session to be user-b — pivot IDB activeAccount
+        // (in real flow `multiUserSync.syncOneUser` does this after `multiSession.setActive`).
+        await db.put('accounts', { id: 'user-b', email: 'b@example.com', name: 'B', image: null, provider: 'google', addedAt: 1 });
+        await db.put('activeAccount', { userId: 'user-b' }, 'active');
+
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'item',
+                    entityId: 'b-boundary-item',
+                    opType: 'create',
+                    snapshot: { ...serverItem('b-boundary-item'), user: 'user-b', updatedTs: sharedTs },
+                },
+            ],
+            serverTs: sharedTs,
+        });
+
+        await pullFromServer(db, 'user-b');
+
+        // user-b picked up its boundary op despite user-a's cursor already being at sharedTs.
+        expect(await db.get('items', 'b-boundary-item')).toBeDefined();
+        const cursorB = await db.get('syncCursors', 'user-b');
+        expect(cursorB?.lastSyncedTs).toBe(sharedTs);
     });
 });
 
@@ -312,7 +390,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const routine = await db.get('routines', 'routine-1');
         expect(routine?.title).toBe('Weekly review');
@@ -327,7 +405,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         expect(await db.get('routines', 'routine-2')).toBeUndefined();
     });
@@ -338,7 +416,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const person = await db.get('people', 'person-1');
         expect(person?.name).toBe('Alice');
@@ -353,7 +431,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         expect(await db.get('people', 'person-2')).toBeUndefined();
     });
@@ -364,7 +442,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const wc = await db.get('workContexts', 'wc-1');
         expect(wc?.name).toBe('At desk');
@@ -379,7 +457,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         expect(await db.get('workContexts', 'wc-2')).toBeUndefined();
     });
@@ -411,7 +489,7 @@ describe('pullFromServer — calendar routine sync', () => {
             serverTs: '2025-06-01T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-r1');
         expect(items).toHaveLength(0);
@@ -424,7 +502,7 @@ describe('pullFromServer — calendar routine sync', () => {
             serverTs: '2025-06-02T00:00:00.000Z',
         });
 
-        await pullFromServer(db);
+        await pullFromServer(db, USER_ID);
 
         const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-r2');
         expect(items).toHaveLength(0);
@@ -434,7 +512,7 @@ describe('pullFromServer — calendar routine sync', () => {
 // ── bootstrapFromServer ────────────────────────────────────────────────────────
 
 describe('bootstrapFromServer', () => {
-    it('writes all entity types and sets lastSyncedTs', async () => {
+    it('writes all entity types and sets the per-user cursor', async () => {
         const serverTs = '2025-07-01T00:00:00.000Z';
         vi.mocked(fetchBootstrap).mockResolvedValueOnce({
             items: [serverItem('item-b1')],
@@ -444,15 +522,15 @@ describe('bootstrapFromServer', () => {
             serverTs,
         });
 
-        await bootstrapFromServer(db);
+        await bootstrapFromServer(db, USER_ID);
 
         expect(await db.get('items', 'item-b1')).toBeDefined();
         expect(await db.get('routines', 'routine-b1')).toBeDefined();
         expect(await db.get('people', 'person-b1')).toBeDefined();
         expect(await db.get('workContexts', 'wc-b1')).toBeDefined();
 
-        const state = await db.get('deviceSyncState', 'local');
-        expect(state?.lastSyncedTs).toBe(serverTs);
+        const cursor = await db.get('syncCursors', USER_ID);
+        expect(cursor?.lastSyncedTs).toBe(serverTs);
     });
 
     it('remaps user → userId on all entities', async () => {
@@ -464,7 +542,7 @@ describe('bootstrapFromServer', () => {
             serverTs: '2025-07-01T00:00:00.000Z',
         });
 
-        await bootstrapFromServer(db);
+        await bootstrapFromServer(db, USER_ID);
 
         const item = await db.get('items', 'item-b2');
         expect(item?.userId).toBe(USER_ID);
@@ -474,7 +552,7 @@ describe('bootstrapFromServer', () => {
     it('throws when the server returns non-200, writing nothing', async () => {
         vi.mocked(fetchBootstrap).mockRejectedValueOnce(new Error('GET /sync/bootstrap 401'));
 
-        await expect(bootstrapFromServer(db)).rejects.toThrow('GET /sync/bootstrap 401');
+        await expect(bootstrapFromServer(db, USER_ID)).rejects.toThrow('GET /sync/bootstrap 401');
 
         const items = await db.getAll('items');
         expect(items).toHaveLength(0);

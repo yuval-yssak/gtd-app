@@ -10,6 +10,7 @@ vi.mock('../lib/authClient', () => {
         data: [
             { user: { id: 'user-a' }, session: { token: 'token-a' } },
             { user: { id: 'user-b' }, session: { token: 'token-b' } },
+            { user: { id: 'user-c' }, session: { token: 'token-c' } },
         ],
     }));
     return {
@@ -21,7 +22,7 @@ vi.mock('../lib/authClient', () => {
 
 import dayjs from 'dayjs';
 import { fetchSyncOps, pushSyncOps } from '#api/syncClient';
-import { syncAllLoggedInUsers } from '../db/multiUserSync';
+import { syncAllLoggedInUsers, syncSingleUser } from '../db/multiUserSync';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
@@ -41,9 +42,11 @@ async function seedAccount(idbDb: IDBPDatabase<MyDB>, id: string, email: string)
 
 beforeEach(async () => {
     db = await openTestDB();
-    // Per-device sync state must already exist so flushSyncQueue + pullFromServer can run; without
-    // it `pullOrBootstrap` would call bootstrapFromServer (we test that path separately).
-    await db.put('deviceSyncState', { _id: 'local', deviceId: 'dev-test', lastSyncedTs: '2025-01-01T00:00:00.000Z', flushingTs: null });
+    // Device meta + per-user cursors must exist so flushSyncQueue + pullFromServer can run; without
+    // a cursor row `pullOrBootstrap` would call bootstrapFromServer (we test that path separately).
+    await db.put('deviceMeta', { _id: 'local', deviceId: 'dev-test', flushingTs: null });
+    await db.put('syncCursors', { userId: 'user-a', lastSyncedTs: '2025-01-01T00:00:00.000Z' });
+    await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '2025-01-01T00:00:00.000Z' });
     // Default to an empty pull payload so the orchestrator can resolve cleanly.
     vi.mocked(fetchSyncOps).mockResolvedValue({ ops: [], serverTs: '2025-01-02T00:00:00.000Z' });
 });
@@ -79,8 +82,50 @@ describe('syncAllLoggedInUsers', () => {
         const orderedUserIds = onUserSynced.mock.calls.map((c) => c[0]);
         expect(orderedUserIds).toEqual(['user-a', 'user-b']);
 
-        // Pull runs once per user (no bootstrap because deviceSyncState already exists).
+        // Pull runs once per user (no bootstrap because each user already has a syncCursors row).
         expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(2);
+    });
+
+    it('updates each user’s cursor independently — one user’s pull does not move another user’s cursor', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        // First pull (user-a) returns serverTs=T_A; second (user-b) returns T_B.
+        const tA = '2025-04-30T19:38:54.754Z';
+        const tB = '2025-05-01T08:00:00.000Z';
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: tA }).mockResolvedValueOnce({ ops: [], serverTs: tB });
+
+        await syncAllLoggedInUsers(db);
+
+        const cursorA = await db.get('syncCursors', 'user-a');
+        const cursorB = await db.get('syncCursors', 'user-b');
+        expect(cursorA?.lastSyncedTs).toBe(tA);
+        expect(cursorB?.lastSyncedTs).toBe(tB);
+    });
+
+    it('bootstraps a user with no syncCursors row instead of pulling', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-c', 'c@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        // Remove user-c's seed cursor so pullOrBootstrap chooses bootstrap for that pass.
+        await db.delete('syncCursors', 'user-c');
+
+        // Mock bootstrap path — fetchBootstrap returns empty arrays + serverTs which becomes user-c's cursor.
+        const bootstrapMod = await import('#api/syncClient');
+        vi.mocked(bootstrapMod.fetchBootstrap).mockResolvedValueOnce({
+            items: [],
+            routines: [],
+            people: [],
+            workContexts: [],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
+
+        await syncAllLoggedInUsers(db);
+
+        // user-c got bootstrapped, not pulled, so a syncCursors row exists at the bootstrap serverTs.
+        const cursorC = await db.get('syncCursors', 'user-c');
+        expect(cursorC?.lastSyncedTs).toBe('2025-06-01T00:00:00.000Z');
     });
 
     it('restores the previously-active session at the end', async () => {
@@ -144,24 +189,69 @@ describe('syncAllLoggedInUsers', () => {
         expect(opsPerCall).toEqual([['a-item'], ['b-item']]);
     });
 
-    it('skips the multi-session pivot when no entry exists but still runs the per-user pass', async () => {
-        // user-c is in IDB but Better Auth's multi-session list doesn't carry an entry for it
-        // (typical for a single-account dev login: only the primary session_token cookie is set).
-        // The pass should still flush + pull under the existing active session — without this
-        // behaviour, single-account users would never trigger an authenticated request and the
-        // server-side deviceUsers join wouldn't get populated.
+    it('single-account device with no multi-session list still runs its single pass without pivoting', async () => {
+        // Single-account dev login: only the primary session_token cookie is set; multi-session
+        // list is empty. The orchestrator should still flush + pull for that single user under
+        // the existing cookie — without this, single-account users would never trigger any sync.
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValueOnce({ data: [] });
         await seedAccount(db, 'user-a', 'a@example.com');
-        await seedAccount(db, 'user-c', 'c@example.com'); // not in mocked sessions list
         await db.put('activeAccount', { userId: 'user-a' }, 'active');
 
         await syncAllLoggedInUsers(db);
 
-        const tokens = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
-        expect(tokens.filter((t) => t === 'token-a').length).toBeGreaterThanOrEqual(1);
-        expect(tokens).not.toContain('token-c');
+        // setActive is never called because there's no session entry to pivot to. But the IDB
+        // active account is re-stamped to user-a (the single-user fallback) so downstream guards
+        // know which user the cookie authenticates as.
+        const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls;
+        expect(setActiveCalls).toHaveLength(0);
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+    });
 
-        // Both users got a pull — user-c via the no-pivot fallback under whichever session is
-        // currently active (user-b at that point in the loop, but the assertion is on call count).
-        expect(vi.mocked(fetchSyncOps).mock.calls.length).toBeGreaterThanOrEqual(2);
+    it('syncSingleUser: pivots the cookie, pulls for that user, restores prior active session', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        await syncSingleUser(db, 'user-b');
+
+        const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
+        // First pivot: to user-b for the targeted sync. Last pivot: back to user-a (restore).
+        expect(setActiveCalls[0]).toBe('token-b');
+        expect(setActiveCalls.at(-1)).toBe('token-a');
+
+        // Exactly one pull — for user-b only, not the whole device.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+        const active = await db.get('activeAccount', 'active');
+        expect(active?.userId).toBe('user-a');
+    });
+
+    it('syncSingleUser: throws when no multi-session entry exists for the user', async () => {
+        // user-orphan is in IDB but has no Better Auth session entry. syncSingleUser must refuse
+        // rather than fall through to a single-user fallback that would corrupt user-orphan's
+        // cursor with another user's data.
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-orphan', 'orphan@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        await expect(syncSingleUser(db, 'user-orphan')).rejects.toThrow(/no Better Auth multi-session entry/);
+        // No pull should have fired.
+        expect(vi.mocked(fetchSyncOps)).not.toHaveBeenCalled();
+    });
+
+    it('multi-user device skips a user with no multi-session entry to avoid cross-user corruption', async () => {
+        // user-orphan is in IDB but missing from the multi-session list. Pulling for them under
+        // whichever cookie is currently set would attribute another user's data to user-orphan's
+        // cursor. The orchestrator must skip them with a warning instead of corrupting state.
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-orphan', 'orphan@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        await syncAllLoggedInUsers(db);
+
+        // user-a got its pull; user-orphan was skipped — only one pull in total.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('user-orphan'))).toBe(true);
+        warnSpy.mockRestore();
     });
 });

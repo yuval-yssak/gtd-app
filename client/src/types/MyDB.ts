@@ -143,11 +143,25 @@ export interface StoredCalendarSyncConfig {
 
 export type StoredEntity = StoredItem | StoredRoutine | StoredPerson | StoredWorkContext;
 
-export interface StoredDeviceSyncState {
-    _id: 'local'; // singleton — only one entry per device
+/**
+ * Singleton record holding device-scoped state — the stable deviceId and the cross-context flush
+ * lock. Split from `StoredSyncCursor` because the device identity and flush coordination are
+ * shared across every Better Auth session on this device, while pull cursors must be per-user.
+ */
+export interface StoredDeviceMeta {
+    _id: 'local'; // singleton
     deviceId: string; // stable UUID generated on first launch; sent with every push/pull request
-    lastSyncedTs: string; // ISO datetime of the last successful pull from the server
     flushingTs: string | null; // ISO datetime — cross-context flush lock between main thread and SW
+}
+
+/**
+ * Per-user pull cursor. One row per Better Auth account currently logged in on this device — a
+ * shared cursor lets one session's pull advance past another session's boundary op (the bug fix
+ * that motivated the schema split). Keyed by Better Auth userId.
+ */
+export interface StoredSyncCursor {
+    userId: string;
+    lastSyncedTs: string; // ISO datetime of the last successful pull for this (device, user) pair
 }
 
 export interface SyncOperation {
@@ -211,9 +225,14 @@ export interface MyDB extends DBSchema {
         key: number; // auto-increment
         value: SyncOperation;
     };
-    // Per-device sync cursor — singleton keyed by 'local'
-    deviceSyncState: {
+    // Device-scoped state: stable deviceId + flush lock. Singleton keyed by 'local'.
+    deviceMeta: {
         key: 'local';
-        value: StoredDeviceSyncState;
+        value: StoredDeviceMeta;
+    };
+    // Per-user pull cursors. One row per logged-in Better Auth account.
+    syncCursors: {
+        key: string; // StoredSyncCursor.userId
+        value: StoredSyncCursor;
     };
 }

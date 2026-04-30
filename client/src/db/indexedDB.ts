@@ -3,7 +3,7 @@ import { openDB } from 'idb';
 import type { MyDB, SyncOperation } from '../types/MyDB';
 
 export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
-    return openDB<MyDB>('gtd-app', 3, {
+    return openDB<MyDB>('gtd-app', 4, {
         upgrade(db, oldVersion, _newVersion, tx) {
             // Version 1: core stores
             if (oldVersion < 1) {
@@ -17,7 +17,11 @@ export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
 
             // Version 2: sync infrastructure + entity stores that were typed but never created
             if (oldVersion < 2) {
-                db.createObjectStore('deviceSyncState', { keyPath: '_id' });
+                // Old single-cursor-per-device store. Replaced in v4 by deviceMeta + syncCursors.
+                // We still create it on the v1→v2 path so the v3→v4 migration below has data to read.
+                if (!db.objectStoreNames.contains('deviceSyncState' as never)) {
+                    db.createObjectStore('deviceSyncState' as never, { keyPath: '_id' });
+                }
 
                 const routines = db.createObjectStore('routines', { keyPath: '_id' });
                 routines.createIndex('userId', 'userId', { unique: false });
@@ -36,6 +40,15 @@ export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
             // pre-upgrade session).
             if (oldVersion < 3) {
                 void backfillSyncOperationUserIds(tx);
+            }
+
+            // Version 4: split the device-shared cursor into deviceMeta (singleton: deviceId +
+            // flush lock) and syncCursors (per-user). A single shared cursor let one session's
+            // pull advance past another session's boundary op — see the cross-account move bug.
+            if (oldVersion < 4) {
+                db.createObjectStore('deviceMeta', { keyPath: '_id' });
+                db.createObjectStore('syncCursors', { keyPath: 'userId' });
+                void migrateDeviceSyncStateToPerUserCursors(tx);
             }
         },
     });
@@ -67,4 +80,56 @@ async function backfillSyncOperationUserIds(tx: IDBPTransaction<MyDB, Array<Stor
         }
         cursor = await cursor.continue();
     }
+}
+
+/**
+ * Pre-v4 shape of the legacy deviceSyncState singleton — read inside the upgrade tx and split into
+ * the two new stores. Declared locally because the schema-typed view of `deviceSyncState` has been
+ * removed from `MyDB`; we read via the unknown-cast escape hatch the same way `backfillSyncOperationUserIds`
+ * does.
+ */
+interface LegacyDeviceSyncState {
+    _id: 'local';
+    deviceId: string;
+    lastSyncedTs: string;
+    flushingTs: string | null;
+}
+
+/**
+ * v3 → v4 split: copy `deviceId` + `flushingTs` to `deviceMeta`, copy `lastSyncedTs` to a single
+ * `syncCursors` row keyed by the active account's userId. Other accounts (multi-session) start
+ * fresh from epoch on their first pull — LWW makes the replay idempotent (same one-time spike as
+ * the server-side migration).
+ *
+ * Then deletes the legacy `deviceSyncState` row to avoid stale reads if any code still touches it.
+ * The store itself stays around (Chromium will not let us delete it inside a versionchange tx
+ * unless we go through `db.deleteObjectStore`, which we skip — no readers remain anyway).
+ */
+async function migrateDeviceSyncStateToPerUserCursors(tx: IDBPTransaction<MyDB, Array<StoreNames<MyDB>>, 'versionchange'>): Promise<void> {
+    // The legacy store is only present if the device upgraded through v2; brand-new v4 installs skip.
+    const legacyStoreName = 'deviceSyncState' as unknown as StoreNames<MyDB>;
+    if (!tx.db.objectStoreNames.contains(legacyStoreName)) {
+        return;
+    }
+    const legacyStore = tx.objectStore(legacyStoreName);
+    const raw = await (legacyStore as unknown as { get(key: 'local'): Promise<unknown> }).get('local');
+    const legacy = raw as LegacyDeviceSyncState | undefined;
+    if (!legacy) {
+        return;
+    }
+
+    const metaStore = tx.objectStore('deviceMeta');
+    await metaStore.put({ _id: 'local', deviceId: legacy.deviceId, flushingTs: legacy.flushingTs });
+
+    // Map the single legacy cursor onto the active account's userId. If no active account exists
+    // (rare — pre-login state with a populated cursor would be unusual), skip; the first pull
+    // post-login will create the row at epoch.
+    const activeStore = tx.objectStore('activeAccount');
+    const active = await activeStore.get('active');
+    if (active && legacy.lastSyncedTs) {
+        const cursorsStore = tx.objectStore('syncCursors');
+        await cursorsStore.put({ userId: active.userId, lastSyncedTs: legacy.lastSyncedTs });
+    }
+
+    await (legacyStore as unknown as { delete(key: 'local'): Promise<void> }).delete('local');
 }

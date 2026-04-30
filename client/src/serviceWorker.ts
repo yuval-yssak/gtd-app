@@ -2,6 +2,7 @@
 import { clientsClaim } from 'workbox-core';
 import { createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
+import { getActiveAccount } from './db/accountHelpers';
 import { openAppDB } from './db/indexedDB';
 import { flushSyncQueue, pullFromServer } from './db/syncHelpers';
 import { hasAtLeastOne } from './lib/typeUtils';
@@ -78,7 +79,18 @@ self.addEventListener('push', (event) => {
 
     event.waitUntil(
         openAppDB()
-            .then((db) => pullFromServer(db))
+            // Per-user cursors require a userId on every pull. The SW can't easily pivot Better
+            // Auth sessions (the auth client is React-only), so we pull under whichever session
+            // the cookies currently point at — that's the active account. Other logged-in accounts
+            // on this device catch up at the next foreground sync (see syncAllLoggedInUsers in
+            // _authenticated.tsx). Documented limitation: a push that targets a non-active
+            // account will queue under that user's channel on the server but won't land in the
+            // SW's IDB until the user opens the app.
+            .then(async (db) => {
+                const acct = await getActiveAccount(db);
+                if (!acct) return;
+                await pullFromServer(db, acct.id);
+            })
             .then(() => {
                 console.log('[sw-push] pulled from server, notifying open tabs');
                 // Notify any open tabs so they can refresh React state from IndexedDB —

@@ -5,7 +5,7 @@ import { listIntegrations, syncIntegration } from '../api/calendarApi';
 import { getActiveAccount, getLoggedInAccounts, upsertAccount } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
 import { getItemsAcrossUsers } from '../db/itemHelpers';
-import { syncAllLoggedInUsers } from '../db/multiUserSync';
+import { syncAllLoggedInUsers, syncSingleUser } from '../db/multiUserSync';
 import { getPeopleAcrossUsers } from '../db/personHelpers';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { getRoutinesAcrossUsers } from '../db/routineHelpers';
@@ -199,11 +199,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // If an SSE/push event arrived while we were syncing, do a lightweight catch-up
             // pull instead of a full syncAndRefresh. A full sync would run calendar integration
             // and two more pulls, creating race conditions with concurrent pushes. A single
-            // pull is sufficient because the SSE event means new ops are on the server.
+            // multi-account orchestrated pull is sufficient — pulling only for the active user
+            // would silently miss ops on other accounts' channels.
             if (syncRequestedWhileBusy.current) {
                 syncRequestedWhileBusy.current = false;
                 console.log('[debug-gcal-sync][client] running catch-up pull (event arrived during sync)');
-                pullFromServer(db)
+                syncAllLoggedInUsers(db)
                     .then(async () => {
                         if (unmountedRef.current) return;
                         await refreshAllEntitiesAcrossUsers();
@@ -216,12 +217,22 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // SSE callback receives the userId of the channel that fired. We trigger a per-user pull only —
     // re-syncing every account on every event would multiply network round-trips by N for no
     // benefit, since changes on user A's channel can't affect user B's data.
+    //
+    // Important: the per-user pull MUST run under that user's active Better Auth session so the
+    // server returns ops for that user. When the fired channel matches the active session, we
+    // pull directly. When it doesn't, we use `syncSingleUser` to pivot/flush/pull/restore for just
+    // that one user — far cheaper than `syncAllLoggedInUsers` which would re-run every account.
     const onSseUpdateForUser = useCallback(
         (userId: string) => {
             void (async () => {
                 try {
-                    await flushSyncQueue(db, { userIdFilter: userId });
-                    await pullFromServer(db);
+                    const activeAcct = await getActiveAccount(db);
+                    if (activeAcct?.id === userId) {
+                        await flushSyncQueue(db, { userIdFilter: userId });
+                        await pullFromServer(db, userId);
+                    } else {
+                        await syncSingleUser(db, userId);
+                    }
                     if (unmountedRef.current) return;
                     await refreshAllEntitiesAcrossUsers();
                 } catch (err) {

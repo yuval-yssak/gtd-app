@@ -30,53 +30,57 @@ describe('getOrCreateDeviceId', () => {
         expect(second).toBe(first);
     });
 
-    it('initializes lastSyncedTs to epoch', async () => {
+    it('writes a deviceMeta singleton with flush lock cleared', async () => {
         await getOrCreateDeviceId(db);
-        const state = await db.get('deviceSyncState', 'local');
-        expect(state?.lastSyncedTs).toBe(dayjs(0).toISOString());
+        const state = await db.get('deviceMeta', 'local');
+        expect(state?.flushingTs).toBeNull();
     });
 });
 
 // ── getLastSyncedTs ───────────────────────────────────────────────────────────
 
 describe('getLastSyncedTs', () => {
-    it('returns epoch when no device state exists', async () => {
-        const ts = await getLastSyncedTs(db);
+    it('returns epoch when no cursor exists for this user', async () => {
+        const ts = await getLastSyncedTs(db, 'user-a');
         expect(ts).toBe(dayjs(0).toISOString());
     });
 
-    it('returns stored value when device state exists', async () => {
-        await getOrCreateDeviceId(db);
+    it('returns stored value when a cursor exists', async () => {
         const customTs = '2025-06-01T12:00:00.000Z';
-        await setLastSyncedTs(db, customTs);
+        await setLastSyncedTs(db, 'user-a', customTs);
+        expect(await getLastSyncedTs(db, 'user-a')).toBe(customTs);
+    });
 
-        expect(await getLastSyncedTs(db)).toBe(customTs);
+    it('keeps cursors per-user — reads don’t leak across users', async () => {
+        await setLastSyncedTs(db, 'user-a', '2025-06-01T12:00:00.000Z');
+        await setLastSyncedTs(db, 'user-b', '2025-08-15T09:00:00.000Z');
+        expect(await getLastSyncedTs(db, 'user-a')).toBe('2025-06-01T12:00:00.000Z');
+        expect(await getLastSyncedTs(db, 'user-b')).toBe('2025-08-15T09:00:00.000Z');
     });
 });
 
 // ── setLastSyncedTs ───────────────────────────────────────────────────────────
 
 describe('setLastSyncedTs', () => {
-    it('updates the lastSyncedTs in device state', async () => {
-        await getOrCreateDeviceId(db);
+    it('writes the cursor row for the given user', async () => {
         const newTs = '2025-07-15T08:30:00.000Z';
-        await setLastSyncedTs(db, newTs);
-
-        const state = await db.get('deviceSyncState', 'local');
-        expect(state?.lastSyncedTs).toBe(newTs);
+        await setLastSyncedTs(db, 'user-a', newTs);
+        const row = await db.get('syncCursors', 'user-a');
+        expect(row?.lastSyncedTs).toBe(newTs);
+        expect(row?.userId).toBe('user-a');
     });
 
-    it('preserves the deviceId when updating timestamp', async () => {
-        const deviceId = await getOrCreateDeviceId(db);
-        await setLastSyncedTs(db, '2025-07-15T08:30:00.000Z');
-
-        const state = await db.get('deviceSyncState', 'local');
-        expect(state?.deviceId).toBe(deviceId);
+    it('does not require a deviceMeta row to exist (cursors are independent of device meta)', async () => {
+        // No prior getOrCreateDeviceId call.
+        await setLastSyncedTs(db, 'user-a', '2025-07-15T08:30:00.000Z');
+        expect(await getLastSyncedTs(db, 'user-a')).toBe('2025-07-15T08:30:00.000Z');
     });
 
-    it('does nothing when no device state exists', async () => {
-        await setLastSyncedTs(db, '2025-07-15T08:30:00.000Z');
-        const state = await db.get('deviceSyncState', 'local');
-        expect(state).toBeUndefined();
+    it('updating one user’s cursor does not touch another user’s row', async () => {
+        await setLastSyncedTs(db, 'user-a', '2025-06-01T12:00:00.000Z');
+        await setLastSyncedTs(db, 'user-b', '2025-08-15T09:00:00.000Z');
+        await setLastSyncedTs(db, 'user-a', '2025-09-01T00:00:00.000Z');
+        expect(await getLastSyncedTs(db, 'user-a')).toBe('2025-09-01T00:00:00.000Z');
+        expect(await getLastSyncedTs(db, 'user-b')).toBe('2025-08-15T09:00:00.000Z');
     });
 });
