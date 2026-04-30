@@ -180,10 +180,13 @@ calendarRoutes.get('/auth/google', authenticateRequest, (c) => {
     const loginHint = typeof rawHint === 'string' && rawHint.trim() !== '' ? rawHint.trim() : undefined;
 
     // state is HMAC-signed so the callback can verify it wasn't tampered with.
+    // userinfo.email is required so the callback can verify the authorized account matches
+    // the login_hint + active session (mismatch protection); without this scope, the resulting
+    // access token can't call /oauth2/v2/userinfo and the connect flow always rejects.
     const url = oauth2.generateAuthUrl({
         access_type: 'offline', // request refresh token
         prompt: 'consent', // always show consent screen so we always get a refresh token
-        scope: ['https://www.googleapis.com/auth/calendar'],
+        scope: ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email'],
         state: signState({ userId, ...(loginHint ? { loginHint } : {}) }),
         ...(loginHint ? { login_hint: loginHint } : {}),
     });

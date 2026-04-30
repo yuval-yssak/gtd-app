@@ -24,13 +24,19 @@ async function renewAllExpiring(): Promise<void> {
         const horizon = dayjs().add(1, 'day').toISOString();
         const configs = await calendarSyncConfigsDAO.findNeedingWebhook(horizon);
         // Sequential to avoid overwhelming Google's API with parallel requests per-account.
+        // Per-config try/catch isolates a broken integration (e.g. revoked refresh token, stale
+        // dev fixtures with `dev-rt-plaintext`) from blocking renewal of the rest.
         for (const config of configs) {
-            const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(config.integrationId, config.user);
-            if (!integration) {
-                continue;
+            try {
+                const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(config.integrationId, config.user);
+                if (!integration) {
+                    continue;
+                }
+                const provider = buildProvider(integration, config.user);
+                await renewWebhookIfExpired(config, provider);
+            } catch (err) {
+                console.error(`[webhook-renewal] skipping config ${config._id} (integration ${config.integrationId}):`, err);
             }
-            const provider = buildProvider(integration, config.user);
-            await renewWebhookIfExpired(config, provider);
         }
         if (configs.length > 0) {
             console.log(`[webhook-renewal] processed ${configs.length} configs`);
