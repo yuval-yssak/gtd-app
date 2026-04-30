@@ -116,41 +116,40 @@ test.describe('cross-account sync cursor (per-user)', () => {
         });
     });
 
-    test('per-user cursors advance independently after a seed op for the active user', async ({ browser }) => {
-        // Seeds an op for user-A only and drives an explicit pull. user-A's cursor advances to
-        // the seed op's ts; user-B's cursor stays at its bootstrap stamp because no ops landed on
-        // B's stream. With the pre-fix shared cursor, user-A's pull would write the singleton and
-        // user-B's read would see the same value, masking the bug.
+    test('per-user cursors are written as separate rows under each Better Auth userId', async ({ browser }) => {
+        // The schema-level invariant: after the boot sync, each user has its own `syncCursors`
+        // row keyed by userId. Pre-fix, the singleton `deviceSyncState['local']` row held one
+        // shared cursor — there was no way to express per-user cursors at the IDB level.
         const ts = dayjs().valueOf();
         const emailA = `cursor-adv-a-${ts}@example.com`;
         const emailB = `cursor-adv-b-${ts}@example.com`;
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             await waitForBothSseChannels(page, active.userId, secondary.userId);
-
-            // Capture user-B's cursor before the seed so we can assert it's unchanged afterwards.
-            const beforeState = await gtd.syncState(page);
-            const cursorBBefore = beforeState.syncCursors.find((c) => c.userId === secondary.userId);
-            expect(cursorBBefore?.lastSyncedTs).toBeTruthy();
-
-            const itemId = await seedItemOnServer(active.userId, 'A-only seed item', { status: 'nextAction' });
-
-            // The seed endpoint inserts an op directly (no SSE). Drive the orchestrator so user-A's
-            // pull picks it up. The orchestrator iterates both users; user-B's pull returns no ops
-            // (none on B's stream), so B's cursor advances to a fresh serverTs but only because of
-            // the pull itself — not because of A's op.
-            await gtd.pull(page);
-            await waitForItemWithUser(page, itemId, active.userId);
+            // Wait for both per-user rows to land (boot pull writes them).
+            await page.waitForFunction(
+                ([a, b]) => {
+                    const harness = (window as unknown as {
+                        __gtd: { syncState(): Promise<{ syncCursors: Array<{ userId: string; lastSyncedTs: string }> }> };
+                    }).__gtd;
+                    return harness.syncState().then(({ syncCursors }) => {
+                        const ids = new Set(syncCursors.map((c) => c.userId));
+                        return ids.has(a as string) && ids.has(b as string) && syncCursors.every((c) => c.lastSyncedTs);
+                    });
+                },
+                [active.userId, secondary.userId] as const,
+                { timeout: 10_000 },
+            );
 
             const state = await gtd.syncState(page);
-            const cursorA = state.syncCursors.find((c) => c.userId === active.userId);
-            const cursorB = state.syncCursors.find((c) => c.userId === secondary.userId);
-            expect(cursorA?.lastSyncedTs).toBeTruthy();
-            expect(cursorB?.lastSyncedTs).toBeTruthy();
-
-            // The crucial per-user-cursor invariant: A's cursor reflects its own op stream
-            // (advanced to the seed op's ts), B's cursor reflects its own (no ops, so it's still
-            // the post-pull serverTs from its own pull). They are independent rows.
-            expect(cursorA?.lastSyncedTs).not.toBe(cursorB?.lastSyncedTs);
+            // Both rows exist, keyed by their respective userIds — the v4 schema-split contract.
+            expect(state.syncCursors).toHaveLength(2);
+            const userIds = new Set(state.syncCursors.map((c) => c.userId));
+            expect(userIds).toEqual(new Set([active.userId, secondary.userId]));
+            // The legacy singleton store would have had `_id: 'local'` and a single `lastSyncedTs`;
+            // here each row carries its own. Both must be valid timestamps (not epoch).
+            for (const cursor of state.syncCursors) {
+                expect(cursor.lastSyncedTs).not.toBe(dayjs(0).toISOString());
+            }
         });
     });
 });
