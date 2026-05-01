@@ -64,12 +64,8 @@ test.describe('cross-account reassign — item survives delete-op clobber', () =
         await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             // Both accounts need a calendar integration so the move can re-link to the target.
-            const seedA = await seedCalendarForUser(active.userId, [
-                { configId: cfgA, calendarId: 'primary', displayName: 'A Primary', isDefault: true },
-            ]);
-            const seedB = await seedCalendarForUser(secondary.userId, [
-                { configId: cfgB, calendarId: 'primary', displayName: 'B Primary', isDefault: true },
-            ]);
+            const seedA = await seedCalendarForUser(active.userId, [{ configId: cfgA, calendarId: 'primary', displayName: 'A Primary', isDefault: true }]);
+            const seedB = await seedCalendarForUser(secondary.userId, [{ configId: cfgB, calendarId: 'primary', displayName: 'B Primary', isDefault: true }]);
 
             const start = dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();
             const end = dayjs().add(1, 'day').hour(11).minute(0).second(0).millisecond(0).toISOString();

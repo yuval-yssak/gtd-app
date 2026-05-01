@@ -1,7 +1,6 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import type { StoredItem } from '../client/src/types/MyDB';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
@@ -18,51 +17,6 @@ import { gtd } from './helpers/gtd';
 // These specs lock in the schema-and-cursor-independence half. The reassign-driven IDB delivery
 // path is exercised by `edit-item-cross-account-reassign.spec.ts`; here we focus on the cursor
 // model itself, which is the load-bearing change.
-
-const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
-
-async function seedItemOnServer(userId: string, title: string, overrides: Record<string, unknown> = {}): Promise<string> {
-    const id = `seed-${Math.random().toString(36).slice(2, 10)}`;
-    const now = dayjs().toISOString();
-    const doc = { _id: id, user: userId, status: 'inbox', title, createdTs: now, updatedTs: now, ...overrides };
-    const res = await fetch(DEV_SEED_ENTITY_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection: 'items', doc }),
-    });
-    if (!res.ok) {
-        throw new Error(`seed item ${res.status}: ${await res.text()}`);
-    }
-    return id;
-}
-
-/**
- * Polls IDB for an item whose userId matches `expectedUserId`. Reads through `__gtd.db` (the
- * `idb` library wrapper, where `store.get` returns a Promise). Used to assert per-user IDB
- * isolation without going through the active-account-only `listItems` helper.
- */
-async function waitForItemWithUser(page: Page, itemId: string, expectedUserId: string, timeoutMs = 12_000): Promise<StoredItem> {
-    const found = await page.evaluate(
-        async ([id, userId, deadline]) => {
-            type IdbStore<T> = { get(key: string): Promise<T | undefined> };
-            type IdbDb = { transaction(name: string, mode: 'readonly'): { objectStore(n: string): IdbStore<StoredItem> } };
-            const harness = (window as unknown as { __gtd: { db: IdbDb } }).__gtd;
-            while (Date.now() < (deadline as number)) {
-                const item = await harness.db.transaction('items', 'readonly').objectStore('items').get(id as string);
-                if (item && item.userId === userId) {
-                    return item;
-                }
-                await new Promise((r) => setTimeout(r, 100));
-            }
-            return null;
-        },
-        [itemId, expectedUserId, Date.now() + timeoutMs] as const,
-    );
-    if (!found) {
-        throw new Error(`Item ${itemId} not found in IDB under user ${expectedUserId} within ${timeoutMs}ms`);
-    }
-    return found;
-}
 
 /** Waits for both SSE channels (one per logged-in user) to be connected. */
 async function waitForBothSseChannels(page: Page, userIdA: string, userIdB: string): Promise<void> {
@@ -91,9 +45,11 @@ test.describe('cross-account sync cursor (per-user)', () => {
             // The boot effect's syncAllLoggedInUsers writes per-user cursor rows; assert they exist.
             await page.waitForFunction(
                 ([a, b]) => {
-                    const harness = (window as unknown as {
-                        __gtd: { syncState(): Promise<{ syncCursors: Array<{ userId: string }> }> };
-                    }).__gtd;
+                    const harness = (
+                        window as unknown as {
+                            __gtd: { syncState(): Promise<{ syncCursors: Array<{ userId: string }> }> };
+                        }
+                    ).__gtd;
                     return harness.syncState().then(({ syncCursors }) => {
                         const ids = new Set(syncCursors.map((c) => c.userId));
                         return ids.has(a as string) && ids.has(b as string);
@@ -128,9 +84,11 @@ test.describe('cross-account sync cursor (per-user)', () => {
             // Wait for both per-user rows to land (boot pull writes them).
             await page.waitForFunction(
                 ([a, b]) => {
-                    const harness = (window as unknown as {
-                        __gtd: { syncState(): Promise<{ syncCursors: Array<{ userId: string; lastSyncedTs: string }> }> };
-                    }).__gtd;
+                    const harness = (
+                        window as unknown as {
+                            __gtd: { syncState(): Promise<{ syncCursors: Array<{ userId: string; lastSyncedTs: string }> }> };
+                        }
+                    ).__gtd;
                     return harness.syncState().then(({ syncCursors }) => {
                         const ids = new Set(syncCursors.map((c) => c.userId));
                         return ids.has(a as string) && ids.has(b as string) && syncCursors.every((c) => c.lastSyncedTs);

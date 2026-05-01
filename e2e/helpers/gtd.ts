@@ -1,7 +1,15 @@
 import type { Page } from '@playwright/test';
 import type { NextActionFilters } from '../../client/src/db/itemHelpers';
 import type { CalendarMeta, NextActionMeta, WaitingForMeta } from '../../client/src/db/itemMutations';
-import type { StoredDeviceMeta, StoredItem, StoredPerson, StoredRoutine, StoredSyncCursor, StoredWorkContext, SyncOperation } from '../../client/src/types/MyDB';
+import type {
+    StoredDeviceMeta,
+    StoredItem,
+    StoredPerson,
+    StoredRoutine,
+    StoredSyncCursor,
+    StoredWorkContext,
+    SyncOperation,
+} from '../../client/src/types/MyDB';
 
 // Typed wrappers around window.__gtd.* that hide the page.evaluate() boilerplate.
 // All functions accept a Page as the first argument and run the corresponding __gtd
@@ -179,10 +187,7 @@ export const gtd = {
         page.evaluate((id) => (window as unknown as { __gtd: { removeRoutine(id: string): Promise<void> } }).__gtd.removeRoutine(id), routineId),
 
     pauseRoutine: (page: Page, routineId: string): Promise<StoredRoutine> =>
-        page.evaluate(
-            (id) => (window as unknown as { __gtd: { pauseRoutine(id: string): Promise<StoredRoutine> } }).__gtd.pauseRoutine(id),
-            routineId,
-        ),
+        page.evaluate((id) => (window as unknown as { __gtd: { pauseRoutine(id: string): Promise<StoredRoutine> } }).__gtd.pauseRoutine(id), routineId),
 
     materializePendingNextActionRoutines: (page: Page): Promise<void> =>
         page.evaluate(() =>
@@ -247,8 +252,7 @@ export const gtd = {
         }),
 
     // ── Device + notifications introspection (Step 1 multi-account work) ─────
-    getDeviceId: (page: Page): Promise<string> =>
-        page.evaluate(() => (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd.getDeviceId()),
+    getDeviceId: (page: Page): Promise<string> => page.evaluate(() => (window as unknown as { __gtd: { getDeviceId(): Promise<string> } }).__gtd.getDeviceId()),
 
     getActiveAccountId: (page: Page): Promise<string | null> =>
         page.evaluate(() => (window as unknown as { __gtd: { getActiveAccountId(): Promise<string | null> } }).__gtd.getActiveAccountId()),

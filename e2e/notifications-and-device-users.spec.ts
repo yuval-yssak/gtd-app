@@ -183,6 +183,9 @@ test.describe('deviceUsers join — multi-account', () => {
 // state machine end-to-end without depending on real browser permission state.
 async function overrideNotificationPermission(ctx: import('@playwright/test').BrowserContext, permission: NotificationPermission): Promise<void> {
     await ctx.addInitScript((perm) => {
+        // Mirrors the `Notification` global's class shape so app code reading `Notification.permission`
+        // or calling `Notification.requestPermission()` works against the fake.
+        // biome-ignore lint/complexity/noStaticOnlyClass: deliberately mirrors the Notification global API
         class FakeNotification {
             static permission: NotificationPermission = perm;
             static requestPermission(): Promise<NotificationPermission> {
