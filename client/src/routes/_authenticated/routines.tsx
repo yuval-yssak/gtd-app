@@ -1,5 +1,5 @@
 import AddIcon from '@mui/icons-material/Add';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
@@ -79,7 +79,12 @@ function RoutinesPage() {
     return (
         <Box>
             <Box className={styles.pageHeader}>
-                <Typography variant="h5" fontWeight={600}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
                     Routines
                     {routines.length > 0 && <Chip label={routines.length} size="small" className={styles.countChip} />}
                 </Typography>
@@ -89,9 +94,14 @@ function RoutinesPage() {
                     </IconButton>
                 </Tooltip>
             </Box>
-
             {routines.length === 0 ? (
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     No routines yet. Routines auto-generate next actions on a schedule.
                 </Typography>
             ) : (
@@ -152,7 +162,6 @@ function RoutinesPage() {
                     ))}
                 </List>
             )}
-
             {dialogRoutine !== null && account !== null && (
                 <RoutineDialog
                     db={db}
@@ -164,7 +173,6 @@ function RoutinesPage() {
                     onSaved={onSaved}
                 />
             )}
-
             <Dialog open={routineToDelete !== null} onClose={() => setRoutineToDelete(null)} maxWidth="sm" fullWidth>
                 <DialogTitle>Delete routine?</DialogTitle>
                 <DialogContent>
@@ -186,7 +194,6 @@ function RoutinesPage() {
                     </Button>
                 </DialogActions>
             </Dialog>
-
             <Dialog open={routineToPause !== null} onClose={() => setRoutineToPause(null)} maxWidth="sm" fullWidth>
                 <DialogTitle>Pause routine?</DialogTitle>
                 <DialogContent>

@@ -75,12 +75,24 @@ export function SearchFilters({ urlState, queryInput, onQueryInputChange, onUrlS
                     },
                 }}
             />
-
             <Box className={styles.row}>
-                <Typography variant="caption" color="text.secondary" className={styles.rowLabel}>
+                <Typography
+                    variant="caption"
+                    className={styles.rowLabel}
+                    sx={{
+                        color: 'text.secondary',
+                    }}
+                >
                     Status
                 </Typography>
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Stack
+                    direction="row"
+                    spacing={1}
+                    useFlexGap
+                    sx={{
+                        flexWrap: 'wrap',
+                    }}
+                >
                     {ALL_STATUSES.map((status) => {
                         const isOn = activeStatuses.has(status);
                         return (
@@ -96,7 +108,6 @@ export function SearchFilters({ urlState, queryInput, onQueryInputChange, onUrlS
                     })}
                 </Stack>
             </Box>
-
             <Box className={styles.row}>
                 <TextField
                     select
@@ -130,7 +141,6 @@ export function SearchFilters({ urlState, queryInput, onQueryInputChange, onUrlS
                     ))}
                 </TextField>
             </Box>
-
             <Box className={styles.row}>
                 <TextField
                     select

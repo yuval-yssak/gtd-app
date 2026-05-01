@@ -66,10 +66,22 @@ function CalendarPage() {
     if (calendarItems.length === 0) {
         return (
             <Box>
-                <Typography variant="h5" fontWeight={600} mb={3}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
                     Calendar
                 </Typography>
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     No upcoming calendar items.
                 </Typography>
             </Box>
@@ -78,13 +90,30 @@ function CalendarPage() {
 
     return (
         <Box>
-            <Typography variant="h5" fontWeight={600} mb={3}>
+            <Typography
+                variant="h5"
+                sx={{
+                    fontWeight: 600,
+                    mb: 3,
+                }}
+            >
                 Calendar
             </Typography>
             {Object.entries(groups).map(([dateKey, groupItems]) => (
-                <Box key={dateKey} mb={3}>
+                <Box
+                    key={dateKey}
+                    sx={{
+                        mb: 3,
+                    }}
+                >
                     <Box className={styles.dateHeader}>
-                        <Typography variant="subtitle2" color="text.secondary" fontWeight={600}>
+                        <Typography
+                            variant="subtitle2"
+                            sx={{
+                                color: 'text.secondary',
+                                fontWeight: 600,
+                            }}
+                        >
                             {dateLabel(dateKey)}
                         </Typography>
                         {isPast(dateKey) && <Chip label="Past" size="small" color="default" />}
@@ -106,7 +135,12 @@ function CalendarPage() {
                                     <ListItemButton onClick={() => openEditorFor(item)} className={styles.rowButton} data-testid="calendarItemRow">
                                         <Box className={styles.timeCol}>
                                             {item.timeStart && (
-                                                <Typography variant="caption" color="text.secondary">
+                                                <Typography
+                                                    variant="caption"
+                                                    sx={{
+                                                        color: 'text.secondary',
+                                                    }}
+                                                >
                                                     {dayjs(item.timeStart).format('h:mm a')}
                                                     {item.timeEnd && ` – ${dayjs(item.timeEnd).format('h:mm a')}`}
                                                 </Typography>

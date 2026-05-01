@@ -38,15 +38,32 @@ function SomedayPage() {
     if (somedayItems.length === 0) {
         return (
             <Box>
-                <Typography variant="h5" fontWeight={600} mb={3}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
                     Someday / Maybe
                 </Typography>
                 <Paper variant="outlined" className={styles.emptyCard}>
                     <BookmarkAddIcon className={styles.icon} />
-                    <Typography variant="subtitle1" fontWeight={600} mb={1}>
+                    <Typography
+                        variant="subtitle1"
+                        sx={{
+                            fontWeight: 600,
+                            mb: 1,
+                        }}
+                    >
                         Nothing parked yet
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         Move items here from the edit dialog when you want to hold onto an idea without committing to it.
                     </Typography>
                 </Paper>
@@ -56,7 +73,13 @@ function SomedayPage() {
 
     return (
         <Box>
-            <Typography variant="h5" fontWeight={600} mb={3}>
+            <Typography
+                variant="h5"
+                sx={{
+                    fontWeight: 600,
+                    mb: 3,
+                }}
+            >
                 Someday / Maybe
                 <Chip label={somedayItems.length} size="small" className={styles.countChip} />
             </Typography>

@@ -1,6 +1,6 @@
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
 import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
@@ -344,10 +344,24 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                 <Divider />
 
                 <Box>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} className={styles.statusLabel}>
+                    <Typography
+                        variant="caption"
+                        className={styles.statusLabel}
+                        sx={{
+                            color: 'text.secondary',
+                            fontWeight: 600,
+                        }}
+                    >
                         Status
                     </Typography>
-                    <Stack direction="row" flexWrap="wrap" gap={1} className={styles.statusChips}>
+                    <Stack
+                        direction="row"
+                        className={styles.statusChips}
+                        sx={{
+                            flexWrap: 'wrap',
+                            gap: 1,
+                        }}
+                    >
                         {STATUS_CHIPS.map((cfg) => (
                             <Chip
                                 key={cfg.value}
@@ -379,7 +393,14 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                             {...(reassignError ? { error: reassignError } : {})}
                         />
                         {isRoutineGenerated && (
-                            <Typography variant="caption" color="text.secondary" mt={0.5} display="block">
+                            <Typography
+                                variant="caption"
+                                sx={{
+                                    color: 'text.secondary',
+                                    mt: 0.5,
+                                    display: 'block',
+                                }}
+                            >
                                 To move this, edit the routine itself.
                             </Typography>
                         )}
@@ -425,7 +446,6 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                     </Box>
                 )}
             </DialogContent>
-
             <DialogActions>
                 <Button onClick={onClose}>Cancel</Button>
                 <Button variant="contained" disabled={saveDisabled} onClick={() => void onSave()}>

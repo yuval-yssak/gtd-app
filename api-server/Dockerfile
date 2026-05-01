@@ -1,4 +1,4 @@
-FROM node:24-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 # Build context is repo root, so reference api-server/ paths explicitly
 COPY api-server/package*.json ./
@@ -9,7 +9,7 @@ COPY api-server/src/ ./src/
 COPY api-server/tsconfig.json ./
 RUN npm run build
 
-FROM node:24-alpine
+FROM node:22-alpine
 WORKDIR /app
 ARG COMMIT_HASH=unknown
 ENV COMMIT_HASH=$COMMIT_HASH

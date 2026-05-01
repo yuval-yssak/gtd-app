@@ -164,10 +164,15 @@ function SubFields({ mode, state, onUpdate, onToggleDay }: SubFieldsProps) {
                     <Typography variant="body2">days</Typography>
                 </div>
             )}
-
             {mode === 'weekly' && (
                 <>
-                    <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                    <Stack
+                        direction="row"
+                        sx={{
+                            flexWrap: 'wrap',
+                            gap: 0.5,
+                        }}
+                    >
                         {DAYS.map(({ key, label }) => (
                             <Chip
                                 key={key}
@@ -193,7 +198,6 @@ function SubFields({ mode, state, onUpdate, onToggleDay }: SubFieldsProps) {
                     </div>
                 </>
             )}
-
             {mode === 'monthly' && (
                 <>
                     <div className={styles.inlineRow}>

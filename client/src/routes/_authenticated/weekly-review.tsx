@@ -107,31 +107,56 @@ function WeeklyReviewPage() {
     return (
         <Box className={styles.pageWrapper}>
             <Box className={styles.headerRow}>
-                <Typography variant="h5" fontWeight={600}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
                     Weekly Review
                 </Typography>
                 {state.completedAt && (
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                        variant="caption"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         Last completed {dayjs(state.completedAt).format('MMM D')}
                     </Typography>
                 )}
             </Box>
-
             <Box className={styles.progressSection}>
                 <Box className={styles.progressHeader}>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                        variant="caption"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         {checkedCount} / {allTaskIds.length} tasks
                     </Typography>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                        variant="caption"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         {Math.round(progress)}%
                     </Typography>
                 </Box>
                 <LinearProgress variant="determinate" value={progress} className={styles.progressBar} />
             </Box>
-
             {reviewSteps.map((step) => (
                 <Paper key={step.id} variant="outlined" className={styles.stepCard}>
-                    <Typography variant="subtitle2" fontWeight={700} color="primary" mb={1}>
+                    <Typography
+                        variant="subtitle2"
+                        color="primary"
+                        sx={{
+                            fontWeight: 700,
+                            mb: 1,
+                        }}
+                    >
                         {step.phase}
                     </Typography>
                     <Box className={styles.stepTasks}>
@@ -146,7 +171,6 @@ function WeeklyReviewPage() {
                     </Box>
                 </Paper>
             ))}
-
             <Box className={styles.actionRow}>
                 {!state.completedAt && (
                     <Button variant="contained" disabled={!isComplete} onClick={onComplete}>
@@ -157,9 +181,14 @@ function WeeklyReviewPage() {
                     Start over
                 </Button>
             </Box>
-
             {state.completedAt && (
-                <Typography variant="body2" color="success.main" mt={2}>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'success.main',
+                        mt: 2,
+                    }}
+                >
                     Review completed {dayjs(state.completedAt).format('dddd, MMM D [at] h:mm a')}. Great work!
                 </Typography>
             )}

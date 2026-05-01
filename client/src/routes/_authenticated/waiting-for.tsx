@@ -1,4 +1,4 @@
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
@@ -52,10 +52,22 @@ function WaitingForPage() {
     if (waitingItems.length === 0) {
         return (
             <Box>
-                <Typography variant="h5" fontWeight={600} mb={3}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
                     Waiting For
                 </Typography>
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     Nothing pending.
                 </Typography>
             </Box>
@@ -64,13 +76,31 @@ function WaitingForPage() {
 
     return (
         <Box>
-            <Typography variant="h5" fontWeight={600} mb={3}>
+            <Typography
+                variant="h5"
+                sx={{
+                    fontWeight: 600,
+                    mb: 3,
+                }}
+            >
                 Waiting For
                 <Chip label={waitingItems.length} size="small" color="primary" className={styles.countChip} />
             </Typography>
             {Object.entries(groups).map(([personId, groupItems]) => (
-                <Box key={personId} mb={3}>
-                    <Typography variant="subtitle2" color="text.secondary" fontWeight={600} mb={1}>
+                <Box
+                    key={personId}
+                    sx={{
+                        mb: 3,
+                    }}
+                >
+                    <Typography
+                        variant="subtitle2"
+                        sx={{
+                            color: 'text.secondary',
+                            fontWeight: 600,
+                            mb: 1,
+                        }}
+                    >
                         {personId === '__none__' ? 'Unassigned' : (personMap[personId] ?? 'Unknown')}
                     </Typography>
                     <List disablePadding className={styles.list}>

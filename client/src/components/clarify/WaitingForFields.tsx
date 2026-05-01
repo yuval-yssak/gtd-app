@@ -15,14 +15,23 @@ interface Props {
 export function WaitingForFields({ value, onChange, people }: Props) {
     if (people.length === 0) {
         return (
-            <Typography variant="body2" color="text.secondary">
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'text.secondary',
+                }}
+            >
                 No people yet — add contacts in the People section first.
             </Typography>
         );
     }
 
     return (
-        <Stack gap={2}>
+        <Stack
+            sx={{
+                gap: 2,
+            }}
+        >
             <TextField
                 select
                 label="Waiting for"
@@ -38,7 +47,12 @@ export function WaitingForFields({ value, onChange, people }: Props) {
                     </MenuItem>
                 ))}
             </TextField>
-            <Stack direction={{ xs: 'column', sm: 'row' }} gap={2}>
+            <Stack
+                direction={{ xs: 'column', sm: 'row' }}
+                sx={{
+                    gap: 2,
+                }}
+            >
                 <TextField
                     label="Expected by"
                     type="date"

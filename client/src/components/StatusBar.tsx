@@ -9,7 +9,12 @@ export function StatusBar() {
     return (
         <div className={styles.root}>
             <CircleIcon className={online ? styles.dotOnline : styles.dotOffline} />
-            <Typography variant="caption" color="text.secondary">
+            <Typography
+                variant="caption"
+                sx={{
+                    color: 'text.secondary',
+                }}
+            >
                 {online ? 'Online' : 'Offline'}
             </Typography>
         </div>

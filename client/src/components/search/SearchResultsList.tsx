@@ -63,12 +63,28 @@ function GroupedList({ items }: { items: readonly StoredItem[] }) {
     return (
         <Box>
             {groups.map((group) => (
-                <Box key={group.status} mb={3}>
+                <Box
+                    key={group.status}
+                    sx={{
+                        mb: 3,
+                    }}
+                >
                     <Box className={styles.groupHeader}>
-                        <Typography variant="subtitle2" color="text.secondary" fontWeight={600}>
+                        <Typography
+                            variant="subtitle2"
+                            sx={{
+                                color: 'text.secondary',
+                                fontWeight: 600,
+                            }}
+                        >
                             {STATUS_LABELS[group.status]}
                         </Typography>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                            variant="caption"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
                             {group.items.length}
                         </Typography>
                     </Box>

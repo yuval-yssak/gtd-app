@@ -1,5 +1,5 @@
 import BoltIcon from '@mui/icons-material/Bolt';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
@@ -94,15 +94,31 @@ function NextActionsPage() {
 
     return (
         <Box>
-            <Typography variant="h5" fontWeight={600} mb={2}>
+            <Typography
+                variant="h5"
+                sx={{
+                    fontWeight: 600,
+                    mb: 2,
+                }}
+            >
                 Next Actions
                 {nextActions.length > 0 && <Chip label={nextActions.length} size="small" color="primary" className={styles.countChip} />}
             </Typography>
-
             {/* Filter bar */}
-            <Box mb={2}>
+            <Box
+                sx={{
+                    mb: 2,
+                }}
+            >
                 {workContexts.length > 0 && (
-                    <Stack direction="row" flexWrap="wrap" gap={0.75} mb={1}>
+                    <Stack
+                        direction="row"
+                        sx={{
+                            flexWrap: 'wrap',
+                            gap: 0.75,
+                            mb: 1,
+                        }}
+                    >
                         {workContexts.map((ctx) => (
                             <Chip
                                 key={ctx._id}
@@ -116,7 +132,13 @@ function NextActionsPage() {
                     </Stack>
                 )}
 
-                <Stack direction="row" flexWrap="wrap" gap={0.75}>
+                <Stack
+                    direction="row"
+                    sx={{
+                        flexWrap: 'wrap',
+                        gap: 0.75,
+                    }}
+                >
                     {(['low', 'medium', 'high'] as EnergyLevel[]).map((e) => (
                         <Chip
                             key={e}
@@ -139,9 +161,14 @@ function NextActionsPage() {
                     ))}
                 </Stack>
             </Box>
-
             {nextActions.length === 0 ? (
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     No next actions match the current filters.
                 </Typography>
             ) : (

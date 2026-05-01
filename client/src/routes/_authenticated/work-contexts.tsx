@@ -1,5 +1,5 @@
 import AddIcon from '@mui/icons-material/Add';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -78,7 +78,12 @@ function WorkContextsPage() {
     return (
         <Box>
             <Box className={styles.pageHeader}>
-                <Typography variant="h5" fontWeight={600}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
                     Work Contexts
                     {workContexts.length > 0 && <Chip label={workContexts.length} size="small" className={styles.countChip} />}
                 </Typography>
@@ -86,9 +91,14 @@ function WorkContextsPage() {
                     Add context
                 </Button>
             </Box>
-
             {workContexts.length === 0 ? (
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     No work contexts yet. Examples: @office, @phone, @computer, @errands.
                 </Typography>
             ) : (
@@ -128,7 +138,6 @@ function WorkContextsPage() {
                     ))}
                 </List>
             )}
-
             <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
                 <DialogTitle>{editing ? 'Rename context' : 'Add work context'}</DialogTitle>
                 <DialogContent>
