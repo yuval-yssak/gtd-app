@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import { buildProvider, renewWebhookIfExpired } from '../routes/calendar.js';
+import { integrationStatus } from './calendarIntegrationStatus.js';
 
 const RENEWAL_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
 
@@ -15,7 +16,8 @@ export function startWebhookRenewalTimer(): NodeJS.Timeout {
 
 let renewing = false;
 
-async function renewAllExpiring(): Promise<void> {
+/** Exported for tests so they can drive the renewal sweep deterministically without timers. */
+export async function renewAllExpiring(): Promise<void> {
     if (renewing) {
         return;
     }
@@ -32,8 +34,14 @@ async function renewAllExpiring(): Promise<void> {
                 if (!integration) {
                     continue;
                 }
+                // Skip suspended/revoked — the auth-escalation flow owns their lifecycle. Hitting
+                // Google again would just re-trigger the same `invalid_grant` on every renewal tick.
+                if (integrationStatus(integration) !== 'active') {
+                    console.log(`[webhook-renewal] skipping ${integrationStatus(integration)} integration ${integration._id}`);
+                    continue;
+                }
                 const provider = buildProvider(integration, config.user);
-                await renewWebhookIfExpired(config, provider);
+                await renewWebhookIfExpired(config, provider, integration._id);
             } catch (err) {
                 console.error(`[webhook-renewal] skipping config ${config._id} (integration ${config.integrationId}):`, err);
             }

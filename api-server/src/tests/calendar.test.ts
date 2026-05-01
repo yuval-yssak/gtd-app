@@ -38,6 +38,7 @@ beforeEach(async () => {
         db.collection('operations').deleteMany({}),
         db.collection('calendarIntegrations').deleteMany({}),
         db.collection('calendarSyncConfigs').deleteMany({}),
+        db.collection('sentEmails').deleteMany({}),
     ]);
     vi.restoreAllMocks();
     gcalCreationInFlight.clear();
@@ -5348,5 +5349,107 @@ describe('routine pause', () => {
         // Per-instance cancellations must be skipped when the routine is paused — racing them
         // against the cap caused GCal to drop UNTIL from the master.
         expect(cancelSpy).not.toHaveBeenCalled();
+    });
+});
+
+// ─── invalid_grant escalation ────────────────────────────────────────────────
+
+describe('integration auth status — sync, pushback, OAuth reconnect', () => {
+    it('returns HTTP 410 + integration_revoked from the sync endpoint when status=revoked', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const revokedAt = dayjs().toISOString();
+        const suspendedAt = dayjs().subtract(25, 'hour').toISOString();
+        await insertIntegrationWithConfig(userId, { status: 'revoked', suspendedAt, revokedAt });
+
+        const watchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+
+        expect(res.status).toBe(410);
+        const body = (await res.json()) as { error: string; integrationId: string; revokedAt: string; suspendedAt: string };
+        expect(body.error).toBe('integration_revoked');
+        expect(body.integrationId).toBe('int-1');
+        expect(body.revokedAt).toBe(revokedAt);
+        expect(body.suspendedAt).toBe(suspendedAt);
+        // No provider call attempted — short-circuit before sync.
+        expect(watchSpy).not.toHaveBeenCalled();
+    });
+
+    it('pushback against a suspended integration is a no-op (no GCal calls)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const suspendedAt = dayjs().toISOString();
+        await insertIntegrationWithConfig(userId, { status: 'suspended', suspendedAt });
+
+        const item: ItemInterface = {
+            _id: 'item-1',
+            user: userId,
+            title: 'Edited locally',
+            status: 'calendar',
+            timeStart: '2026-06-01T10:00:00Z',
+            timeEnd: '2026-06-01T10:30:00Z',
+            calendarEventId: 'gcal-evt-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        };
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue();
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue();
+
+        const op: OperationInterface = {
+            _id: 'op-1',
+            user: userId,
+            entityType: 'item',
+            entityId: 'item-1',
+            opType: 'update',
+            ts: dayjs().toISOString(),
+            snapshot: item,
+        };
+        await maybePushToGCal(
+            op,
+            () => new GoogleCalendarProvider({ accessToken: 'at', refreshToken: 'rt', tokenExpiry: dayjs().toISOString() }, async () => {}),
+        );
+
+        // Both `provider.updateEvent` and `provider.deleteEvent` must NOT be called — the suspended
+        // status short-circuits inside resolvePushContext.
+        expect(updateSpy).not.toHaveBeenCalled();
+        expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('OAuth reconnect (upsertEncrypted) flips a revoked row back to active and unsets escalation timestamps', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // Seed an existing revoked integration for this user.
+        await calendarIntegrationsDAO.insertEncrypted(
+            makeIntegration(userId, {
+                status: 'revoked',
+                suspendedAt: dayjs().subtract(2, 'day').toISOString(),
+                revokedAt: dayjs().subtract(1, 'day').toISOString(),
+                lastAuthErrorAt: dayjs().subtract(1, 'day').toISOString(),
+            }),
+        );
+
+        // Simulate the OAuth callback: upsertEncrypted is what the callback ultimately calls.
+        const now = dayjs().toISOString();
+        await calendarIntegrationsDAO.upsertEncrypted({
+            _id: 'int-1',
+            user: userId,
+            provider: 'google',
+            accessToken: 'fresh-at',
+            refreshToken: 'fresh-rt',
+            tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const refreshed = await calendarIntegrationsDAO.findById('int-1');
+        expect(refreshed?.status).toBe('active');
+        expect(refreshed?.suspendedAt).toBeUndefined();
+        expect(refreshed?.revokedAt).toBeUndefined();
+        expect(refreshed?.lastAuthErrorAt).toBeUndefined();
     });
 });

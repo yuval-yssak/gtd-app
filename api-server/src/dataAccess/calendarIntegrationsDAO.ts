@@ -20,6 +20,10 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
     /**
      * Upserts an integration keyed by (user, provider), encrypting tokens at rest.
      * Upserting instead of inserting prevents duplicates from concurrent OAuth completions.
+     *
+     * Reconnect path: a row marked `'suspended'` or `'revoked'` by the auth-escalation flow is
+     * cleared back to `'active'` here, and all three escalation timestamps are unset, so
+     * completing OAuth is the user-facing way to recover from a revoked integration.
      */
     async upsertEncrypted(integration: CalendarIntegrationInterface): Promise<void> {
         const { _id, createdTs, ...rest } = integration;
@@ -27,11 +31,17 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
             ...rest,
             accessToken: encrypt(integration.accessToken),
             refreshToken: encrypt(integration.refreshToken),
+            status: 'active' as const,
         };
         // $setOnInsert preserves createdTs and _id on reconnect — only $set on mutable fields.
+        // $unset clears any prior escalation timestamps so a reconnected integration looks fresh.
         await this.updateOne(
             { user: integration.user, provider: integration.provider },
-            { $set: encryptedRest, $setOnInsert: { _id, createdTs } },
+            {
+                $set: encryptedRest,
+                $setOnInsert: { _id, createdTs },
+                $unset: { suspendedAt: '', revokedAt: '', lastAuthErrorAt: '' },
+            },
             { upsert: true },
         );
     }
@@ -106,6 +116,57 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
         // updatedTs tracks when the document itself was modified — decouple from lastSyncedTs
         // so it always reflects wall-clock "now", not the sync cursor time.
         await this.updateOne({ _id: id, user: userId }, { $set: { lastSyncedTs: ts, updatedTs: dayjs().toISOString() } });
+    }
+
+    /**
+     * Reads a single integration by id without decrypting tokens. The auth-escalation flow only
+     * needs status + timestamps + user, so skipping the decrypt avoids surfacing plaintext tokens
+     * in code paths that don't need them.
+     */
+    async findById(id: string): Promise<CalendarIntegrationInterface | null> {
+        return this.findOne({ _id: id } as never);
+    }
+
+    /**
+     * Atomically transitions an integration from `'active'` (or no status field — legacy rows) to
+     * `'suspended'`. Returns `true` if this call won the race and made the change. Used by the
+     * escalation state machine to ensure exactly one warning email per suspension event.
+     */
+    async markSuspendedIfActive(id: string, ts: string): Promise<boolean> {
+        const result = await this.updateOne({ _id: id, $or: [{ status: 'active' }, { status: { $exists: false } }] } as never, {
+            $set: { status: 'suspended', suspendedAt: ts, lastAuthErrorAt: ts, updatedTs: ts },
+        });
+        return result.modifiedCount === 1;
+    }
+
+    /**
+     * Atomically transitions an integration from `'suspended'` to `'revoked'`. Returns `true` if
+     * this call won the race. Paired with `markSuspendedIfActive` so concurrent escalation
+     * attempts produce at most one warning email + one revoked email per integration.
+     */
+    async markRevokedIfSuspended(id: string, ts: string): Promise<boolean> {
+        const result = await this.updateOne({ _id: id, status: 'suspended' } as never, {
+            $set: { status: 'revoked', revokedAt: ts, lastAuthErrorAt: ts, updatedTs: ts },
+        });
+        return result.modifiedCount === 1;
+    }
+
+    /** Records a fresh `invalid_grant` occurrence on an already-suspended integration without changing status. */
+    async bumpLastAuthErrorAt(id: string, ts: string): Promise<void> {
+        await this.updateOne({ _id: id } as never, { $set: { lastAuthErrorAt: ts } });
+    }
+
+    /**
+     * Clears auth-escalation state — sets status back to `'active'` and unsets the three
+     * escalation timestamps. Generally callers should use `upsertEncrypted` (which clears these
+     * as a side effect of the OAuth reconnect); this method is exposed for tests and direct
+     * recovery paths.
+     */
+    async clearAuthStatus(id: string): Promise<void> {
+        await this.updateOne({ _id: id } as never, {
+            $set: { status: 'active', updatedTs: dayjs().toISOString() },
+            $unset: { suspendedAt: '', revokedAt: '', lastAuthErrorAt: '' },
+        });
     }
 }
 

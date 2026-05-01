@@ -10,6 +10,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import sentEmailsDAO from '../dataAccess/sentEmailsDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { migrateDeviceSyncStateToPerUserCursor } from './deviceSyncStateMigration.js';
 
@@ -46,6 +47,7 @@ async function loadDataAccess(customDBName?: string) {
         workContextsDAO.init(dbClient, resolvedDBName),
         calendarIntegrationsDAO.init(dbClient, resolvedDBName),
         calendarSyncConfigsDAO.init(dbClient, resolvedDBName),
+        sentEmailsDAO.init(dbClient, resolvedDBName),
     ]);
     // Convert any legacy single-cursor-per-device rows to per-(device, user) shape.
     // Idempotent + boot-only — see deviceSyncStateMigration.ts.
