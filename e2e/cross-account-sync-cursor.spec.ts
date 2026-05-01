@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
-import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
 // E2e regression for the per-(device, user) sync-cursor fix. Pre-fix, two Better Auth sessions on
@@ -19,7 +19,6 @@ import { gtd } from './helpers/gtd';
 // path is exercised by `edit-item-cross-account-reassign.spec.ts`; here we focus on the cursor
 // model itself, which is the load-bearing change.
 
-const DEV_RESET_URL = 'http://localhost:4000/dev/reset';
 const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
 
 async function seedItemOnServer(userId: string, title: string, overrides: Record<string, unknown> = {}): Promise<string> {
@@ -79,14 +78,14 @@ async function waitForBothSseChannels(page: Page, userIdA: string, userIdB: stri
 }
 
 test.describe('cross-account sync cursor (per-user)', () => {
-    test.beforeEach(async () => {
-        await fetch(DEV_RESET_URL, { method: 'DELETE' });
-    });
-
+    // Each test scopes its own /dev/reset to the test's unique stamped emails. Pre-fix, an
+    // unconditional global reset in beforeEach wiped session+user data for tests running
+    // concurrently in other workers, surfacing as 401s and timeouts.
     test('per-user cursors are independent: each Better Auth session on the device gets its own syncCursors row', async ({ browser }) => {
         const ts = dayjs().valueOf();
         const emailA = `cursor-a-${ts}@example.com`;
         const emailB = `cursor-b-${ts}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             await waitForBothSseChannels(page, active.userId, secondary.userId);
             // The boot effect's syncAllLoggedInUsers writes per-user cursor rows; assert they exist.
@@ -123,6 +122,7 @@ test.describe('cross-account sync cursor (per-user)', () => {
         const ts = dayjs().valueOf();
         const emailA = `cursor-adv-a-${ts}@example.com`;
         const emailB = `cursor-adv-b-${ts}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             await waitForBothSseChannels(page, active.userId, secondary.userId);
             // Wait for both per-user rows to land (boot pull writes them).

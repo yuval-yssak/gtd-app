@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
 // E2e for cross-account "edit + move" of a routine + its generated items. Mirrors the item spec —
@@ -87,14 +87,13 @@ async function fetchServerItem(entityId: string): Promise<ServerItem | null> {
 }
 
 test.describe('RoutineDialog cross-account reassign — atomic edit + move', () => {
-    test.beforeEach(async () => {
-        await fetch('http://localhost:4000/dev/reset', { method: 'DELETE' });
-    });
-
+    // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
+    // other workers keep their session/user data.
     test('routine + generated items move together; title/rrule edits ride along; routineId link survives', async ({ browser }) => {
         const stamp = dayjs().valueOf();
         const emailA = `routine-edit-a-${stamp}@example.com`;
         const emailB = `routine-edit-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const routineId = await seedRoutineOnServer(active.userId, { title: 'Daily standup', rrule: 'FREQ=WEEKLY;BYDAY=MO' });
             // Two generated items so reassignGeneratedItems has something to move.
@@ -136,6 +135,7 @@ test.describe('RoutineDialog cross-account reassign — atomic edit + move', () 
         const stamp = dayjs().valueOf();
         const emailA = `routine-resume-a-${stamp}@example.com`;
         const emailB = `routine-resume-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const routineId = await seedRoutineOnServer(active.userId, { active: false, title: 'Paused routine' });
             await page.goto(INBOX_URL);

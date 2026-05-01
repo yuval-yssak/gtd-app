@@ -187,8 +187,46 @@ export const devLoginRoutes = new Hono()
         });
     })
 
-    // DELETE /dev/reset — wipe all collections so tests can start with a clean slate.
+    // DELETE /dev/reset — wipe collections so tests can start with a clean slate.
+    //
+    // Two modes:
+    //   - Body `{ emails: [...] }` — scoped reset: only delete records owned by users with those
+    //     emails. Safe to run while other workers are using unrelated emails. Specs running in
+    //     parallel MUST use this form so /dev/reset in one file doesn't wipe sessions/items
+    //     belonging to a test running concurrently in another worker.
+    //   - No body — global wipe: kept for one-off manual cleanup. Parallel e2e runs must not use
+    //     this form (it will clobber concurrent workers); helpers/context.ts:resetServerForEmails
+    //     always sends an `emails` body for that reason.
     .delete('/reset', async (c) => {
+        const body = await c.req.json<{ emails?: string[] } | undefined>().catch(() => undefined);
+        const emails = body?.emails?.map((e) => e.toLowerCase());
+        if (emails && emails.length > 0) {
+            const users = await db
+                .collection<{ _id: string; email: string }>('user')
+                .find({ email: { $in: emails } })
+                .toArray();
+            const userIds = users.map((u) => u._id);
+            // Best-effort: if no users matched, the only thing to clear is potential leftover state
+            // keyed by email (none of our collections are). Return ok so tests proceed idempotently.
+            if (userIds.length === 0) {
+                return c.json({ ok: true, scope: 'emails', deletedUserIds: [] });
+            }
+            await Promise.all([
+                db.collection('user').deleteMany({ _id: { $in: userIds } } as never),
+                db.collection('session').deleteMany({ userId: { $in: userIds } } as never),
+                db.collection('items').deleteMany({ user: { $in: userIds } } as never),
+                db.collection('operations').deleteMany({ user: { $in: userIds } } as never),
+                db.collection('deviceSyncState').deleteMany({ user: { $in: userIds } } as never),
+                db.collection('routines').deleteMany({ user: { $in: userIds } } as never),
+                db.collection('people').deleteMany({ user: { $in: userIds } } as never),
+                db.collection('workContexts').deleteMany({ user: { $in: userIds } } as never),
+                db.collection('deviceUsers').deleteMany({ userId: { $in: userIds } } as never),
+                db.collection('pushSubscriptions').deleteMany({ user: { $in: userIds } } as never),
+                db.collection('calendarIntegrations').deleteMany({ user: { $in: userIds } } as never),
+                db.collection('calendarSyncConfigs').deleteMany({ user: { $in: userIds } } as never),
+            ]);
+            return c.json({ ok: true, scope: 'emails', deletedUserIds: userIds });
+        }
         await Promise.all([
             db.collection('user').deleteMany({}),
             db.collection('session').deleteMany({}),
@@ -203,7 +241,7 @@ export const devLoginRoutes = new Hono()
             db.collection('calendarIntegrations').deleteMany({}),
             db.collection('calendarSyncConfigs').deleteMany({}),
         ]);
-        return c.json({ ok: true });
+        return c.json({ ok: true, scope: 'all' });
     })
 
     // GET /dev/device-users?deviceId=... — surface deviceUsers join rows so e2e specs can

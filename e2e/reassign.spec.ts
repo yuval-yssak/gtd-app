@@ -1,6 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
 // E2E coverage strategy: assertions read MongoDB through dev endpoints (server-side state) instead
@@ -89,33 +89,23 @@ async function fetchServerEntity(collection: 'items' | 'people', entityId: strin
 async function reloadInbox(page: Page): Promise<void> {
     await page.goto(INBOX_URL);
     await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
-    // Wait for the device cursor to advance past the bootstrap epoch so subsequent assertions
-    // don't race against an in-flight bootstrap. Mirrors the waitForSyncSettled pattern in login.ts.
-    await page.evaluate(async () => {
-        type Harness = { syncState(): Promise<{ lastSyncedTs: string } | undefined> };
-        const harness = (window as unknown as { __gtd: Harness }).__gtd;
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline) {
-            const s = await harness.syncState();
-            if (s !== undefined && s !== null && s.lastSyncedTs !== '1970-01-01T00:00:00.000Z') {
-                return;
-            }
-            await new Promise((r) => setTimeout(r, 100));
-        }
-    });
+    // We deliberately do NOT wait for cursor settlement here. These tests run under
+    // `withTwoAccountsOnOneDevice`, where the boot orchestrator pivots between users; an SSE event
+    // arriving on an inactive channel can populate `pullInFlight[user]` and cause the next
+    // orchestrator pass to deadlock when its gated `pullFromServerUnguarded` returns the
+    // gate-pending promise. The test asserts against server state directly via dev endpoints, so a
+    // settled client cursor is not required for correctness.
 }
 
 test.describe('reassign — Step 5', () => {
-    // Each test seeds fresh stamp-derived emails; reset the server between tests so leftover
-    // operations from earlier passes don't influence the device's pull cursor.
-    test.beforeEach(async () => {
-        await fetch('http://localhost:4000/dev/reset', { method: 'DELETE' });
-    });
-
+    // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
+    // other workers keep their session/user data. Pre-fix, an unconditional global reset in
+    // beforeEach wiped session+user data for tests running in parallel workers.
     test('plain item: reassign a→b moves the item server-side', async ({ browser }) => {
         const stamp = dayjs().valueOf();
         const emailA = `reassign-a-${stamp}@example.com`;
         const emailB = `reassign-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const itemId = await seedItemOnServer(active.userId, 'Plan trip');
             await reloadInbox(page);
@@ -133,6 +123,7 @@ test.describe('reassign — Step 5', () => {
         const stamp = dayjs().valueOf();
         const emailA = `reassign-p-a-${stamp}@example.com`;
         const emailB = `reassign-p-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const personId = await seedPersonOnServer(active.userId, 'Sam');
             const itemId = await seedItemOnServer(active.userId, 'Lunch with Sam', { peopleIds: [personId] });
@@ -157,21 +148,26 @@ test.describe('reassign — Step 5', () => {
         const stamp = dayjs().valueOf();
         const emailA = `cal-reassign-a-${stamp}@example.com`;
         const emailB = `cal-reassign-b-${stamp}@example.com`;
+        // configIds carry the stamp so parallel workers don't collide on _id (the configs collection
+        // is keyed by _id, so two tests trying to seed the same configId race on insertOne).
+        const cfgA = `cfg-a-${stamp}`;
+        const cfgB = `cfg-b-${stamp}`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const seedA = await seedServerCalendarIntegration({
                 userId: active.userId,
-                calendars: [{ configId: 'cfg-a', calendarId: 'primary', displayName: 'A Primary', isDefault: true }],
+                calendars: [{ configId: cfgA, calendarId: 'primary', displayName: 'A Primary', isDefault: true }],
             });
             const seedB = await seedServerCalendarIntegration({
                 userId: secondary.userId,
-                calendars: [{ configId: 'cfg-b', calendarId: 'primary', displayName: 'B Primary', isDefault: true }],
+                calendars: [{ configId: cfgB, calendarId: 'primary', displayName: 'B Primary', isDefault: true }],
             });
 
             const itemId = await seedItemOnServer(active.userId, 'Cal event A', {
                 status: 'calendar',
                 calendarEventId: 'gcal-evt-original',
                 calendarIntegrationId: seedA.integrationId,
-                calendarSyncConfigId: 'cfg-a',
+                calendarSyncConfigId: cfgA,
                 timeStart: dayjs().add(1, 'day').toISOString(),
                 timeEnd: dayjs().add(1, 'day').add(1, 'hour').toISOString(),
             });
@@ -183,7 +179,7 @@ test.describe('reassign — Step 5', () => {
                 entityId: itemId,
                 fromUserId: active.userId,
                 toUserId: secondary.userId,
-                targetCalendar: { integrationId: seedB.integrationId, syncConfigId: 'cfg-b' },
+                targetCalendar: { integrationId: seedB.integrationId, syncConfigId: cfgB },
             });
             expect(result.ok).toBe(true);
 
@@ -200,6 +196,7 @@ test.describe('reassign — Step 5', () => {
         const stamp = dayjs().valueOf();
         const emailA = `routine-gen-a-${stamp}@example.com`;
         const emailB = `routine-gen-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const itemId = await seedItemOnServer(active.userId, 'Generated by routine', { routineId: 'routine-xyz' });
             await reloadInbox(page);

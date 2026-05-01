@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 
 // Regression for: opening EditItemDialog on a calendar-linked item, switching the AccountPicker
 // to the secondary account, and finding no calendar selector — only the validation error
@@ -68,27 +68,30 @@ async function seedCalendarItemOnServer(userId: string, integrationId: string, c
 }
 
 test.describe('EditItemDialog cross-account calendar picker', () => {
-    test.beforeEach(async () => {
-        await fetch('http://localhost:4000/dev/reset', { method: 'DELETE' });
-    });
-
+    // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
+    // other workers keep their session/user data.
     test('switching AccountPicker to a target account with one calendar shows the picker pre-filled with that calendar', async ({ browser }) => {
         const stamp = dayjs().valueOf();
         const emailA = `cal-pick-a-${stamp}@example.com`;
         const emailB = `cal-pick-b-${stamp}@example.com`;
+        // configIds carry the stamp so parallel workers don't collide on _id.
+        const cfgAPrimary = `cfg-a-primary-${stamp}`;
+        const cfgAOther = `cfg-a-other-${stamp}`;
+        const cfgBSole = `cfg-b-sole-${stamp}`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             // Account A: two calendars (so the source-side Select is meaningful).
             const seedA = await seedCalendarForUser(active.userId, [
-                { configId: 'cfg-a-primary', calendarId: 'primary', displayName: 'A Primary', isDefault: true },
-                { configId: 'cfg-a-other', calendarId: 'other-a', displayName: 'A Other', isDefault: false },
+                { configId: cfgAPrimary, calendarId: 'primary', displayName: 'A Primary', isDefault: true },
+                { configId: cfgAOther, calendarId: 'other-a', displayName: 'A Other', isDefault: false },
             ]);
             // Account B: exactly one calendar — pre-fix this hid the picker entirely (length > 1 gate).
             const seedB = await seedCalendarForUser(secondary.userId, [
-                { configId: 'cfg-b-sole', calendarId: 'primary', displayName: 'B Primary', isDefault: true },
+                { configId: cfgBSole, calendarId: 'primary', displayName: 'B Primary', isDefault: true },
             ]);
             expect(seedB.configIds).toHaveLength(1);
 
-            await seedCalendarItemOnServer(active.userId, seedA.integrationId, 'cfg-a-primary', 'Cross-account picker test');
+            await seedCalendarItemOnServer(active.userId, seedA.integrationId, cfgAPrimary, 'Cross-account picker test');
 
             await page.goto(INBOX_URL);
             // Force a server pull so the seeded item shows up under the active account.
@@ -103,8 +106,11 @@ test.describe('EditItemDialog cross-account calendar picker', () => {
             const dialog = page.getByRole('dialog', { name: 'Edit item' });
             await expect(dialog).toBeVisible();
 
-            // Verify the picker initially shows the source calendar.
-            const calendarSelect = dialog.getByLabel('Calendar');
+            // Verify the picker initially shows the source calendar. CalendarFields renders a raw
+            // FormControl/InputLabel/Select without `htmlFor` linking, so the label is not a11y-
+            // associated with the combobox — locate the FormControl by its label text and grab the
+            // sibling Select trigger directly.
+            const calendarSelect = dialog.locator('.MuiFormControl-root', { has: page.locator('label', { hasText: /^Calendar$/ }) }).locator('[role="combobox"]');
             await expect(calendarSelect).toBeVisible();
 
             // Switch the AccountPicker to the secondary account.
