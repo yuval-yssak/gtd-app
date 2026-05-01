@@ -294,6 +294,27 @@ describe('pullFromServer — item ops', () => {
         expect(item).toBeUndefined();
     });
 
+    // Regression: cross-account reassign emits a `delete` op under the source user. If the
+    // orchestrator pulls the target user first, the local row already carries the new userId by
+    // the time the source's delete arrives. Without the owner check, deleteItemById would blow
+    // away the post-move row by `_id` and the entity would disappear from both views.
+    it('delete op skips when local row belongs to a different user (post-reassign safety)', async () => {
+        const reassignedItem = { ...makeItem('item-reassigned'), userId: 'user-target' };
+        await db.put('items', reassignedItem);
+
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            // The source user (USER_ID) pulls the delete op, but the row has already moved to user-target.
+            ops: [{ entityType: 'item', entityId: 'item-reassigned', opType: 'delete', snapshot: null }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const item = await db.get('items', 'item-reassigned');
+        expect(item).toBeDefined();
+        expect(item?.userId).toBe('user-target');
+    });
+
     it('updates the per-user cursor to serverTs after a successful pull', async () => {
         const serverTs = '2025-09-01T12:00:00.000Z';
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs });

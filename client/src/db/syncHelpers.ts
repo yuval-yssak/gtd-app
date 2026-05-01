@@ -357,7 +357,7 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     );
 
     for (const op of ops) {
-        await applyServerOp(db, op);
+        await applyServerOp(db, userId, op);
     }
 
     await setLastSyncedTs(db, userId, serverTs);
@@ -366,7 +366,7 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
 // Handlers for each entity type used by applyEntityOp to stay DRY across entity types.
 // Each entry provides the three DB operations needed to apply a server op.
 interface EntityApplyHandlers {
-    getExisting: (id: string) => Promise<{ updatedTs: string } | undefined>;
+    getExisting: (id: string) => Promise<{ updatedTs: string; userId: string } | undefined>;
     put: (entity: unknown) => Promise<void>;
     remove: (id: string) => Promise<void>;
 }
@@ -396,13 +396,27 @@ function buildEntityHandlers(db: IDBPDatabase<MyDB>): Record<EntityType, EntityA
     };
 }
 
-async function applyServerOp(db: IDBPDatabase<MyDB>, op: ServerOp): Promise<void> {
+async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: ServerOp): Promise<void> {
     const handlers = buildEntityHandlers(db);
-    await applyEntityOp(op, handlers[op.entityType]);
+    await applyEntityOp(pullUserId, op, handlers[op.entityType]);
 }
 
-async function applyEntityOp(op: ServerOp, handlers: EntityApplyHandlers): Promise<void> {
+/**
+ * `pullUserId` is the user whose cursor is being advanced (i.e. the user the server scoped this
+ * pull to). Used to scope deletes: a delete op only removes the local row when it still belongs
+ * to that user. Without this guard, a cross-account reassign emits two ops with the same entityId
+ * (delete under source, create under target). If the orchestrator pulls target before source, the
+ * source's later delete blindly removes the post-move row by `_id` — the entity disappears.
+ */
+async function applyEntityOp(pullUserId: string, op: ServerOp, handlers: EntityApplyHandlers): Promise<void> {
     if (op.opType === 'delete') {
+        const existing = await handlers.getExisting(op.entityId);
+        if (existing && existing.userId !== pullUserId) {
+            console.log(
+                `[debug-gcal-sync][client] applyEntityOp delete skipped — owner mismatch | type=${op.entityType} id=${op.entityId} pullUserId=${pullUserId} existingUserId=${existing.userId}`,
+            );
+            return;
+        }
         await handlers.remove(op.entityId);
         return;
     }
