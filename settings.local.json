@@ -1,0 +1,16 @@
+{
+    "permissions": {
+        "allow": [
+            "Bash(while read:*)",
+            "Bash(do echo:*)",
+            "Read(//Users/yuvalyssak/gtd/client/**)",
+            "Bash(done)",
+            "Read(//Users/yuvalyssak/gtd/api-server/**)",
+            "Bash(npm run:*)",
+            "Bash(npx biome:*)",
+            "Bash(find:*)",
+            "Bash(grep \"\\\\$\")",
+            "Bash(node:*)"
+        ]
+    }
+}

@@ -55,14 +55,14 @@ export async function migrateDeviceSyncStateToPerUserCursor(db: Db): Promise<voi
         }
 
         const newId = `${oldId}::${userId}`;
-        const setOnInsert: Record<string, string> = {
+        const setOnInsert: { deviceId: string; user: string; lastSyncedTs: string; lastSeenTs: string; name?: string } = {
             deviceId: oldId,
             user: userId,
             lastSyncedTs: oldDoc.lastSyncedTs,
             lastSeenTs: oldDoc.lastSeenTs,
         };
         if (oldDoc.name) {
-            setOnInsert['name'] = oldDoc.name;
+            setOnInsert.name = oldDoc.name;
         }
 
         // $setOnInsert preserves any fresher row written by a concurrently-running app instance —

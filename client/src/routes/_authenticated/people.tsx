@@ -1,5 +1,5 @@
 import AddIcon from '@mui/icons-material/Add';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -111,7 +111,12 @@ function PeoplePage() {
     return (
         <Box>
             <Box className={styles.pageHeader}>
-                <Typography variant="h5" fontWeight={600}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
                     People
                     {people.length > 0 && <Chip label={people.length} size="small" className={styles.countChip} />}
                 </Typography>
@@ -119,9 +124,14 @@ function PeoplePage() {
                     Add person
                 </Button>
             </Box>
-
             {people.length === 0 ? (
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     No people yet. Add contacts to reference in Waiting For and items.
                 </Typography>
             ) : (
@@ -162,7 +172,6 @@ function PeoplePage() {
                     ))}
                 </List>
             )}
-
             <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
                 <DialogTitle>{editing ? 'Edit person' : 'Add person'}</DialogTitle>
                 <DialogContent>

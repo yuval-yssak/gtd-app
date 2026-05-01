@@ -1,4 +1,4 @@
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import { createFileRoute } from '@tanstack/react-router';
 import { ArchivedItemsView } from '../../components/ArchivedItemsView';
 

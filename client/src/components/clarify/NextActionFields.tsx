@@ -31,16 +31,32 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
     }
 
     return (
-        <Stack gap={2}>
+        <Stack
+            sx={{
+                gap: 2,
+            }}
+        >
             {/* Tickler field shown first — "ignoreBefore" hides the item until that date.
                 Placing it at the top makes the snooze intent explicit before filling other fields. */}
             <Box>
                 <FormLabel>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                        variant="caption"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         Tickler — hide until
                     </Typography>
                 </FormLabel>
-                <Typography variant="caption" color="text.secondary" display="block" mb={0.5}>
+                <Typography
+                    variant="caption"
+                    sx={{
+                        color: 'text.secondary',
+                        display: 'block',
+                        mb: 0.5,
+                    }}
+                >
                     Item stays hidden from Next Actions until this date
                 </Typography>
                 <TextField
@@ -51,15 +67,26 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                     slotProps={{ inputLabel: { shrink: true } }}
                 />
             </Box>
-
             {workContexts.length > 0 && (
                 <Box>
                     <FormLabel>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                            variant="caption"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
                             Work contexts
                         </Typography>
                     </FormLabel>
-                    <Stack direction="row" flexWrap="wrap" gap={0.75} mt={0.5}>
+                    <Stack
+                        direction="row"
+                        sx={{
+                            flexWrap: 'wrap',
+                            gap: 0.75,
+                            mt: 0.5,
+                        }}
+                    >
                         {workContexts.map((ctx) => (
                             <Chip
                                 key={ctx._id}
@@ -73,15 +100,26 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                     </Stack>
                 </Box>
             )}
-
             {people.length > 0 && (
                 <Box>
                     <FormLabel>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                            variant="caption"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
                             People
                         </Typography>
                     </FormLabel>
-                    <Stack direction="row" flexWrap="wrap" gap={0.75} mt={0.5}>
+                    <Stack
+                        direction="row"
+                        sx={{
+                            flexWrap: 'wrap',
+                            gap: 0.75,
+                            mt: 0.5,
+                        }}
+                    >
                         {people.map((p) => (
                             <Chip
                                 key={p._id}
@@ -95,10 +133,14 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                     </Stack>
                 </Box>
             )}
-
             <Box>
                 <FormLabel>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                        variant="caption"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         Energy
                     </Typography>
                 </FormLabel>
@@ -114,7 +156,6 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                     <ToggleButton value="high">High</ToggleButton>
                 </ToggleButtonGroup>
             </Box>
-
             <TextField
                 label="Time estimate (min)"
                 value={value.time}
@@ -124,8 +165,12 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                 className={styles.timeField}
                 slotProps={{ htmlInput: { min: 1 } }}
             />
-
-            <Stack direction="row" gap={2}>
+            <Stack
+                direction="row"
+                sx={{
+                    gap: 2,
+                }}
+            >
                 <FormControlLabel
                     control={<Checkbox size="small" checked={value.urgent} onChange={(e) => onChange({ urgent: e.target.checked })} />}
                     label={<Typography variant="body2">Urgent</Typography>}
@@ -135,7 +180,6 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                     label={<Typography variant="body2">Needs focus</Typography>}
                 />
             </Stack>
-
             <TextField
                 label="Expected by"
                 type="date"

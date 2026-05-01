@@ -2,8 +2,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
 import Box from '@mui/material/Box';
@@ -63,7 +63,12 @@ function PageHeader({ title, onBack }: { title: string; onBack: () => void }) {
             <IconButton onClick={onBack} size="small" aria-label="Go back">
                 <ArrowBackIcon />
             </IconButton>
-            <Typography variant="h6" fontWeight={600}>
+            <Typography
+                variant="h6"
+                sx={{
+                    fontWeight: 600,
+                }}
+            >
                 {title}
             </Typography>
         </Box>
@@ -86,7 +91,13 @@ function ItemPage() {
         return (
             <Box className={styles.page}>
                 <PageHeader title="Edit item" onBack={() => window.history.back()} />
-                <Typography color="text.secondary" mt={4} textAlign="center">
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        mt: 4,
+                        textAlign: 'center',
+                    }}
+                >
                     Item not found — it may have already been processed.
                 </Typography>
                 <Button onClick={() => window.history.back()} sx={{ mt: 2, display: 'block', mx: 'auto' }}>
@@ -118,7 +129,13 @@ function ItemPage() {
         return (
             <Box className={styles.page}>
                 <PageHeader title="Item" onBack={goBack} />
-                <Typography color="text.secondary" mt={4} textAlign="center">
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        mt: 4,
+                        textAlign: 'center',
+                    }}
+                >
                     This item has already been processed.
                 </Typography>
             </Box>
@@ -200,14 +217,35 @@ function InboxClarifyContent({ item, db, dest, workContexts, people, refreshItem
         <Box className={styles.page}>
             <PageHeader title="Clarify" onBack={onBack} />
             <Paper variant="outlined" className={styles.card}>
-                <Typography variant="h6" fontWeight={500} mb={3}>
+                <Typography
+                    variant="h6"
+                    sx={{
+                        fontWeight: 500,
+                        mb: 3,
+                    }}
+                >
                     "{item.title}"
                 </Typography>
 
-                <Typography variant="caption" color="text.secondary" fontWeight={600} className={styles.sectionLabel}>
+                <Typography
+                    variant="caption"
+                    className={styles.sectionLabel}
+                    sx={{
+                        color: 'text.secondary',
+                        fontWeight: 600,
+                    }}
+                >
                     What is it?
                 </Typography>
-                <Stack direction="row" flexWrap="wrap" gap={1} mt={1} mb={3}>
+                <Stack
+                    direction="row"
+                    sx={{
+                        flexWrap: 'wrap',
+                        gap: 1,
+                        mt: 1,
+                        mb: 3,
+                    }}
+                >
                     <Chip
                         icon={<DeleteOutlineIcon />}
                         label="Trash"
@@ -413,7 +451,12 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
                     <TextField label="Title" value={title} onChange={(e) => setTitle(e.target.value)} fullWidth required autoFocus />
                     {item.routineId && (
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            <Typography variant="caption" color="text.secondary">
+                            <Typography
+                                variant="caption"
+                                sx={{
+                                    color: 'text.secondary',
+                                }}
+                            >
                                 Part of routine:
                             </Typography>
                             <RoutineIndicator routineId={item.routineId} routineTitle={routines.find((r) => r._id === item.routineId)?.title} />
@@ -449,10 +492,24 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
                     <Divider />
 
                     <Box className={styles.moveToSection}>
-                        <Typography variant="caption" color="text.secondary" fontWeight={600} className={styles.sectionLabel}>
+                        <Typography
+                            variant="caption"
+                            className={styles.sectionLabel}
+                            sx={{
+                                color: 'text.secondary',
+                                fontWeight: 600,
+                            }}
+                        >
                             Move to
                         </Typography>
-                        <Stack direction="row" flexWrap="wrap" gap={1} mt={1}>
+                        <Stack
+                            direction="row"
+                            sx={{
+                                flexWrap: 'wrap',
+                                gap: 1,
+                                mt: 1,
+                            }}
+                        >
                             <Chip
                                 icon={<MoveToInboxIcon />}
                                 label="Inbox"
@@ -501,7 +558,13 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
                                     onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))}
                                     calendarOptions={calendarOptions}
                                 />
-                                <Stack direction="row" gap={1} mt={1.5}>
+                                <Stack
+                                    direction="row"
+                                    sx={{
+                                        gap: 1,
+                                        mt: 1.5,
+                                    }}
+                                >
                                     <Button size="small" onClick={() => setMoveDest(null)}>
                                         Cancel
                                     </Button>
@@ -515,7 +578,13 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
                         {moveDest === 'waitingFor' && (
                             <Box className={styles.subForm}>
                                 <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
-                                <Stack direction="row" gap={1} mt={1.5}>
+                                <Stack
+                                    direction="row"
+                                    sx={{
+                                        gap: 1,
+                                        mt: 1.5,
+                                    }}
+                                >
                                     <Button size="small" onClick={() => setMoveDest(null)}>
                                         Cancel
                                     </Button>

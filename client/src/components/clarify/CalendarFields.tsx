@@ -46,7 +46,11 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
     const showAccountHeaders = grouped.size > 1;
 
     return (
-        <Stack gap={2}>
+        <Stack
+            sx={{
+                gap: 2,
+            }}
+        >
             <TextField
                 label="Date"
                 type="date"
@@ -56,7 +60,12 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
                 required
                 slotProps={{ inputLabel: { shrink: true } }}
             />
-            <Stack direction="row" gap={2}>
+            <Stack
+                direction="row"
+                sx={{
+                    gap: 2,
+                }}
+            >
                 <TextField
                     label="Start time"
                     type="time"

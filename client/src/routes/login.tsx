@@ -35,10 +35,22 @@ function LoginPage() {
     return (
         <div className={styles.page}>
             <Paper elevation={3} className={styles.card}>
-                <Typography variant="h5" fontWeight={600} mb={1}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 1,
+                    }}
+                >
                     Getting Things Done
                 </Typography>
-                <Typography variant="body2" color="text.secondary" mb={4}>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'text.secondary',
+                        mb: 4,
+                    }}
+                >
                     Sign in to your account
                 </Typography>
                 <div className={styles.buttonGroup}>

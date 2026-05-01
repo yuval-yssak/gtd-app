@@ -88,11 +88,16 @@ function SearchPage() {
 
     return (
         <Box>
-            <Typography variant="h5" fontWeight={600} mb={3}>
+            <Typography
+                variant="h5"
+                sx={{
+                    fontWeight: 600,
+                    mb: 3,
+                }}
+            >
                 Search
                 {filtered.length > 0 && <Chip label={filtered.length} size="small" color="primary" className={styles.countChip} />}
             </Typography>
-
             <SearchFilters
                 urlState={urlState}
                 queryInput={queryInput}
@@ -103,7 +108,6 @@ function SearchPage() {
                 workContexts={workContexts}
                 activeStatuses={activeStatuses}
             />
-
             <Box className={styles.viewRow}>
                 <ToggleButtonGroup
                     size="small"
@@ -118,9 +122,14 @@ function SearchPage() {
                     ))}
                 </ToggleButtonGroup>
             </Box>
-
             {filtered.length === 0 ? (
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     {hasNoInputs ? 'Type to search or use the filters above.' : 'No items match your filters.'}
                 </Typography>
             ) : urlState.view === 'table' ? (

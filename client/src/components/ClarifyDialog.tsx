@@ -1,7 +1,7 @@
 import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
@@ -121,10 +121,21 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
             <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
                 <DialogContent className={styles.completedContent}>
                     <AssignmentTurnedInIcon className={styles.completedIcon} />
-                    <Typography variant="h6" fontWeight={600}>
+                    <Typography
+                        variant="h6"
+                        sx={{
+                            fontWeight: 600,
+                        }}
+                    >
                         Inbox clear!
                     </Typography>
-                    <Typography variant="body2" color="text.secondary" mt={1}>
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                            mt: 1,
+                        }}
+                    >
                         All {total} item{total !== 1 ? 's' : ''} processed.
                     </Typography>
                 </DialogContent>
@@ -141,28 +152,59 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle className={styles.dialogTitle}>
                 {/* component="span" prevents an h6 nested inside DialogTitle's h2, which is invalid HTML */}
-                <Typography component="span" variant="subtitle1" fontWeight={600}>
+                <Typography
+                    component="span"
+                    variant="subtitle1"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
                     Clarify
                 </Typography>
                 {/* Counter only meaningful in batch mode */}
                 {!isSingleItem && (
-                    <Typography component="span" variant="caption" color="text.secondary">
+                    <Typography
+                        component="span"
+                        variant="caption"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         {index + 1} of {total}
                     </Typography>
                 )}
             </DialogTitle>
-
             <DialogContent dividers>
-                <Typography variant="h6" fontWeight={500} mb={3}>
+                <Typography
+                    variant="h6"
+                    sx={{
+                        fontWeight: 500,
+                        mb: 3,
+                    }}
+                >
                     "{currentItem?.title}"
                 </Typography>
 
                 <FormLabel className={styles.formLabel}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} className={styles.sectionLabel}>
+                    <Typography
+                        variant="caption"
+                        className={styles.sectionLabel}
+                        sx={{
+                            color: 'text.secondary',
+                            fontWeight: 600,
+                        }}
+                    >
                         What is it?
                     </Typography>
                 </FormLabel>
-                <Stack direction="row" flexWrap="wrap" gap={1} mb={3}>
+                <Stack
+                    direction="row"
+                    sx={{
+                        flexWrap: 'wrap',
+                        gap: 1,
+                        mb: 3,
+                    }}
+                >
                     <Chip
                         icon={<DeleteOutlineIcon />}
                         label="Trash"
@@ -227,7 +269,6 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                     </Box>
                 )}
             </DialogContent>
-
             <DialogActions>
                 {/* Skip hidden in single-item mode — there is nothing else to process */}
                 {!isSingleItem && (

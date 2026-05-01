@@ -56,12 +56,23 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
     if (filtered.length === 0) {
         return (
             <Box>
-                <Typography variant="h5" fontWeight={600} mb={3}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
                     {title}
                 </Typography>
                 <Paper variant="outlined" className={styles.emptyCard}>
                     <Box className={styles.icon}>{emptyIcon}</Box>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         {emptyMessage}
                     </Typography>
                 </Paper>
@@ -79,7 +90,12 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
     return (
         <Box>
             <Box className={styles.headerRow}>
-                <Typography variant="h5" fontWeight={600}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
                     {title}
                     <Chip label={filtered.length} size="small" className={styles.countChip} />
                 </Typography>

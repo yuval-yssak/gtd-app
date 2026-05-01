@@ -498,7 +498,13 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
 
                 <Box>
                     <FormLabel>
-                        <Typography variant="caption" color="text.secondary" className={styles.sectionLabel}>
+                        <Typography
+                            variant="caption"
+                            className={styles.sectionLabel}
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
                             Type
                         </Typography>
                     </FormLabel>
@@ -518,7 +524,13 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
 
                 <Box>
                     <FormLabel>
-                        <Typography variant="caption" color="text.secondary" className={styles.sectionLabel}>
+                        <Typography
+                            variant="caption"
+                            className={styles.sectionLabel}
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
                             Frequency
                         </Typography>
                     </FormLabel>
@@ -565,7 +577,6 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                 {/* Account picker — auto-hides on single-account devices */}
                 {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} disabled={isSaving} />}
             </DialogContent>
-
             <DialogActions>
                 <Button onClick={onClose}>Cancel</Button>
                 <Button variant="contained" disabled={!form.title.trim() || !form.rrule || isSaving} onClick={() => void onSave()}>
@@ -592,11 +603,30 @@ function CalendarFields({
     const showPicker = calendarOptions.length > 1;
 
     return (
-        <Stack gap={1.5} sx={disabled ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
-            <Typography variant="caption" color="text.secondary" fontWeight={600}>
+        <Stack
+            sx={[
+                {
+                    gap: 1.5,
+                },
+                disabled ? { opacity: 0.5, pointerEvents: 'none' } : false,
+            ]}
+        >
+            <Typography
+                variant="caption"
+                sx={{
+                    color: 'text.secondary',
+                    fontWeight: 600,
+                }}
+            >
                 Calendar event settings
             </Typography>
-            <Stack direction="row" gap={2} alignItems="center">
+            <Stack
+                direction="row"
+                sx={{
+                    gap: 2,
+                    alignItems: 'center',
+                }}
+            >
                 <TextField
                     label="Start time"
                     type="time"
@@ -674,7 +704,13 @@ function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (pa
     return (
         <Box sx={disabled ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
             <FormLabel>
-                <Typography variant="caption" color="text.secondary" className={styles.sectionLabel}>
+                <Typography
+                    variant="caption"
+                    className={styles.sectionLabel}
+                    sx={{
+                        color: 'text.secondary',
+                    }}
+                >
                     Ends
                 </Typography>
             </FormLabel>
@@ -690,7 +726,6 @@ function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (pa
                 <ToggleButton value="onDate">On date</ToggleButton>
                 <ToggleButton value="afterN">After N</ToggleButton>
             </ToggleButtonGroup>
-
             {form.endsMode === 'onDate' && (
                 <TextField
                     type="date"
@@ -702,7 +737,6 @@ function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (pa
                     label="End date"
                 />
             )}
-
             {form.endsMode === 'afterN' && (
                 <div className={styles.ticklerRow}>
                     <Typography variant="body2">After</Typography>
@@ -734,19 +768,40 @@ interface TemplateFieldsProps {
 
 function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkContext, onTogglePerson }: TemplateFieldsProps) {
     return (
-        <Stack gap={1.5}>
-            <Typography variant="caption" color="text.secondary" fontWeight={600}>
+        <Stack
+            sx={{
+                gap: 1.5,
+            }}
+        >
+            <Typography
+                variant="caption"
+                sx={{
+                    color: 'text.secondary',
+                    fontWeight: 600,
+                }}
+            >
                 Template fields (copied onto each generated item)
             </Typography>
-
             {workContexts.length > 0 && (
                 <Box>
                     <FormLabel>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                            variant="caption"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
                             Work contexts
                         </Typography>
                     </FormLabel>
-                    <Stack direction="row" flexWrap="wrap" gap={0.75} mt={0.5}>
+                    <Stack
+                        direction="row"
+                        sx={{
+                            flexWrap: 'wrap',
+                            gap: 0.75,
+                            mt: 0.5,
+                        }}
+                    >
                         {workContexts.map((ctx) => (
                             <Chip
                                 key={ctx._id}
@@ -760,15 +815,26 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                     </Stack>
                 </Box>
             )}
-
             {people.length > 0 && (
                 <Box>
                     <FormLabel>
-                        <Typography variant="caption" color="text.secondary">
+                        <Typography
+                            variant="caption"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
                             People
                         </Typography>
                     </FormLabel>
-                    <Stack direction="row" flexWrap="wrap" gap={0.75} mt={0.5}>
+                    <Stack
+                        direction="row"
+                        sx={{
+                            flexWrap: 'wrap',
+                            gap: 0.75,
+                            mt: 0.5,
+                        }}
+                    >
                         {people.map((p) => (
                             <Chip
                                 key={p._id}
@@ -782,10 +848,14 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                     </Stack>
                 </Box>
             )}
-
             <Box>
                 <FormLabel>
-                    <Typography variant="caption" color="text.secondary">
+                    <Typography
+                        variant="caption"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         Energy
                     </Typography>
                 </FormLabel>
@@ -801,7 +871,6 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                     <ToggleButton value="high">High</ToggleButton>
                 </ToggleButtonGroup>
             </Box>
-
             <TextField
                 label="Time estimate (min)"
                 value={form.time}
@@ -811,8 +880,12 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                 className={styles.narrowInput}
                 slotProps={{ htmlInput: { min: 1 } }}
             />
-
-            <Stack direction="row" gap={2}>
+            <Stack
+                direction="row"
+                sx={{
+                    gap: 2,
+                }}
+            >
                 <FormControlLabel
                     control={<Checkbox size="small" checked={form.urgent} onChange={(e) => onPatch({ urgent: e.target.checked })} />}
                     label={<Typography variant="body2">Urgent</Typography>}

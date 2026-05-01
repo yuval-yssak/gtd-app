@@ -1,7 +1,7 @@
 import AddIcon from '@mui/icons-material/Add';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
@@ -109,14 +109,24 @@ function InboxSwipeItem({ item, routineTitle, onTap, onSwipeNextAction, onSwipeT
             {showRight && (
                 <Box className={styles.revealRight}>
                     <ArrowForwardIcon fontSize="small" />
-                    <Typography variant="body2" ml={1}>
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            ml: 1,
+                        }}
+                    >
                         Next Action
                     </Typography>
                 </Box>
             )}
             {showLeft && (
                 <Box className={styles.revealLeft}>
-                    <Typography variant="body2" mr={1}>
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            mr: 1,
+                        }}
+                    >
                         Trash
                     </Typography>
                     <DeleteOutlineIcon fontSize="small" />
@@ -182,7 +192,14 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
         // onOpen is required by MUI's API but unused here because open state is driven externally.
         <SwipeableDrawer anchor="bottom" open={Boolean(item)} onClose={onClose} onOpen={() => {}}>
             <Box className={styles.sheetHandle} />
-            <Typography variant="subtitle1" fontWeight={600} px={2} pb={1}>
+            <Typography
+                variant="subtitle1"
+                sx={{
+                    fontWeight: 600,
+                    px: 2,
+                    pb: 1,
+                }}
+            >
                 {item.title}
             </Typography>
             <Divider />
@@ -221,10 +238,14 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
                     <ListItemIcon>
                         <DeleteOutlineIcon color="error" />
                     </ListItemIcon>
-                    <ListItemText primary="Trash" primaryTypographyProps={{ color: 'error' }} />
+                    <ListItemText primary="Trash" slotProps={{ primary: { color: 'error' } }} />
                 </ListItemButton>
             </List>
-            <Box pb={2} />
+            <Box
+                sx={{
+                    pb: 2,
+                }}
+            />
         </SwipeableDrawer>
     );
 }
@@ -441,7 +462,12 @@ function InboxPage() {
     return (
         <Box>
             <Box className={styles.pageHeader}>
-                <Typography variant="h5" fontWeight={600}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
                     Inbox
                     {inboxItems.length > 0 && <Chip label={inboxItems.length} size="small" color="primary" className={styles.countChip} />}
                 </Typography>
@@ -449,7 +475,6 @@ function InboxPage() {
                     Process Inbox ({inboxItems.length})
                 </Button>
             </Box>
-
             <Paper variant="outlined" className={styles.captureCard}>
                 <TextField
                     fullWidth
@@ -500,9 +525,14 @@ function InboxPage() {
                     </Box>
                 )}
             </Paper>
-
             {inboxItems.length === 0 ? (
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     Inbox zero — well done.
                 </Typography>
             ) : (
@@ -620,7 +650,6 @@ function InboxPage() {
                     ))}
                 </List>
             )}
-
             {/* Popover mode: floating panel anchored to the clicked button */}
             <Popover
                 open={Boolean(popoverAnchor)}
@@ -661,10 +690,8 @@ function InboxPage() {
                     </Box>
                 )}
             </Popover>
-
             {/* Instant mode toast — prompts user to add details after the instant move */}
             <Snackbar open={toastOpen} autoHideDuration={5000} onClose={() => setToastOpen(false)} message="Moved to Next Actions" />
-
             {batchClarifyOpen && (
                 <ClarifyDialog
                     items={inboxItems}
@@ -700,7 +727,6 @@ function InboxPage() {
                     onSaved={refreshItems}
                 />
             )}
-
             <InboxBottomSheet
                 item={bottomSheetItem}
                 onClose={() => setBottomSheetItem(null)}

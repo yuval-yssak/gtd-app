@@ -2,7 +2,7 @@ import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
 import BoltIcon from '@mui/icons-material/Bolt';
 import BookmarkIcon from '@mui/icons-material/Bookmark';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import DoneAllIcon from '@mui/icons-material/DoneAll';
 import EventNoteIcon from '@mui/icons-material/EventNote';
 import GroupIcon from '@mui/icons-material/Group';
@@ -112,16 +112,20 @@ function DrawerContent({ onItemClick, db }: DrawerContentProps) {
         <Box className={styles.drawerContent}>
             {/* Logo row — desktop only (mobile has the AppBar) */}
             <Box className={styles.logoRow}>
-                <Typography variant="h6" fontWeight={700} color="primary">
+                <Typography
+                    variant="h6"
+                    color="primary"
+                    sx={{
+                        fontWeight: 700,
+                    }}
+                >
                     GTD
                 </Typography>
             </Box>
-
             {/* Spacer on mobile so nav list starts below the fixed AppBar */}
             <Box className={styles.toolbarSpacer}>
                 <Toolbar />
             </Box>
-
             <Box className={styles.navScrollArea}>
                 <List disablePadding>
                     {primaryItems.map((item) => (
@@ -139,7 +143,6 @@ function DrawerContent({ onItemClick, db }: DrawerContentProps) {
                     <NavListItem item={settingsNavItem} isActive={pathname === settingsNavItem.to} onItemClick={onItemClick} />
                 </List>
             </Box>
-
             {/* Account + status — pinned to sidebar bottom */}
             <Box className={styles.drawerFooter}>
                 <Box className={styles.accountRow}>

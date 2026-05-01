@@ -51,32 +51,58 @@ function SettingsPage() {
 
     return (
         <Box className={styles.pageWrapper}>
-            <Typography variant="h5" fontWeight={600} mb={3}>
+            <Typography
+                variant="h5"
+                sx={{
+                    fontWeight: 600,
+                    mb: 3,
+                }}
+            >
                 Settings
             </Typography>
-
             {/* Account section */}
             <Paper variant="outlined" className={styles.section}>
                 <Box className={styles.sectionContent}>
-                    <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                    <Typography
+                        variant="subtitle1"
+                        sx={{
+                            fontWeight: 600,
+                            mb: 0.5,
+                        }}
+                    >
                         Account
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         {account?.name ?? '—'} · {account?.email ?? '—'}
                     </Typography>
                 </Box>
             </Paper>
-
             {/* Appearance section */}
             <AppearanceSection />
-
             {/* Calendar sync section */}
             <Paper variant="outlined" className={styles.section}>
                 <Box className={styles.sectionContent}>
-                    <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                    <Typography
+                        variant="subtitle1"
+                        sx={{
+                            fontWeight: 600,
+                            mb: 0.5,
+                        }}
+                    >
                         Calendar Sync
                     </Typography>
-                    <Typography variant="body2" color="text.secondary" mb={2}>
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                            mb: 2,
+                        }}
+                    >
                         Connect a Google Calendar account to sync calendar items bidirectionally. Changes made here or in Google Calendar stay in sync
                         automatically.
                     </Typography>
@@ -84,29 +110,42 @@ function SettingsPage() {
                     <CalendarIntegrations db={db} />
                 </Box>
             </Paper>
-
             {/* Calendar horizon */}
             <CalendarHorizonSection />
-
             {/* Routine indicator style */}
             <RoutineIndicatorSection />
-
             {/* Inbox preferences */}
             <InboxSection />
-
             {/* Notifications section */}
             <NotificationsSection db={db} />
-
             {/* App info */}
             <Paper variant="outlined">
                 <Box className={styles.sectionContent}>
-                    <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                    <Typography
+                        variant="subtitle1"
+                        sx={{
+                            fontWeight: 600,
+                            mb: 0.5,
+                        }}
+                    >
                         App
                     </Typography>
-                    <Typography variant="body2" color="text.secondary">
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                        }}
+                    >
                         Getting Things Done — offline-first GTD productivity app.
                     </Typography>
-                    <Typography variant="caption" color="text.secondary" mt={1} component="p">
+                    <Typography
+                        variant="caption"
+                        component="p"
+                        sx={{
+                            color: 'text.secondary',
+                            mt: 1,
+                        }}
+                    >
                         Version: {__COMMIT_HASH__}
                     </Typography>
                 </Box>
@@ -127,7 +166,13 @@ function AppearanceSection() {
     return (
         <Paper variant="outlined" className={styles.section}>
             <Box className={styles.sectionContent}>
-                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                <Typography
+                    variant="subtitle1"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 0.5,
+                    }}
+                >
                     Appearance
                 </Typography>
                 <RadioGroup value={mode ?? 'system'} onChange={(e) => setMode(e.target.value as 'light' | 'dark' | 'system')}>
@@ -138,7 +183,12 @@ function AppearanceSection() {
                         label={
                             <Box>
                                 <Typography variant="body2">System</Typography>
-                                <Typography variant="caption" color="text.secondary">
+                                <Typography
+                                    variant="caption"
+                                    sx={{
+                                        color: 'text.secondary',
+                                    }}
+                                >
                                     Follows your OS setting
                                 </Typography>
                             </Box>
@@ -147,7 +197,13 @@ function AppearanceSection() {
                     <FormControlLabel value="dark" control={<Radio size="small" />} label={<Typography variant="body2">Dark</Typography>} />
                 </RadioGroup>
                 <Divider className={styles.divider} />
-                <Typography variant="body2" fontWeight={500} mb={1}>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        fontWeight: 500,
+                        mb: 1,
+                    }}
+                >
                     Color theme
                 </Typography>
                 <Box className={styles.themeGrid}>
@@ -187,10 +243,22 @@ function CalendarHorizonSection() {
     return (
         <Paper variant="outlined" className={styles.section}>
             <Box className={styles.sectionContent}>
-                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                <Typography
+                    variant="subtitle1"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 0.5,
+                    }}
+                >
                     Calendar horizon
                 </Typography>
-                <Typography variant="body2" color="text.secondary" mb={2}>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'text.secondary',
+                        mb: 2,
+                    }}
+                >
                     How far ahead to generate calendar items for recurring routines. Existing routines are not affected until their next edit or item
                     completion.
                 </Typography>
@@ -220,10 +288,22 @@ function InboxSection() {
     return (
         <Paper variant="outlined" className={styles.section}>
             <Box className={styles.sectionContent}>
-                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                <Typography
+                    variant="subtitle1"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 0.5,
+                    }}
+                >
                     Inbox
                 </Typography>
-                <Typography variant="body2" color="text.secondary" mb={2}>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'text.secondary',
+                        mb: 2,
+                    }}
+                >
                     How you prefer to edit and clarify items — applies to the inbox and all other pages.
                 </Typography>
                 <RadioGroup value={clarifyMode} onChange={(e) => onChange(parseClarifyMode(e.target.value))}>
@@ -233,7 +313,12 @@ function InboxSection() {
                         label={
                             <Box>
                                 <Typography variant="body2">Dialog</Typography>
-                                <Typography variant="caption" color="text.secondary">
+                                <Typography
+                                    variant="caption"
+                                    sx={{
+                                        color: 'text.secondary',
+                                    }}
+                                >
                                     A focused dialog window
                                 </Typography>
                             </Box>
@@ -245,7 +330,12 @@ function InboxSection() {
                         label={
                             <Box>
                                 <Typography variant="body2">Expand inline</Typography>
-                                <Typography variant="caption" color="text.secondary">
+                                <Typography
+                                    variant="caption"
+                                    sx={{
+                                        color: 'text.secondary',
+                                    }}
+                                >
                                     The item row expands in place
                                 </Typography>
                             </Box>
@@ -257,7 +347,12 @@ function InboxSection() {
                         label={
                             <Box>
                                 <Typography variant="body2">Popover</Typography>
-                                <Typography variant="caption" color="text.secondary">
+                                <Typography
+                                    variant="caption"
+                                    sx={{
+                                        color: 'text.secondary',
+                                    }}
+                                >
                                     A floating panel near the button
                                 </Typography>
                             </Box>
@@ -269,7 +364,12 @@ function InboxSection() {
                         label={
                             <Box>
                                 <Typography variant="body2">Instant</Typography>
-                                <Typography variant="caption" color="text.secondary">
+                                <Typography
+                                    variant="caption"
+                                    sx={{
+                                        color: 'text.secondary',
+                                    }}
+                                >
                                     Moves immediately with no extra fields (Next Action only; Calendar and Waiting For always show a form)
                                 </Typography>
                             </Box>
@@ -281,7 +381,12 @@ function InboxSection() {
                         label={
                             <Box>
                                 <Typography variant="body2">Full Page</Typography>
-                                <Typography variant="caption" color="text.secondary">
+                                <Typography
+                                    variant="caption"
+                                    sx={{
+                                        color: 'text.secondary',
+                                    }}
+                                >
                                     Opens a dedicated page for clarifying the item
                                 </Typography>
                             </Box>
@@ -304,10 +409,22 @@ function RoutineIndicatorSection() {
     return (
         <Paper variant="outlined" className={styles.section}>
             <Box className={styles.sectionContent}>
-                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                <Typography
+                    variant="subtitle1"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 0.5,
+                    }}
+                >
                     Routine indicator
                 </Typography>
-                <Typography variant="body2" color="text.secondary" mb={1}>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'text.secondary',
+                        mb: 1,
+                    }}
+                >
                     How items linked to a routine are marked in lists.
                 </Typography>
                 <RadioGroup value={style} onChange={(e) => onChange(e.target.value as RoutineIndicatorStyle)}>
@@ -377,10 +494,22 @@ function NotificationsSection({ db }: { db: IDBPDatabase<MyDB> }) {
     return (
         <Paper variant="outlined" className={styles.section}>
             <Box className={styles.sectionContent}>
-                <Typography variant="subtitle1" fontWeight={600} mb={0.5}>
+                <Typography
+                    variant="subtitle1"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 0.5,
+                    }}
+                >
                     Notifications
                 </Typography>
-                <Typography variant="body2" color="text.secondary" mb={2}>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'text.secondary',
+                        mb: 2,
+                    }}
+                >
                     Push notifications keep your items in sync across devices, even when the app is closed.
                 </Typography>
                 <NotificationsBody status={status} isRequesting={isRequesting} onEnableOrRegister={onEnableOrRegister} />
@@ -398,28 +527,51 @@ interface NotificationsBodyProps {
 function NotificationsBody({ status, isRequesting, onEnableOrRegister }: NotificationsBodyProps) {
     if (status === 'loading') {
         return (
-            <Typography variant="body2" color="text.secondary" fontStyle="italic">
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'text.secondary',
+                    fontStyle: 'italic',
+                }}
+            >
                 Checking notification status…
             </Typography>
         );
     }
     if (status === 'unsupported') {
         return (
-            <Typography variant="body2" color="text.secondary" fontStyle="italic">
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'text.secondary',
+                    fontStyle: 'italic',
+                }}
+            >
                 Push notifications are not supported in this browser.
             </Typography>
         );
     }
     if (status === 'denied') {
         return (
-            <Typography variant="body2" color="text.secondary" fontStyle="italic">
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'text.secondary',
+                    fontStyle: 'italic',
+                }}
+            >
                 Notifications are blocked. To enable them, update your browser's site permissions.
             </Typography>
         );
     }
     if (status === 'enabled') {
         return (
-            <Typography variant="body2" color="success.main">
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'success.main',
+                }}
+            >
                 Notifications enabled.
             </Typography>
         );

@@ -60,10 +60,22 @@ function TicklerPage() {
     if (ticklerItems.length === 0) {
         return (
             <Box>
-                <Typography variant="h5" fontWeight={600} mb={3}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
                     Tickler
                 </Typography>
-                <Typography color="text.secondary" textAlign="center" mt={6}>
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
                     No items are snoozed. Items hidden with "ignore before" will appear here.
                 </Typography>
             </Box>
@@ -72,13 +84,31 @@ function TicklerPage() {
 
     return (
         <Box>
-            <Typography variant="h5" fontWeight={600} mb={3}>
+            <Typography
+                variant="h5"
+                sx={{
+                    fontWeight: 600,
+                    mb: 3,
+                }}
+            >
                 Tickler
                 <Chip label={ticklerItems.length} size="small" className={styles.countChip} />
             </Typography>
             {Object.entries(groups).map(([dateKey, groupItems]) => (
-                <Box key={dateKey} mb={3}>
-                    <Typography variant="subtitle2" color="text.secondary" fontWeight={600} mb={1}>
+                <Box
+                    key={dateKey}
+                    sx={{
+                        mb: 3,
+                    }}
+                >
+                    <Typography
+                        variant="subtitle2"
+                        sx={{
+                            color: 'text.secondary',
+                            fontWeight: 600,
+                            mb: 1,
+                        }}
+                    >
                         {dayLabel(dateKey)} — {dayjs(dateKey).format('MMM D')}
                     </Typography>
                     <List disablePadding className={styles.list}>

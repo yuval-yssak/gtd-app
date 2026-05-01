@@ -187,7 +187,14 @@ export function CalendarIntegrations({ db }: CalendarIntegrationsProps) {
         <Box>
             {calendarConnectError === 'mismatch' && <ConnectMismatchError onDismiss={dismissMismatchError} />}
             {integrations.length === 0 && (
-                <Typography variant="body2" color="text.secondary" fontStyle="italic" mb={2}>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'text.secondary',
+                        fontStyle: 'italic',
+                        mb: 2,
+                    }}
+                >
                     No calendars connected.
                 </Typography>
             )}
@@ -202,9 +209,7 @@ export function CalendarIntegrations({ db }: CalendarIntegrationsProps) {
             <Button variant="outlined" size="small" onClick={() => setIsPickerOpen(true)}>
                 Connect Google Calendar
             </Button>
-
             {isPickerOpen && <ConnectAccountPickerDialog db={db} onClose={() => setIsPickerOpen(false)} />}
-
             {chooseCalendarFor && (
                 <ChooseCalendarDialog
                     integration={chooseCalendarFor}
@@ -223,10 +228,23 @@ export function CalendarIntegrations({ db }: CalendarIntegrationsProps) {
 function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
     return (
         <Box sx={{ mb: 2, p: 1.5, border: 1, borderColor: 'error.main', borderRadius: 1 }}>
-            <Typography variant="body2" color="error.main" fontWeight={500} mb={0.5}>
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'error.main',
+                    fontWeight: 500,
+                    mb: 0.5,
+                }}
+            >
                 Couldn't connect that Google Calendar account
             </Typography>
-            <Typography variant="caption" color="text.secondary" display="block">
+            <Typography
+                variant="caption"
+                sx={{
+                    color: 'text.secondary',
+                    display: 'block',
+                }}
+            >
                 The Google account you authorized didn't match the one you selected. Tokens were revoked and no calendar was added.
             </Typography>
             <Button size="small" sx={{ mt: 1 }} onClick={onDismiss}>
@@ -278,9 +296,21 @@ function ConnectAccountPickerDialog({ db, onClose }: ConnectAccountPickerDialogP
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Connect Google Calendar</DialogTitle>
             <DialogContent>
-                <DialogContentText mb={2}>Choose which Google account's calendar you want to connect. We'll only ask for calendar access.</DialogContentText>
+                <DialogContentText
+                    sx={{
+                        mb: 2,
+                    }}
+                >
+                    Choose which Google account's calendar you want to connect. We'll only ask for calendar access.
+                </DialogContentText>
                 {googleAccounts.length === 0 ? (
-                    <Typography variant="body2" color="text.secondary" fontStyle="italic">
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                            fontStyle: 'italic',
+                        }}
+                    >
                         No Google accounts are signed into GTD on this device. Add a Google account from the account switcher first, then come back here to
                         connect its calendar.
                     </Typography>
@@ -292,8 +322,10 @@ function ConnectAccountPickerDialog({ db, onClose }: ConnectAccountPickerDialogP
                                     <ListItemText
                                         primary={acct.name ?? acct.email}
                                         secondary={acct.email}
-                                        primaryTypographyProps={{ variant: 'body2' }}
-                                        secondaryTypographyProps={{ variant: 'caption' }}
+                                        slotProps={{
+                                            primary: { variant: 'body2' },
+                                            secondary: { variant: 'caption' },
+                                        }}
                                     />
                                     <Typography variant="caption" color="primary">
                                         {pendingAccountId === acct.id ? 'Redirecting…' : 'Connect this calendar account'}
@@ -304,7 +336,13 @@ function ConnectAccountPickerDialog({ db, onClose }: ConnectAccountPickerDialogP
                     </List>
                 )}
                 {pickerError && (
-                    <Typography variant="body2" color="error" mt={1}>
+                    <Typography
+                        variant="body2"
+                        color="error"
+                        sx={{
+                            mt: 1,
+                        }}
+                    >
                         {pickerError}
                     </Typography>
                 )}
@@ -481,21 +519,42 @@ function IntegrationRow({ integration, onDisconnected, onChooseCalendar }: Integ
     const hasNoCalendarChosen = !configsLoading && configs.length === 0;
 
     return (
-        <Box mb={2}>
+        <Box
+            sx={{
+                mb: 2,
+            }}
+        >
             <Divider sx={{ mb: 1.5 }} />
-            <Typography variant="body2" fontWeight={600} mb={0.5}>
+            <Typography
+                variant="body2"
+                sx={{
+                    fontWeight: 600,
+                    mb: 0.5,
+                }}
+            >
                 Google Calendar
             </Typography>
-            <Typography variant="caption" color="text.secondary" display="block">
+            <Typography
+                variant="caption"
+                sx={{
+                    color: 'text.secondary',
+                    display: 'block',
+                }}
+            >
                 Connected {connectedSince}
             </Typography>
-
             {errorMessage && (
-                <Typography variant="caption" color="error" display="block" mt={1}>
+                <Typography
+                    variant="caption"
+                    color="error"
+                    sx={{
+                        display: 'block',
+                        mt: 1,
+                    }}
+                >
                     {errorMessage}
                 </Typography>
             )}
-
             {configsLoading ? (
                 <CircularProgress size={16} sx={{ mt: 1 }} />
             ) : hasNoCalendarChosen ? (
@@ -503,20 +562,17 @@ function IntegrationRow({ integration, onDisconnected, onChooseCalendar }: Integ
             ) : (
                 <SyncConfigList configs={configs} resolveCalendarName={resolveCalendarName} actions={actions} />
             )}
-
             <IntegrationActions
                 isSyncing={isSyncing}
                 hasAvailableCalendars={availableToAdd.length > 0}
                 actions={{ onSyncNow, onAddCalendar: () => setIsAddCalendarOpen(true), onDisconnect: () => setIsDisconnectOpen(true) }}
             />
-
             <DisconnectDialog
                 open={isDisconnectOpen}
                 integrationId={integration._id}
                 onClose={() => setIsDisconnectOpen(false)}
                 onDisconnected={onDisconnected}
             />
-
             {isAddCalendarOpen && (
                 <AddCalendarDialog
                     integrationId={integration._id}
@@ -536,7 +592,13 @@ function IntegrationRow({ integration, onDisconnected, onChooseCalendar }: Integ
 function NoCalendarChosenRow({ onChooseCalendar }: { onChooseCalendar: () => void }) {
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-            <Typography variant="body2" color="text.secondary" fontStyle="italic">
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'text.secondary',
+                    fontStyle: 'italic',
+                }}
+            >
                 No calendar selected — choose one
             </Typography>
             <Button size="small" onClick={onChooseCalendar}>
@@ -592,7 +654,14 @@ interface SyncConfigListProps {
 function SyncConfigList({ configs, resolveCalendarName, actions }: SyncConfigListProps) {
     if (configs.length === 0) {
         return (
-            <Typography variant="body2" color="text.secondary" fontStyle="italic" mt={1}>
+            <Typography
+                variant="body2"
+                sx={{
+                    color: 'text.secondary',
+                    fontStyle: 'italic',
+                    mt: 1,
+                }}
+            >
                 No calendars synced yet.
             </Typography>
         );
@@ -621,7 +690,9 @@ function SyncConfigList({ configs, resolveCalendarName, actions }: SyncConfigLis
                 >
                     <ListItemText
                         primary={config.displayName ?? resolveCalendarName(config.calendarId)}
-                        primaryTypographyProps={{ variant: 'body2', color: config.enabled ? 'text.primary' : 'text.disabled' }}
+                        slotProps={{
+                            primary: { variant: 'body2', color: config.enabled ? 'text.primary' : 'text.disabled' },
+                        }}
                     />
                 </ListItem>
             ))}
@@ -742,7 +813,13 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
         <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Choose a calendar to sync</DialogTitle>
             <DialogContent>
-                <DialogContentText mb={2}>Select which Google Calendar events should appear in this app.</DialogContentText>
+                <DialogContentText
+                    sx={{
+                        mb: 2,
+                    }}
+                >
+                    Select which Google Calendar events should appear in this app.
+                </DialogContentText>
                 {isLoading ? (
                     <CircularProgress size={20} />
                 ) : calendarFetchError ? (
@@ -828,7 +905,11 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: Disc
         <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
             <DialogTitle>Disconnect Google Calendar</DialogTitle>
             <DialogContent>
-                <DialogContentText mb={2}>
+                <DialogContentText
+                    sx={{
+                        mb: 2,
+                    }}
+                >
                     What would you like to do with calendar items and calendar routines linked to this integration? Disconnecting never modifies your Google
                     Calendar.
                 </DialogContentText>
@@ -849,7 +930,12 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: Disc
                         control={<Radio size="small" />}
                         label={
                             <Box>
-                                <Typography variant="body2" color="error.main">
+                                <Typography
+                                    variant="body2"
+                                    sx={{
+                                        color: 'error.main',
+                                    }}
+                                >
                                     Remove calendar items and calendar routines from GTD. Google Calendar events will not be touched.
                                 </Typography>
                             </Box>
