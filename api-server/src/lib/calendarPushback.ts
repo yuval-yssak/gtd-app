@@ -13,6 +13,8 @@ import type {
     OpType,
     RoutineInterface,
 } from '../types/entities.js';
+import { withAuthFailureHandling } from './calendarAuthEscalation.js';
+import { integrationStatus } from './calendarIntegrationStatus.js';
 import { propagateRoutineNotesToItems } from './calendarItemNotes.js';
 import { applyDoneMarker, DONE_COLOR_ID } from './doneMarker.js';
 import { markdownToHtml } from './markdownHtml.js';
@@ -110,23 +112,26 @@ async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: stri
         return;
     }
     const originalDate = resolveOriginalDate(routine, snapshot);
-    const { provider, config, timeZone } = ctx;
+    const { provider, config, timeZone, integration } = ctx;
     const isDone = snapshot.status === 'done';
+    const calendarEventId = routine.calendarEventId;
     console.log(
-        `[gcal-pushback] overriding routine instance | routineId=${snapshot.routineId} eventId=${routine.calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
+        `[gcal-pushback] overriding routine instance | routineId=${snapshot.routineId} eventId=${calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
     );
-    await provider.updateRecurringInstance(
-        routine.calendarEventId,
-        originalDate,
-        {
-            title: isDone ? applyDoneMarker(snapshot.title) : snapshot.title,
-            ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
-            ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
-            description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
-            colorId: isDone ? DONE_COLOR_ID : null,
-        },
-        config.calendarId,
-        timeZone,
+    await withAuthFailureHandling(integration._id, () =>
+        provider.updateRecurringInstance(
+            calendarEventId,
+            originalDate,
+            {
+                title: isDone ? applyDoneMarker(snapshot.title) : snapshot.title,
+                ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
+                ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
+                description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+                colorId: isDone ? DONE_COLOR_ID : null,
+            },
+            config.calendarId,
+            timeZone,
+        ),
     );
     await stampItemLastPushed(userId, snapshot._id);
 }
@@ -160,11 +165,12 @@ async function pushRoutineInstanceCancellation(snapshot: ItemInterface, userId: 
         return;
     }
     const originalDate = resolveOriginalDate(routine, snapshot);
-    const { provider, config } = ctx;
+    const { provider, config, integration } = ctx;
+    const calendarEventId = routine.calendarEventId;
     console.log(
-        `[gcal-pushback] cancelling routine instance | routineId=${snapshot.routineId} eventId=${routine.calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
+        `[gcal-pushback] cancelling routine instance | routineId=${snapshot.routineId} eventId=${calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
     );
-    await provider.cancelRecurringInstance(routine.calendarEventId, originalDate, config.calendarId);
+    await withAuthFailureHandling(integration._id, () => provider.cancelRecurringInstance(calendarEventId, originalDate, config.calendarId));
     await stampItemLastPushed(userId, snapshot._id);
 }
 
@@ -197,11 +203,11 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
         return;
     }
 
-    const { provider, config, timeZone } = ctx;
+    const { provider, config, timeZone, integration } = ctx;
 
     if (snapshot.status === 'trash') {
         console.log(`[gcal-pushback] deleting GCal event | eventId=${eventId} itemId=${itemId} title=${snapshot.title}`);
-        await provider.deleteEvent(config.calendarId, eventId);
+        await withAuthFailureHandling(integration._id, () => provider.deleteEvent(config.calendarId, eventId));
         await stampItemLastPushed(userId, itemId);
         return;
     }
@@ -212,17 +218,19 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
     // title and colorId: null to revert both.
     if (snapshot.status === 'done') {
         console.log(`[gcal-pushback] marking GCal event done | eventId=${eventId} itemId=${itemId} title=${snapshot.title}`);
-        await provider.updateEvent(
-            config.calendarId,
-            eventId,
-            {
-                title: applyDoneMarker(snapshot.title),
-                ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
-                ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
-                description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
-                colorId: DONE_COLOR_ID,
-            },
-            timeZone,
+        await withAuthFailureHandling(integration._id, () =>
+            provider.updateEvent(
+                config.calendarId,
+                eventId,
+                {
+                    title: applyDoneMarker(snapshot.title),
+                    ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
+                    ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
+                    description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+                    colorId: DONE_COLOR_ID,
+                },
+                timeZone,
+            ),
         );
         const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
         await stampItemLastPushed(userId, itemId, htmlForSync);
@@ -232,17 +240,19 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
     console.log(`[gcal-pushback] updating existing item | eventId=${eventId} title=${snapshot.title} status=${snapshot.status}`);
     // colorId: null clears any prior done-marker color (sage) so a reopened item reverts to the
     // calendar's default color. Idempotent for items that never carried a colorId.
-    await provider.updateEvent(
-        config.calendarId,
-        eventId,
-        {
-            title: snapshot.title,
-            ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
-            ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
-            description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
-            colorId: null,
-        },
-        timeZone,
+    await withAuthFailureHandling(integration._id, () =>
+        provider.updateEvent(
+            config.calendarId,
+            eventId,
+            {
+                title: snapshot.title,
+                ...(snapshot.timeStart ? { timeStart: snapshot.timeStart } : {}),
+                ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
+                description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
+                colorId: null,
+            },
+            timeZone,
+        ),
     );
     const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
     await stampItemLastPushed(userId, itemId, htmlForSync);
@@ -253,6 +263,8 @@ async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildP
     if (!snapshot.timeStart || !snapshot.timeEnd || !snapshot._id) {
         return;
     }
+    // Locally bind narrowed values so they survive into the closure passed to withAuthFailureHandling.
+    const { timeStart, timeEnd } = snapshot;
     // Routine-managed items are represented by the routine's GCal recurring series.
     if (snapshot.routineId) {
         return;
@@ -281,15 +293,17 @@ async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildP
 
         const { provider, config, integration, timeZone } = ctx;
         console.log(`[gcal-pushback] creating new GCal event | itemId=${snapshot._id} title=${snapshot.title}`);
-        const calendarEventId = await provider.createEvent(
-            config.calendarId,
-            {
-                title: snapshot.title,
-                timeStart: snapshot.timeStart,
-                timeEnd: snapshot.timeEnd,
-                ...(snapshot.notes !== undefined ? { description: markdownToHtml(snapshot.notes) } : {}),
-            },
-            timeZone,
+        const calendarEventId = await withAuthFailureHandling(integration._id, () =>
+            provider.createEvent(
+                config.calendarId,
+                {
+                    title: snapshot.title,
+                    timeStart,
+                    timeEnd,
+                    ...(snapshot.notes !== undefined ? { description: markdownToHtml(snapshot.notes) } : {}),
+                },
+                timeZone,
+            ),
         );
 
         const now = dayjs().toISOString();
@@ -406,11 +420,14 @@ async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buil
     }
     // UNTIL=<today - 1 day>T235959Z: RFC 5545 format (YYYYMMDDTHHMMSSZ, no separators) in UTC.
     const untilDate = `${dayjs().subtract(1, 'day').utc().format('YYYYMMDD')}T235959Z`;
+    const calendarEventId = snapshot.calendarEventId;
     console.log(`[gcal-pushback] capping GCal master for routine pause | routineId=${snapshot._id} until=${untilDate}`);
     try {
-        await ctx.provider.capRecurringEvent(snapshot.calendarEventId, untilDate, ctx.config.calendarId, ctx.timeZone);
+        await withAuthFailureHandling(ctx.integration._id, () =>
+            ctx.provider.capRecurringEvent(calendarEventId, untilDate, ctx.config.calendarId, ctx.timeZone),
+        );
     } catch (err) {
-        console.error(`[calendar-pushback] failed to cap recurring event ${snapshot.calendarEventId} for routine ${snapshot._id}:`, err);
+        console.error(`[calendar-pushback] failed to cap recurring event ${calendarEventId} for routine ${snapshot._id}:`, err);
     }
 }
 
@@ -461,11 +478,12 @@ export async function pushRoutineDeletion(
     if (!ctx) {
         return;
     }
-    console.log(`[gcal-pushback] deleting GCal recurring event for routine | routineId=${snapshot._id} eventId=${snapshot.calendarEventId}`);
+    const calendarEventId = snapshot.calendarEventId;
+    console.log(`[gcal-pushback] deleting GCal recurring event for routine | routineId=${snapshot._id} eventId=${calendarEventId}`);
     try {
-        await ctx.provider.deleteRecurringEvent(snapshot.calendarEventId, ctx.config.calendarId);
+        await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.deleteRecurringEvent(calendarEventId, ctx.config.calendarId));
     } catch (err) {
-        console.error(`[calendar-pushback] failed to delete GCal recurring event ${snapshot.calendarEventId} for routine ${snapshot._id}:`, err);
+        console.error(`[calendar-pushback] failed to delete GCal recurring event ${calendarEventId} for routine ${snapshot._id}:`, err);
     }
 }
 
@@ -509,7 +527,7 @@ async function pushExistingRoutineToGCal(snapshot: RoutineInterface, userId: str
         return;
     }
 
-    await ctx.provider.updateRecurringEvent(calendarEventId, snapshot, ctx.config.calendarId, ctx.timeZone);
+    await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.updateRecurringEvent(calendarEventId, snapshot, ctx.config.calendarId, ctx.timeZone));
     const htmlForSync = snapshot.template.notes !== undefined ? markdownToHtml(snapshot.template.notes) : undefined;
     await stampRoutineLastPushed(userId, snapshot._id, htmlForSync);
     await propagateRoutineNotesToItems(snapshot._id, snapshot.template.notes, userId);
@@ -545,7 +563,9 @@ async function pushNewRoutineToGCal(snapshot: RoutineInterface, userId: string, 
         if (!ctx) {
             return;
         }
-        const calendarEventId = await ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId, ctx.timeZone);
+        const calendarEventId = await withAuthFailureHandling(ctx.integration._id, () =>
+            ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId, ctx.timeZone),
+        );
         const now = dayjs().toISOString();
         await routinesDAO.updateOne(
             { _id: snapshot._id, user: userId },
@@ -584,6 +604,12 @@ async function resolvePushContext(link: CalendarLink, userId: string, buildProvi
         console.warn(`[calendar-pushback] resolvePushContext: integration ${link.integrationId} not found for user ${userId}`);
         return null;
     }
+    // Suspended/revoked integrations: pushback is a no-op. The auth-escalation flow owns their
+    // lifecycle and hitting Google again would re-trigger the same invalid_grant.
+    if (integrationStatus(integration) !== 'active') {
+        console.log(`[calendar-pushback] skipping ${integrationStatus(integration)} integration ${integration._id}`);
+        return null;
+    }
     const config = link.configId
         ? await calendarSyncConfigsDAO.findByOwnerAndId(link.configId, userId)
         : ((await calendarSyncConfigsDAO.findEnabledByIntegration(link.integrationId)).find((c) => c.isDefault) ?? null);
@@ -592,7 +618,7 @@ async function resolvePushContext(link: CalendarLink, userId: string, buildProvi
         return null;
     }
     const provider = buildProvider(integration, userId);
-    const timeZone = await ensureTimeZone(config, provider);
+    const timeZone = await withAuthFailureHandling(integration._id, () => ensureTimeZone(config, provider));
     return { integration, config, provider, timeZone };
 }
 
@@ -605,6 +631,11 @@ async function resolveDefaultPushContext(userId: string, buildProvider: Provider
     }
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(defaultConfig.integrationId, userId);
     if (!integration) {
+        return null;
+    }
+    // Mirror resolvePushContext — pushback is a no-op for suspended/revoked integrations.
+    if (integrationStatus(integration) !== 'active') {
+        console.log(`[calendar-pushback] skipping ${integrationStatus(integration)} integration ${integration._id}`);
         return null;
     }
     const provider = buildProvider(integration, userId);

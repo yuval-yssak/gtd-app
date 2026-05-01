@@ -316,8 +316,36 @@ export interface CalendarIntegrationInterface {
      */
     calendarId?: string;
     lastSyncedTs?: string; // ISO datetime of last successful pull from this calendar
+    /**
+     * OAuth auth state. Absent ⇒ treated as `'active'`. Lifecycle:
+     *  - `'active'`: tokens believed valid; sync + pushback proceed normally.
+     *  - `'suspended'`: a refresh attempt failed with `invalid_grant`; warning email sent. Sync still
+     *     attempts (the failure may have been transient); after 24h elapsed since `suspendedAt` the
+     *     escalation flips status to `'revoked'`.
+     *  - `'revoked'`: soft-deleted. Sync/pushback skip; sync endpoint returns HTTP 410. Reconnect via
+     *     OAuth (`upsertEncrypted`) clears status back to `'active'`.
+     */
+    status?: 'active' | 'suspended' | 'revoked';
+    suspendedAt?: string; // ISO datetime — set when first invalid_grant detected
+    revokedAt?: string; // ISO datetime — set when 24h grace expires
+    lastAuthErrorAt?: string; // ISO datetime — bumped on every invalid_grant occurrence
     createdTs: string;
     updatedTs: string;
+}
+
+/**
+ * Audit row for outbound emails. The current `sendEmail` implementation is a stub that logs and
+ * persists this row; a real email provider replaces the body of `sendEmail` while preserving this
+ * audit log so prior sends remain queryable.
+ */
+export interface SentEmailInterface {
+    _id: string;
+    userId: string;
+    to: string;
+    subject: string;
+    body: string;
+    kind: 'calendar_auth_warning' | 'calendar_auth_revoked';
+    sentAt: string;
 }
 
 export interface CalendarSyncConfigInterface {

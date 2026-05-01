@@ -17,6 +17,8 @@ import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { withAuthFailureHandling } from '../lib/calendarAuthEscalation.js';
+import { integrationStatus } from '../lib/calendarIntegrationStatus.js';
 import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
 import { ensureTimeZone, pushRoutineDeletion } from '../lib/calendarPushback.js';
 import { stripDoneMarker } from '../lib/doneMarker.js';
@@ -84,6 +86,27 @@ function isPastEvent(event: { timeEnd: string }, cutoffIso: string): boolean {
 }
 
 const calendarRoutes = new Hono<{ Variables: AuthVariables }>();
+
+/**
+ * If the integration is `'revoked'`, returns the JSON body for an HTTP 410 Gone response so the
+ * client can clear its local sync state and show a reconnect banner. Returns `null` for `'active'`
+ * and `'suspended'` — suspended integrations still attempt the operation (24h hasn't elapsed yet);
+ * the call-site `withAuthFailureHandling` handles re-escalation if Google still rejects the refresh.
+ *
+ * Client contract: any 410 + `{ error: 'integration_revoked' }` from a calendar endpoint means
+ * "show reconnect banner, hide calendar UI."
+ */
+function revokedIntegrationBody(integration: CalendarIntegrationInterface) {
+    if (integrationStatus(integration) !== 'revoked') {
+        return null;
+    }
+    return {
+        error: 'integration_revoked' as const,
+        integrationId: integration._id,
+        ...(integration.suspendedAt ? { suspendedAt: integration.suspendedAt } : {}),
+        ...(integration.revokedAt ? { revokedAt: integration.revokedAt } : {}),
+    };
+}
 
 // ── OAuth ─────────────────────────────────────────────────────────────────────
 
@@ -543,7 +566,7 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
     await applyUnlinkSideEffects(action, integrationId, linkedRoutines, { userId, now });
     // Stop all webhook channels before deleting configs so Google stops sending notifications.
     const configs = await calendarSyncConfigsDAO.findByIntegration(integrationId);
-    await Promise.all(configs.map((cfg) => teardownWatch(cfg, provider).catch(() => {})));
+    await Promise.all(configs.map((cfg) => teardownWatch(cfg, provider, integration._id).catch(() => {})));
     await calendarSyncConfigsDAO.deleteByIntegration(integrationId);
     await calendarIntegrationsDAO.deleteByOwner(integrationId, userId);
     return c.json({ ok: true });
@@ -579,10 +602,14 @@ calendarRoutes.get('/integrations/:id/calendars', authenticateRequest, async (c)
     if (!integration) {
         return c.json({ error: 'Integration not found' }, 404);
     }
+    const revokedBody = revokedIntegrationBody(integration);
+    if (revokedBody) {
+        return c.json(revokedBody, 410);
+    }
 
     try {
         const provider = buildProvider(integration, userId);
-        const calendars = await provider.listCalendars();
+        const calendars = await withAuthFailureHandling(integration._id, () => provider.listCalendars());
         return c.json(calendars);
     } catch (err) {
         console.error(`[calendar] listCalendars failed for integration ${integrationId}:`, err);
@@ -649,6 +676,10 @@ calendarRoutes.post('/integrations/:id/sync-configs', authenticateRequest, async
     if (!integration) {
         return c.json({ error: 'Integration not found' }, 404);
     }
+    const revokedBody = revokedIntegrationBody(integration);
+    if (revokedBody) {
+        return c.json(revokedBody, 410);
+    }
 
     const body = await c.req.json<{ calendarId?: unknown; displayName?: unknown; isDefault?: unknown }>();
     if (typeof body.calendarId !== 'string' || body.calendarId.trim() === '') {
@@ -685,10 +716,14 @@ calendarRoutes.post('/integrations/:id/sync-configs', authenticateRequest, async
     }
 
     // Start receiving push notifications for this calendar (best-effort — sync still works without it).
-    const provider = buildProvider(integration, userId);
-    await setupWatch(config, provider).catch((err) => {
-        console.error(`[calendar] setupWatch failed for config ${configId}:`, err);
-    });
+    // Skip setup if the integration is suspended — pushing more provider calls would just re-trigger
+    // the same invalid_grant. The next OAuth reconnect or sync flips status back to active.
+    if (integrationStatus(integration) === 'active') {
+        const provider = buildProvider(integration, userId);
+        await setupWatch(config, provider, integration._id).catch((err) => {
+            console.error(`[calendar] setupWatch failed for config ${configId}:`, err);
+        });
+    }
 
     return c.json(config, 201);
 });
@@ -701,6 +736,10 @@ calendarRoutes.patch('/integrations/:integrationId/sync-configs/:configId', auth
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(integrationId, userId);
     if (!integration) {
         return c.json({ error: 'Integration not found' }, 404);
+    }
+    const revokedBody = revokedIntegrationBody(integration);
+    if (revokedBody) {
+        return c.json(revokedBody, 410);
     }
 
     const config = await calendarSyncConfigsDAO.findByOwnerAndId(configId, userId);
@@ -730,11 +769,11 @@ calendarRoutes.patch('/integrations/:integrationId/sync-configs/:configId', auth
     // Manage webhook channel lifecycle when enabled state changes.
     const provider = buildProvider(integration, userId);
     if (enablingWatch) {
-        await setupWatch(config, provider).catch((err) => {
+        await setupWatch(config, provider, integration._id).catch((err) => {
             console.error(`[calendar] setupWatch failed for config ${configId}:`, err);
         });
     } else if (disablingWatch) {
-        await teardownWatch(config, provider).catch((err) => {
+        await teardownWatch(config, provider, integration._id).catch((err) => {
             console.error(`[calendar] teardownWatch failed for config ${configId}:`, err);
         });
     }
@@ -762,7 +801,7 @@ calendarRoutes.delete('/integrations/:integrationId/sync-configs/:configId', aut
 
     // Stop the webhook channel before deleting the config so Google stops sending notifications.
     const provider = buildProvider(integration, userId);
-    await teardownWatch(config, provider).catch((err) => {
+    await teardownWatch(config, provider, integration._id).catch((err) => {
         console.error(`[calendar] teardownWatch failed for config ${configId}:`, err);
     });
 
@@ -818,9 +857,10 @@ async function tryCreateRecurringEvent(
     routine: RoutineInterface,
     calendarId: string,
     timeZone: string,
+    integrationId: string,
 ): Promise<CreateEventResult> {
     try {
-        const calendarEventId = await provider.createRecurringEvent(routine, calendarId, timeZone);
+        const calendarEventId = await withAuthFailureHandling(integrationId, () => provider.createRecurringEvent(routine, calendarId, timeZone));
         return { ok: true, calendarEventId };
     } catch (error) {
         return { ok: false, error };
@@ -846,6 +886,10 @@ calendarRoutes.post('/integrations/:id/link-routine/:routineId', authenticateReq
     if (routine.routineType !== 'calendar') {
         return c.json({ error: 'Only calendar routines can be linked' }, 400);
     }
+    const revokedBody = revokedIntegrationBody(integration);
+    if (revokedBody) {
+        return c.json(revokedBody, 410);
+    }
 
     // Resolve the target calendar from the integration's default sync config — Step 2 deprecates
     // `integration.calendarId`, so new integrations only have it on the sync config. Falls back to
@@ -856,8 +900,8 @@ calendarRoutes.post('/integrations/:id/link-routine/:routineId', authenticateReq
     }
 
     const provider = buildProvider(integration, userId);
-    const timeZone = await resolveTimeZoneForIntegration(integrationId, provider, targetCalendarId);
-    const createResult = await tryCreateRecurringEvent(provider, routine, targetCalendarId, timeZone);
+    const timeZone = await withAuthFailureHandling(integration._id, () => resolveTimeZoneForIntegration(integrationId, provider, targetCalendarId));
+    const createResult = await tryCreateRecurringEvent(provider, routine, targetCalendarId, timeZone, integration._id);
     if (!createResult.ok) {
         console.error(`[calendar] createRecurringEvent failed for integration ${integrationId}:`, createResult.error);
         return c.json({ error: 'Failed to create Google Calendar event' }, 502);
@@ -886,6 +930,9 @@ calendarRoutes.post('/integrations/:id/link-routine/:routineId', authenticateReq
 
 // ── Sync (pull GCal exceptions → app) ────────────────────────────────────────
 
+// Returns HTTP 410 Gone when the integration is `'revoked'` so the client can clear local sync
+// state and prompt for reconnect. `'suspended'` integrations still attempt the sync — the call-site
+// `withAuthFailureHandling` re-escalates on persistent failure and revokes after the 24h grace.
 calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => {
     const userId = c.get('session').user.id;
     const integrationId = c.req.param('id');
@@ -893,6 +940,10 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(integrationId, userId);
     if (!integration) {
         return c.json({ error: 'Integration not found' }, 404);
+    }
+    const revokedBody = revokedIntegrationBody(integration);
+    if (revokedBody) {
+        return c.json(revokedBody, 410);
     }
 
     try {
@@ -904,9 +955,9 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
         // Sequential to avoid overwhelming Google's API with parallel requests per-account.
         const syncResults = await configs.reduce(async (prevPromise, config) => {
             const prev = await prevPromise;
-            const count = await syncSingleCalendar(config, integration, provider, { userId, now, ops: [] });
+            const count = await withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, { userId, now, ops: [] }));
             // Keep webhook channel alive — renew if expired or expiring soon.
-            await renewWebhookIfExpired(config, provider).catch((err) => {
+            await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
                 console.error(`[calendar] renewWebhookIfExpired failed for config ${config._id}:`, err);
             });
             return prev + count;
@@ -1661,28 +1712,30 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
 // ── Webhook watch management ─────────────────────────────────────────────────
 
 /** Sets up a Google push notification channel for the given sync config. Stores webhook fields on success. */
-async function setupWatch(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider): Promise<void> {
+async function setupWatch(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider, integrationId: string): Promise<void> {
     // Webhook feature is opt-in: no-op when CALENDAR_WEBHOOK_URL is not configured.
     const webhookUrl = process.env.CALENDAR_WEBHOOK_URL;
     if (!webhookUrl) {
         return;
     }
     const channelId = randomUUID();
-    const { resourceId, expiration } = await provider.watchEvents(config.calendarId, webhookUrl, channelId);
+    const { resourceId, expiration } = await withAuthFailureHandling(integrationId, () => provider.watchEvents(config.calendarId, webhookUrl, channelId));
     await calendarSyncConfigsDAO.upsertWebhookFields(config._id, channelId, resourceId, expiration);
 }
 
 /** Stops the existing push notification channel for the given sync config. Clears webhook fields regardless of whether the stop call succeeds. */
-async function teardownWatch(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider): Promise<void> {
-    if (config.webhookChannelId && config.webhookResourceId) {
+async function teardownWatch(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider, integrationId: string): Promise<void> {
+    const channelId = config.webhookChannelId;
+    const resourceId = config.webhookResourceId;
+    if (channelId && resourceId) {
         // Best-effort stop — the channel may have already expired or been invalidated.
-        await provider.stopWatch(config.webhookChannelId, config.webhookResourceId).catch(() => {});
+        await withAuthFailureHandling(integrationId, () => provider.stopWatch(channelId, resourceId)).catch(() => {});
     }
     await calendarSyncConfigsDAO.clearWebhookFields(config._id);
 }
 
 /** Re-registers the webhook channel if it is expired or expiring within 1 day. */
-async function renewWebhookIfExpired(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider): Promise<void> {
+async function renewWebhookIfExpired(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider, integrationId: string): Promise<void> {
     if (!process.env.CALENDAR_WEBHOOK_URL) {
         return;
     }
@@ -1693,9 +1746,9 @@ async function renewWebhookIfExpired(config: CalendarSyncConfigInterface, provid
     }
 
     if (config.webhookChannelId) {
-        await teardownWatch(config, provider);
+        await teardownWatch(config, provider, integrationId);
     }
-    await setupWatch(config, provider);
+    await setupWatch(config, provider, integrationId);
     console.log(`[calendar-webhook] renewed watch for config ${config._id}`);
 }
 
@@ -1794,13 +1847,19 @@ async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void
         console.warn(`[calendar-webhook] integration ${config.integrationId} not found for config ${config._id} — skipping sync`);
         return;
     }
+    // Skip suspended/revoked integrations — the auth-escalation flow owns their lifecycle and any
+    // provider call here would just re-trigger the same `invalid_grant` on every webhook delivery.
+    if (integrationStatus(integration) !== 'active') {
+        console.log(`[calendar-webhook] skipping ${integrationStatus(integration)} integration ${integration._id}`);
+        return;
+    }
     const provider = buildProvider(integration, config.user);
     const now = dayjs().toISOString();
     const ctx: SyncContext = { userId: config.user, now, ops: [] };
-    await syncSingleCalendar(config, integration, provider, ctx);
+    await withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, ctx));
     console.log(`[gcal-webhook-sync] sync complete | configId=${config._id} ops=${ctx.ops.length}`);
     // Keep webhook channel alive — renew if close to expiring so the next change also triggers a webhook.
-    await renewWebhookIfExpired(config, provider).catch((err) => {
+    await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
         console.error(`[calendar-webhook] renewWebhookIfExpired failed for config ${config._id}:`, err);
     });
     console.log(`[gcal-webhook-sync] notifying SSE + push | userId=${config.user} ops=${ctx.ops.length}`);
@@ -1829,8 +1888,12 @@ calendarRoutes.post('/webhooks/renew', async (c) => {
             if (!integration) {
                 return;
             }
+            // Skip suspended/revoked integrations — the auth-escalation flow owns their lifecycle.
+            if (integrationStatus(integration) !== 'active') {
+                return;
+            }
             const provider = buildProvider(integration, config.user);
-            await renewWebhookIfExpired(config, provider);
+            await renewWebhookIfExpired(config, provider, integration._id);
         }),
     );
 

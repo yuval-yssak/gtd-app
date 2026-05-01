@@ -76,6 +76,32 @@ export function isGoogleApiError(err: unknown): err is Error & { code: number } 
     return err instanceof Error && 'code' in err && typeof (err as { code: unknown }).code === 'number';
 }
 
+/**
+ * Type guard for OAuth `invalid_grant` (refresh token revoked / expired). Distinct from
+ * `isGoogleApiError` which only inspects numeric `code`. invalid_grant typically arrives
+ * without a numeric code — it's an OAuth2 protocol error, not a Calendar API error.
+ *
+ * googleapis surfaces it in three observed shapes: bare `Error('invalid_grant')`,
+ * GaxiosError with `err.response.data.error === 'invalid_grant'`, or wrapped messages
+ * containing the substring (e.g. `'Bad Request: invalid_grant'`).
+ */
+export function isInvalidGrantError(err: unknown): boolean {
+    if (!(err instanceof Error)) {
+        return false;
+    }
+    if (err.message === 'invalid_grant') {
+        return true;
+    }
+    if (err.message.includes('invalid_grant')) {
+        return true;
+    }
+    const resp = (err as { response?: { data?: { error?: unknown } } }).response;
+    if (resp?.data?.error === 'invalid_grant') {
+        return true;
+    }
+    return false;
+}
+
 /** Parses raw Google Calendar API event items into typed GCalEvent objects. Skips all-day events (no dateTime). */
 function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCalEvent[] {
     // Type-safe cast: googleapis returns `calendar_v3.Schema$Event[]` but we treat it generically

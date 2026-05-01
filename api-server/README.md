@@ -200,6 +200,25 @@ When items change in the app, the server pushes changes to Google Calendar:
 
 Calendar pushback is fire-and-forget — it doesn't block the sync response. Errors are logged but not thrown.
 
+### `invalid_grant` escalation
+
+When Google rejects a refresh token (revoke, password change, idle, admin policy), the integration is escalated through a 24-hour, time-based state machine in `src/lib/calendarAuthEscalation.ts`:
+
+1. First detected `invalid_grant` → status flips `active` → `suspended`, warning email sent. Sync still attempts (the failure may have been transient).
+2. Still failing 24 h after `suspendedAt` → status flips `suspended` → `revoked`, final email sent. Sync/pushback skip; the sync endpoint returns HTTP 410 Gone with `{ error: 'integration_revoked', integrationId, suspendedAt, revokedAt }`.
+3. Reconnect via OAuth (`upsertEncrypted`) clears status back to `active` and unsets all escalation timestamps.
+
+The grace window can be shortened for dev/tests via `CALENDAR_AUTH_GRACE_MS` (milliseconds; default 24 h). Detection is centralized in `isInvalidGrantError` (`src/calendarProviders/GoogleCalendarProvider.ts`) and applied at provider call sites with `withAuthFailureHandling(integrationId, () => provider.*)`.
+
+## Email (stub)
+
+Outbound email is currently a stub. `src/lib/emailStub.ts` exposes `sendEmail(...)`, which (a) writes a row to the `sentEmails` MongoDB collection and (b) logs `[email-stub] kind=... to=... subject=...`. No external email provider is wired up.
+
+Callers today:
+- Calendar OAuth escalation (warning + final email when a Google integration is suspended/revoked due to `invalid_grant`).
+
+The collection schema is `SentEmailInterface` in `src/types/entities.ts`. To wire a real provider later, replace the body of `sendEmail` while keeping its signature and the `sentEmails` audit log so prior sends remain queryable.
+
 ## Data Access Layer
 
 All DAOs extend `AbstractDAO<T>`, a generic MongoDB wrapper providing:
