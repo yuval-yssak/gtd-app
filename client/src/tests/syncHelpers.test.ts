@@ -5,8 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // import of '#api/syncClient' is also intercepted — no resolve.conditions config needed.
 vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'));
 
+// Mock the multiUserSync module so the cross-account dispatch tests can observe whether
+// `syncSingleUser` was called without driving the real Better Auth multi-session pivot.
+vi.mock('../db/multiUserSync', () => ({
+    syncSingleUser: vi.fn().mockResolvedValue(undefined),
+}));
+
 import dayjs from 'dayjs';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import { syncSingleUser } from '../db/multiUserSync';
 import {
     bootstrapFromServer,
     flushSyncQueue,
@@ -79,6 +86,21 @@ afterEach(() => {
 
 // ── queueSyncOp ────────────────────────────────────────────────────────────────
 
+/**
+ * Polls until `predicate()` returns true, with a small timeout. Used by the dispatch tests below
+ * to wait on the fire-and-forget `dispatchOpFlush` chain without exposing internal promise hooks
+ * — we observe the side effects (syncSingleUser called, pushSyncOps called) instead.
+ */
+async function waitFor(predicate: () => boolean, timeoutMs = 500): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+        if (Date.now() > deadline) {
+            throw new Error('waitFor: predicate did not become true before deadline');
+        }
+        await new Promise((r) => setTimeout(r, 5));
+    }
+}
+
 describe('queueSyncOp — userId field', () => {
     afterEach(async () => {
         // queueSyncOp fire-and-forgets a flush — wait so the in-flight network mock settles
@@ -134,6 +156,117 @@ describe('queueSyncOp — userId field', () => {
                 snapshot: makeItem('q-item-3'),
             }),
         ).rejects.toThrow('no active account');
+    });
+});
+
+// ── queueSyncOp — immediate flush dispatch (cross-account routing) ─────────────
+// Ops queued under a userId that differs from the currently-active Better Auth session must
+// route through `syncSingleUser`, which pivots the cookie before flushing — otherwise the
+// server's misroute guard rejects the push with a 400.
+
+describe('queueSyncOp — immediate flush dispatch', () => {
+    afterEach(async () => {
+        await waitForPendingFlush();
+    });
+
+    it('queues an op and immediately flushes via flushSyncQueue with userIdFilter when the op userId matches the active account', async () => {
+        // Active account is USER_ID (seeded in the global beforeEach). Pre-seed a second user's
+        // queued op so we can assert the dispatch's `userIdFilter` actually scoped the flush —
+        // otherwise the test would still pass even if a future regression dropped the filter.
+        await db.add('syncOperations', {
+            userId: 'user-other',
+            opType: 'create',
+            entityType: 'item',
+            entityId: 'other-op',
+            queuedAt: dayjs().toISOString(),
+            snapshot: { ...makeItem('other-op'), userId: 'user-other' },
+        });
+
+        await queueSyncOp(db, {
+            opType: 'update',
+            entityType: 'item',
+            entityId: 'i-1',
+            snapshot: makeItem('i-1'),
+            userId: USER_ID,
+        });
+
+        await waitFor(() => vi.mocked(pushSyncOps).mock.calls.length > 0);
+
+        const calls = vi.mocked(pushSyncOps).mock.calls;
+        expect(calls).toHaveLength(1);
+        // Only the active user's op landed on the wire — `user-other`'s op was filtered out by the
+        // `userIdFilter` arg `dispatchOpFlush` passes on the same-account branch. Without that
+        // filter, the unscoped flush would have pushed both ops under USER_ID's session and
+        // tripped the server's misroute guard.
+        expect(calls[0]?.[1].map((op) => op.entityId)).toEqual(['i-1']);
+        // The `user-other` op is still queued, untouched.
+        const remaining = await db.getAll('syncOperations');
+        expect(remaining.map((op) => op.entityId)).toContain('other-op');
+        // Same-account fast path must not detour through the multi-session orchestrator —
+        // that would acquire the gate unnecessarily and serialize ops behind any in-flight pivot.
+        expect(vi.mocked(syncSingleUser)).not.toHaveBeenCalled();
+    });
+
+    it('routes the immediate flush through syncSingleUser when the op userId differs from the active account', async () => {
+        // Active account is USER_ID; queue an op for user-b.
+        await queueSyncOp(db, {
+            opType: 'update',
+            entityType: 'item',
+            entityId: 'i-cross',
+            snapshot: { ...makeItem('i-cross'), userId: 'user-b' },
+            userId: 'user-b',
+        });
+
+        await waitFor(() => vi.mocked(syncSingleUser).mock.calls.length > 0);
+
+        expect(vi.mocked(syncSingleUser)).toHaveBeenCalledWith(db, 'user-b');
+        // The mocked syncSingleUser resolves without ever calling pushSyncOps. The unscoped
+        // flushSyncQueue path also must not fire — that would attempt the push under USER_ID's
+        // session and trip the server's misroute guard.
+        expect(vi.mocked(pushSyncOps)).not.toHaveBeenCalled();
+    });
+
+    it('routes through syncSingleUser when no active account exists', async () => {
+        // Drop the active-account row but keep the explicit userId on the queued op. A null
+        // active account is treated like a mismatch — same conservative dispatch.
+        await db.delete('activeAccount', 'active');
+
+        await queueSyncOp(db, {
+            opType: 'update',
+            entityType: 'item',
+            entityId: 'i-no-active',
+            snapshot: { ...makeItem('i-no-active'), userId: 'user-b' },
+            userId: 'user-b',
+        });
+
+        await waitFor(() => vi.mocked(syncSingleUser).mock.calls.length > 0);
+
+        expect(vi.mocked(syncSingleUser)).toHaveBeenCalledWith(db, 'user-b');
+        expect(vi.mocked(pushSyncOps)).not.toHaveBeenCalled();
+    });
+
+    it('swallows dispatch rejection with a console.warn — queueSyncOp resolves regardless', async () => {
+        // The fire-and-forget `void dispatchOpFlush(...).catch(...)` contract: if the dispatch
+        // rejects (e.g. `syncSingleUser` throwing because no multi-session entry exists for the
+        // queued userId), the rejection is logged and swallowed — `queueSyncOp` itself must not
+        // throw, because callers (UI mutations) would surface the error to the user even though
+        // the op is safely persisted in IDB and will retry on the next mount.
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        vi.mocked(syncSingleUser).mockRejectedValueOnce(new Error('pivot failed'));
+
+        await expect(
+            queueSyncOp(db, {
+                opType: 'update',
+                entityType: 'item',
+                entityId: 'i-reject',
+                snapshot: { ...makeItem('i-reject'), userId: 'user-b' },
+                userId: 'user-b',
+            }),
+        ).resolves.toBeUndefined();
+
+        await waitFor(() => warnSpy.mock.calls.length > 0);
+        expect(warnSpy).toHaveBeenCalledWith('Failed to flush sync queue after adding op', expect.any(Error));
+        warnSpy.mockRestore();
     });
 });
 
