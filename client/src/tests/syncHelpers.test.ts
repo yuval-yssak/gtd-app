@@ -7,7 +7,15 @@ vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts')
 
 import dayjs from 'dayjs';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
-import { bootstrapFromServer, flushSyncQueue, pullFromServer, queueSyncOp, waitForPendingFlush } from '../db/syncHelpers';
+import {
+    bootstrapFromServer,
+    flushSyncQueue,
+    pullFromServer,
+    queueSyncOp,
+    setSessionGateTimeoutMs,
+    waitForPendingFlush,
+    withSessionGate,
+} from '../db/syncHelpers';
 import type { MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 // StoredPerson/Routine/WorkContext are still needed for the db.put() casts below
 import { openTestDB } from './openTestDB';
@@ -577,5 +585,60 @@ describe('bootstrapFromServer', () => {
 
         const items = await db.getAll('items');
         expect(items).toHaveLength(0);
+    });
+});
+
+// Regression for the cross-account reassign hang: a stalled gate task (e.g. session pivot
+// behind a slow Google API call) used to wedge every queued caller indefinitely. The gate now
+// auto-releases after a deadline so queued callers proceed even when one task never settles.
+describe('withSessionGate — self-healing timeout', () => {
+    afterEach(() => {
+        // Reset to production default so cross-test gate state doesn't leak.
+        setSessionGateTimeoutMs(10_000);
+    });
+
+    it('releases the gate after the deadline so queued tasks proceed even if one hangs', async () => {
+        setSessionGateTimeoutMs(20);
+        // Hang task: a promise that never settles.
+        const hung = withSessionGate(() => new Promise<string>(() => {}));
+        // Queued task: should run after the gate auto-releases.
+        const queuedRan = vi.fn(() => Promise.resolve('queued-result'));
+        const queuedResult = withSessionGate(queuedRan);
+        // Wait past the deadline.
+        await new Promise((r) => setTimeout(r, 60));
+        await expect(queuedResult).resolves.toBe('queued-result');
+        expect(queuedRan).toHaveBeenCalledTimes(1);
+        // The hung task's promise is still pending — its caller awaits it independently.
+        // We don't await it here (it never settles); the test ends fine because it's not the
+        // gate's responsibility to settle it.
+        void hung;
+    });
+
+    it('logs a warning when the gate releases due to timeout', async () => {
+        setSessionGateTimeoutMs(20);
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const hung = withSessionGate(() => new Promise<string>(() => {}));
+        await new Promise((r) => setTimeout(r, 60));
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('session gate task exceeded'));
+        warnSpy.mockRestore();
+        void hung;
+    });
+
+    it('does not warn or release early when the task settles within the deadline', async () => {
+        setSessionGateTimeoutMs(200);
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const result = await withSessionGate(() => Promise.resolve('fast'));
+        expect(result).toBe('fast');
+        expect(warnSpy).not.toHaveBeenCalled();
+        warnSpy.mockRestore();
+    });
+
+    it('propagates task rejection to the caller without poisoning subsequent gate tasks', async () => {
+        setSessionGateTimeoutMs(200);
+        const failed = withSessionGate(() => Promise.reject(new Error('task boom')));
+        await expect(failed).rejects.toThrow('task boom');
+        // Next task should run normally — the rejection released the gate via finally().
+        const next = await withSessionGate(() => Promise.resolve('after-reject'));
+        expect(next).toBe('after-reject');
     });
 });

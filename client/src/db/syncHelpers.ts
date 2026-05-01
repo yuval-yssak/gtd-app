@@ -295,6 +295,22 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
 // via `pullInFlight`.
 let sessionGate: Promise<void> = Promise.resolve();
 
+/**
+ * Hard deadline for any single gate task. A stalled fetch (e.g. a session pivot retrying behind
+ * a slow Google Calendar API call) used to wedge the gate forever, blocking every queued caller —
+ * surfaced as the EditItemDialog hang on cross-account reassign. After this deadline the gate is
+ * released so queued tasks proceed; the original task keeps running and its eventual settlement
+ * is logged but does not block the caller chain.
+ *
+ * Exposed for tests (via `setSessionGateTimeoutMs`) so timing-dependent specs can run fast.
+ */
+let sessionGateTimeoutMs = 10_000;
+
+/** Test-only: override the gate timeout. Restored to the default at the end of each test. */
+export function setSessionGateTimeoutMs(ms: number): void {
+    sessionGateTimeoutMs = ms;
+}
+
 /** Run `task` after any in-flight session-dependent op completes. Returns the task's result. */
 export function withSessionGate<T>(task: () => Promise<T>): Promise<T> {
     const previous = sessionGate;
@@ -302,7 +318,34 @@ export function withSessionGate<T>(task: () => Promise<T>): Promise<T> {
     sessionGate = new Promise<void>((resolve) => {
         release = resolve;
     });
-    return previous.then(task).finally(release);
+    // Hard timeout to release the gate even if `task` never settles. Without this, one stuck
+    // task wedges every queued caller until page refresh.
+    const timeoutMs = sessionGateTimeoutMs;
+    const result = previous.then(task);
+    let released = false;
+    const releaseOnce = () => {
+        if (released) {
+            return;
+        }
+        released = true;
+        release();
+    };
+    const timer = setTimeout(() => {
+        if (!released) {
+            console.warn(`[sync] session gate task exceeded ${timeoutMs}ms — releasing gate; task continues in background`);
+        }
+        releaseOnce();
+    }, timeoutMs);
+    // When the task settles (either before or after the timeout) clear the timer and ensure
+    // release fires exactly once. The trailing `.catch(() => {})` swallows the rejection on
+    // this internal-only chain — the caller's rejection handler runs on `result`, not here.
+    result
+        .finally(() => {
+            clearTimeout(timer);
+            releaseOnce();
+        })
+        .catch(() => {});
+    return result;
 }
 
 const pullInFlight = new Map<string, Promise<void>>();
