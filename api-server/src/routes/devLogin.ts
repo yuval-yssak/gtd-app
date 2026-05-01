@@ -441,6 +441,37 @@ export const devLoginRoutes = new Hono()
         return c.json({ ok: true, simulatedEventId: fakeEventId, ...(result.crossUserReferences ? { crossUserReferences: result.crossUserReferences } : {}) });
     })
 
+    // POST /dev/calendar/simulate-webhook-event — drives one inbound GCal event through the
+    // single-event upsert path used by webhook delivery, without orchestrating a real Google
+    // Calendar push subscription. Used by the revive-trashed-item e2e to confirm the inbound
+    // anchor (`lastSyncedFromGCalTs`) restores items that were trashed by a prior disconnect.
+    .post('/calendar/simulate-webhook-event', async (c) => {
+        const { default: calendarIntegrationsDAO } = await import('../dataAccess/calendarIntegrationsDAO.js');
+        const { default: calendarSyncConfigsDAO } = await import('../dataAccess/calendarSyncConfigsDAO.js');
+        const { upsertCalendarItem } = await import('./calendar.js');
+        const body = await c.req.json<{
+            userId: string;
+            integrationId: string;
+            syncConfigId: string;
+            event: { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string; description?: string };
+        }>();
+        if (!body.userId || !body.integrationId || !body.syncConfigId || !body.event) {
+            return c.json({ error: 'userId, integrationId, syncConfigId, event required' }, 400);
+        }
+        const integration = await calendarIntegrationsDAO.findOne({ _id: body.integrationId, user: body.userId });
+        const config = await calendarSyncConfigsDAO.findOne({ _id: body.syncConfigId, user: body.userId });
+        if (!integration || !config) {
+            return c.json({ error: 'integration or syncConfig not found' }, 404);
+        }
+        const now = dayjs().toISOString();
+        // `recordOperation` (called inside upsertCalendarItem) already writes ops to the DB; the
+        // local ctx.ops list is just for tracking — no need to insert it again here. The explicit
+        // type pin via Parameters<> avoids `ops: never[]` inference.
+        const ctx: Parameters<typeof upsertCalendarItem>[2] = { userId: body.userId, now, ops: [] };
+        await upsertCalendarItem(body.event, { integration, config }, ctx);
+        return c.json({ ok: true, opsRecorded: ctx.ops.length });
+    })
+
     // GET /dev/calendar/integrations?userId=... — read calendarIntegrations rows for a user
     // bypassing the auth middleware. Used by e2e tests to assert disconnect actually removed
     // the row, without forging a session cookie.
