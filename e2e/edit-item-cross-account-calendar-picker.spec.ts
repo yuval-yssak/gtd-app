@@ -110,7 +110,9 @@ test.describe('EditItemDialog cross-account calendar picker', () => {
             // FormControl/InputLabel/Select without `htmlFor` linking, so the label is not a11y-
             // associated with the combobox — locate the FormControl by its label text and grab the
             // sibling Select trigger directly.
-            const calendarSelect = dialog.locator('.MuiFormControl-root', { has: page.locator('label', { hasText: /^Calendar$/ }) }).locator('[role="combobox"]');
+            const calendarSelect = dialog
+                .locator('.MuiFormControl-root', { has: page.locator('label', { hasText: /^Calendar$/ }) })
+                .locator('[role="combobox"]');
             await expect(calendarSelect).toBeVisible();
 
             // Switch the AccountPicker to the secondary account.

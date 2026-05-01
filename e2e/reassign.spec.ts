@@ -77,12 +77,17 @@ async function flushDevice(page: Page): Promise<void> {
  * need a session pivot to re-fetch items now owned by a non-active user — too much harness
  * machinery for a coverage check. The IDB-sync path is exercised in unit tests + multiUserSync.test.ts.
  */
-async function fetchServerEntity(collection: 'items' | 'people', entityId: string): Promise<{ _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string } | null> {
+async function fetchServerEntity(
+    collection: 'items' | 'people',
+    entityId: string,
+): Promise<{ _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string } | null> {
     const res = await fetch(`http://localhost:4000/dev/reassign/find-entity?collection=${collection}&entityId=${entityId}`);
     if (!res.ok) {
         return null;
     }
-    const body = (await res.json()) as { doc: { _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string } | null };
+    const body = (await res.json()) as {
+        doc: { _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string } | null;
+    };
     return body.doc;
 }
 

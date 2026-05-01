@@ -2,9 +2,14 @@
     "name": "gtd-e2e",
     "private": true,
     "scripts": {
-        "test": "playwright test --retries=0"
+        "test": "playwright test --retries=0",
+        "lint": "biome check",
+        "lint:fix": "biome check . --write",
+        "lint:fix:unsafe": "biome check --write --unsafe",
+        "cleanup-e2e-seeds": "set -a && . ../api-server/.env && set +a && mongosh \"$MONGO_DB_URL/$MONGO_DB_NAME\" --quiet --file scripts/cleanupE2ECalendarSeeds.js"
     },
     "devDependencies": {
+        "@biomejs/biome": "2.4.8",
         "@playwright/test": "^1.58.2"
     },
     "dependencies": {

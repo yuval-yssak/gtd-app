@@ -95,12 +95,8 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
         const cfgB = `cfg-b-${stamp}`;
         await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
-            const seedA = await seedCalendarForUser(active.userId, [
-                { configId: cfgA, calendarId: 'primary', displayName: 'A Primary', isDefault: true },
-            ]);
-            const seedB = await seedCalendarForUser(secondary.userId, [
-                { configId: cfgB, calendarId: 'primary', displayName: 'B Primary', isDefault: true },
-            ]);
+            const seedA = await seedCalendarForUser(active.userId, [{ configId: cfgA, calendarId: 'primary', displayName: 'A Primary', isDefault: true }]);
+            const seedB = await seedCalendarForUser(secondary.userId, [{ configId: cfgB, calendarId: 'primary', displayName: 'B Primary', isDefault: true }]);
 
             const originalStart = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
             const originalEnd = dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();

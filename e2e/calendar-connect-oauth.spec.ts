@@ -103,19 +103,22 @@ test.describe('calendar connect — OAuth account picker', () => {
         await withOneLoggedInDevice(browser, email, async (page) => {
             // Forge a non-google account in IDB so the picker filter (provider === 'google') excludes everyone.
             // Mutating the cached IDB row is enough — the dialog reads via useAccounts which subscribes to IDB.
-            await page.evaluate(async (uid) => {
-                type AccountIDB = { provider: string; id: string };
-                type DBHandle = {
-                    get(store: 'accounts', key: string): Promise<AccountIDB | undefined>;
-                    put(store: 'accounts', value: AccountIDB): Promise<unknown>;
-                };
-                const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-                const acct = await dbHandle.get('accounts', uid);
-                if (acct) {
-                    acct.provider = 'github';
-                    await dbHandle.put('accounts', acct);
-                }
-            }, await readActiveAccountId(page));
+            await page.evaluate(
+                async (uid) => {
+                    type AccountIDB = { provider: string; id: string };
+                    type DBHandle = {
+                        get(store: 'accounts', key: string): Promise<AccountIDB | undefined>;
+                        put(store: 'accounts', value: AccountIDB): Promise<unknown>;
+                    };
+                    const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
+                    const acct = await dbHandle.get('accounts', uid);
+                    if (acct) {
+                        acct.provider = 'github';
+                        await dbHandle.put('accounts', acct);
+                    }
+                },
+                await readActiveAccountId(page),
+            );
             await page.reload();
             await page.goto(SETTINGS_URL);
 
