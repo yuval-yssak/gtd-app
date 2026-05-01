@@ -6,6 +6,7 @@ import { hasAtLeastOne } from '../lib/typeUtils';
 import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
+import { dispatchOpFlush } from './dispatchOpFlush';
 import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
 import { deletePersonById, putPerson } from './personHelpers';
 import { deleteRoutineById, putRoutine } from './routineHelpers';
@@ -92,7 +93,11 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
     // Attempt an immediate flush. Safari and Firefox don't support the Background Sync API,
     // so without this the op would sit in IDB until the next mount or online event.
     // Fire-and-forget — errors are non-fatal; the online handler and mount effect will retry.
-    void flushSyncQueue(db).catch((e) => console.warn('Failed to flush sync queue after adding op', e));
+    // The dispatch routes through `syncSingleUser` whenever the queued op belongs to a different
+    // account than the currently-active Better Auth session — without that pivot, the server's
+    // misroute guard rejects the push with a 400 because session.user.id wouldn't match the
+    // snapshot's userId. Same-account ops keep the lightweight path.
+    void dispatchOpFlush(db, userId).catch((e) => console.warn('Failed to flush sync queue after adding op', e));
     registerBackgroundSync();
 }
 
