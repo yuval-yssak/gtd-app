@@ -137,13 +137,15 @@ test.describe('multi-device sync', () => {
         // only after both items AND a non-epoch lastSyncedTs are stable.
         const items = await page2.evaluate(async () => {
             // Date.now() is intentional — this closure runs in the browser context where dayjs is unavailable.
-            type Harness = { listItems(): Promise<Array<{ title: string }>>; syncState(): Promise<{ lastSyncedTs: string } | undefined> };
+            type Cursor = { userId: string; lastSyncedTs: string };
+            type Harness = { listItems(): Promise<Array<{ title: string }>>; syncState(): Promise<{ syncCursors: Cursor[] } | undefined> };
             const harness = (window as unknown as { __gtd: Harness }).__gtd;
             const deadline = Date.now() + 10_000;
             while (Date.now() < deadline) {
                 const [items, state] = await Promise.all([harness.listItems(), harness.syncState()]);
                 const hasBoth = items.some((i) => i.title === 'Bootstrap item A') && items.some((i) => i.title === 'Bootstrap item B');
-                const isSyncSettled = state?.lastSyncedTs !== '1970-01-01T00:00:00.000Z';
+                const cursors = state?.syncCursors ?? [];
+                const isSyncSettled = cursors.length > 0 && cursors.every((c) => c.lastSyncedTs !== '1970-01-01T00:00:00.000Z');
                 if (hasBoth && isSyncSettled) {
                     return items;
                 }

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
 // Regression for the "item disappears after cross-account move" bug. The reassign endpoint emits
@@ -17,14 +17,13 @@ const DEV_SEED_CALENDAR_URL = 'http://localhost:4000/dev/calendar/seed-integrati
 const INBOX_URL = 'http://localhost:4173/inbox';
 
 test.describe('cross-account reassign — item survives delete-op clobber', () => {
-    test.beforeEach(async () => {
-        await fetch('http://localhost:4000/dev/reset', { method: 'DELETE' });
-    });
-
+    // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
+    // other workers keep their session/user data.
     test('plain (non-calendar) item: row stays in IDB under target after reassign', async ({ browser }) => {
         const stamp = dayjs().valueOf();
         const emailA = `clobber-na-a-${stamp}@example.com`;
         const emailB = `clobber-na-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             // Seed the item server-side under the source account. The reassign call below pivots
             // through both sessions, which flushes + pulls each — that's how the seeded op (and the
@@ -59,13 +58,17 @@ test.describe('cross-account reassign — item survives delete-op clobber', () =
         const stamp = dayjs().valueOf();
         const emailA = `clobber-cal-a-${stamp}@example.com`;
         const emailB = `clobber-cal-b-${stamp}@example.com`;
+        // configIds carry the stamp so parallel workers don't collide on _id.
+        const cfgA = `cfg-clob-a-${stamp}`;
+        const cfgB = `cfg-clob-b-${stamp}`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             // Both accounts need a calendar integration so the move can re-link to the target.
             const seedA = await seedCalendarForUser(active.userId, [
-                { configId: 'cfg-clob-a', calendarId: 'primary', displayName: 'A Primary', isDefault: true },
+                { configId: cfgA, calendarId: 'primary', displayName: 'A Primary', isDefault: true },
             ]);
             const seedB = await seedCalendarForUser(secondary.userId, [
-                { configId: 'cfg-clob-b', calendarId: 'primary', displayName: 'B Primary', isDefault: true },
+                { configId: cfgB, calendarId: 'primary', displayName: 'B Primary', isDefault: true },
             ]);
 
             const start = dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();
@@ -78,7 +81,7 @@ test.describe('cross-account reassign — item survives delete-op clobber', () =
                 timeStart: start,
                 timeEnd: end,
                 calendarIntegrationId: seedA.integrationId,
-                calendarSyncConfigId: 'cfg-clob-a',
+                calendarSyncConfigId: cfgA,
                 calendarEventId: 'gcal-evt-survive-original',
             });
             await page.goto(INBOX_URL);
@@ -91,7 +94,7 @@ test.describe('cross-account reassign — item survives delete-op clobber', () =
                 entityId: itemId,
                 fromUserId: active.userId,
                 toUserId: secondary.userId,
-                targetCalendar: { integrationId: seedB.integrationId, syncConfigId: 'cfg-clob-b' },
+                targetCalendar: { integrationId: seedB.integrationId, syncConfigId: cfgB },
             });
             expect(result.ok).toBe(true);
 
@@ -108,7 +111,7 @@ test.describe('cross-account reassign — item survives delete-op clobber', () =
                     },
                     { timeout: 10_000 },
                 )
-                .toMatchObject({ user: secondary.userId, cfg: 'cfg-clob-b' });
+                .toMatchObject({ user: secondary.userId, cfg: cfgB });
         });
     });
 });

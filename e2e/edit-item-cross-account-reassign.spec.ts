@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
 // E2e coverage for the atomic cross-account "edit + move" path. Pre-fix, EditItemDialog wrote a
@@ -83,20 +83,23 @@ async function fetchServerItem(entityId: string): Promise<ServerItem | null> {
 }
 
 test.describe('EditItemDialog cross-account reassign — atomic edit + move', () => {
-    test.beforeEach(async () => {
-        await fetch('http://localhost:4000/dev/reset', { method: 'DELETE' });
-    });
-
+    // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
+    // other workers keep their session/user data.
     test('calendar item with edits: title + time changes ride along on the move; new GCal event lives on target calendar', async ({ browser }) => {
         const stamp = dayjs().valueOf();
         const emailA = `cal-edit-a-${stamp}@example.com`;
         const emailB = `cal-edit-b-${stamp}@example.com`;
+        // configIds carry the stamp so parallel workers don't collide on _id (the configs collection
+        // is keyed by _id, so two tests trying to seed the same configId race on insertOne).
+        const cfgA = `cfg-a-${stamp}`;
+        const cfgB = `cfg-b-${stamp}`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const seedA = await seedCalendarForUser(active.userId, [
-                { configId: 'cfg-a', calendarId: 'primary', displayName: 'A Primary', isDefault: true },
+                { configId: cfgA, calendarId: 'primary', displayName: 'A Primary', isDefault: true },
             ]);
             const seedB = await seedCalendarForUser(secondary.userId, [
-                { configId: 'cfg-b', calendarId: 'primary', displayName: 'B Primary', isDefault: true },
+                { configId: cfgB, calendarId: 'primary', displayName: 'B Primary', isDefault: true },
             ]);
 
             const originalStart = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
@@ -106,7 +109,7 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
                 notes: 'old notes',
                 calendarEventId: 'gcal-evt-original',
                 calendarIntegrationId: seedA.integrationId,
-                calendarSyncConfigId: 'cfg-a',
+                calendarSyncConfigId: cfgA,
                 timeStart: originalStart,
                 timeEnd: originalEnd,
             });
@@ -122,7 +125,7 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
                 entityId: itemId,
                 fromUserId: active.userId,
                 toUserId: secondary.userId,
-                targetCalendar: { integrationId: seedB.integrationId, syncConfigId: 'cfg-b' },
+                targetCalendar: { integrationId: seedB.integrationId, syncConfigId: cfgB },
                 editPatch: { title: 'Renamed via reassign', notes: 'new notes', timeStart: newStart, timeEnd: newEnd },
             });
             expect(result.ok).toBe(true);
@@ -136,7 +139,7 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
             expect(moved?.timeStart).toBe(newStart);
             expect(moved?.timeEnd).toBe(newEnd);
             expect(moved?.calendarIntegrationId).toBe(seedB.integrationId);
-            expect(moved?.calendarSyncConfigId).toBe('cfg-b');
+            expect(moved?.calendarSyncConfigId).toBe(cfgB);
             expect(moved?.calendarEventId).toBeTruthy();
             expect(moved?.calendarEventId).not.toBe('gcal-evt-original');
         });
@@ -146,6 +149,7 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
         const stamp = dayjs().valueOf();
         const emailA = `na-edit-a-${stamp}@example.com`;
         const emailB = `na-edit-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const itemId = await seedItemOnServer(active.userId, 'Original NA', {
                 status: 'nextAction',
@@ -193,6 +197,7 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
         const stamp = dayjs().valueOf();
         const emailA = `reassign-only-a-${stamp}@example.com`;
         const emailB = `reassign-only-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const itemId = await seedItemOnServer(active.userId, 'Untouched title', {
                 status: 'nextAction',
@@ -228,6 +233,7 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
         const stamp = dayjs().valueOf();
         const emailA = `clear-a-${stamp}@example.com`;
         const emailB = `clear-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const itemId = await seedItemOnServer(active.userId, 'Has stuff to clear', {
                 status: 'nextAction',

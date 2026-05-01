@@ -50,21 +50,24 @@ async function waitForHarness(page: Page): Promise<void> {
 }
 
 async function waitForSyncSettled(page: Page): Promise<void> {
-    // bootstrapFromServer sets lastSyncedTs = epoch BEFORE the network fetch completes.
-    // A non-epoch lastSyncedTs confirms the network I/O finished and items are in IDB.
+    // bootstrapFromServer creates each per-user syncCursors row with lastSyncedTs = epoch BEFORE
+    // the network fetch completes. A non-epoch lastSyncedTs on at least one cursor row confirms
+    // the network I/O finished and items are in IDB.
     //
     // Use evaluate() with an inline polling loop rather than waitForFunction() — the latter
     // resolves as soon as the predicate returns truthy, but a Promise is always truthy,
     // so waitForFunction() with an async predicate would return immediately without awaiting
     // the resolved value.
     await page.evaluate(async () => {
-        type Harness = { syncState(): Promise<{ lastSyncedTs: string } | undefined> };
+        type Cursor = { userId: string; lastSyncedTs: string };
+        type Harness = { syncState(): Promise<{ syncCursors: Cursor[] } | undefined> };
         const harness = (window as unknown as { __gtd: Harness }).__gtd;
         // Date.now() is intentional — this closure runs in the browser context where dayjs is unavailable.
         const deadline = Date.now() + 15_000;
         while (Date.now() < deadline) {
             const s = await harness.syncState();
-            if (s !== undefined && s !== null && s.lastSyncedTs !== '1970-01-01T00:00:00.000Z') {
+            const cursors = s?.syncCursors ?? [];
+            if (cursors.length > 0 && cursors.every((c) => c.lastSyncedTs !== '1970-01-01T00:00:00.000Z')) {
                 return;
             }
             await new Promise((r) => setTimeout(r, 200));

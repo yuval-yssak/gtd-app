@@ -2,7 +2,25 @@ import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { fetchDevSessionCookie, loginAs } from './login';
 
 const DEV_MULTI_LOGIN_URL = 'http://localhost:4000/dev/multi-login';
+const DEV_RESET_URL = 'http://localhost:4000/dev/reset';
 const CLIENT_URL = 'http://localhost:4173';
+
+/**
+ * Email-scoped server reset. Use this in `beforeEach` for specs that need a clean DB slate
+ * for the test's emails — passing the emails restricts deletion to those users' rows so
+ * /dev/reset in one worker no longer wipes session/user data for tests running concurrently
+ * in other workers.
+ */
+export async function resetServerForEmails(emails: string[]): Promise<void> {
+    const res = await fetch(DEV_RESET_URL, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emails }),
+    });
+    if (!res.ok) {
+        throw new Error(`dev/reset ${res.status}: ${await res.text()}`);
+    }
+}
 
 export async function withOneLoggedInDevice(browser: Browser, email: string, fn: (page: Page) => Promise<void>): Promise<void> {
     const ctx = await browser.newContext();

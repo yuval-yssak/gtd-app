@@ -94,14 +94,20 @@ test.describe('routines', () => {
 
     test('pause routine: flips active=false and trashes future open items', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `routine-pause-${dayjs().valueOf()}@example.com`, async (page) => {
+            // Use today's startDate so materializePendingNextActionRoutines (the boot-tick) seeds the
+            // first item with expectedBy=today — __gtd.createRoutine alone doesn't generate items;
+            // that's handled by RoutineDialog.tsx in the UI path. The seeded item must have
+            // expectedBy >= today so pauseRoutine's trashFutureItemsFromDate(today) catches it.
+            const today = dayjs().format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
                 title: 'Workout',
                 routineType: 'nextAction',
                 rrule: 'FREQ=DAILY',
                 template: {},
                 active: true,
+                startDate: today,
             });
-            // The create path auto-generates the first nextAction item.
+            await gtd.materializePendingNextActionRoutines(page);
             const itemsBefore = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status !== 'done' && i.status !== 'trash');
             expect(itemsBefore.length).toBeGreaterThan(0);
 
