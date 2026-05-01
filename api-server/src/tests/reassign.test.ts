@@ -474,6 +474,264 @@ describe('POST /sync/reassign', () => {
             expect(deleteEvent).not.toHaveBeenCalled();
             buildSpy.mockRestore();
         });
+
+        // Real-world bug: an item carried a stale calendarIntegrationId pointing at an integration
+        // that no longer resolves under fromUserId (e.g. cleanup script removed it, or the id was
+        // never valid). Without the fallback, the GCal event would survive on the source calendar
+        // and the user sees the event "duplicated" across both accounts. The fallback walks every
+        // integration of fromUserId and tries deleteEvent until one succeeds.
+        it('falls back to probing every sync config of fromUserId until one matches when the stored source ids are stale', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            // Alice owns one Google integration ((user, provider) is unique) but two sync configs
+            // — a "wrong" calendar (the event isn't there → 404) and the "real" one. The fallback
+            // must iterate past the failing config and find the right one.
+            await calendarIntegrationsDAO.upsertEncrypted({
+                _id: 'int-a',
+                user: alice.userId,
+                provider: 'google',
+                accessToken: 'at-a',
+                refreshToken: 'rt-a',
+                status: 'active',
+                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarIntegrationsDAO.upsertEncrypted({
+                _id: 'int-b',
+                user: bob.userId,
+                provider: 'google',
+                accessToken: 'at-b',
+                refreshToken: 'rt-b',
+                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-a-wrong',
+                integrationId: 'int-a',
+                user: alice.userId,
+                calendarId: 'alice-other',
+                isDefault: false,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-a-real',
+                integrationId: 'int-a',
+                user: alice.userId,
+                calendarId: 'alice-primary',
+                isDefault: true,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-b',
+                integrationId: 'int-b',
+                user: bob.userId,
+                calendarId: 'bob-primary',
+                isDefault: true,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+
+            // Item carries STALE source ids that don't resolve under alice — primary lookup fails.
+            const item = makeItem(alice.userId, {
+                status: 'calendar',
+                calendarEventId: 'gcal-evt-orig',
+                calendarIntegrationId: 'int-a-stale',
+                calendarSyncConfigId: 'cfg-a-stale',
+                timeStart: '2030-01-01T10:00:00Z',
+                timeEnd: '2030-01-01T11:00:00Z',
+            });
+            await itemsDAO.insertOne(item);
+
+            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            // Reject deletes against the wrong calendar (mimics GCal 404), succeed on the real one.
+            // This makes the test concretely exercise the per-attempt try/catch — the fallback must
+            // skip past the failing wrong-calendar attempt and continue to the matching one.
+            const deleteEvent = vi.fn().mockImplementation(async (calendarId: string) => {
+                if (calendarId === 'alice-other') {
+                    throw Object.assign(new Error('Not Found'), { code: 404 });
+                }
+            });
+            const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
+            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, {
+                entityType: 'item',
+                entityId: item._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
+            });
+
+            expect(res.status).toBe(200);
+            expect(createEvent).toHaveBeenCalledTimes(1);
+            expect(createEvent.mock.calls[0]?.[0]).toBe('bob-primary');
+            // The fallback hit BOTH alice calendars — the wrong one threw, the real one succeeded.
+            const deleteCalls = deleteEvent.mock.calls.map((c) => c[0]);
+            expect(deleteCalls).toContain('alice-other');
+            expect(deleteCalls).toContain('alice-primary');
+            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(moved?.calendarEventId).toBe('gcal-evt-new');
+            buildSpy.mockRestore();
+        });
+
+        // Bail branch: fromUserId has no integrations at all. The move on target still succeeds —
+        // the source GCal event is left as a stub and the warning is logged. No exception escapes.
+        it('logs a stub-event warning and completes the move when fromUserId has no integrations', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            // Only bob has an integration — alice has none.
+            await calendarIntegrationsDAO.upsertEncrypted({
+                _id: 'int-b',
+                user: bob.userId,
+                provider: 'google',
+                accessToken: 'at-b',
+                refreshToken: 'rt-b',
+                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-b',
+                integrationId: 'int-b',
+                user: bob.userId,
+                calendarId: 'bob-primary',
+                isDefault: true,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+
+            const item = makeItem(alice.userId, {
+                status: 'calendar',
+                calendarEventId: 'gcal-evt-orig',
+                calendarIntegrationId: 'int-a-stale',
+                calendarSyncConfigId: 'cfg-a-stale',
+                timeStart: '2030-01-01T10:00:00Z',
+                timeEnd: '2030-01-01T11:00:00Z',
+            });
+            await itemsDAO.insertOne(item);
+
+            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const deleteEvent = vi.fn();
+            const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
+            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, {
+                entityType: 'item',
+                entityId: item._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
+            });
+
+            expect(res.status).toBe(200);
+            expect(createEvent).toHaveBeenCalledTimes(1);
+            expect(deleteEvent).not.toHaveBeenCalled();
+            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(moved?.calendarEventId).toBe('gcal-evt-new');
+            buildSpy.mockRestore();
+        });
+
+        // Bail branch: every probe attempt throws. The move still succeeds, the warn includes the
+        // last error, and no exception escapes the reassign call.
+        it('logs the last error and completes the move when every fallback probe throws', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            await calendarIntegrationsDAO.upsertEncrypted({
+                _id: 'int-a',
+                user: alice.userId,
+                provider: 'google',
+                accessToken: 'at-a',
+                refreshToken: 'rt-a',
+                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarIntegrationsDAO.upsertEncrypted({
+                _id: 'int-b',
+                user: bob.userId,
+                provider: 'google',
+                accessToken: 'at-b',
+                refreshToken: 'rt-b',
+                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-a',
+                integrationId: 'int-a',
+                user: alice.userId,
+                calendarId: 'alice-primary',
+                isDefault: true,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-b',
+                integrationId: 'int-b',
+                user: bob.userId,
+                calendarId: 'bob-primary',
+                isDefault: true,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+
+            const item = makeItem(alice.userId, {
+                status: 'calendar',
+                calendarEventId: 'gcal-evt-orig',
+                calendarIntegrationId: 'int-a-stale',
+                calendarSyncConfigId: 'cfg-a-stale',
+                timeStart: '2030-01-01T10:00:00Z',
+                timeEnd: '2030-01-01T11:00:00Z',
+            });
+            await itemsDAO.insertOne(item);
+
+            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const deleteEvent = vi.fn().mockImplementation(async (calendarId: string) => {
+                if (calendarId === 'alice-primary') {
+                    throw new Error('invalid_grant');
+                }
+            });
+            const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
+            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, {
+                entityType: 'item',
+                entityId: item._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
+            });
+
+            expect(res.status).toBe(200);
+            // Probe was attempted on alice's calendar; it threw. No success log; aggregate warn includes the error.
+            expect(deleteEvent).toHaveBeenCalledWith('alice-primary', 'gcal-evt-orig');
+            const aggregateWarn = warnSpy.mock.calls.find((args) => typeof args[0] === 'string' && args[0].includes('fallback probes did not find event'));
+            expect(aggregateWarn?.[0]).toContain('invalid_grant');
+            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(moved?.calendarEventId).toBe('gcal-evt-new');
+            buildSpy.mockRestore();
+            warnSpy.mockRestore();
+        });
     });
 
     describe('session validation', () => {

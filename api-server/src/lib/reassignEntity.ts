@@ -239,10 +239,12 @@ interface PushCtx {
 async function loadPushContext(integrationId: string, configId: string, userId: string, buildProvider: ReassignProviderFactory): Promise<PushCtx | null> {
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(integrationId, userId);
     if (!integration) {
+        console.warn(`[reassign] loadPushContext: integration not found | integrationId=${integrationId} userId=${userId}`);
         return null;
     }
     const config = await calendarSyncConfigsDAO.findByOwnerAndId(configId, userId);
     if (!config) {
+        console.warn(`[reassign] loadPushContext: syncConfig not found | configId=${configId} userId=${userId}`);
         return null;
     }
     const provider = buildProvider(integration, userId);
@@ -278,7 +280,12 @@ async function bestEffortDeleteOnSource(item: ItemInterface, params: ReassignPar
     }
     const sourceCtx = await loadPushContext(item.calendarIntegrationId, item.calendarSyncConfigId, params.fromUserId, buildProvider);
     if (!sourceCtx) {
-        console.warn(`[reassign] source push context missing — leaving stub event ${item.calendarEventId} on source GCal`);
+        // Fallback: if the item's integrationId/configId doesn't resolve under fromUserId (e.g.
+        // because a stale id from a prior account move was carried in the row), look for any active
+        // integration owned by fromUserId that has a syncConfig pointing at the same calendarId we
+        // care about. We don't know that calendarId without the original config, so just try every
+        // active integration of fromUserId — this is best-effort only and runs once per move.
+        await fallbackDeleteAcrossUserCalendars(item, params, buildProvider);
         return;
     }
     try {
@@ -286,6 +293,74 @@ async function bestEffortDeleteOnSource(item: ItemInterface, params: ReassignPar
     } catch (err) {
         console.error(`[reassign] failed to delete source GCal event ${item.calendarEventId} — leaving stub on source`, err);
     }
+}
+
+/**
+ * Last-ditch attempt to delete the source-side GCal event when the item's stored integration/config
+ * ids are stale or otherwise unresolvable under fromUserId. Walks every integration owned by
+ * fromUserId (no status filter — matches the primary path's loadPushContext, which also accepts
+ * suspended integrations during the 24h grace), and probes each integration's sync configs.
+ * Logs an aggregate warning if every attempt fails — but never throws, since the move has already
+ * succeeded on the target side and we don't want to roll that back.
+ */
+async function fallbackDeleteAcrossUserCalendars(item: ItemInterface, params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<void> {
+    if (!item.calendarEventId) {
+        return;
+    }
+    const integrations = await calendarIntegrationsDAO.findByUserDecrypted(params.fromUserId);
+    if (integrations.length === 0) {
+        console.warn(
+            `[reassign] source push context missing and no integrations for fromUserId — leaving stub event ${item.calendarEventId} on source GCal | staleIntegrationId=${item.calendarIntegrationId} staleSyncConfigId=${item.calendarSyncConfigId}`,
+        );
+        return;
+    }
+    let lastError: unknown;
+    for (const integration of integrations) {
+        const result = await probeDeleteOnIntegration(integration, item.calendarEventId, params.fromUserId, buildProvider);
+        if (result.ok) {
+            console.warn(
+                `[reassign] fallback deleted source GCal event ${item.calendarEventId} via integration=${integration._id} config=${result.configId} | staleIntegrationId=${item.calendarIntegrationId} staleSyncConfigId=${item.calendarSyncConfigId}`,
+            );
+            return;
+        }
+        if (result.lastError !== undefined) {
+            lastError = result.lastError;
+        }
+    }
+    const errSummary = lastError instanceof Error ? `${lastError.name}: ${lastError.message}` : String(lastError ?? 'no attempts made');
+    console.warn(
+        `[reassign] source push context missing and fallback probes did not find event — leaving stub event ${item.calendarEventId} on source GCal (last error: ${errSummary})`,
+    );
+}
+
+/**
+ * Probes a single integration's sync configs for the given eventId. Resolves on the first config
+ * whose deleteEvent succeeds, otherwise records the last per-attempt error so the caller can
+ * surface it in the aggregate warn. Per-attempt errors include 404 (event not on this calendar —
+ * the dominant case during a sweep) and 401/403/transport — all swallowed here to keep the sweep
+ * best-effort, but tracked so the caller can summarise the failure mode.
+ */
+async function probeDeleteOnIntegration(
+    integration: CalendarIntegrationInterface,
+    eventId: string,
+    fromUserId: string,
+    buildProvider: ReassignProviderFactory,
+): Promise<{ ok: true; configId: string } | { ok: false; lastError?: unknown }> {
+    const configs = await calendarSyncConfigsDAO.findArray({ integrationId: integration._id, user: fromUserId });
+    if (configs.length === 0) {
+        return { ok: false };
+    }
+    const provider = buildProvider(integration, fromUserId);
+    let lastError: unknown;
+    for (const config of configs) {
+        try {
+            await provider.deleteEvent(config.calendarId, eventId);
+            return { ok: true, configId: config._id };
+        } catch (err) {
+            lastError = err;
+        }
+    }
+    return { ok: false, lastError };
 }
 
 /** Common path for both calendar-linked and plain items: delete from source, create under target, record both ops. */
