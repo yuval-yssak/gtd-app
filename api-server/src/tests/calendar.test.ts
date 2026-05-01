@@ -10,6 +10,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { gcalCreationInFlight, maybePushToGCal } from '../lib/calendarPushback.js';
+import * as sseConnections from '../lib/sseConnections.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { calendarRoutes, pickSplitParent } from '../routes/calendar.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
@@ -658,7 +659,46 @@ describe('POST /calendar/integrations/:id/sync', () => {
 
         const items = await db.collection('items').find({ user: userId, calendarEventId: 'evt-abc' }).toArray();
         expect(items).toHaveLength(1);
-        expect(items[0]).toMatchObject({ status: 'calendar', title: 'Team lunch', calendarIntegrationId: 'int-1' });
+        expect(items[0]).toMatchObject({ status: 'calendar', title: 'Team lunch', calendarIntegrationId: 'int-1', lastSyncedFromGCalTs: eventTs });
+    });
+
+    it('manual sync notifies SSE when ops are produced so the calling client knows to pull', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Spy must be installed before the route runs — the SSE notify happens inline.
+        const notifySpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+
+        const eventTs = dayjs().add(1, 'day').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-notify', title: 'After connect', timeStart: eventTs, timeEnd: eventTs, updated: eventTs, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Without this notify, a freshly-connected calendar's events would be created server-side
+        // but stay invisible on the originating client until the next webhook arrived.
+        expect(notifySpy).toHaveBeenCalledWith(userId, expect.objectContaining({ type: 'update' }));
+    });
+
+    it('manual sync skips SSE notify when no ops were produced (avoid spurious pulls)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const notifySpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        expect(notifySpy).not.toHaveBeenCalled();
     });
 
     it('trashes an existing item when its GCal event is cancelled', async () => {
@@ -1487,6 +1527,9 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
             calendarIntegrationId: 'int-1',
             createdTs: gcalTs,
             updatedTs: localTs,
+            // Anchor against which the inbound guard compares — without this the empty-string
+            // fallback would let the older GCal payload through.
+            lastSyncedFromGCalTs: localTs,
         });
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
@@ -1500,6 +1543,280 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         const item = await itemsDAO.findOne({ _id: 'item-stale' });
         // Local edit must be preserved — GCal event is older than local updatedTs.
         expect(item?.title).toBe('Local edit');
+    });
+
+    it('rejects an old GCal payload when lastSyncedFromGCalTs is set', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const t1 = dayjs().subtract(1, 'hour').toISOString(); // older inbound
+        const t2 = dayjs().toISOString(); // last applied inbound
+        await itemsDAO.insertOne({
+            _id: 'item-stale-anchor',
+            user: userId,
+            status: 'calendar',
+            title: 'Title from t2',
+            timeStart: t2,
+            timeEnd: t2,
+            calendarEventId: 'evt-stale-anchor',
+            calendarIntegrationId: 'int-1',
+            createdTs: t1,
+            // updatedTs older than t1 — proves the guard uses lastSyncedFromGCalTs, not updatedTs.
+            updatedTs: dayjs().subtract(2, 'hour').toISOString(),
+            lastSyncedFromGCalTs: t2,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-stale-anchor', title: 'Stale redelivery', timeStart: t1, timeEnd: t1, updated: t1, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-stale-anchor' });
+        expect(item?.title).toBe('Title from t2');
+    });
+
+    it('revives a trashed item when its GCal event becomes confirmed again', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Reproduces the bug: trashed by a prior disconnect, local updatedTs later than the
+        // GCal event.updated. Pre-fix the structural-newer guard would skip; the revive branch
+        // must restore to status: 'calendar' regardless.
+        const eventUpdated = dayjs().subtract(1, 'hour').toISOString();
+        const trashedTs = dayjs().toISOString();
+        const futureStart = dayjs().add(1, 'day').toISOString();
+        const futureEnd = dayjs().add(1, 'day').add(30, 'minute').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-revive',
+            user: userId,
+            status: 'trash',
+            title: 'Old title',
+            timeStart: futureStart,
+            timeEnd: futureStart,
+            calendarEventId: 'evt-revive',
+            calendarIntegrationId: 'int-1',
+            createdTs: eventUpdated,
+            updatedTs: trashedTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-revive',
+                    title: 'Cross-account smoke (moved)',
+                    timeStart: futureStart,
+                    timeEnd: futureEnd,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-revive' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('Cross-account smoke (moved)');
+        expect(item?.timeEnd).toBe(futureEnd);
+        expect(item?.lastSyncedFromGCalTs).toBe(eventUpdated);
+
+        // An update operation must be recorded so other devices learn about the revive.
+        const ops = await db.collection('operations').find({ user: userId, entityId: 'item-revive' }).toArray();
+        const reviveOp = ops.find((o) => o.opType === 'update');
+        expect(reviveOp).toBeDefined();
+    });
+
+    it('does not revive a trashed item if the resurrected event is in the past', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Past-event short-circuit must run before the revive branch.
+        const eventUpdated = dayjs().subtract(1, 'hour').toISOString();
+        const trashedTs = dayjs().toISOString();
+        const pastStart = dayjs().subtract(2, 'day').toISOString();
+        const pastEnd = dayjs().subtract(2, 'day').add(30, 'minute').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-past-revive',
+            user: userId,
+            status: 'trash',
+            title: 'Old title',
+            timeStart: pastStart,
+            timeEnd: pastStart,
+            calendarEventId: 'evt-past-revive',
+            calendarIntegrationId: 'int-1',
+            createdTs: eventUpdated,
+            updatedTs: trashedTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-past-revive', title: 'Past event', timeStart: pastStart, timeEnd: pastEnd, updated: eventUpdated, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-past-revive' });
+        expect(item?.status).toBe('trash');
+        expect(item?.title).toBe('Old title');
+    });
+
+    it('does not revive a routine-managed trashed item', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const eventUpdated = dayjs().subtract(1, 'hour').toISOString();
+        const trashedTs = dayjs().toISOString();
+        const futureStart = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-routine-revive',
+            user: userId,
+            status: 'trash',
+            title: 'Routine instance',
+            routineId: 'routine-1',
+            timeStart: futureStart,
+            timeEnd: futureStart,
+            calendarEventId: 'evt-routine-revive',
+            calendarIntegrationId: 'int-1',
+            createdTs: eventUpdated,
+            updatedTs: trashedTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-routine-revive',
+                    title: 'Should not revive',
+                    timeStart: futureStart,
+                    timeEnd: futureStart,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-routine-revive' });
+        expect(item?.status).toBe('trash');
+        expect(item?.title).toBe('Routine instance');
+    });
+
+    it('on revive, GCal description overwrites stale local notes (last-write-wins anchor on revive is epoch)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const eventUpdated = dayjs().subtract(1, 'hour').toISOString();
+        const trashedTs = dayjs().toISOString();
+        const futureStart = dayjs().add(1, 'day').toISOString();
+        const futureEnd = dayjs().add(1, 'day').add(30, 'minute').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-revive-notes',
+            user: userId,
+            status: 'trash',
+            title: 'Old title',
+            timeStart: futureStart,
+            timeEnd: futureStart,
+            calendarEventId: 'evt-revive-notes',
+            calendarIntegrationId: 'int-1',
+            notes: 'old notes',
+            lastSyncedNotes: '<p>old notes</p>',
+            createdTs: eventUpdated,
+            // Trash stamp later than event.updated — pre-fix this would have made GCal lose
+            // the last-write-wins comparison via `dayjs('').unix() === NaN` (which always
+            // returns false). Anchored at epoch on revive, GCal correctly wins.
+            updatedTs: trashedTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-revive-notes',
+                    title: 'Revived',
+                    timeStart: futureStart,
+                    timeEnd: futureEnd,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                    description: '<p>fresh notes from gcal</p>',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-revive-notes' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.notes).toBe('fresh notes from gcal');
+        expect(item?.lastSyncedNotes).toBe('<p>fresh notes from gcal</p>');
+    });
+
+    it('does not regress lastSyncedFromGCalTs on a notes-only update from an out-of-order webhook', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Existing item with anchor T3 but a much older local updatedTs T1. An out-of-order
+        // webhook arrives with event.updated = T2 (between T1 and T3) and a changed description:
+        //   - Notes guard (`resolveInboundNotes` compares gcalUpdated vs updatedTs): T2 > T1 → notes apply.
+        //   - Structural-newer guard (compares gcalUpdated vs lastSyncedFromGCalTs): T2 < T3 → no structural change.
+        //   - Anchor must stay at T3 — bumping to T2 would let an even-older payload pass the guard later.
+        const t1 = dayjs().subtract(2, 'hour').toISOString();
+        const t2 = dayjs().subtract(1, 'hour').toISOString();
+        const t3 = dayjs().toISOString();
+        const futureStart = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-anchor-no-regress',
+            user: userId,
+            status: 'calendar',
+            title: 'Title at T3',
+            timeStart: futureStart,
+            timeEnd: futureStart,
+            calendarEventId: 'evt-anchor-no-regress',
+            calendarIntegrationId: 'int-1',
+            lastSyncedNotes: '<p>old desc</p>',
+            createdTs: t1,
+            updatedTs: t1,
+            lastSyncedFromGCalTs: t3,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-anchor-no-regress',
+                    title: 'Stale title (should be ignored)',
+                    timeStart: futureStart,
+                    timeEnd: futureStart,
+                    updated: t2,
+                    status: 'confirmed',
+                    description: '<p>new desc</p>',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-anchor-no-regress' });
+        // Notes update applied (GCal changed the description), structural fields stayed put.
+        expect(item?.title).toBe('Title at T3');
+        expect(item?.notes).toBe('new desc');
+        // Anchor must NOT regress to T2 — that would let an even-older T1 payload pass the guard.
+        expect(item?.lastSyncedFromGCalTs).toBe(t3);
     });
 
     it('strips leading "✓ " from inbound title when local item is already done', async () => {

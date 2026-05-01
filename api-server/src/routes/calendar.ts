@@ -52,11 +52,11 @@ function parseUnlinkAction(raw: string | undefined): UnlinkAction | null {
     }
     return null;
 }
-type SyncContext = { userId: string; now: string; ops: OperationInterface[] };
+export type SyncContext = { userId: string; now: string; ops: OperationInterface[] };
 type RoutineSyncCtx = { userId: string; since: string; now: string; calendarId: string; ops: OperationInterface[] };
 type UnlinkSideEffectCtx = { userId: string; now: string };
 /** Groups the integration + sync config identity needed by import/upsert functions. */
-type CalendarSource = { integration: CalendarIntegrationInterface; config: CalendarSyncConfigInterface };
+export type CalendarSource = { integration: CalendarIntegrationInterface; config: CalendarSyncConfigInterface };
 // Discriminated union to distinguish network failures from missing-token responses in the OAuth flow.
 type OAuthTokenResult =
     | { ok: true; accessToken: string; refreshToken: string; expiryDate: number | null | undefined }
@@ -950,18 +950,33 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
         const provider = buildProvider(integration, userId);
         const configs = await calendarSyncConfigsDAO.findEnabledByIntegration(integrationId);
         const now = dayjs().toISOString();
+        // Aggregate ops across configs so a single SSE notify covers the whole manual sync —
+        // mirrors the webhook path's behavior so the calling client always learns to pull.
+        const ops: OperationInterface[] = [];
 
         // Sync each enabled calendar independently — each has its own lastSyncedTs cursor.
         // Sequential to avoid overwhelming Google's API with parallel requests per-account.
         const syncResults = await configs.reduce(async (prevPromise, config) => {
             const prev = await prevPromise;
-            const count = await withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, { userId, now, ops: [] }));
+            const count = await withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, { userId, now, ops }));
             // Keep webhook channel alive — renew if expired or expiring soon.
             await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
                 console.error(`[calendar] renewWebhookIfExpired failed for config ${config._id}:`, err);
             });
             return prev + count;
         }, Promise.resolve(0));
+
+        // Notify the user's open SSE channels so the client (this device + others on the same
+        // user) pulls the new ops. Without this, a freshly-connected calendar's events stay
+        // invisible until the next webhook arrives — the originating client triggers the sync
+        // but isn't told to pull when the server finishes producing ops.
+        if (ops.length > 0) {
+            console.log(`[calendar] manual sync produced ops — notifying SSE + push | userId=${userId} ops=${ops.length}`);
+            notifyUserViaSse(userId, { type: 'update', ts: now });
+            await notifyViaWebPush(userId, null, ops, now).catch((err) => {
+                console.error(`[calendar] web push failed for user ${userId}:`, err);
+            });
+        }
 
         return c.json({ ok: true, syncedRoutines: syncResults, syncedCalendars: configs.length });
     } catch (err) {
@@ -1421,9 +1436,9 @@ export function resolveInboundNotes(
 
 // ── Single calendar event import ─────────────────────────────────────────────
 
-type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string; description?: string };
+export type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string; description?: string };
 
-async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+export async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const [existing] = await itemsDAO.findArray({ user: ctx.userId, calendarEventId: event.id });
 
     console.log(
@@ -1452,11 +1467,46 @@ async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, 
         return;
     }
 
+    // Revive: a future-confirmed event whose local item was trashed (typically by a prior
+    // disconnect that bumped `updatedTs`) must be restored to `status: 'calendar'` regardless
+    // of the structural-newer guard — local trash stamps are never authoritative against GCal
+    // truth. Past-confirmed events have already short-circuited above.
+    if (existing && existing.status === 'trash' && !existing.routineId) {
+        await reviveTrashedCalendarItem(existing, event, source, ctx);
+        return;
+    }
+
     if (existing) {
         await updateExistingCalendarItem(existing, event, source, ctx);
     } else {
         await createNewCalendarItem(event, source, ctx);
     }
+}
+
+async function reviveTrashedCalendarItem(existing: ItemInterface, event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const itemId = existing._id;
+    if (!itemId) {
+        return;
+    }
+    // On revive, treat GCal's title verbatim (no `stripDoneMarker`) — the item is being restored
+    // from trash, so any prior "done" semantics are irrelevant. For notes, pass the epoch as the
+    // local anchor so the last-write-wins comparison in resolveInboundNotes always picks GCal
+    // (the local trash-stamp `updatedTs` is presumed stale and never authoritative on revive).
+    // Note: `dayjs('')` is `NaN` and would make GCal lose every comparison — must use a real timestamp.
+    const notesUpdate = resolveInboundNotes(event.description, existing.lastSyncedNotes, event.updated, '1970-01-01T00:00:00.000Z');
+    const updated: ItemInterface = {
+        ...existing,
+        status: 'calendar',
+        title: event.title,
+        timeStart: event.timeStart,
+        timeEnd: event.timeEnd,
+        calendarSyncConfigId: source.config._id,
+        ...notesUpdate,
+        lastSyncedFromGCalTs: event.updated,
+        updatedTs: ctx.now,
+    };
+    await itemsDAO.replaceById(itemId, updated);
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: updated, opType: 'update', now: ctx.now }));
 }
 
 /**
@@ -1513,11 +1563,13 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
     // Determine notes update independently of structural fields (title/time).
     const notesUpdate = resolveInboundNotes(event.description, existing.lastSyncedNotes, event.updated, existing.updatedTs);
 
-    // Structural fields still use the simple timestamp guard.
-    const structurallyNewer = event.updated > existing.updatedTs;
+    // Structural-newer guard compares against `lastSyncedFromGCalTs` (the GCal-side anchor of the
+    // last applied payload), not `updatedTs` — local-only writes (e.g. trash-on-disconnect) bump
+    // `updatedTs` and would otherwise lock GCal out of reasserting state.
+    const structurallyNewer = event.updated > (existing.lastSyncedFromGCalTs ?? '');
     if (!structurallyNewer && !notesUpdate) {
         console.log(
-            `[debug-gcal-sync][server] updateExistingCalendarItem skipped — not newer | eventId=${event.id} eventUpdated=${event.updated} existingUpdatedTs=${existing.updatedTs} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate}`,
+            `[debug-gcal-sync][server] updateExistingCalendarItem skipped — not newer | eventId=${event.id} eventUpdated=${event.updated} existingLastSyncedFromGCalTs=${existing.lastSyncedFromGCalTs ?? 'n/a'} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate}`,
         );
         return;
     }
@@ -1540,6 +1592,11 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
               }
             : {}),
         ...notesUpdate,
+        // Only advance the anchor when this payload is structurally newer than the last one we
+        // applied. A notes-only update against an older `event.updated` (out-of-order webhook
+        // delivery) must not regress the anchor — that would let an even-older subsequent
+        // payload overwrite structural fields by passing the guard again.
+        ...(structurallyNewer ? { lastSyncedFromGCalTs: event.updated } : {}),
         updatedTs: ctx.now,
     };
     await itemsDAO.replaceById(itemId, updated);
@@ -1559,6 +1616,7 @@ async function createNewCalendarItem(event: CalendarEvent, source: CalendarSourc
         calendarIntegrationId: source.integration._id,
         calendarSyncConfigId: source.config._id,
         ...(event.description != null ? { notes: htmlToMarkdown(event.description), lastSyncedNotes: event.description } : {}),
+        lastSyncedFromGCalTs: event.updated,
         createdTs: ctx.now,
         updatedTs: ctx.now,
     };
