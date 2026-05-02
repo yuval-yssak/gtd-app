@@ -21,13 +21,13 @@ import { withAuthFailureHandling } from '../lib/calendarAuthEscalation.js';
 import { integrationStatus } from '../lib/calendarIntegrationStatus.js';
 import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
 import { ensureTimeZone, pushRoutineDeletion } from '../lib/calendarPushback.js';
-import { stripDoneMarker } from '../lib/doneMarker.js';
+import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
 import { propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
-import { hasAtLeastOne } from '../lib/typeUtils.js';
+import { hasAtLeastOne, type NonEmptyArray } from '../lib/typeUtils.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
@@ -426,18 +426,47 @@ calendarRoutes.get('/all-sync-configs', authenticateRequest, async (c) => {
     return c.json(bundles);
 });
 
-/** Trashes every item linked to the integration (status → 'trash'), records ops for cross-device convergence. Never touches GCal. */
+/**
+ * Handles the `removeLinkedEntities` disconnect path for items:
+ * - Items with status 'done' are treated as terminal — they are unlinked (calendar fields cleared)
+ *   but kept as 'done', so a later GCal reconnect will not resurrect them as live calendar items.
+ * - All other linked items are trashed.
+ * Records ops for cross-device convergence. Never touches GCal.
+ */
 async function trashItemsForIntegration(userId: string, integrationId: string, now: string): Promise<void> {
     const linked = await itemsDAO.findArray({ user: userId, calendarIntegrationId: integrationId });
-    const ids = linked.map((item) => item._id).filter((id): id is string => Boolean(id));
-    if (!hasAtLeastOne(ids)) {
+    if (!hasAtLeastOne(linked)) {
         return;
     }
-    await itemsDAO.updateMany({ _id: { $in: ids }, user: userId }, { $set: { status: 'trash', updatedTs: now } });
+    const openIds = linked
+        .filter((item) => item.status !== 'done')
+        .map((item) => item._id)
+        .filter((id): id is string => Boolean(id));
+    const doneIds = linked
+        .filter((item) => item.status === 'done')
+        .map((item) => item._id)
+        .filter((id): id is string => Boolean(id));
+
+    if (hasAtLeastOne(openIds)) {
+        await itemsDAO.updateMany({ _id: { $in: openIds }, user: userId }, { $set: { status: 'trash', updatedTs: now } });
+    }
+    if (hasAtLeastOne(doneIds)) {
+        // Done items: unlink only (clear calendar fields, status stays 'done'). Same shape as
+        // the keepLinkedEntities path, so reconnect won't create a duplicate or revive the item.
+        await itemsDAO.updateMany(
+            { _id: { $in: doneIds }, user: userId },
+            { $unset: { calendarEventId: '', calendarIntegrationId: '', calendarSyncConfigId: '' }, $set: { updatedTs: now } },
+        );
+    }
+
     // Re-fetch so operation snapshots reflect the persisted state.
-    const trashed = await itemsDAO.findArray({ _id: { $in: ids }, user: userId });
+    const allIds = [...openIds, ...doneIds];
+    if (!hasAtLeastOne(allIds)) {
+        return;
+    }
+    const updated = await itemsDAO.findArray({ _id: { $in: allIds }, user: userId });
     await Promise.all(
-        trashed.flatMap((item) => {
+        updated.flatMap((item) => {
             const itemId = item._id;
             if (!itemId) {
                 return [];
@@ -1195,11 +1224,9 @@ function extractRrule(recurrence: string[]): string | null {
  * Creates a new routine if none exists for this calendarEventId, or updates the existing one.
  */
 async function importRecurringEventAsRoutine(event: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
-    const [existing] = await routinesDAO.findArray({
-        user: ctx.userId,
-        calendarEventId: event.id,
-        calendarIntegrationId: source.integration._id,
-    });
+    const rrule = event.status === 'cancelled' ? null : extractRrule(event.recurrence ?? []);
+
+    const existing = await findExistingRoutineForEvent(event, rrule, source, ctx);
 
     if (existing?.lastPushedToGCalTs && isOwnEcho(existing.lastPushedToGCalTs, event.updated)) {
         return;
@@ -1211,7 +1238,6 @@ async function importRecurringEventAsRoutine(event: GCalEvent, source: CalendarS
         return;
     }
 
-    const rrule = extractRrule(event.recurrence ?? []);
     if (!rrule) {
         console.warn(`[calendar] recurring master event ${event.id} has no RRULE in recurrence — skipping routine import`);
         return;
@@ -1225,6 +1251,81 @@ async function importRecurringEventAsRoutine(event: GCalEvent, source: CalendarS
 
     console.log(`[gcal-sync] creating routine | eventId=${event.id} title=${event.title} rrule=${rrule}`);
     await createRoutineFromGCal(event, rrule, source, ctx);
+}
+
+/**
+ * Two-stage routine reconciliation, mirroring `findExistingCalendarItem` for items.
+ *  1. Match by (user, calendarEventId, calendarIntegrationId) — strong key.
+ *  2. On miss, match a naked active routine — title + rrule + timeOfDay + duration must all
+ *     line up — and relink it. Covers reconnect-after-keepLinkedEntities for routines.
+ *  Skips the naked search for cancelled events (no rrule available, and there is nothing to relink to).
+ */
+async function findExistingRoutineForEvent(
+    event: GCalEvent,
+    rrule: string | null,
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<RoutineInterface | undefined> {
+    const [byEventId] = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarEventId: event.id,
+        calendarIntegrationId: source.integration._id,
+    });
+    if (byEventId || !rrule) {
+        return byEventId;
+    }
+    const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
+    const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+    const naked = await routinesDAO.findArray({
+        user: ctx.userId,
+        active: true,
+        routineType: 'calendar',
+        calendarEventId: { $exists: false },
+        calendarIntegrationId: { $exists: false },
+        title: event.title,
+        rrule,
+        'calendarItemTemplate.timeOfDay': timeOfDay,
+        'calendarItemTemplate.duration': duration,
+    });
+    if (!hasAtLeastOne(naked)) {
+        return undefined;
+    }
+    const best = pickMostRecentlyUpdated(naked);
+    return await relinkRoutineToEvent(best, event, source, ctx);
+}
+
+/**
+ * Conditional relink — same TOCTOU pattern as `relinkBestNakedCandidate` for items. If a concurrent
+ * webhook already claimed this routine, our $set matches 0 docs and we return undefined; the caller
+ * falls through to `createRoutineFromGCal`. Better duplicate routine than silent overwrite.
+ */
+async function relinkRoutineToEvent(
+    routine: RoutineInterface,
+    event: GCalEvent,
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<RoutineInterface | undefined> {
+    const result = await routinesDAO.updateOne(
+        { _id: routine._id, user: ctx.userId, calendarEventId: { $exists: false }, calendarIntegrationId: { $exists: false } },
+        {
+            $set: {
+                calendarEventId: event.id,
+                calendarIntegrationId: source.integration._id,
+                calendarSyncConfigId: source.config._id,
+                updatedTs: ctx.now,
+            },
+        },
+    );
+    if (result.matchedCount === 0) {
+        return undefined;
+    }
+    const relinked = await routinesDAO.findByOwnerAndId(routine._id, ctx.userId);
+    if (!relinked) {
+        return undefined;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routine._id, snapshot: relinked, opType: 'update', now: ctx.now }));
+    console.log(`[gcal-sync] relinked naked routine to GCal event | routineId=${routine._id} eventId=${event.id} title="${event.title}"`);
+    return relinked;
 }
 
 async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
@@ -1438,8 +1539,109 @@ export function resolveInboundNotes(
 
 export type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string; description?: string };
 
+/**
+ * Strong-key lookup: by `calendarEventId` only. Used for echo/cancelled/past-event branches that
+ * must operate on a known-linked item. Naked-orphan relink is intentionally NOT done here —
+ * relinking only makes sense for live future-confirmed events.
+ */
+async function findCalendarItemByEventId(event: CalendarEvent, ctx: SyncContext): Promise<ItemInterface | undefined> {
+    const [byEventId] = await itemsDAO.findArray({ user: ctx.userId, calendarEventId: event.id });
+    return byEventId;
+}
+
+/**
+ * Looks for a "naked" candidate — an item previously linked but unlinked by a `keepLinkedEntities`
+ * disconnect (or `removeLinkedEntities` for done items, which also unlink) — and atomically relinks
+ * it to the inbound event. Returns the relinked item, or `undefined` if no candidate matches OR if
+ * a concurrent webhook won the race to claim the candidate first.
+ *
+ * Match dimensions:
+ *  - same user, status in {'calendar', 'done'}, no link fields set
+ *  - same time window (±1 minute on each bound, to absorb DST roundtrips and offset normalization)
+ *  - title equality OR (`done` candidate whose stored title matches the GCal title with the "✓ "
+ *    marker stripped — the app stores done titles unprefixed but pushes them prefixed to GCal).
+ *
+ * Ordering: this is called only from the live future-confirmed-event branch of `upsertCalendarItem`,
+ * AFTER cancelled/past/echo guards. That keeps the side-effecting relink op out of paths where the
+ * inbound event will not result in a live local item.
+ */
+async function tryRelinkNakedCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<ItemInterface | undefined> {
+    // Done items store unprefixed titles; the app prefixes "✓ " only on the GCal push. So the same
+    // GCal event title may correspond to either an unprefixed done item or a prefixed open item.
+    const titleAlternatives = Array.from(new Set([event.title, stripDoneMarker(event.title)]));
+    // Time match is done in JS (after the Mongo query) on instant equality with a 1-minute
+    // tolerance — string equality on ISO timestamps would miss legitimate roundtrip variants
+    // (DST shifts, +03:00 vs Z normalizations, etc.) that still represent the same instant.
+    const candidates = await itemsDAO.findArray({
+        user: ctx.userId,
+        status: { $in: ['calendar', 'done'] },
+        calendarEventId: { $exists: false },
+        calendarIntegrationId: { $exists: false },
+        title: { $in: titleAlternatives },
+    });
+    const naked = candidates.filter((item) => instantsWithin(item.timeStart, event.timeStart, 1) && instantsWithin(item.timeEnd, event.timeEnd, 1));
+    if (!hasAtLeastOne(naked)) {
+        return undefined;
+    }
+    return await relinkBestNakedCandidate(naked, event, source, ctx);
+}
+
+/** True when two ISO timestamps refer to instants within `toleranceMinutes` of each other. */
+function instantsWithin(a: string | undefined, b: string, toleranceMinutes: number): boolean {
+    if (!a) {
+        return false;
+    }
+    return Math.abs(dayjs(a).diff(dayjs(b), 'minute')) <= toleranceMinutes;
+}
+
+/**
+ * Picks the most recently updated naked candidate and atomically relinks it. Conditional update on
+ * `calendarEventId: { $exists: false }` means a concurrent webhook that already claimed the same
+ * candidate causes our update to match zero docs — the loser falls through, and `upsertCalendarItem`
+ * will create a fresh item on the next iteration. Better duplicate than silent overwrite.
+ */
+async function relinkBestNakedCandidate(
+    candidates: NonEmptyArray<ItemInterface>,
+    event: CalendarEvent,
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<ItemInterface | undefined> {
+    const best = pickMostRecentlyUpdated(candidates);
+    const itemId = best._id;
+    if (!itemId) {
+        return undefined;
+    }
+    const result = await itemsDAO.updateOne(
+        { _id: itemId, user: ctx.userId, calendarEventId: { $exists: false }, calendarIntegrationId: { $exists: false } },
+        {
+            $set: {
+                calendarEventId: event.id,
+                calendarIntegrationId: source.integration._id,
+                calendarSyncConfigId: source.config._id,
+                updatedTs: ctx.now,
+            },
+        },
+    );
+    if (result.matchedCount === 0) {
+        return undefined;
+    }
+    const relinked = await itemsDAO.findOne({ _id: itemId, user: ctx.userId });
+    if (!relinked) {
+        return undefined;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: relinked, opType: 'update', now: ctx.now }));
+    console.log(`[gcal-sync] relinked naked item to GCal event | itemId=${itemId} eventId=${event.id} title="${event.title}"`);
+    return relinked;
+}
+
+/** Returns the entry with the largest `updatedTs` (lexicographic ISO compare). NonEmptyArray-typed so the empty-reduce throw can never fire. */
+function pickMostRecentlyUpdated<T extends { updatedTs?: string }>(items: NonEmptyArray<T>): T {
+    return items.reduce((acc, cur) => ((cur.updatedTs ?? '') > (acc.updatedTs ?? '') ? cur : acc));
+}
+
 export async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
-    const [existing] = await itemsDAO.findArray({ user: ctx.userId, calendarEventId: event.id });
+    const byEventId = await findCalendarItemByEventId(event, ctx);
+    let existing = byEventId;
 
     console.log(
         `[debug-gcal-sync][server] upsertCalendarItem | eventId=${event.id} title="${event.title}" status=${event.status} eventUpdated=${event.updated} existing=${!!existing} existingUpdatedTs=${existing?.updatedTs ?? 'n/a'} existingStatus=${existing?.status ?? 'n/a'} lastPushedToGCalTs=${existing?.lastPushedToGCalTs ?? 'n/a'}`,
@@ -1476,6 +1678,13 @@ export async function upsertCalendarItem(event: CalendarEvent, source: CalendarS
         return;
     }
 
+    // Naked-orphan relink: only attempt for live future-confirmed events with no strong-key match.
+    // Done above the `createNewCalendarItem` fallback so a previously-unlinked item (post-disconnect)
+    // is reused instead of producing a duplicate.
+    if (!existing) {
+        existing = await tryRelinkNakedCalendarItem(event, source, ctx);
+    }
+
     if (existing) {
         await updateExistingCalendarItem(existing, event, source, ctx);
     } else {
@@ -1486,6 +1695,28 @@ export async function upsertCalendarItem(event: CalendarEvent, source: CalendarS
 async function reviveTrashedCalendarItem(existing: ItemInterface, event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const itemId = existing._id;
     if (!itemId) {
+        return;
+    }
+    // Done-stays-done invariant: a trashed item whose title still bears the "✓ " marker was
+    // previously `done` locally. The current disconnect paths never trash a done item (see
+    // `trashItemsForIntegration` and `unlinkItems`), so this branch should not fire in normal
+    // operation — but if a future code path or manual mongo edit ever produces this state, we
+    // preserve the done semantics instead of resurrecting the item as a live calendar entry.
+    // Title is also the only persisted signal we have; `lastDoneTs` is not tracked.
+    if (existing.title.startsWith(DONE_PREFIX) || (event.title.startsWith(DONE_PREFIX) && existing.title === stripDoneMarker(event.title))) {
+        console.warn(`[gcal-sync] refusing to revive trashed item with done marker | itemId=${itemId} eventId=${event.id} title="${existing.title}"`);
+        const restored: ItemInterface = {
+            ...existing,
+            status: 'done',
+            title: stripDoneMarker(existing.title),
+            calendarEventId: event.id,
+            calendarIntegrationId: source.integration._id,
+            calendarSyncConfigId: source.config._id,
+            lastSyncedFromGCalTs: event.updated,
+            updatedTs: ctx.now,
+        };
+        await itemsDAO.replaceById(itemId, restored);
+        ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: restored, opType: 'update', now: ctx.now }));
         return;
     }
     // On revive, treat GCal's title verbatim (no `stripDoneMarker`) — the item is being restored

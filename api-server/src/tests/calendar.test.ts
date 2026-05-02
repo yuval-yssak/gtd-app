@@ -2310,6 +2310,561 @@ describe('DELETE /calendar/integrations/:id', () => {
     });
 });
 
+// ─── Disconnect/reconnect idempotency ──────────────────────────────────────
+
+describe('disconnect/reconnect — idempotency and done preservation', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('removeLinkedEntities leaves done items as done (only unlinks them)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-done',
+            user: userId,
+            status: 'done',
+            title: 'Already done',
+            calendarEventId: 'gcal-done',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+        await itemsDAO.insertOne({
+            _id: 'item-open',
+            user: userId,
+            status: 'calendar',
+            title: 'Open one',
+            calendarEventId: 'gcal-open',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=removeLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const done = await itemsDAO.findOne({ _id: 'item-done' });
+        expect(done?.status).toBe('done');
+        expect(done?.calendarEventId).toBeUndefined();
+        expect(done?.calendarIntegrationId).toBeUndefined();
+        expect(done?.calendarSyncConfigId).toBeUndefined();
+
+        const open = await itemsDAO.findOne({ _id: 'item-open' });
+        expect(open?.status).toBe('trash');
+    });
+
+    it('relinks a naked calendar item to the same GCal event on reconnect (no duplicate)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureStart = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const futureEnd = dayjs(futureStart).add(1, 'hour').toISOString();
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        // Naked item: previously linked, link cleared by disconnect, status preserved.
+        await itemsDAO.insertOne({
+            _id: 'item-naked',
+            user: userId,
+            status: 'calendar',
+            title: 'C2',
+            timeStart: futureStart,
+            timeEnd: futureEnd,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastSyncedFromGCalTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-c2-new',
+                    title: 'C2',
+                    timeStart: futureStart,
+                    timeEnd: futureEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const all = await itemsDAO.findArray({ user: userId, title: 'C2' });
+        expect(all).toHaveLength(1);
+        expect(all[0]!._id).toBe('item-naked');
+        expect(all[0]!.calendarEventId).toBe('gcal-c2-new');
+        expect(all[0]!.calendarIntegrationId).toBe('int-1');
+        expect(all[0]!.calendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('does not relink a naked item with the same title but different time (creates a new item)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const nakedStart = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const nakedEnd = dayjs(nakedStart).add(1, 'hour').toISOString();
+        const eventStart = dayjs(nakedStart).add(2, 'hour').toISOString();
+        const eventEnd = dayjs(eventStart).add(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-naked-other-time',
+            user: userId,
+            status: 'calendar',
+            title: 'Same title',
+            timeStart: nakedStart,
+            timeEnd: nakedEnd,
+            createdTs: nakedStart,
+            updatedTs: nakedStart,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-other',
+                    title: 'Same title',
+                    timeStart: eventStart,
+                    timeEnd: eventEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const all = await itemsDAO.findArray({ user: userId, title: 'Same title' });
+        expect(all).toHaveLength(2);
+        // Naked one untouched.
+        const naked = all.find((i) => i._id === 'item-naked-other-time');
+        expect(naked?.calendarEventId).toBeUndefined();
+        // New one was created with the link.
+        const created = all.find((i) => i._id !== 'item-naked-other-time');
+        expect(created?.calendarEventId).toBe('gcal-other');
+    });
+
+    it('relinks the most recently updated naked candidate when several match', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const start = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const end = dayjs(start).add(1, 'hour').toISOString();
+        const olderTs = dayjs().subtract(2, 'hour').toISOString();
+        const newerTs = dayjs().subtract(1, 'minute').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-naked-old',
+            user: userId,
+            status: 'calendar',
+            title: 'Dup',
+            timeStart: start,
+            timeEnd: end,
+            createdTs: olderTs,
+            updatedTs: olderTs,
+        });
+        await itemsDAO.insertOne({
+            _id: 'item-naked-new',
+            user: userId,
+            status: 'calendar',
+            title: 'Dup',
+            timeStart: start,
+            timeEnd: end,
+            createdTs: newerTs,
+            updatedTs: newerTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-dup',
+                    title: 'Dup',
+                    timeStart: start,
+                    timeEnd: end,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const newer = await itemsDAO.findOne({ _id: 'item-naked-new' });
+        expect(newer?.calendarEventId).toBe('gcal-dup');
+        const older = await itemsDAO.findOne({ _id: 'item-naked-old' });
+        expect(older?.calendarEventId).toBeUndefined();
+    });
+
+    it('preserves done status when a trashed item with "✓ " title prefix would otherwise be revived', async () => {
+        // This codifies the belt-and-braces guard in reviveTrashedCalendarItem: even if a future
+        // path trashes a done item, the inbound GCal event must not resurrect it as 'calendar'.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const start = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const end = dayjs(start).add(1, 'hour').toISOString();
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-trashed-done',
+            user: userId,
+            status: 'trash',
+            title: '✓ Was done',
+            timeStart: start,
+            timeEnd: end,
+            calendarEventId: 'gcal-was-done',
+            calendarIntegrationId: 'int-1',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastSyncedFromGCalTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-was-done',
+                    title: '✓ Was done',
+                    timeStart: start,
+                    timeEnd: end,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-trashed-done' });
+        expect(item?.status).toBe('done');
+        expect(item?.title).toBe('Was done');
+        expect(item?.calendarEventId).toBe('gcal-was-done');
+    });
+
+    it('relinks a naked DONE item whose GCal event title still has the "✓ " marker', async () => {
+        // Realistic done-item flow: the app stores done titles unprefixed but pushes them prefixed
+        // to GCal. After removeLinkedEntities (which now unlinks done items rather than trashing
+        // them), reconnect must match the stored unprefixed title against the GCal-prefixed title
+        // and relink the same row — not create a duplicate live `calendar` item.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const start = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const end = dayjs(start).add(1, 'hour').toISOString();
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        // Naked done item: status preserved, link fields cleared. Title stored without "✓ ".
+        await itemsDAO.insertOne({
+            _id: 'item-done-naked',
+            user: userId,
+            status: 'done',
+            title: 'Pay rent',
+            timeStart: start,
+            timeEnd: end,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastSyncedFromGCalTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-pay-rent',
+                    title: '✓ Pay rent', // GCal still carries the prefix from before disconnect.
+                    timeStart: start,
+                    timeEnd: end,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const all = await itemsDAO.findArray({ user: userId, title: { $in: ['Pay rent', '✓ Pay rent'] } });
+        expect(all).toHaveLength(1);
+        expect(all[0]!._id).toBe('item-done-naked');
+        expect(all[0]!.status).toBe('done');
+        expect(all[0]!.title).toBe('Pay rent'); // marker stripped because item is done
+        expect(all[0]!.calendarEventId).toBe('gcal-pay-rent');
+        expect(all[0]!.calendarIntegrationId).toBe('int-1');
+    });
+
+    it('matches a naked candidate whose timeStart/timeEnd ISO offset differs from the inbound event', async () => {
+        // GCal can echo back times with a different offset string than what the app stored locally
+        // (DST roundtrip, calendar-tz reformatting). The naked-lookup uses a ±1-minute window per
+        // bound rather than string equality so these legitimate roundtrip variants still match.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        // Stored in +03:00 (Asia/Jerusalem standard time); inbound presented in UTC for the same instant.
+        const storedStart = dayjs.tz(`${futureDate}T15:00:00`, 'Asia/Jerusalem').format();
+        const storedEnd = dayjs.tz(`${futureDate}T16:00:00`, 'Asia/Jerusalem').format();
+        const inboundStart = dayjs(storedStart).utc().format();
+        const inboundEnd = dayjs(storedEnd).utc().format();
+        expect(inboundStart).not.toBe(storedStart); // sanity — strings differ
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-naked-tz',
+            user: userId,
+            status: 'calendar',
+            title: 'Tz event',
+            timeStart: storedStart,
+            timeEnd: storedEnd,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-tz',
+                    title: 'Tz event',
+                    timeStart: inboundStart,
+                    timeEnd: inboundEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const all = await itemsDAO.findArray({ user: userId, title: 'Tz event' });
+        expect(all).toHaveLength(1);
+        expect(all[0]!._id).toBe('item-naked-tz');
+        expect(all[0]!.calendarEventId).toBe('gcal-tz');
+    });
+
+    it('does not relink a naked candidate when the inbound event is in the past (no spurious op)', async () => {
+        // Past-event short-circuit must run before the relink so we don't churn the op log
+        // for an event that won't produce a live local item.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const pastStart = dayjs().subtract(2, 'day').toISOString();
+        const pastEnd = dayjs(pastStart).add(1, 'hour').toISOString();
+        const oldTs = dayjs().subtract(3, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-naked-past',
+            user: userId,
+            status: 'calendar',
+            title: 'Old past',
+            timeStart: pastStart,
+            timeEnd: pastEnd,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-past',
+                    title: 'Old past',
+                    timeStart: pastStart,
+                    timeEnd: pastEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // No relink op was recorded — the past-event guard fired first.
+        const ops = await operationsDAO.findArray({ entityId: 'item-naked-past' });
+        expect(ops).toHaveLength(0);
+        // Naked item is unchanged.
+        const item = await itemsDAO.findOne({ _id: 'item-naked-past' });
+        expect(item?.calendarEventId).toBeUndefined();
+    });
+
+    it('relink is conditional — a concurrent claim on the same naked candidate yields a fresh item, not a clobber', async () => {
+        // Simulates the TOCTOU window: another writer atomically attaches link fields between
+        // our findArray and our updateOne. Conditional update matches 0 docs → caller falls
+        // through to createNewCalendarItem with the inbound event's id. Result: two items, no
+        // silent overwrite of the prior claim. Better duplicate than data loss.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const start = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const end = dayjs(start).add(1, 'hour').toISOString();
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-naked-race',
+            user: userId,
+            status: 'calendar',
+            title: 'Race',
+            timeStart: start,
+            timeEnd: end,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        // Simulate a concurrent winner: another webhook claimed the candidate between our
+        // findArray (which returns the still-naked snapshot) and our conditional updateOne (which
+        // refuses to write because the link fields are now present). We model this by directly
+        // poisoning the row in the DB so our conditional updateOne matches 0 docs.
+        const realUpdateOne = itemsDAO.updateOne.bind(itemsDAO);
+        vi.spyOn(itemsDAO, 'updateOne').mockImplementation(async (filter, update, options) => {
+            // Trigger the race exactly once: when the relink's conditional updateOne runs (it has
+            // the calendarEventId-$exists-false guard in the filter). Apply the rival's claim
+            // first, then forward to the real updateOne — which now matches 0 docs.
+            type FilterShape = { calendarEventId?: { $exists?: boolean } };
+            const guard = (filter as FilterShape).calendarEventId;
+            if (guard && guard.$exists === false) {
+                await realUpdateOne(
+                    { _id: 'item-naked-race', user: userId },
+                    { $set: { calendarEventId: 'gcal-other-winner', calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' } },
+                );
+            }
+            return await realUpdateOne(filter, update, options);
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-race',
+                    title: 'Race',
+                    timeStart: start,
+                    timeEnd: end,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const all = await itemsDAO.findArray({ user: userId, title: 'Race' });
+        expect(all).toHaveLength(2);
+        // Original candidate remains attached to the racing winner (we didn't clobber it).
+        const racer = all.find((i) => i._id === 'item-naked-race');
+        expect(racer?.calendarEventId).toBe('gcal-other-winner');
+        // A fresh item was created for our event.
+        const fresh = all.find((i) => i._id !== 'item-naked-race');
+        expect(fresh?.calendarEventId).toBe('gcal-race');
+    });
+
+    it('relinks a naked active routine to the same GCal master event on reconnect', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        // Anchor the GCal event in Asia/Jerusalem (the sync config's tz) so `extractLocalTime`
+        // produces '09:00' regardless of the machine's local tz — without `dayjs.tz` the timeOfDay
+        // would shift by the host UTC offset and the naked match would silently miss on CI.
+        const futureDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const futureStart = dayjs.tz(`${futureDate}T09:00:00`, 'Asia/Jerusalem').format();
+        const futureEnd = dayjs.tz(`${futureDate}T09:30:00`, 'Asia/Jerusalem').format();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-naked',
+                title: 'Standup',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                updatedTs: oldTs,
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-standup-new',
+                    title: 'Standup',
+                    timeStart: futureStart,
+                    timeEnd: futureEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const all = await routinesDAO.findArray({ user: userId, title: 'Standup' });
+        expect(all).toHaveLength(1);
+        expect(all[0]!._id).toBe('routine-naked');
+        expect(all[0]!.calendarEventId).toBe('gcal-standup-new');
+        expect(all[0]!.calendarIntegrationId).toBe('int-1');
+        expect(all[0]!.calendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('reconnect sync is idempotent — running it twice does not create a second item', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const start = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const end = dayjs(start).add(1, 'hour').toISOString();
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-naked-idem',
+            user: userId,
+            status: 'calendar',
+            title: 'Idem',
+            timeStart: start,
+            timeEnd: end,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastSyncedFromGCalTs: oldTs,
+        });
+
+        const eventUpdated = dayjs().toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-idem',
+                    title: 'Idem',
+                    timeStart: start,
+                    timeEnd: end,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+
+        const all = await itemsDAO.findArray({ user: userId, title: 'Idem' });
+        expect(all).toHaveLength(1);
+        expect(all[0]!._id).toBe('item-naked-idem');
+        expect(all[0]!.calendarEventId).toBe('gcal-idem');
+    });
+});
+
 // ─── GoogleCalendarProvider token refresh callback ────────────────────────
 
 describe('GoogleCalendarProvider token refresh callback', () => {
