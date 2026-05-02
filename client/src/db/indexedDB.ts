@@ -3,8 +3,8 @@ import { openDB } from 'idb';
 import type { MyDB, SyncOperation } from '../types/MyDB';
 
 export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
-    return openDB<MyDB>('gtd-app', 4, {
-        upgrade(db, oldVersion, _newVersion, tx) {
+    return openDB<MyDB>('gtd-app', 5, {
+        async upgrade(db, oldVersion, _newVersion, tx) {
             // Version 1: core stores
             if (oldVersion < 1) {
                 const accounts = db.createObjectStore('accounts', { keyPath: 'id' });
@@ -39,7 +39,7 @@ export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
             // upgrade strategy would silently swallow offline-queued mutations from the user's
             // pre-upgrade session).
             if (oldVersion < 3) {
-                void backfillSyncOperationUserIds(tx);
+                await backfillSyncOperationUserIds(tx);
             }
 
             // Version 4: split the device-shared cursor into deviceMeta (singleton: deviceId +
@@ -48,10 +48,41 @@ export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
             if (oldVersion < 4) {
                 db.createObjectStore('deviceMeta', { keyPath: '_id' });
                 db.createObjectStore('syncCursors', { keyPath: 'userId' });
-                void migrateDeviceSyncStateToPerUserCursors(tx);
+                await migrateDeviceSyncStateToPerUserCursors(tx);
+            }
+
+            // Version 5: server entity shapes changed and both staging + production DBs were
+            // wiped. Locally cached snapshots keyed by IDs the server no longer knows about would
+            // linger forever (bootstrap puts new rows but never clears stale ones), so we drop
+            // every cached entity + sync state and force a fresh bootstrap on next sign-in.
+            // Keep `accounts` and `activeAccount` so the multi-account login list survives.
+            // Awaited so it sequences strictly after the v4 cursor writes — otherwise a
+            // concurrent fire-and-forget race could let the cursor land after the wipe.
+            if (oldVersion < 5) {
+                await wipeCachedEntitiesAndSyncState(tx);
             }
         },
     });
+}
+
+/**
+ * v4 → v5 wipe: clears every store that holds server-replicated data or sync bookkeeping. The next
+ * `bootstrapFromServer` call repopulates `items`/`routines`/`people`/`workContexts` from the server,
+ * and `syncCursors`/`syncOperations` start empty as if this were a fresh device — except we keep
+ * `deviceMeta` (which carries the stable `deviceId`) so push subscriptions and operation log purges
+ * stay attached to the same identity. Any new server-replicated store added to `MyDB` must also be
+ * added to the wipe list here.
+ *
+ * `deviceMeta.flushingTs` is also reset to null: a tab killed mid-flush against the dropped server
+ * DB would otherwise leave a lingering lock until the 30s self-heal window elapses on next mount.
+ */
+async function wipeCachedEntitiesAndSyncState(tx: IDBPTransaction<MyDB, Array<StoreNames<MyDB>>, 'versionchange'>): Promise<void> {
+    const stores = ['items', 'routines', 'people', 'workContexts', 'syncOperations', 'syncCursors'] as const satisfies ReadonlyArray<StoreNames<MyDB>>;
+    await Promise.all(stores.map((name) => tx.objectStore(name).clear()));
+    const meta = await tx.objectStore('deviceMeta').get('local');
+    if (meta) {
+        await tx.objectStore('deviceMeta').put({ ...meta, flushingTs: null });
+    }
 }
 
 /**

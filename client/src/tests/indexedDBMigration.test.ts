@@ -86,22 +86,13 @@ async function bootV3DBWithDeviceSyncState(opts: {
     v3.close();
 }
 
-describe('indexedDB v2 → v3 migration', () => {
-    it('backfills userId on every legacy syncOperations row using the active account', async () => {
+describe('indexedDB v2 → current chained migration', () => {
+    // v3 backfilled userId onto legacy ops; v5 then clears the queue entirely. Either way, after a
+    // full chain upgrade the queue must be empty — assert the post-state of the chain rather than
+    // the intermediate v3 state, which is no longer observable through openAppDB.
+    it('ends with an empty syncOperations queue regardless of pre-upgrade contents', async () => {
         await withFreshIDB(async () => {
             await bootV2DBWithFixtures({ activeUserId: 'active-user', legacyOpsEntityIds: ['legacy-a', 'legacy-b'] });
-
-            const upgraded = await openAppDB();
-            const ops = await upgraded.getAll('syncOperations');
-            expect(ops).toHaveLength(2);
-            expect(ops.every((op) => op.userId === 'active-user')).toBe(true);
-            upgraded.close();
-        });
-    });
-
-    it('leaves the queue empty and migrates cleanly when the user has no queued ops', async () => {
-        await withFreshIDB(async () => {
-            await bootV2DBWithFixtures({ activeUserId: 'active-user', legacyOpsEntityIds: [] });
 
             const upgraded = await openAppDB();
             expect(await upgraded.getAll('syncOperations')).toHaveLength(0);
@@ -109,10 +100,8 @@ describe('indexedDB v2 → v3 migration', () => {
         });
     });
 
-    it('no-ops the backfill when the legacy DB has no active account', async () => {
+    it('migrates cleanly when the user has no queued ops and no active account', async () => {
         await withFreshIDB(async () => {
-            // legacyOpsEntityIds intentionally empty — without an active account we can't
-            // attribute legacy rows to anyone, so the migration must skip rather than guess.
             await bootV2DBWithFixtures({ activeUserId: null, legacyOpsEntityIds: [] });
 
             const upgraded = await openAppDB();
@@ -123,7 +112,7 @@ describe('indexedDB v2 → v3 migration', () => {
 });
 
 describe('indexedDB v3 → v4 migration (per-user cursors)', () => {
-    it('splits the legacy deviceSyncState singleton into deviceMeta + a syncCursors row for the active user', async () => {
+    it('preserves deviceMeta from the legacy singleton (cursor is wiped by v5 — covered separately)', async () => {
         await withFreshIDB(async () => {
             await bootV3DBWithDeviceSyncState({
                 activeUserId: 'active-user',
@@ -135,16 +124,15 @@ describe('indexedDB v3 → v4 migration (per-user cursors)', () => {
             expect(meta?.deviceId).toBe('dev-1');
             expect(meta?.flushingTs).toBeNull();
 
-            const cursor = await upgraded.get('syncCursors', 'active-user');
-            expect(cursor?.lastSyncedTs).toBe('2025-04-30T19:38:54.754Z');
-
-            // Other accounts get no row — they bootstrap or pull from epoch on their first sync.
-            expect(await upgraded.getAll('syncCursors')).toHaveLength(1);
+            // syncCursors gets cleared by the v5 wipe; the per-user cursor row is no longer
+            // observable through the full chain. The v3→v4 split itself still runs (no errors),
+            // and the next bootstrap re-creates the cursor at serverTs.
+            expect(await upgraded.getAll('syncCursors')).toHaveLength(0);
             upgraded.close();
         });
     });
 
-    it('preserves the cross-context flush lock through the migration', async () => {
+    it('clears any legacy flush lock through the chain (v4 forwards it; v5 then resets it to null)', async () => {
         await withFreshIDB(async () => {
             const lockTs = '2026-04-30T19:00:00.000Z';
             await bootV3DBWithDeviceSyncState({
@@ -154,7 +142,7 @@ describe('indexedDB v3 → v4 migration (per-user cursors)', () => {
 
             const upgraded = await openAppDB();
             const meta = await upgraded.get('deviceMeta', 'local');
-            expect(meta?.flushingTs).toBe(lockTs);
+            expect(meta?.flushingTs).toBeNull();
             upgraded.close();
         });
     });
@@ -183,6 +171,119 @@ describe('indexedDB v3 → v4 migration (per-user cursors)', () => {
             const upgraded = await openAppDB();
             expect(await upgraded.get('deviceMeta', 'local')).toBeUndefined();
             expect(await upgraded.getAll('syncCursors')).toHaveLength(0);
+            upgraded.close();
+        });
+    });
+});
+
+/**
+ * Boots a v4-shape DB and seeds every entity store + sync bookkeeping store. Lets v4→v5 tests
+ * assert that the wipe migration touches only the stores it should.
+ */
+async function bootV4DBWithFullCache(): Promise<void> {
+    const v4 = await openDB<MyDB>('gtd-app', 4, {
+        upgrade(db) {
+            const accounts = db.createObjectStore('accounts', { keyPath: 'id' });
+            accounts.createIndex('email', 'email', { unique: true });
+            db.createObjectStore('activeAccount');
+            const items = db.createObjectStore('items', { keyPath: '_id' });
+            items.createIndex('userId', 'userId', { unique: false });
+            db.createObjectStore('syncOperations', { autoIncrement: true, keyPath: 'id' });
+            const routines = db.createObjectStore('routines', { keyPath: '_id' });
+            routines.createIndex('userId', 'userId', { unique: false });
+            const people = db.createObjectStore('people', { keyPath: '_id' });
+            people.createIndex('userId', 'userId', { unique: false });
+            const workContexts = db.createObjectStore('workContexts', { keyPath: '_id' });
+            workContexts.createIndex('userId', 'userId', { unique: false });
+            db.createObjectStore('deviceMeta', { keyPath: '_id' });
+            db.createObjectStore('syncCursors', { keyPath: 'userId' });
+        },
+    });
+
+    // StoredAccount.id is the Better Auth user ID — so id === userId by design.
+    await v4.put('accounts', { id: 'user-1', email: 'user@example.com', name: 'User', image: null, provider: 'google', addedAt: 0 });
+    await v4.put('activeAccount', { userId: 'user-1' }, 'active');
+    await v4.put('items', {
+        _id: 'item-1',
+        userId: 'user-1',
+        title: 'stale',
+        status: 'inbox',
+        updatedTs: '2026-04-01T00:00:00.000Z',
+        createdTs: '2026-04-01T00:00:00.000Z',
+    } as MyDB['items']['value']);
+    await v4.put('routines', { _id: 'routine-1', userId: 'user-1', title: 'stale routine' } as unknown as MyDB['routines']['value']);
+    await v4.put('people', { _id: 'person-1', userId: 'user-1', name: 'stale person' } as unknown as MyDB['people']['value']);
+    await v4.put('workContexts', { _id: 'wc-1', userId: 'user-1', name: 'stale ctx' } as unknown as MyDB['workContexts']['value']);
+    await v4.add('syncOperations', {
+        userId: 'user-1',
+        opType: 'create',
+        entityType: 'item',
+        entityId: 'item-1',
+        queuedAt: '2026-04-01T00:00:00.000Z',
+        snapshot: null,
+    } as unknown as MyDB['syncOperations']['value']);
+    await v4.put('deviceMeta', { _id: 'local', deviceId: 'dev-1', flushingTs: null });
+    await v4.put('syncCursors', { userId: 'user-1', lastSyncedTs: '2026-04-30T00:00:00.000Z' });
+    v4.close();
+}
+
+describe('indexedDB v4 → v5 migration (server-data wipe)', () => {
+    it('clears every cached entity store + sync queue + cursors so the next bootstrap rebuilds from server', async () => {
+        await withFreshIDB(async () => {
+            await bootV4DBWithFullCache();
+
+            const upgraded = await openAppDB();
+            expect(await upgraded.getAll('items')).toHaveLength(0);
+            expect(await upgraded.getAll('routines')).toHaveLength(0);
+            expect(await upgraded.getAll('people')).toHaveLength(0);
+            expect(await upgraded.getAll('workContexts')).toHaveLength(0);
+            expect(await upgraded.getAll('syncOperations')).toHaveLength(0);
+            expect(await upgraded.getAll('syncCursors')).toHaveLength(0);
+            upgraded.close();
+        });
+    });
+
+    it('preserves accounts, activeAccount, and deviceMeta so the user stays logged in and keeps their device identity', async () => {
+        await withFreshIDB(async () => {
+            await bootV4DBWithFullCache();
+
+            const upgraded = await openAppDB();
+            const accounts = await upgraded.getAll('accounts');
+            expect(accounts).toHaveLength(1);
+            expect(accounts[0]?.id).toBe('user-1');
+
+            const active = await upgraded.get('activeAccount', 'active');
+            expect(active?.userId).toBe('user-1');
+
+            const meta = await upgraded.get('deviceMeta', 'local');
+            expect(meta?.deviceId).toBe('dev-1');
+            upgraded.close();
+        });
+    });
+
+    it('resets a stale flushingTs so a tab killed mid-flush against the dropped server DB does not wedge sync', async () => {
+        await withFreshIDB(async () => {
+            // Boot a v4 DB with deviceMeta holding a stale flush lock from a pre-upgrade flush.
+            const v4 = await openDB<MyDB>('gtd-app', 4, {
+                upgrade(db) {
+                    db.createObjectStore('accounts', { keyPath: 'id' }).createIndex('email', 'email', { unique: true });
+                    db.createObjectStore('activeAccount');
+                    db.createObjectStore('items', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+                    db.createObjectStore('syncOperations', { autoIncrement: true, keyPath: 'id' });
+                    db.createObjectStore('routines', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+                    db.createObjectStore('people', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+                    db.createObjectStore('workContexts', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+                    db.createObjectStore('deviceMeta', { keyPath: '_id' });
+                    db.createObjectStore('syncCursors', { keyPath: 'userId' });
+                },
+            });
+            await v4.put('deviceMeta', { _id: 'local', deviceId: 'dev-1', flushingTs: '2026-04-30T19:00:00.000Z' });
+            v4.close();
+
+            const upgraded = await openAppDB();
+            const meta = await upgraded.get('deviceMeta', 'local');
+            expect(meta?.deviceId).toBe('dev-1');
+            expect(meta?.flushingTs).toBeNull();
             upgraded.close();
         });
     });
