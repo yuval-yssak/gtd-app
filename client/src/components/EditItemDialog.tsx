@@ -5,6 +5,7 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
 import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
@@ -24,6 +25,7 @@ import { useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { ReassignItemEditPatch } from '../api/syncApi';
 import { useAppData } from '../contexts/AppDataProvider';
+import { usePendingReassign } from '../contexts/PendingReassignProvider';
 import {
     clarifyToCalendar,
     clarifyToDone,
@@ -35,7 +37,6 @@ import {
     recordRoutineInstanceModification,
     updateItem,
 } from '../db/itemMutations';
-import { reassignEntity } from '../db/reassignMutations';
 import { useCalendarOptions } from '../hooks/useCalendarOptions';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 import { AccountPicker } from './AccountPicker';
@@ -109,6 +110,14 @@ function itemToCalendarForm(item: StoredItem): CalendarFormState {
 export function EditItemDialog({ item, db, people, workContexts, onClose, onSaved }: Props) {
     const { options: calendarOptions } = useCalendarOptions();
     const { loggedInAccounts } = useAppData();
+    const { runReassignWithOverlay, isPending } = usePendingReassign();
+    // While a cross-account reassign is in flight, the AppDataProvider rewrites the rendered
+    // item's userId to the target — opening the edit dialog on the overlayed row would seed
+    // ownerUserId from the wrong owner, and a save under that state could write IDB under the
+    // target user (the exact misroute bug the existing reassign flow was designed to prevent).
+    // Refuse to render the form until the move resolves. The guard is read here but the early
+    // return happens after all hooks (rules-of-hooks).
+    const reassignInFlight = isPending('item', item._id);
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
@@ -169,18 +178,19 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
         if (path.kind === 'reassign' && !validateReassign()) {
             return;
         }
+        if (path.kind === 'reassign') {
+            // Optimistic UX: register the presentational overlay so the item appears under the
+            // target account immediately, close the dialog, and let the server round-trip run
+            // in the background. PendingReassignProvider clears the overlay on success and
+            // surfaces a revert snackbar on failure — we don't await here.
+            startReassignInBackground(buildEditPatch(item, trimmedTitle, notes.trim(), status, naForm, calForm, wfForm), trimmedTitle);
+            onClose();
+            return;
+        }
         setIsSaving(true);
         setReassignError(null);
         try {
-            if (path.kind === 'reassign') {
-                // Cross-account: do NOT touch IDB under the source user. The server is the only
-                // writer here — it applies the edits + moves atomically via /sync/reassign with
-                // an editPatch. This avoids both the misroute corruption and the double-write.
-                const reassignOk = await runReassign(buildEditPatch(item, trimmedTitle, notes.trim(), status, naForm, calForm, wfForm));
-                if (!reassignOk) {
-                    return; // error already set via setReassignError; keep dialog open for retry
-                }
-            } else if (path.kind === 'statusTransition') {
+            if (path.kind === 'statusTransition') {
                 await saveViaStatusTransition(normalizeTitleAndNotes(item, trimmedTitle, notes.trim()));
             } else {
                 await saveInPlace(normalizeTitleAndNotes(item, trimmedTitle, notes.trim()));
@@ -211,28 +221,37 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
     }
 
     /**
-     * Calls `/sync/reassign`. The target calendar is required for calendar-linked items —
-     * `validateReassign` already enforced presence; here we look up the option and forward
-     * its integration + sync config ids to the server. The optional `editPatch` carries the
-     * dialog's field edits so the server applies them atomically with the move (no source-user
-     * pre-write).
+     * Registers the presentational overlay and fires `/sync/reassign` in the background. The
+     * dialog is closed by the caller before this promise resolves — `runReassignWithOverlay`
+     * takes ownership of the failure UX (snackbar revert) so we don't need to keep the dialog
+     * open for retry. The optional `editPatch` carries the dialog's field edits so the server
+     * applies them atomically with the move (no source-user pre-write).
      */
-    async function runReassign(editPatch: ReassignItemEditPatch): Promise<boolean> {
+    function startReassignInBackground(editPatch: ReassignItemEditPatch, label: string): void {
         const targetCalendar = resolveTargetCalendar();
         const hasEdits = Object.keys(editPatch).length > 0;
-        const result = await reassignEntity(db, {
-            entityType: 'item',
+        // onSaved() here is a redundant safety net — `reassignEntity` already calls
+        // syncAllLoggedInUsers which refreshes AppDataProvider state — but kept so routes that
+        // override onSaved with non-refresh side effects still see "completed".
+        runReassignWithOverlay({
+            kind: 'item',
             entityId: item._id,
-            fromUserId: item.userId,
-            toUserId: ownerUserId,
-            ...(targetCalendar ? { targetCalendar } : {}),
-            ...(hasEdits ? { editPatch } : {}),
-        });
-        if (!result.ok) {
-            setReassignError(result.error);
-            return false;
-        }
-        return true;
+            label,
+            override: {
+                toUserId: ownerUserId,
+                ...(targetCalendar ? { targetIntegrationId: targetCalendar.integrationId, targetSyncConfigId: targetCalendar.syncConfigId } : {}),
+            },
+            params: {
+                entityType: 'item',
+                entityId: item._id,
+                fromUserId: item.userId,
+                toUserId: ownerUserId,
+                ...(targetCalendar ? { targetCalendar } : {}),
+                ...(hasEdits ? { editPatch } : {}),
+            },
+        })
+            .then(() => onSaved())
+            .catch((err) => console.error('[reassign] post-flight refresh failed:', err));
     }
 
     function resolveTargetCalendar(): { integrationId: string; syncConfigId: string } | null {
@@ -311,6 +330,10 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                 await clarifyToTrash(db, baseItem);
                 break;
         }
+    }
+
+    if (reassignInFlight) {
+        return <ReassignInFlightDialog onClose={onClose} />;
     }
 
     return (
@@ -451,6 +474,27 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
                 <Button variant="contained" disabled={saveDisabled} onClick={() => void onSave()}>
                     Save changes
                 </Button>
+            </DialogActions>
+        </Dialog>
+    );
+}
+
+/**
+ * Shown when the edit dialog is opened on an entity with an in-flight cross-account reassign.
+ * Editing under that state would seed `ownerUserId` from the overlayed (target) user and a save
+ * would write IDB under the target — the precise misroute the reassign flow exists to prevent.
+ */
+function ReassignInFlightDialog({ onClose }: { onClose: () => void }) {
+    return (
+        <Dialog open onClose={onClose} fullWidth maxWidth="xs">
+            <DialogTitle>Move in progress</DialogTitle>
+            <DialogContent>
+                <Alert severity="info" variant="outlined">
+                    This item is being moved to another account. You can edit it once the move completes.
+                </Alert>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose}>Close</Button>
             </DialogActions>
         </Dialog>
     );

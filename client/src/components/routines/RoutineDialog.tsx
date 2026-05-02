@@ -20,7 +20,7 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import type { ReassignRoutineEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { reassignEntity } from '../../db/reassignMutations';
+import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import {
     createFirstRoutineItem,
     deleteAndRegenerateFutureItems,
@@ -217,6 +217,12 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
     const [isSaving, setIsSaving] = useState(false);
     const { options: calendarOptions } = useCalendarOptions();
     const { loggedInAccounts } = useAppData();
+    const { runReassignWithOverlay, isPending } = usePendingReassign();
+    // Refuse to render the form while a cross-account reassign is in flight on this routine —
+    // editing under that state seeds ownerUserId from the overlayed (target) user and a save
+    // could write IDB under the target. See the matching guard in EditItemDialog. Read here
+    // but render the guard after all hooks below (rules-of-hooks).
+    const reassignInFlight = routine !== undefined && isPending('routine', routine._id);
     // Reassignment owner. For new routines defaults to the (caller-provided) active userId;
     // for edits defaults to the routine's current owner. Save runs reassign after the
     // local update so the source-user copy carries the latest fields before being moved.
@@ -254,12 +260,14 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
-                // Cross-account move: route through /sync/reassign with an editRoutinePatch and
-                // skip the entire local-update + generate path. The server applies edits + moves
-                // the routine and its generated items atomically — a pre-write under the source
-                // user would race against the active session and silently misroute the snapshot.
+                // Cross-account move: register the presentational overlay so the routine appears
+                // under the target account immediately, close the dialog, and let /sync/reassign
+                // run in the background. The server applies edits + moves atomically — a
+                // pre-write under the source user would race against the active session and
+                // silently misroute the snapshot. PendingReassignProvider clears the overlay
+                // on success and surfaces a revert snackbar on failure.
                 if (ownerUserId !== routine.userId) {
-                    const ok = await reassignRoutineCrossAccount({
+                    startRoutineReassignInBackground({
                         routine,
                         toUserId: ownerUserId,
                         title: trimmedTitle,
@@ -268,16 +276,12 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                         template,
                         ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
                         ...(form.startDate ? { startDate: form.startDate } : {}),
+                        ...(calendarLink.calendarIntegrationId !== undefined ? { targetIntegrationId: calendarLink.calendarIntegrationId } : {}),
+                        ...(calendarLink.calendarSyncConfigId !== undefined ? { targetSyncConfigId: calendarLink.calendarSyncConfigId } : {}),
                         // Honour the "Save your changes to resume it" banner shown above paused routines —
                         // even when the same Save is also moving the routine to a different account.
                         resumeOnSave: !routine.active,
                     });
-                    if (!ok) {
-                        // Server rejected the move (rare — picker only lists eligible targets).
-                        // Keep the dialog open so the user can retry; the error is logged to console.
-                        return;
-                    }
-                    await onSaved();
                     onClose();
                     return;
                 }
@@ -441,12 +445,14 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
     }
 
     /**
-     * Sends one atomic /sync/reassign with editRoutinePatch carrying the dialog's current form
-     * state. We don't pre-write under the source user (the corruption fingerprint from before)
-     * — the server is the only writer. Generated items follow via reassignGeneratedItems on
-     * the server, and the new owner's pull replays the resulting create + child-item ops.
+     * Registers the presentational overlay and fires /sync/reassign in the background. The
+     * dialog closes before this resolves — `runReassignWithOverlay` owns the failure UX
+     * (snackbar revert). We don't pre-write under the source user (the corruption fingerprint
+     * from before) — the server remains the only writer. Generated items follow via
+     * reassignGeneratedItems on the server, and the new owner's pull replays the resulting
+     * create + child-item ops.
      */
-    async function reassignRoutineCrossAccount(args: {
+    function startRoutineReassignInBackground(args: {
         routine: StoredRoutine;
         toUserId: string;
         title: string;
@@ -456,27 +462,38 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
         calendarItemTemplate?: { timeOfDay: string; duration: number };
         startDate?: string;
         resumeOnSave?: boolean;
-    }): Promise<boolean> {
+        targetIntegrationId?: string;
+        targetSyncConfigId?: string;
+    }): void {
         const editRoutinePatch = buildRoutineEditPatch(args);
-        const result = await reassignEntity(db, {
-            entityType: 'routine',
+        runReassignWithOverlay({
+            kind: 'routine',
             entityId: args.routine._id,
-            fromUserId: args.routine.userId,
-            toUserId: args.toUserId,
-            editRoutinePatch,
-        });
-        if (!result.ok) {
-            // Rare — the picker only lists eligible target accounts. Log for dev visibility and
-            // return false so the caller keeps the dialog open instead of silently closing.
-            console.error('[routine reassign] failed:', result.error);
-            return false;
-        }
-        return true;
+            label: args.title,
+            override: {
+                toUserId: args.toUserId,
+                ...(args.targetIntegrationId !== undefined ? { targetIntegrationId: args.targetIntegrationId } : {}),
+                ...(args.targetSyncConfigId !== undefined ? { targetSyncConfigId: args.targetSyncConfigId } : {}),
+            },
+            params: {
+                entityType: 'routine',
+                entityId: args.routine._id,
+                fromUserId: args.routine.userId,
+                toUserId: args.toUserId,
+                editRoutinePatch,
+            },
+        })
+            .then(() => onSaved())
+            .catch((err) => console.error('[routine reassign] post-flight refresh failed:', err));
     }
 
     const isCalendar = form.routineType === 'calendar';
     // An ended calendar routine has no future occurrences — schedule fields are locked.
     const isEndedCalendar = isEdit && routine.routineType === 'calendar' && computeSplitDate(routine.rrule, routine.createdTs) === null;
+
+    if (reassignInFlight) {
+        return <RoutineReassignInFlightDialog onClose={onClose} />;
+    }
 
     return (
         <Dialog open onClose={onClose} fullWidth maxWidth="sm">
@@ -582,6 +599,27 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
                 <Button variant="contained" disabled={!form.title.trim() || !form.rrule || isSaving} onClick={() => void onSave()}>
                     {isEdit ? 'Save changes' : 'Create routine'}
                 </Button>
+            </DialogActions>
+        </Dialog>
+    );
+}
+
+/**
+ * Shown when the routine dialog is opened on a routine with an in-flight cross-account reassign.
+ * Editing under that state would seed ownerUserId from the overlayed (target) user and a save
+ * would write IDB under the target — matches the EditItemDialog guard.
+ */
+function RoutineReassignInFlightDialog({ onClose }: { onClose: () => void }) {
+    return (
+        <Dialog open onClose={onClose} fullWidth maxWidth="xs">
+            <DialogTitle>Move in progress</DialogTitle>
+            <DialogContent>
+                <Alert severity="info" variant="outlined">
+                    This routine is being moved to another account. You can edit it once the move completes.
+                </Alert>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose}>Close</Button>
             </DialogActions>
         </Dialog>
     );
