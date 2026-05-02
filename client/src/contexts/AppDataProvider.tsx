@@ -16,6 +16,7 @@ import { getWorkContextsAcrossUsers } from '../db/workContextHelpers';
 import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
 import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import { applyOverrideToItem, applyOverrideToRoutine, usePendingReassignMaps } from './PendingReassignProvider';
 
 export interface AppData {
     /** The active session's account — the default-owner for newly created entities. */
@@ -296,15 +297,38 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         await syncAndRefresh();
     }, [db, initializeFromCache, refreshAccounts, syncAndRefresh]);
 
+    // Cross-account reassign overlay: while a /sync/reassign is in flight the source-account row
+    // is rewritten to render under the target account. Touches only fields safe to forge (userId
+    // + calendar config refs); the underlying IDB row is unchanged. See PendingReassignProvider.
+    const { items: itemOverrides, routines: routineOverrides } = usePendingReassignMaps();
+    const visibleItems = useMemo(() => {
+        if (itemOverrides.size === 0) {
+            return items;
+        }
+        return items.map((item) => {
+            const override = itemOverrides.get(item._id);
+            return override ? applyOverrideToItem(item, override) : item;
+        });
+    }, [items, itemOverrides]);
+    const visibleRoutines = useMemo(() => {
+        if (routineOverrides.size === 0) {
+            return routines;
+        }
+        return routines.map((routine) => {
+            const override = routineOverrides.get(routine._id);
+            return override ? applyOverrideToRoutine(routine, override) : routine;
+        });
+    }, [routines, routineOverrides]);
+
     const appData: AppData = useMemo(
         () => ({
             account,
             loggedInAccounts,
             loggedInUserIds,
-            items,
+            items: visibleItems,
             workContexts,
             people,
-            routines,
+            routines: visibleRoutines,
             refreshItems,
             refreshWorkContexts,
             refreshPeople,
@@ -320,10 +344,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             account,
             loggedInAccounts,
             loggedInUserIds,
-            items,
+            visibleItems,
             workContexts,
             people,
-            routines,
+            visibleRoutines,
             refreshItems,
             refreshWorkContexts,
             refreshPeople,

@@ -10,6 +10,7 @@ import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppNav } from '../components/AppNav';
 import { NotificationNudge } from '../components/NotificationNudge';
 import { AppDataProvider } from '../contexts/AppDataProvider';
+import { PendingReassignProvider } from '../contexts/PendingReassignProvider';
 import styles from './-_authenticated.module.css';
 import { authenticatedRouteGuard } from './-authenticatedRouteGuard';
 
@@ -46,10 +47,12 @@ export function AuthenticatedLayout() {
             <AppNav isMobileDrawerOpen={isMobileDrawerOpen} setIsMobileDrawerOpen={setIsMobileDrawerOpen} db={db} />
 
             <Box component="main" className={styles.mainContent}>
-                <AppDataProvider db={db}>
-                    <Outlet />
-                    <NotificationNudge db={db} />
-                </AppDataProvider>
+                <PendingReassignProvider db={db}>
+                    <AppDataProvider db={db}>
+                        <Outlet />
+                        <NotificationNudge db={db} />
+                    </AppDataProvider>
+                </PendingReassignProvider>
             </Box>
         </Box>
     );
