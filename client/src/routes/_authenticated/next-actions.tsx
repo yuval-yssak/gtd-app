@@ -7,6 +7,7 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
+import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Stack from '@mui/material/Stack';
 import Tooltip from '@mui/material/Tooltip';
@@ -92,6 +93,16 @@ function NextActionsPage() {
         await clarifyToDone(db, item);
         await refreshItems();
     }
+
+    // Read clarify mode at click time — mode changes require a settings navigation
+    // which remounts this component, so no reactive state needed.
+    const openEditorFor = (item: StoredItem) => {
+        if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
+            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
+        } else {
+            setEditingItem(item);
+        }
+    };
 
     return (
         <Box>
@@ -184,18 +195,7 @@ function NextActionsPage() {
                                 secondaryAction={
                                     <Box className={styles.actionButtons}>
                                         <Tooltip title="Edit">
-                                            <IconButton
-                                                size="small"
-                                                onClick={() => {
-                                                    // Read at click time — mode changes require a settings navigation
-                                                    // which remounts this component, so no reactive state needed.
-                                                    if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
-                                                        void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
-                                                    } else {
-                                                        setEditingItem(item);
-                                                    }
-                                                }}
-                                            >
+                                            <IconButton size="small" onClick={() => openEditorFor(item)} data-testid="nextActionItemEditButton">
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
@@ -207,25 +207,27 @@ function NextActionsPage() {
                                     </Box>
                                 }
                             >
-                                <ListItemText
-                                    primary={
-                                        <Box className={styles.titleRow}>
-                                            {item.urgent && <BoltIcon fontSize="small" color="error" />}
-                                            <span>{item.title}</span>
-                                            {item.energy && <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />}
-                                            {item.time !== undefined && <Chip label={`${item.time} min`} size="small" variant="outlined" />}
-                                            {item.routineId && (
-                                                <RoutineIndicator
-                                                    routineId={item.routineId}
-                                                    routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                />
-                                            )}
-                                            <AccountChip userId={item.userId} />
-                                        </Box>
-                                    }
-                                    secondary={item.expectedBy ? `Due ${dayjs(item.expectedBy).format('MMM D')}` : undefined}
-                                    className={styles.listItemText}
-                                />
+                                <ListItemButton onClick={() => openEditorFor(item)} className={styles.rowButton} data-testid="nextActionItemRow">
+                                    <ListItemText
+                                        primary={
+                                            <Box className={styles.titleRow}>
+                                                {item.urgent && <BoltIcon fontSize="small" color="error" />}
+                                                <span>{item.title}</span>
+                                                {item.energy && <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />}
+                                                {item.time !== undefined && <Chip label={`${item.time} min`} size="small" variant="outlined" />}
+                                                {item.routineId && (
+                                                    <RoutineIndicator
+                                                        routineId={item.routineId}
+                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                    />
+                                                )}
+                                                <AccountChip userId={item.userId} />
+                                            </Box>
+                                        }
+                                        secondary={item.expectedBy ? `Due ${dayjs(item.expectedBy).format('MMM D')}` : undefined}
+                                        className={styles.listItemText}
+                                    />
+                                </ListItemButton>
                             </ListItem>
                             {idx < nextActions.length - 1 && <Divider />}
                         </Box>

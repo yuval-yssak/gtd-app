@@ -6,6 +6,7 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
+import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
 import Tooltip from '@mui/material/Tooltip';
@@ -110,25 +111,30 @@ function SomedayPage() {
                             secondaryAction={
                                 <Box className={styles.actionButtons}>
                                     <Tooltip title="Edit">
-                                        <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                        <IconButton size="small" onClick={() => setEditingItem(item)} data-testid="somedayItemEditButton">
                                             <EditIcon fontSize="small" />
                                         </IconButton>
                                     </Tooltip>
                                 </Box>
                             }
                         >
-                            <ListItemText
-                                primary={
-                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                        <span>{item.title}</span>
-                                        {item.routineId && (
-                                            <RoutineIndicator routineId={item.routineId} routineTitle={routines.find((r) => r._id === item.routineId)?.title} />
-                                        )}
-                                        <AccountChip userId={item.userId} />
-                                    </Box>
-                                }
-                                secondary={dayjs(item.createdTs).fromNow()}
-                            />
+                            <ListItemButton onClick={() => setEditingItem(item)} className={styles.rowButton} data-testid="somedayItemRow">
+                                <ListItemText
+                                    primary={
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                            <span>{item.title}</span>
+                                            {item.routineId && (
+                                                <RoutineIndicator
+                                                    routineId={item.routineId}
+                                                    routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                />
+                                            )}
+                                            <AccountChip userId={item.userId} />
+                                        </Box>
+                                    }
+                                    secondary={dayjs(item.createdTs).fromNow()}
+                                />
+                            </ListItemButton>
                         </ListItem>
                         {idx < somedayItems.length - 1 && <Divider />}
                     </Box>

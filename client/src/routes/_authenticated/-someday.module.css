@@ -16,10 +16,15 @@
 }
 
 .item {
+    padding: 0;
+}
+
+.rowButton {
+    padding: 0.625rem 1rem;
     padding-right: 5rem;
 }
 
-.item :global(.MuiListItemText-root) {
+.rowButton :global(.MuiListItemText-root) {
     padding-right: 0.5rem;
 }
 

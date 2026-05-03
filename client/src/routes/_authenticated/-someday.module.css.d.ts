@@ -5,5 +5,6 @@ declare const styles: {
     readonly icon: string;
     readonly item: string;
     readonly list: string;
+    readonly rowButton: string;
 };
 export = styles;
