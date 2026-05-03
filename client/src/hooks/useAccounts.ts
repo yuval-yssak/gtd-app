@@ -7,6 +7,14 @@ import { getOrCreateDeviceId } from '../db/deviceId';
 import { authClient } from '../lib/authClient';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
 
+export type PendingAction = 'switching' | 'signingOut' | 'signingOutAll';
+
+const FAILURE_LABELS: Record<PendingAction, string> = {
+    switching: "Couldn't switch account. Please try again.",
+    signingOut: "Couldn't sign out. Please try again.",
+    signingOutAll: "Couldn't sign out of all accounts. Please try again.",
+};
+
 export interface AccountsState {
     activeAccount: StoredAccount | undefined;
     allAccounts: StoredAccount[];
@@ -14,11 +22,35 @@ export interface AccountsState {
     switchToAccount: (userId: string) => Promise<void>;
     signOutCurrent: () => Promise<void>;
     signOutAll: () => Promise<void>;
+    pendingAction: PendingAction | null;
+    actionError: string | null;
+    dismissActionError: () => void;
 }
 
 export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
     const [activeAccount, setActiveAccountState] = useState<StoredAccount | undefined>(undefined);
     const [allAccounts, setAllAccounts] = useState<StoredAccount[]>([]);
+    const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
+
+    const dismissActionError = useCallback(() => setActionError(null), []);
+
+    // Wraps the three account-mutation actions in one place: clear the prior error, set the
+    // pending label, and on rejection clear pending + surface a user-visible message. Success
+    // paths always end in window.location navigation, so explicit "clear pending on success"
+    // would be dead code.
+    const withPending = useCallback(async <T>(action: PendingAction, fn: () => Promise<T>): Promise<T | undefined> => {
+        setActionError(null);
+        setPendingAction(action);
+        try {
+            return await fn();
+        } catch (err) {
+            console.error(`Account action "${action}" failed`, err);
+            setPendingAction(null);
+            setActionError(FAILURE_LABELS[action]);
+            return undefined;
+        }
+    }, []);
 
     useEffect(() => {
         async function load() {
@@ -83,43 +115,53 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
     }, [db]);
 
     const reauthForUserId = useCallback(
-        (userId: string) => {
-            // Session expired — trigger OAuth re-authentication for the target account
+        (userId: string): boolean => {
+            // Session expired — trigger OAuth re-authentication for the target account.
+            // Returns true when navigation was kicked off, false when the account isn't
+            // known locally (caller is responsible for clearing any pending UI state).
             const account = allAccounts.find((a) => a.id === userId);
             if (!account) {
-                return;
+                return false;
             }
             void authClient.signIn.social({
                 provider: account.provider,
                 callbackURL: `${window.location.origin}/auth/callback`,
             });
+            return true;
         },
         [allAccounts],
     );
 
     const switchToAccount = useCallback(
         async (userId: string) => {
-            const { data: sessions } = await authClient.multiSession.listDeviceSessions();
-            const target = sessions?.find((s) => s.user.id === userId);
+            await withPending('switching', async () => {
+                const { data: sessions } = await authClient.multiSession.listDeviceSessions();
+                const target = sessions?.find((s) => s.user.id === userId);
 
-            if (!target) {
-                // Session expired — fall back to OAuth re-authentication
-                reauthForUserId(userId);
-                return;
-            }
+                if (!target) {
+                    // Session expired — fall back to OAuth re-authentication. If the account
+                    // isn't locally known, no navigation fires and we must clear the backdrop
+                    // ourselves so the user isn't stranded behind it.
+                    const navigated = reauthForUserId(userId);
+                    if (!navigated) {
+                        setPendingAction(null);
+                    }
+                    return;
+                }
 
-            // Switch the active session cookie server-side — no OAuth redirect needed
-            await authClient.multiSession.setActive({ sessionToken: target.session.token });
-            await setActiveAccount(userId, db);
-            await refreshAccountState();
-            // Hard reload back to the current route so AppDataProvider re-runs its boot effect
-            // and every component reads the new active account. Without this, useAppData().account
-            // stays stuck on the previous account — Settings shows stale name/email, and worse,
-            // mutations on Inbox/Routines/People/Work Contexts get written under the wrong userId.
-            // Matches the reload pattern already used by signOutCurrent and switchToNextAndRevoke.
-            window.location.href = window.location.pathname + window.location.search;
+                // Switch the active session cookie server-side — no OAuth redirect needed
+                await authClient.multiSession.setActive({ sessionToken: target.session.token });
+                await setActiveAccount(userId, db);
+                await refreshAccountState();
+                // Hard reload back to the current route so AppDataProvider re-runs its boot effect
+                // and every component reads the new active account. Without this, useAppData().account
+                // stays stuck on the previous account — Settings shows stale name/email, and worse,
+                // mutations on Inbox/Routines/People/Work Contexts get written under the wrong userId.
+                // Matches the reload pattern already used by signOutCurrent and switchToNextAndRevoke.
+                window.location.href = window.location.pathname + window.location.search;
+            });
         },
-        [db, reauthForUserId, refreshAccountState],
+        [db, reauthForUserId, refreshAccountState, withPending],
     );
 
     const switchToNextAndRevoke = useCallback(
@@ -166,39 +208,53 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
     }, [db, activeAccount]);
 
     const signOutCurrent = useCallback(async () => {
-        const { currentSessionToken, sessions } = await revokeCurrentFromIDB();
+        await withPending('signingOut', async () => {
+            const { currentSessionToken, sessions } = await revokeCurrentFromIDB();
 
-        const remaining = await getAllAccounts(db);
-        const next = remaining[0];
+            const remaining = await getAllAccounts(db);
+            const next = remaining[0];
 
-        if (!next) {
-            // Drop the (deviceId, currentUserId) join row before authClient.signOut — the
-            // signoutDevice endpoint authenticates via the still-active current session.
+            if (!next) {
+                // Drop the (deviceId, currentUserId) join row before authClient.signOut — the
+                // signoutDevice endpoint authenticates via the still-active current session.
+                const deviceId = await getOrCreateDeviceId(db);
+                await signOutDevice(deviceId);
+                await authClient.signOut();
+                window.location.href = '/login';
+                return;
+            }
+
+            const targetSession = sessions?.find((s) => s.user.id === next.id);
+            if (targetSession) {
+                await switchToNextAndRevoke(next, currentSessionToken, targetSession.session.token);
+            } else {
+                reauthAsNext(next);
+            }
+        });
+    }, [db, revokeCurrentFromIDB, switchToNextAndRevoke, reauthAsNext, withPending]);
+
+    const signOutAll = useCallback(async () => {
+        await withPending('signingOutAll', async () => {
+            // Best-effort: drop the (deviceId, activeUserId) join row before Better Auth tears down
+            // every session on this device. Other accounts' join rows fall through to the
+            // 410-on-push and stale-device cleanup paths.
             const deviceId = await getOrCreateDeviceId(db);
             await signOutDevice(deviceId);
             await authClient.signOut();
+            await clearAllAccounts(db);
             window.location.href = '/login';
-            return;
-        }
+        });
+    }, [db, withPending]);
 
-        const targetSession = sessions?.find((s) => s.user.id === next.id);
-        if (targetSession) {
-            await switchToNextAndRevoke(next, currentSessionToken, targetSession.session.token);
-        } else {
-            reauthAsNext(next);
-        }
-    }, [db, revokeCurrentFromIDB, switchToNextAndRevoke, reauthAsNext]);
-
-    const signOutAll = useCallback(async () => {
-        // Best-effort: drop the (deviceId, activeUserId) join row before Better Auth tears down
-        // every session on this device. Other accounts' join rows fall through to the
-        // 410-on-push and stale-device cleanup paths.
-        const deviceId = await getOrCreateDeviceId(db);
-        await signOutDevice(deviceId);
-        await authClient.signOut();
-        await clearAllAccounts(db);
-        window.location.href = '/login';
-    }, [db]);
-
-    return { activeAccount, allAccounts, addAnotherAccount, switchToAccount, signOutCurrent, signOutAll };
+    return {
+        activeAccount,
+        allAccounts,
+        addAnotherAccount,
+        switchToAccount,
+        signOutCurrent,
+        signOutAll,
+        pendingAction,
+        actionError,
+        dismissActionError,
+    };
 }
