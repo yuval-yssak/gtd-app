@@ -18,6 +18,7 @@ const mockAppData: AppData = {
     workContexts: [],
     people: [],
     routines: [],
+    isInitialLoading: false,
     refreshItems: fn().mockResolvedValue(undefined),
     refreshWorkContexts: fn().mockResolvedValue(undefined),
     refreshPeople: fn().mockResolvedValue(undefined),

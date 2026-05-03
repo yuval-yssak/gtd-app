@@ -18,6 +18,7 @@ import { type ItemSortDir, type ItemSortKey, sortItems } from '../lib/itemSearch
 import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
 import styles from './ArchivedItemsView.module.css';
+import { PageLoadingSpinner } from './PageLoadingSpinner';
 import { RoutineIndicator } from './RoutineIndicator';
 
 dayjs.extend(relativeTime);
@@ -46,12 +47,29 @@ interface Props {
 }
 
 export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Props) {
-    const { items, routines } = useAppData();
+    const { items, routines, isInitialLoading } = useAppData();
     const [sortKey, setSortKey] = useState<ItemSortKey>('updatedTs');
     const [sortDir, setSortDir] = useState<ItemSortDir>('desc');
 
     const filtered = items.filter((item) => item.status === status);
     const sorted = sortItems(filtered, sortKey, sortDir);
+
+    if (isInitialLoading) {
+        return (
+            <Box>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
+                    {title}
+                </Typography>
+                <PageLoadingSpinner />
+            </Box>
+        );
+    }
 
     if (filtered.length === 0) {
         return (
