@@ -1,15 +1,23 @@
 import Button from '@mui/material/Button';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
-import { createFileRoute, redirect } from '@tanstack/react-router';
+import { createFileRoute, isRedirect, redirect } from '@tanstack/react-router';
 import { authClient } from '../lib/authClient';
 import styles from './-login.module.css';
 
 export const Route = createFileRoute('/login')({
     beforeLoad: async () => {
-        const { data: session } = await authClient.getSession();
-        if (session) {
-            throw redirect({ to: '/' });
+        // Wrap in try/catch so an offline reload of /login doesn't crash the route with a
+        // bare TypeError. When the network is down we simply render the sign-in page —
+        // OAuth itself won't work anyway, but the shell stays visible.
+        try {
+            const { data: session } = await authClient.getSession();
+            if (session) {
+                throw redirect({ to: '/' });
+            }
+        } catch (e) {
+            // Re-throw the redirect so the router still navigates to '/'; only swallow network errors.
+            if (isRedirect(e)) throw e;
         }
     },
     component: LoginPage,
