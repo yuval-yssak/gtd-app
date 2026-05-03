@@ -6,6 +6,7 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
+import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -138,7 +139,7 @@ function TicklerPage() {
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
                                             <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                <IconButton size="small" onClick={() => setEditingItem(item)} data-testid="ticklerItemEditButton">
                                                     <EditIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
@@ -150,22 +151,24 @@ function TicklerPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemText
-                                        primary={
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                <span>{item.title}</span>
-                                                {item.routineId && (
-                                                    <RoutineIndicator
-                                                        routineId={item.routineId}
-                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                    />
-                                                )}
-                                                <AccountChip userId={item.userId} />
-                                            </Box>
-                                        }
-                                        secondary={`Status: ${item.status}`}
-                                        className={styles.listItemText}
-                                    />
+                                    <ListItemButton onClick={() => setEditingItem(item)} className={styles.rowButton} data-testid="ticklerItemRow">
+                                        <ListItemText
+                                            primary={
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                    <span>{item.title}</span>
+                                                    {item.routineId && (
+                                                        <RoutineIndicator
+                                                            routineId={item.routineId}
+                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                        />
+                                                    )}
+                                                    <AccountChip userId={item.userId} />
+                                                </Box>
+                                            }
+                                            secondary={`Status: ${item.status}`}
+                                            className={styles.listItemText}
+                                        />
+                                    </ListItemButton>
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>

@@ -6,6 +6,7 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
+import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
@@ -47,6 +48,16 @@ function WaitingForPage() {
         await clarifyToDone(db, item);
         await refreshItems();
     }
+
+    // Read clarify mode at click time — mode changes require a settings navigation
+    // which remounts this component, so no reactive state needed.
+    const openEditorFor = (item: StoredItem) => {
+        if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
+            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
+        } else {
+            setEditingItem(item);
+        }
+    };
 
     const isOverdue = (item: StoredItem) => item.expectedBy !== undefined && item.expectedBy < dayjs().format('YYYY-MM-DD');
 
@@ -130,18 +141,7 @@ function WaitingForPage() {
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
                                             <Tooltip title="Edit">
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={() => {
-                                                        // Read at click time — mode changes require a settings navigation
-                                                        // which remounts this component, so no reactive state needed.
-                                                        if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
-                                                            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
-                                                        } else {
-                                                            setEditingItem(item);
-                                                        }
-                                                    }}
-                                                >
+                                                <IconButton size="small" onClick={() => openEditorFor(item)} data-testid="waitingForItemEditButton">
                                                     <EditIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
@@ -153,29 +153,31 @@ function WaitingForPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemText
-                                        primary={
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                <span>{item.title}</span>
-                                                {item.routineId && (
-                                                    <RoutineIndicator
-                                                        routineId={item.routineId}
-                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                    />
-                                                )}
-                                                <AccountChip userId={item.userId} />
-                                            </Box>
-                                        }
-                                        secondary={
-                                            item.expectedBy ? (
-                                                <Typography component="span" variant="caption" color={isOverdue(item) ? 'error' : 'text.secondary'}>
-                                                    Expected by {dayjs(item.expectedBy).format('MMM D')}
-                                                    {isOverdue(item) && ' — overdue'}
-                                                </Typography>
-                                            ) : undefined
-                                        }
-                                        className={styles.listItemText}
-                                    />
+                                    <ListItemButton onClick={() => openEditorFor(item)} className={styles.rowButton} data-testid="waitingForItemRow">
+                                        <ListItemText
+                                            primary={
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                    <span>{item.title}</span>
+                                                    {item.routineId && (
+                                                        <RoutineIndicator
+                                                            routineId={item.routineId}
+                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                        />
+                                                    )}
+                                                    <AccountChip userId={item.userId} />
+                                                </Box>
+                                            }
+                                            secondary={
+                                                item.expectedBy ? (
+                                                    <Typography component="span" variant="caption" color={isOverdue(item) ? 'error' : 'text.secondary'}>
+                                                        Expected by {dayjs(item.expectedBy).format('MMM D')}
+                                                        {isOverdue(item) && ' — overdue'}
+                                                    </Typography>
+                                                ) : undefined
+                                            }
+                                            className={styles.listItemText}
+                                        />
+                                    </ListItemButton>
                                 </ListItem>
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>
