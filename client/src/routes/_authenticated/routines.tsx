@@ -21,6 +21,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
+import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { RoutineDialog } from '../../components/routines/RoutineDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
@@ -34,7 +35,7 @@ export const Route = createFileRoute('/_authenticated/routines')({
 
 function RoutinesPage() {
     const { db } = Route.useRouteContext();
-    const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh } = useAppData();
+    const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh, isInitialLoading } = useAppData();
     const [dialogRoutine, setDialogRoutine] = useState<StoredRoutine | 'new' | null>(null);
     const [routineToDelete, setRoutineToDelete] = useState<StoredRoutine | null>(null);
     const [routineToPause, setRoutineToPause] = useState<StoredRoutine | null>(null);
@@ -94,7 +95,9 @@ function RoutinesPage() {
                     </IconButton>
                 </Tooltip>
             </Box>
-            {routines.length === 0 ? (
+            {isInitialLoading ? (
+                <PageLoadingSpinner />
+            ) : routines.length === 0 ? (
                 <Typography
                     sx={{
                         color: 'text.secondary',

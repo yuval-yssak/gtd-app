@@ -10,6 +10,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useState } from 'react';
+import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
@@ -36,7 +37,7 @@ const VIEW_OPTIONS: Array<{ value: SearchView; icon: React.ReactElement; label: 
 function SearchPage() {
     const urlState = Route.useSearch();
     const navigate = useNavigate();
-    const { items, people, workContexts } = useAppData();
+    const { items, people, workContexts, isInitialLoading } = useAppData();
 
     // Mirrored from URL so typing stays responsive while URL writes are debounced.
     const [queryInput, setQueryInput] = useState(urlState.q);
@@ -122,7 +123,12 @@ function SearchPage() {
                     ))}
                 </ToggleButtonGroup>
             </Box>
-            {filtered.length === 0 ? (
+            {/* Loading guard: persisted URL filters mean a hard refresh of /search?q=foo would render
+                "No items match your filters." until the first IDB read completes. The benign
+                "type to search" hint stays unguarded — it's correct even while items are loading. */}
+            {isInitialLoading && !hasNoInputs ? (
+                <PageLoadingSpinner />
+            ) : filtered.length === 0 ? (
                 <Typography
                     sx={{
                         color: 'text.secondary',

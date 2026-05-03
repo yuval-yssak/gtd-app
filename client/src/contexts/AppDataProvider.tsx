@@ -33,6 +33,13 @@ export interface AppData {
     workContexts: StoredWorkContext[];
     people: StoredPerson[];
     routines: StoredRoutine[];
+    /**
+     * True until the first IDB cache read completes on mount. List pages use this to render a
+     * loading state instead of their empty-state during the brief gap between component mount
+     * and `initializeFromCache` populating React state — otherwise a hard refresh briefly shows
+     * "no items" before the cached items appear.
+     */
+    isInitialLoading: boolean;
     refreshItems: () => Promise<void>;
     refreshWorkContexts: () => Promise<void>;
     refreshPeople: () => Promise<void>;
@@ -65,6 +72,9 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     const [workContexts, setWorkContexts] = useState<StoredWorkContext[]>([]);
     const [people, setPeople] = useState<StoredPerson[]>([]);
     const [routines, setRoutines] = useState<StoredRoutine[]>([]);
+    // Flips to false once loadAll has finished its initial IDB read (or determined there's no
+    // active account). Routes use this to distinguish "still loading" from "loaded, genuinely empty".
+    const [isInitialLoading, setIsInitialLoading] = useState(true);
     const isOnline = useOnline();
     const isFirstOnlineRender = useRef(true); // Skips the first render of the isOnline effect — mount-time handling is done in loadAll()
 
@@ -284,6 +294,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     const loadAll = useCallback(async () => {
         const acct = await getActiveAccount(db);
         if (!acct) {
+            // No account — nothing to load. Drop the flag so the UI moves past its loading state
+            // (the route guard will redirect to /login, but if a child renders first it shouldn't
+            // be stuck on a spinner).
+            if (!unmountedRef.current) {
+                setIsInitialLoading(false);
+            }
             return;
         }
         // Refresh accounts BEFORE initializing from cache so cross-user reads see every
@@ -291,6 +307,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         // entities, then flicker once accounts loaded.
         const accounts = await refreshAccounts();
         await initializeFromCache(acct, accounts);
+        // Cached data is now in React state — surface it to the UI immediately. The subsequent
+        // server sync will update what's on screen rather than gating the first paint.
+        if (!unmountedRef.current) {
+            setIsInitialLoading(false);
+        }
         if (!navigator.onLine) {
             return;
         }
@@ -329,6 +350,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             workContexts,
             people,
             routines: visibleRoutines,
+            isInitialLoading,
             refreshItems,
             refreshWorkContexts,
             refreshPeople,
@@ -348,6 +370,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             workContexts,
             people,
             visibleRoutines,
+            isInitialLoading,
             refreshItems,
             refreshWorkContexts,
             refreshPeople,

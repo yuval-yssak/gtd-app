@@ -14,6 +14,7 @@ import dayjs from 'dayjs';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { EditItemDialog } from '../../components/EditItemDialog';
+import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updateItem } from '../../db/itemMutations';
@@ -26,7 +27,7 @@ export const Route = createFileRoute('/_authenticated/tickler')({
 
 function TicklerPage() {
     const { db } = Route.useRouteContext();
-    const { items, routines, people, workContexts, refreshItems } = useAppData();
+    const { items, routines, people, workContexts, refreshItems, isInitialLoading } = useAppData();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const today = dayjs().format('YYYY-MM-DD');
@@ -55,6 +56,23 @@ function TicklerPage() {
         if (daysUntil === 1) return 'Tomorrow';
         if (daysUntil < 7) return d.format('dddd');
         return d.format('MMM D, YYYY');
+    }
+
+    if (isInitialLoading) {
+        return (
+            <Box>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
+                    Tickler
+                </Typography>
+                <PageLoadingSpinner />
+            </Box>
+        );
     }
 
     if (ticklerItems.length === 0) {

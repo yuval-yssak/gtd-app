@@ -20,6 +20,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
+import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
 import { reassignEntity } from '../../db/reassignMutations';
@@ -40,7 +41,7 @@ const emptyForm: PersonFormState = { name: '', email: '', phone: '' };
 
 function PeoplePage() {
     const { db } = Route.useRouteContext();
-    const { account, people, refreshPeople, loggedInAccounts } = useAppData();
+    const { account, people, refreshPeople, loggedInAccounts, isInitialLoading } = useAppData();
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<StoredPerson | null>(null);
     const [form, setForm] = useState<PersonFormState>(emptyForm);
@@ -124,7 +125,9 @@ function PeoplePage() {
                     Add person
                 </Button>
             </Box>
-            {people.length === 0 ? (
+            {isInitialLoading ? (
+                <PageLoadingSpinner />
+            ) : people.length === 0 ? (
                 <Typography
                     sx={{
                         color: 'text.secondary',

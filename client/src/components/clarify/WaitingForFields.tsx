@@ -2,6 +2,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import { Link } from '@tanstack/react-router';
 import type { StoredPerson } from '../../types/MyDB';
 import type { WaitingForFormState } from './types';
 import styles from './WaitingForFields.module.css';
@@ -21,7 +22,11 @@ export function WaitingForFields({ value, onChange, people }: Props) {
                     color: 'text.secondary',
                 }}
             >
-                No people yet — add contacts in the People section first.
+                No people yet — add contacts in the{' '}
+                <Link to="/people" className={styles.peopleLink}>
+                    People
+                </Link>{' '}
+                section first.
             </Typography>
         );
     }

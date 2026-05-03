@@ -19,6 +19,7 @@ dayjs.extend(relativeTime);
 
 import { AccountChip } from '../../components/AccountChip';
 import { EditItemDialog } from '../../components/EditItemDialog';
+import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import type { StoredItem } from '../../types/MyDB';
@@ -30,10 +31,27 @@ export const Route = createFileRoute('/_authenticated/someday')({
 
 function SomedayPage() {
     const { db } = Route.useRouteContext();
-    const { items, people, workContexts, routines, refreshItems } = useAppData();
+    const { items, people, workContexts, routines, refreshItems, isInitialLoading } = useAppData();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
     const somedayItems = items.filter((item) => item.status === 'somedayMaybe').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+
+    if (isInitialLoading) {
+        return (
+            <Box>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
+                    Someday / Maybe
+                </Typography>
+                <PageLoadingSpinner />
+            </Box>
+        );
+    }
 
     if (somedayItems.length === 0) {
         return (

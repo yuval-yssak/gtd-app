@@ -20,6 +20,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
+import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { reassignEntity } from '../../db/reassignMutations';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
@@ -32,7 +33,7 @@ export const Route = createFileRoute('/_authenticated/work-contexts')({
 
 function WorkContextsPage() {
     const { db } = Route.useRouteContext();
-    const { account, workContexts, refreshWorkContexts, loggedInAccounts } = useAppData();
+    const { account, workContexts, refreshWorkContexts, loggedInAccounts, isInitialLoading } = useAppData();
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<StoredWorkContext | null>(null);
     const [nameInput, setNameInput] = useState('');
@@ -91,7 +92,9 @@ function WorkContextsPage() {
                     Add context
                 </Button>
             </Box>
-            {workContexts.length === 0 ? (
+            {isInitialLoading ? (
+                <PageLoadingSpinner />
+            ) : workContexts.length === 0 ? (
                 <Typography
                     sx={{
                         color: 'text.secondary',
