@@ -39,7 +39,11 @@ export default defineConfig({
                     { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
                 ],
             },
-            workbox: {
+            // The `workbox` option block applies only to `strategies: 'generateSW'`.
+            // For `injectManifest`, configure precache globs under `injectManifest`.
+            // Without this, Workbox's default `['**/*.{js,css,html}']` excludes fonts —
+            // CSS @font-face URLs then fail offline and the app can't render its shell.
+            injectManifest: {
                 globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
             },
         }),
