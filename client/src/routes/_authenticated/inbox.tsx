@@ -32,7 +32,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AccountChip } from '../../components/AccountChip';
 import { ClarifyDialog } from '../../components/ClarifyDialog';
@@ -284,9 +284,11 @@ function InboxPage() {
 
     // Instant mode toast
     const [toastOpen, setToastOpen] = useState(false);
-    const [isSubmittingInline, setIsSubmittingInline] = useState(false);
-    // Ref mirror of isSubmittingInline — state updates are async so a rapid double-swipe would
-    // read stale false from both closures; a ref is mutated synchronously and always current.
+    // useTransition gives us `isSubmittingInline` for free — React tracks pending state across
+    // the wrapped async work without manual setState toggling in finally blocks.
+    const [isSubmittingInline, startSubmittingInline] = useTransition();
+    // Ref still needed: useTransition does not dedupe successive startTransition calls, so a
+    // rapid double-swipe would queue two transitions. The ref short-circuits the second one.
     const isSubmittingInlineRef = useRef(false);
 
     // Shared form state for expand/popover modes
@@ -335,26 +337,26 @@ function InboxPage() {
         return false;
     }
 
-    async function onConfirmInlineForm(item: StoredItem, dest: ActionableDest) {
+    function onConfirmInlineForm(item: StoredItem, dest: ActionableDest) {
         if (isSubmittingInlineRef.current) {
             return;
         }
         isSubmittingInlineRef.current = true;
-        setIsSubmittingInline(true);
-        try {
-            if (dest === 'nextAction') {
-                await clarifyToNextAction(db, item, buildNextActionMeta(naForm));
-            } else if (dest === 'calendar') {
-                await clarifyToCalendar(db, item, buildCalendarMeta(calForm, calendarOptions));
-            } else if (dest === 'waitingFor') {
-                await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
+        startSubmittingInline(async () => {
+            try {
+                if (dest === 'nextAction') {
+                    await clarifyToNextAction(db, item, buildNextActionMeta(naForm));
+                } else if (dest === 'calendar') {
+                    await clarifyToCalendar(db, item, buildCalendarMeta(calForm, calendarOptions));
+                } else if (dest === 'waitingFor') {
+                    await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
+                }
+                await refreshItems();
+                closeInlineForm();
+            } finally {
+                isSubmittingInlineRef.current = false;
             }
-            await refreshItems();
-            closeInlineForm();
-        } finally {
-            isSubmittingInlineRef.current = false;
-            setIsSubmittingInline(false);
-        }
+        });
     }
 
     // Extracted to avoid duplication between desktop onInlineAction and mobile onInlineActionFromSheet.
@@ -364,13 +366,14 @@ function InboxPage() {
             return;
         }
         isSubmittingInlineRef.current = true;
-        setIsSubmittingInline(true);
-        void clarifyToNextAction(db, item, {})
-            .then(refreshItems)
-            .finally(() => {
+        startSubmittingInline(async () => {
+            try {
+                await clarifyToNextAction(db, item, {});
+                await refreshItems();
+            } finally {
                 isSubmittingInlineRef.current = false;
-                setIsSubmittingInline(false);
-            });
+            }
+        });
         setToastOpen(true);
     }
 
