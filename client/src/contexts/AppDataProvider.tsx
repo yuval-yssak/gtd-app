@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
+import { AppResourceProvider } from '../data/AppResourceProvider';
 import { getActiveAccount, getLoggedInAccounts, upsertAccount } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
 import { getItemsAcrossUsers } from '../db/itemHelpers';
@@ -454,5 +455,15 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         // cleanup), making the online run skip entirely — silently dropping the reconnect flush.
     }, [isOnline, db, syncAndRefresh, onSseUpdateForUser]);
 
-    return <AppDataContext.Provider value={appData}>{children}</AppDataContext.Provider>;
+    // AppResourceProvider is a no-op for current consumers — they still read entity arrays from the
+    // legacy `appData` context above. Step 3 will switch consumers to `useAppResource()` and remove
+    // the duplicate IDB reads. Mounting it here now keeps the resource snapshot in sync with the
+    // active userIds set so the cutover is one-step.
+    return (
+        <AppDataContext.Provider value={appData}>
+            <AppResourceProvider db={db} userIds={loggedInUserIds}>
+                {children}
+            </AppResourceProvider>
+        </AppDataContext.Provider>
+    );
 }
