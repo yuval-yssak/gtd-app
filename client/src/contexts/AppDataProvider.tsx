@@ -12,6 +12,7 @@ import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnections, openSseConnections } from '../db/sseClient';
 import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
+import { prefetchCalendarOptions } from '../hooks/useCalendarOptions';
 import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
 import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
@@ -255,6 +256,8 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // No account in IDB — route guard redirects to /login. Nothing to sync.
             return;
         }
+        // Pre-warm dialog-only caches so the first dialog open doesn't suspend the whole route.
+        prefetchCalendarOptions();
         await refreshAccountsInternal();
         if (!navigator.onLine) {
             return;
