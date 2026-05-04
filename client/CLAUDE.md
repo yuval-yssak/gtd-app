@@ -235,6 +235,15 @@ client/src/
 - Avoid `useEffect` for derived state; compute it inline or with `useMemo`.
 - Never read from a ref during render — refs are for imperative escape hatches, not rendering logic.
 
+### React 19 & Suspense
+
+- React 19 features are first-class: `<Suspense>`, `use()`, `useTransition`, `useOptimistic`, `useActionState`, `useFormStatus`, `useDeferredValue`, `lazy()`, `cache()`. Reach for them before hand-rolled `useState<boolean>` loading flags or `useEffect`-driven async patterns.
+- For data reads: write a cached promise (e.g. `client/src/data/appResource.ts`, `client/src/data/initialAuthBundle.ts`, `prefetchCalendarOptions` in `hooks/useCalendarOptions.ts`) and `use()` it inside the consumer. Two consumers reading the same key share the same promise — that's how Suspense de-dupes.
+- Wrap consumers in a Suspense boundary at the right granularity: route-level for the whole-page initial read (`_authenticated.tsx` does this for the `AppData` resource), per-section for hooks that suspend a smaller area, and `<AppErrorBoundary>` (mode `'page'` or `'inline'`) outside every Suspense boundary so a thrown rejection has somewhere to land.
+- For background refreshes that should not flash a fallback (sync, SSE, push): drop the cache entry and call `setSnapshot(newSnapshot)` inside `startTransition`. The provider in `data/AppResourceProvider.tsx` does this — its `refresh(scope)` is exposed via the module-level `triggerAppResourceRefresh` so callers don't need context.
+- For mutation pending state: `useTransition` is the default — its `[isPending, startTransition]` replaces the `useState<boolean>` + manual `try/finally` toggle. Keep a `useRef` alongside if you need to dedupe rapid double-submits (transitions don't dedupe).
+- Exception: when a mutation surface needs richer state than a single `isPending` boolean — per-action error messages, per-row pending sets, error/recovery UI — keep `useState`. Examples in this codebase: `useAccounts`'s `pendingAction` enum + `actionError`, `CalendarIntegrations`'s `savingConfigIds` set, the `PendingReassignProvider` overlay map.
+
 ### Test IDs
 
 - `data-testid` values are camelCase: `inboxItem`, `clarifyButton`
