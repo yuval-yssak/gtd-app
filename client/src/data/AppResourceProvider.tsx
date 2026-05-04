@@ -1,7 +1,7 @@
 import type { IDBPDatabase } from 'idb';
-import { createContext, type PropsWithChildren, startTransition, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import { createContext, type PropsWithChildren, startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { MyDB } from '../types/MyDB';
-import { type AppResourceSnapshot, getAppResource, invalidateAppResource, type ResourceScope } from './appResource';
+import { type AppResourceSnapshot, getAppResource, invalidateAppResource, type ResourceScope, registerAppResourceRefreshHandler } from './appResource';
 
 interface AppResourceContextValue {
     snapshot: AppResourceSnapshot;
@@ -54,6 +54,10 @@ export function AppResourceProvider({ db, userIds, children }: PropsWithChildren
         },
         [db],
     );
+
+    // Expose refresh through the module-level handler so the sync layer (and the legacy
+    // AppDataProvider above us) can trigger a resource refresh without importing context.
+    useEffect(() => registerAppResourceRefreshHandler(refresh), [refresh]);
 
     const value = useMemo<AppResourceContextValue>(() => ({ snapshot: renderedSnapshot, refresh }), [renderedSnapshot, refresh]);
 

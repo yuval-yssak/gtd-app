@@ -17,7 +17,6 @@ import dayjs from 'dayjs';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { EditItemDialog } from '../../components/EditItemDialog';
-import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
@@ -68,7 +67,7 @@ function makeToggle<T>(setter: React.Dispatch<React.SetStateAction<T | null>>) {
 
 function NextActionsPage() {
     const { db } = Route.useRouteContext();
-    const { items, workContexts, people, routines, refreshItems, isInitialLoading } = useAppData();
+    const { items, workContexts, people, routines, refreshItems } = useAppData();
     const navigate = useNavigate();
     const [energyFilter, setEnergyFilter] = useState<EnergyLevel | null>(null);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
@@ -173,9 +172,7 @@ function NextActionsPage() {
                     ))}
                 </Stack>
             </Box>
-            {isInitialLoading ? (
-                <PageLoadingSpinner />
-            ) : nextActions.length === 0 ? (
+            {nextActions.length === 0 ? (
                 <Typography
                     sx={{
                         color: 'text.secondary',

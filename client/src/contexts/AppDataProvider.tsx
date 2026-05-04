@@ -1,19 +1,17 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, type PropsWithChildren, type ReactNode, use, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
-import { AppResourceProvider } from '../data/AppResourceProvider';
+import { AppResourceProvider, useAppResource } from '../data/AppResourceProvider';
+import { triggerAppResourceRefresh } from '../data/appResource';
+import { getInitialAuthBundle } from '../data/initialAuthBundle';
 import { getActiveAccount, getLoggedInAccounts, upsertAccount } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
-import { getItemsAcrossUsers } from '../db/itemHelpers';
 import { syncAllLoggedInUsers, syncSingleUser } from '../db/multiUserSync';
-import { getPeopleAcrossUsers } from '../db/personHelpers';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
-import { getRoutinesAcrossUsers } from '../db/routineHelpers';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnections, openSseConnections } from '../db/sseClient';
 import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
-import { getWorkContextsAcrossUsers } from '../db/workContextHelpers';
 import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
 import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
@@ -34,13 +32,6 @@ export interface AppData {
     workContexts: StoredWorkContext[];
     people: StoredPerson[];
     routines: StoredRoutine[];
-    /**
-     * True until the first IDB cache read completes on mount. List pages use this to render a
-     * loading state instead of their empty-state during the brief gap between component mount
-     * and `initializeFromCache` populating React state — otherwise a hard refresh briefly shows
-     * "no items" before the cached items appear.
-     */
-    isInitialLoading: boolean;
     refreshItems: () => Promise<void>;
     refreshWorkContexts: () => Promise<void>;
     refreshPeople: () => Promise<void>;
@@ -66,16 +57,28 @@ async function syncCalendarIntegrationsForActiveSession(): Promise<void> {
     await Promise.allSettled(integrations.map((i) => syncIntegration(i._id)));
 }
 
+interface AuthBundle {
+    account: StoredAccount | null;
+    loggedInAccounts: StoredAccount[];
+    loggedInUserIds: string[];
+    refreshItems: () => Promise<void>;
+    refreshWorkContexts: () => Promise<void>;
+    refreshPeople: () => Promise<void>;
+    refreshRoutines: () => Promise<void>;
+    refreshAccounts: () => Promise<void>;
+    syncAndRefresh: () => Promise<void>;
+}
+
 export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDatabase<MyDB> }>) {
-    const [account, setAccount] = useState<StoredAccount | null>(null);
-    const [loggedInAccounts, setLoggedInAccounts] = useState<StoredAccount[]>([]);
-    const [items, setItems] = useState<StoredItem[]>([]);
-    const [workContexts, setWorkContexts] = useState<StoredWorkContext[]>([]);
-    const [people, setPeople] = useState<StoredPerson[]>([]);
-    const [routines, setRoutines] = useState<StoredRoutine[]>([]);
-    // Flips to false once loadAll has finished its initial IDB read (or determined there's no
-    // active account). Routes use this to distinguish "still loading" from "loaded, genuinely empty".
-    const [isInitialLoading, setIsInitialLoading] = useState(true);
+    // Suspends on first mount until IDB hands back the active account + multi-session list.
+    // Initializing state from this resolved bundle (rather than from null/[] and patching later
+    // in a useEffect) avoids the boot-time flash where the resource snapshot built for an empty
+    // userIds set, returned [], and the UI rendered empty-state until the boot effect settled.
+    const initial = use(getInitialAuthBundle(db));
+    // The active account is sticky to whatever IDB had at boot — switching accounts triggers a
+    // page reload (see useAccounts), so a setter would be dead code here.
+    const account = initial.account;
+    const [loggedInAccounts, setLoggedInAccounts] = useState<StoredAccount[]>(initial.loggedInAccounts);
     const isOnline = useOnline();
     const isFirstOnlineRender = useRef(true); // Skips the first render of the isOnline effect — mount-time handling is done in loadAll()
 
@@ -83,26 +86,21 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // memoizing on it don't re-run for every accounts-array re-creation.
     const loggedInUserIds = useMemo(() => loggedInAccounts.map((a) => a.id), [loggedInAccounts]);
 
-    // Mirror state into a ref so the refresh* callbacks can read the freshest list
-    // without depending on `loggedInAccounts` (whose change would re-create every callback
-    // and ripple through child memoization). useEffect below keeps the ref synced.
+    // Mirror state into a ref so callbacks can read the freshest list without depending on
+    // `loggedInUserIds` (whose change would re-create every callback and ripple through memos).
     const loggedInUserIdsRef = useRef<string[]>([]);
     useEffect(() => {
         loggedInUserIdsRef.current = loggedInUserIds;
     }, [loggedInUserIds]);
 
-    const refreshItems = useCallback(async () => {
-        setItems(await getItemsAcrossUsers(db, loggedInUserIdsRef.current));
-    }, [db]);
-    const refreshWorkContexts = useCallback(async () => {
-        setWorkContexts(await getWorkContextsAcrossUsers(db, loggedInUserIdsRef.current));
-    }, [db]);
-    const refreshPeople = useCallback(async () => {
-        setPeople(await getPeopleAcrossUsers(db, loggedInUserIdsRef.current));
-    }, [db]);
-    const refreshRoutines = useCallback(async () => {
-        setRoutines(await getRoutinesAcrossUsers(db, loggedInUserIdsRef.current));
-    }, [db]);
+    // Each refreshXxx now just invalidates the resource for that scope; the AppResourceProvider's
+    // module-level handler swaps the snapshot inside startTransition so consumers re-suspend on
+    // the new promise rather than seeing a stale-then-fresh flicker. async signature kept so
+    // existing callers like `await refreshItems()` after a mutation continue to compile.
+    const refreshItems = useCallback(async () => triggerAppResourceRefresh('items'), []);
+    const refreshWorkContexts = useCallback(async () => triggerAppResourceRefresh('workContexts'), []);
+    const refreshPeople = useCallback(async () => triggerAppResourceRefresh('people'), []);
+    const refreshRoutines = useCallback(async () => triggerAppResourceRefresh('routines'), []);
 
     // Mirrors Better Auth's device-multi-session list into the IDB `accounts` store before
     // reading from it. Without this seed, only the active session's account row exists at boot
@@ -138,7 +136,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // Re-reads accounts from IDB so add/remove-account flows can drive a unified-view
     // refresh without driving a full sync round-trip. Returns the freshly read list so
     // consumers (e.g. boot/online effects) can chain entity refreshes off the new ids.
-    const refreshAccounts = useCallback(async (): Promise<StoredAccount[]> => {
+    const refreshAccountsInternal = useCallback(async (): Promise<StoredAccount[]> => {
         await seedAccountsFromMultiSession();
         const accounts = await getLoggedInAccounts(db);
         setLoggedInAccounts(accounts);
@@ -148,32 +146,15 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
 
     // Guards against concurrent invocations from three independent paths: boot effect,
     // SSE callback, and SW push message. flushSyncQueue/pullFromServer have their own
-    // module-level guards, but this prevents redundant IDB reads and setState batches.
+    // module-level guards, but this prevents redundant entity-reads.
     const isSyncingRef = useRef(false);
     // When an SSE/push event arrives while syncAndRefresh is already running, setting this
     // flag ensures a follow-up sync runs after the current one finishes. Without it, the
     // incoming event would be silently dropped and the user wouldn't see the update.
     const syncRequestedWhileBusy = useRef(false);
-    // Prevents setState calls from in-flight syncAndRefresh/initializeFromCache after unmount
-    // (e.g. React Strict Mode double-mount, or fast navigation away during a network round-trip).
+    // Prevents resource-refresh calls from in-flight syncAndRefresh after unmount (e.g.
+    // React Strict Mode double-mount, or fast navigation away during a network round-trip).
     const unmountedRef = useRef(false);
-
-    // Reads every entity store once across all logged-in users and pushes the result into
-    // React state. Extracted so syncAndRefresh and the catch-up pull share one definition
-    // and so each call is a single concise level of abstraction.
-    const refreshAllEntitiesAcrossUsers = useCallback(async () => {
-        const userIds = loggedInUserIdsRef.current;
-        const [freshItems, freshWorkContexts, freshPeople, freshRoutines] = await Promise.all([
-            getItemsAcrossUsers(db, userIds),
-            getWorkContextsAcrossUsers(db, userIds),
-            getPeopleAcrossUsers(db, userIds),
-            getRoutinesAcrossUsers(db, userIds),
-        ]);
-        setItems(freshItems);
-        setWorkContexts(freshWorkContexts);
-        setPeople(freshPeople);
-        setRoutines(freshRoutines);
-    }, [db]);
 
     // Extracted so both the mount effect and the isOnline effect can call it.
     const syncAndRefresh = useCallback(async () => {
@@ -202,10 +183,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
 
             // Guard after the async work — component may have unmounted while awaiting network.
             if (unmountedRef.current) {
-                console.log('[debug-gcal-sync][client] syncAndRefresh: unmounted — skipping setState');
+                console.log('[debug-gcal-sync][client] syncAndRefresh: unmounted — skipping refresh');
                 return;
             }
-            await refreshAllEntitiesAcrossUsers();
+            triggerAppResourceRefresh('all');
         } finally {
             isSyncingRef.current = false;
             // If an SSE/push event arrived while we were syncing, do a lightweight catch-up
@@ -217,14 +198,14 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                 syncRequestedWhileBusy.current = false;
                 console.log('[debug-gcal-sync][client] running catch-up pull (event arrived during sync)');
                 syncAllLoggedInUsers(db)
-                    .then(async () => {
+                    .then(() => {
                         if (unmountedRef.current) return;
-                        await refreshAllEntitiesAcrossUsers();
+                        triggerAppResourceRefresh('all');
                     })
                     .catch((err) => console.error('[sync] catch-up pull failed:', err));
             }
         }
-    }, [db, refreshAllEntitiesAcrossUsers]);
+    }, [db]);
 
     // SSE callback receives the userId of the channel that fired. We trigger a per-user pull only —
     // re-syncing every account on every event would multiply network round-trips by N for no
@@ -246,43 +227,17 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                         await syncSingleUser(db, userId);
                     }
                     if (unmountedRef.current) return;
-                    await refreshAllEntitiesAcrossUsers();
+                    triggerAppResourceRefresh('all');
                 } catch (err) {
                     console.error('[sse] per-user sync failed:', err);
                 }
             })();
-        },
-        [db, refreshAllEntitiesAcrossUsers],
-    );
-
-    const initializeFromCache = useCallback(
-        async (acct: StoredAccount, accounts: StoredAccount[]) => {
-            // Show cached data immediately — works offline with no network round-trip.
-            // Reads span every logged-in account so the unified view is correct from frame 1.
-            const userIds = accounts.map((a) => a.id);
-            const [items, workContexts, people, routines] = await Promise.all([
-                getItemsAcrossUsers(db, userIds),
-                getWorkContextsAcrossUsers(db, userIds),
-                getPeopleAcrossUsers(db, userIds),
-                getRoutinesAcrossUsers(db, userIds),
-            ]);
-            // Skip setState if the component unmounted while the IDB reads were in flight.
-            if (unmountedRef.current) {
-                return;
-            }
-            setAccount(acct);
-            setItems(items);
-            setWorkContexts(workContexts);
-            setPeople(people);
-            setRoutines(routines);
         },
         [db],
     );
 
     // When the SW handles a push event it updates IndexedDB and then messages open tabs.
     // Without this listener the tab only sees fresh data after the next mount.
-    // db is initialized once in main.tsx and never changes, so syncAndRefresh has stable
-    // identity for the full component lifetime — no ref indirection needed.
     const onSwMessage = useCallback(
         (event: MessageEvent) => {
             if (event.data?.type === 'sync-complete') {
@@ -293,92 +248,37 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     );
 
     const loadAll = useCallback(async () => {
-        const acct = await getActiveAccount(db);
-        if (!acct) {
-            // No account — nothing to load. Drop the flag so the UI moves past its loading state
-            // (the route guard will redirect to /login, but if a child renders first it shouldn't
-            // be stuck on a spinner).
-            if (!unmountedRef.current) {
-                setIsInitialLoading(false);
-            }
+        // Initial state is already populated from getInitialAuthBundle (suspended on above).
+        // This effect's job is to (a) re-seed accounts from the multi-session network endpoint
+        // so a session signed in on another tab shows up here, and (b) kick off the first sync.
+        if (!initial.account) {
+            // No account in IDB — route guard redirects to /login. Nothing to sync.
             return;
         }
-        // Refresh accounts BEFORE initializing from cache so cross-user reads see every
-        // account; otherwise the very first render would only show the active account's
-        // entities, then flicker once accounts loaded.
-        const accounts = await refreshAccounts();
-        await initializeFromCache(acct, accounts);
-        // Cached data is now in React state — surface it to the UI immediately. The subsequent
-        // server sync will update what's on screen rather than gating the first paint.
-        if (!unmountedRef.current) {
-            setIsInitialLoading(false);
-        }
+        await refreshAccountsInternal();
         if (!navigator.onLine) {
             return;
         }
         await syncAndRefresh();
-    }, [db, initializeFromCache, refreshAccounts, syncAndRefresh]);
+    }, [initial.account, refreshAccountsInternal, syncAndRefresh]);
 
-    // Cross-account reassign overlay: while a /sync/reassign is in flight the source-account row
-    // is rewritten to render under the target account. Touches only fields safe to forge (userId
-    // + calendar config refs); the underlying IDB row is unchanged. See PendingReassignProvider.
-    const { items: itemOverrides, routines: routineOverrides } = usePendingReassignMaps();
-    const visibleItems = useMemo(() => {
-        if (itemOverrides.size === 0) {
-            return items;
-        }
-        return items.map((item) => {
-            const override = itemOverrides.get(item._id);
-            return override ? applyOverrideToItem(item, override) : item;
-        });
-    }, [items, itemOverrides]);
-    const visibleRoutines = useMemo(() => {
-        if (routineOverrides.size === 0) {
-            return routines;
-        }
-        return routines.map((routine) => {
-            const override = routineOverrides.get(routine._id);
-            return override ? applyOverrideToRoutine(routine, override) : routine;
-        });
-    }, [routines, routineOverrides]);
+    const refreshAccounts = useCallback(async () => {
+        await refreshAccountsInternal();
+    }, [refreshAccountsInternal]);
 
-    const appData: AppData = useMemo(
+    const authBundle = useMemo<AuthBundle>(
         () => ({
             account,
             loggedInAccounts,
             loggedInUserIds,
-            items: visibleItems,
-            workContexts,
-            people,
-            routines: visibleRoutines,
-            isInitialLoading,
-            refreshItems,
-            refreshWorkContexts,
-            refreshPeople,
-            refreshRoutines,
-            // Cast away the extra accounts return value — consumers don't need it; the
-            // internal call sites that do (loadAll) use it directly via refreshAccounts.
-            refreshAccounts: async () => {
-                await refreshAccounts();
-            },
-            syncAndRefresh,
-        }),
-        [
-            account,
-            loggedInAccounts,
-            loggedInUserIds,
-            visibleItems,
-            workContexts,
-            people,
-            visibleRoutines,
-            isInitialLoading,
             refreshItems,
             refreshWorkContexts,
             refreshPeople,
             refreshRoutines,
             refreshAccounts,
             syncAndRefresh,
-        ],
+        }),
+        [account, loggedInAccounts, loggedInUserIds, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines, refreshAccounts, syncAndRefresh],
     );
 
     /**
@@ -415,7 +315,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             .catch((err) => console.error('[boot] load failed:', err));
         return () => {
             unmounted = true; // guards the .then() callback below (local scope)
-            unmountedRef.current = true; // guards setState inside syncAndRefresh / initializeFromCache (shared scope)
+            unmountedRef.current = true; // guards triggerAppResourceRefresh inside syncAndRefresh (shared scope)
             isFirstOnlineRender.current = true; // reset so the isOnline effect skips correctly on Strict Mode remount
             closeSseConnections();
             navigator.serviceWorker?.removeEventListener('message', onSwMessage);
@@ -455,15 +355,58 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         // cleanup), making the online run skip entirely — silently dropping the reconnect flush.
     }, [isOnline, db, syncAndRefresh, onSseUpdateForUser]);
 
-    // AppResourceProvider is a no-op for current consumers — they still read entity arrays from the
-    // legacy `appData` context above. Step 3 will switch consumers to `useAppResource()` and remove
-    // the duplicate IDB reads. Mounting it here now keeps the resource snapshot in sync with the
-    // active userIds set so the cutover is one-step.
     return (
-        <AppDataContext.Provider value={appData}>
-            <AppResourceProvider db={db} userIds={loggedInUserIds}>
-                {children}
-            </AppResourceProvider>
-        </AppDataContext.Provider>
+        <AppResourceProvider db={db} userIds={loggedInUserIds}>
+            <AppDataInner authBundle={authBundle}>{children}</AppDataInner>
+        </AppResourceProvider>
     );
+}
+
+/**
+ * Inner consumer of AppResourceProvider. This is where Suspense fires — `use()` on each entity
+ * promise either returns the resolved array synchronously (cache hit) or throws to suspend.
+ * The reassign overlay is applied here so consumers see the same "items + override" shape.
+ */
+function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; children: ReactNode }) {
+    const { snapshot } = useAppResource();
+    const items = use(snapshot.items);
+    const workContexts = use(snapshot.workContexts);
+    const people = use(snapshot.people);
+    const routines = use(snapshot.routines);
+
+    // Cross-account reassign overlay: while a /sync/reassign is in flight the source-account row
+    // is rewritten to render under the target account. Touches only fields safe to forge (userId
+    // + calendar config refs); the underlying IDB row is unchanged. See PendingReassignProvider.
+    const { items: itemOverrides, routines: routineOverrides } = usePendingReassignMaps();
+    const visibleItems = useMemo(() => {
+        if (itemOverrides.size === 0) {
+            return items;
+        }
+        return items.map((item) => {
+            const override = itemOverrides.get(item._id);
+            return override ? applyOverrideToItem(item, override) : item;
+        });
+    }, [items, itemOverrides]);
+    const visibleRoutines = useMemo(() => {
+        if (routineOverrides.size === 0) {
+            return routines;
+        }
+        return routines.map((routine) => {
+            const override = routineOverrides.get(routine._id);
+            return override ? applyOverrideToRoutine(routine, override) : routine;
+        });
+    }, [routines, routineOverrides]);
+
+    const appData: AppData = useMemo(
+        () => ({
+            ...authBundle,
+            items: visibleItems,
+            workContexts,
+            people,
+            routines: visibleRoutines,
+        }),
+        [authBundle, visibleItems, workContexts, people, visibleRoutines],
+    );
+
+    return <AppDataContext.Provider value={appData}>{children}</AppDataContext.Provider>;
 }

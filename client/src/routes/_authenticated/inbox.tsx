@@ -52,7 +52,6 @@ import {
 } from '../../components/clarify/types';
 import { WaitingForFields } from '../../components/clarify/WaitingForFields';
 import { EditItemDialog } from '../../components/EditItemDialog';
-import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, collectItem } from '../../db/itemMutations';
@@ -255,7 +254,7 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
 
 function InboxPage() {
     const { db } = Route.useRouteContext();
-    const { account, items, workContexts, people, routines, refreshItems, isInitialLoading } = useAppData();
+    const { account, items, workContexts, people, routines, refreshItems } = useAppData();
     const { options: calendarOptions } = useCalendarOptions();
     const theme = useTheme();
     // Hide inline buttons and switch to swipe+bottom-sheet on screens narrower than 900px
@@ -526,9 +525,7 @@ function InboxPage() {
                     </Box>
                 )}
             </Paper>
-            {isInitialLoading ? (
-                <PageLoadingSpinner />
-            ) : inboxItems.length === 0 ? (
+            {inboxItems.length === 0 ? (
                 <Typography
                     sx={{
                         color: 'text.secondary',

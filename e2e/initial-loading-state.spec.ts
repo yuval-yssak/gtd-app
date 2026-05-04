@@ -4,13 +4,14 @@ import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
 // Hard-refresh on a populated account used to flash the empty-state ("Inbox zero — well done.")
-// for the frames between component mount and the IDB cache read completing. AppDataProvider now
-// exposes `isInitialLoading`, gating the empty-state branch on each list page until the first
-// IDB read resolves; routes render <PageLoadingSpinner /> while that flag is true.
+// for the frames between component mount and the IDB cache read completing. The Suspense
+// migration replaced the bespoke `isInitialLoading` flag with a route-level <Suspense> boundary
+// fed by an `AppResource` of cached IDB-read promises — `useAppData()` `use()`s those promises,
+// so the empty-state branch never renders until items resolve.
 //
-// On a fast dev machine the spinner is too brief to assert visually without flake (the IDB read
-// can resolve sub-frame). The contract this spec locks in instead: hard-refreshing a populated
-// account renders items normally — verifying the loading guard hasn't broken the post-load state.
+// On a fast dev machine the fallback is too brief to assert visually without flake (the IDB
+// read can resolve sub-frame). The contract this spec locks in instead: hard-refreshing a
+// populated account renders items normally — verifying Suspense hasn't broken the post-load state.
 test.describe('initial loading state', () => {
     test('hard refresh on inbox renders items after the loading gate', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `loading-inbox-${dayjs().valueOf()}@example.com`, async (page) => {

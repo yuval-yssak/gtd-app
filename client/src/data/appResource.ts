@@ -94,4 +94,25 @@ function replaceField(prev: AppResourceSnapshot, db: IDBPDatabase<MyDB>, userIds
 /** Test-only: drops the entire module cache. Real code should use scoped invalidation instead. */
 export function _resetAppResourceCacheForTests(): void {
     cache.clear();
+    refreshHandler = null;
+}
+
+// Module-level handler set by the active AppResourceProvider on mount. The sync layer and the
+// legacy AppDataProvider call `triggerAppResourceRefresh(scope)` without importing the provider
+// or threading context through their call sites — same shape as the SSE EventSource singleton.
+type RefreshHandler = (scope?: ResourceScope) => void;
+let refreshHandler: RefreshHandler | null = null;
+
+export function registerAppResourceRefreshHandler(handler: RefreshHandler): () => void {
+    refreshHandler = handler;
+    return () => {
+        if (refreshHandler === handler) {
+            refreshHandler = null;
+        }
+    };
+}
+
+/** No-op when no provider is mounted (e.g. during boot before _authenticated mounts). */
+export function triggerAppResourceRefresh(scope: ResourceScope = 'all'): void {
+    refreshHandler?.(scope);
 }

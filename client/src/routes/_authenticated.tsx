@@ -5,10 +5,12 @@ import IconButton from '@mui/material/IconButton';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, Outlet } from '@tanstack/react-router';
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { AccountSwitcher } from '../components/AccountSwitcher';
+import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { AppNav } from '../components/AppNav';
 import { NotificationNudge } from '../components/NotificationNudge';
+import { RouteFallback } from '../components/RouteFallback';
 import { AppDataProvider } from '../contexts/AppDataProvider';
 import { PendingReassignProvider } from '../contexts/PendingReassignProvider';
 import styles from './-_authenticated.module.css';
@@ -49,8 +51,15 @@ export function AuthenticatedLayout() {
             <Box component="main" className={styles.mainContent}>
                 <PendingReassignProvider db={db}>
                     <AppDataProvider db={db}>
-                        <Outlet />
-                        <NotificationNudge db={db} />
+                        {/* Inner boundary catches Suspense from `useAppData()`'s `use()` calls during the
+                            initial IDB read. The boot path then renders RouteFallback in place of every
+                            authenticated route until the per-user resource resolves. */}
+                        <AppErrorBoundary mode="page">
+                            <Suspense fallback={<RouteFallback />}>
+                                <Outlet />
+                                <NotificationNudge db={db} />
+                            </Suspense>
+                        </AppErrorBoundary>
                     </AppDataProvider>
                 </PendingReassignProvider>
             </Box>
