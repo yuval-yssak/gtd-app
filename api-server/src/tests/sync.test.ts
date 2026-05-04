@@ -94,6 +94,23 @@ async function pull(sessionCookie: string, opts: { since?: string; deviceId?: st
 /** Small delay to guarantee strictly-ordered ISO timestamps across sequential operations. */
 const tick = () => new Promise<void>((r) => setTimeout(r, 5));
 
+/**
+ * Polls a predicate against MongoDB until it returns true or the timeout elapses, then runs
+ * one final attempt so the eventual `expect(...)` reports a meaningful diff instead of "false".
+ * Use this for assertions that depend on the fire-and-forget purge in /sync/pull — a fixed
+ * `tick()` after pull is racy under CPU load (purge is multiple awaits), but polling lets the
+ * test pass as fast as the purge actually completes while staying flake-free under load.
+ */
+async function waitForPurge(predicate: () => Promise<boolean>, timeoutMs = 2000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (await predicate()) {
+            return;
+        }
+        await new Promise<void>((r) => setTimeout(r, 10));
+    }
+}
+
 // ─── POST /sync/push ────────────────────────────────────────────────────────
 
 describe('POST /sync/push', () => {
@@ -555,9 +572,8 @@ describe('Purge logic', () => {
         // dev-2 pulls → lastSyncedTs(dev-2) = S2 > S1 → triggers purge; floor = min(S1,S2) = S1
         await pull(cookie, { deviceId: 'dev-2' });
 
-        // Purge is fire-and-forget; give it a moment to complete before asserting
-        await tick();
-
+        // Purge is fire-and-forget — poll until it converges instead of guessing a fixed delay.
+        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
     });
 
@@ -568,8 +584,8 @@ describe('Purge logic', () => {
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
         await pull(cookie, { deviceId: 'dev-1' });
-        await tick();
 
+        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
     });
 
@@ -612,8 +628,8 @@ describe('Stale device cleanup', () => {
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
         await pull(cookie, { deviceId: 'dev-active' });
-        await tick();
 
+        await waitForPurge(async () => (await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })) === 0);
         expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
         expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-stale' })).toBe(0);
         // Active device still exists
@@ -652,8 +668,10 @@ describe('Stale device cleanup', () => {
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
         await pull(cookie, { deviceId: 'dev-active' });
-        await tick();
 
+        // Purge runs in two phases: first the abandoned device row is removed, then the now-
+        // unblocked operations purge fires. Wait for the second phase since it's the slower one.
+        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
         // Abandoned (device, user) row pruned, so ops can be purged
         expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-abandoned' })).toBe(0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
@@ -712,8 +730,8 @@ describe('Stale device cleanup', () => {
         await push(aliceCookie, 'dev-alice-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
         await pull(aliceCookie, { deviceId: 'dev-alice-active' });
-        await tick();
 
+        await waitForPurge(async () => (await db.collection('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })) === 0);
         expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-multi::${aliceId}` })).toBe(0);
         expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-multi::${bobId}` })).toBe(1);
         // bob still uses dev-multi → push subscription survives
@@ -768,9 +786,9 @@ describe('Multi-device round-trip', () => {
         // advances past the update op — otherwise min(lastSyncedTs) never reaches it.
         await tick();
         await pull(dev2Cookie, { deviceId: 'dev-2' });
-        await tick();
 
         // Both devices have now pulled past all ops → purge fires → operations collection empty
+        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
     });
 });
