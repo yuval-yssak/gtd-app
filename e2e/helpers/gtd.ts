@@ -11,11 +11,24 @@ import type {
     SyncOperation,
 } from '../../client/src/types/MyDB';
 
+/**
+ * Awaits the dev-tools harness on the given page. mountDevTools() runs after the async
+ * `await openAppDB()` in main.tsx, so a `page.goto(<route>)` that resolves on the `load`
+ * event can race the assignment to `window.__gtd`. Every gtd.* helper below funnels through
+ * this guard via the Proxy at the bottom — call sites don't need to remember to wait.
+ *
+ * The 5s timeout is the default Playwright matches; if the harness still isn't there it's a
+ * real bug (mountDevTools didn't run, e.g. wrong host/env) and we want a clear failure.
+ */
+async function waitForHarness(page: Page): Promise<void> {
+    await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
+}
+
 // Typed wrappers around window.__gtd.* that hide the page.evaluate() boilerplate.
 // All functions accept a Page as the first argument and run the corresponding __gtd
 // method in the browser context, returning a typed result.
 
-export const gtd = {
+const gtdImpl = {
     // ── List / query ─────────────────────────────────────────────────────────
     listItems: (page: Page): Promise<StoredItem[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { listItems(): Promise<StoredItem[]> } }).__gtd.listItems()),
@@ -347,3 +360,21 @@ export const gtd = {
             ).__gtd.getAllSyncConfigs(),
         ),
 };
+
+/**
+ * Wraps every method on gtdImpl so the dev-tools harness is awaited before the page.evaluate
+ * fires. Without this, helpers called shortly after page.goto() can race the async
+ * mountDevTools() in main.tsx and see `window.__gtd === undefined`.
+ */
+export const gtd = new Proxy(gtdImpl, {
+    get(target, prop) {
+        const fn = (target as Record<string | symbol, unknown>)[prop];
+        if (typeof fn !== 'function') {
+            return fn;
+        }
+        return async (page: Page, ...rest: unknown[]) => {
+            await waitForHarness(page);
+            return (fn as (page: Page, ...args: unknown[]) => Promise<unknown>)(page, ...rest);
+        };
+    },
+}) as typeof gtdImpl;
