@@ -17,7 +17,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useState } from 'react';
+import { useState, useTransition } from 'react';
 import type { ReassignRoutineEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
@@ -214,7 +214,7 @@ function buildTemplate(form: FormState) {
 export function RoutineDialog({ db, userId, workContexts, people, routine, onClose, onSaved }: Props) {
     const isEdit = routine !== undefined;
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
-    const [isSaving, setIsSaving] = useState(false);
+    const [isSaving, startSaving] = useTransition();
     const { options: calendarOptions } = useCalendarOptions();
     const { loggedInAccounts } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
@@ -242,7 +242,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
         patch({ peopleIds: ids });
     }
 
-    async function onSave() {
+    function onSave() {
         const trimmedTitle = form.title.trim();
         if (!trimmedTitle || !form.rrule || isSaving) {
             return;
@@ -251,8 +251,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             return;
         }
 
-        setIsSaving(true);
-        try {
+        startSaving(async () => {
             const finalRrule = buildFinalRrule(form.rrule, form.endsMode, form.endsDate, form.endsCount);
             const template = buildTemplate(form);
             const calendarItemTemplate =
@@ -439,9 +438,7 @@ export function RoutineDialog({ db, userId, workContexts, people, routine, onClo
             // and on new-routine creates (which can't be cross-account by definition).
             await onSaved();
             onClose();
-        } finally {
-            setIsSaving(false);
-        }
+        });
     }
 
     /**

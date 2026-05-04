@@ -21,7 +21,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { ReassignItemEditPatch } from '../api/syncApi';
 import { useAppData } from '../contexts/AppDataProvider';
@@ -127,8 +127,10 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
     const [ownerUserId, setOwnerUserId] = useState(item.userId);
     // Reassign error surfaced inline (e.g. "select a target calendar before saving").
     const [reassignError, setReassignError] = useState<string | null>(null);
-    // Re-entry guard — rapid double-clicks on Save must not fire two mutations.
-    const [isSaving, setIsSaving] = useState(false);
+    // Re-entry guard — rapid double-clicks on Save must not fire two mutations. useTransition does
+    // not dedupe successive startTransition calls, so the `isSaving` short-circuit at the top of
+    // onSave (and `saveDisabled` on the Save button) is what actually blocks double-submits.
+    const [isSaving, startSaving] = useTransition();
     // Routine-generated items can't be reassigned — disable the picker and show a hint instead.
     const isRoutineGenerated = Boolean(item.routineId);
 
@@ -160,7 +162,7 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
 
     const saveDisabled = isSaveDisabled(title, status, calForm, wfForm) || isSaving;
 
-    async function onSave() {
+    function onSave() {
         if (isSaving) {
             return;
         }
@@ -187,9 +189,8 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
             onClose();
             return;
         }
-        setIsSaving(true);
         setReassignError(null);
-        try {
+        startSaving(async () => {
             if (path.kind === 'statusTransition') {
                 await saveViaStatusTransition(normalizeTitleAndNotes(item, trimmedTitle, notes.trim()));
             } else {
@@ -197,9 +198,7 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
             }
             await onSaved();
             onClose();
-        } finally {
-            setIsSaving(false);
-        }
+        });
     }
 
     /**

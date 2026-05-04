@@ -25,7 +25,7 @@ import Typography from '@mui/material/Typography';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import {
     type CalendarIntegration,
     type CalendarSyncConfig,
@@ -709,24 +709,24 @@ interface AddCalendarDialogProps {
 
 function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded }: AddCalendarDialogProps) {
     const [selectedId, setSelectedId] = useState(hasAtLeastOne(availableCalendars) ? availableCalendars[0].id : '');
-    const [isSaving, setIsSaving] = useState(false);
+    const [isSaving, startSaving] = useTransition();
     const [saveError, setSaveError] = useState<string | null>(null);
 
-    async function onConfirm() {
+    function onConfirm() {
         if (!selectedId) {
             return;
         }
-        setIsSaving(true);
         setSaveError(null);
-        try {
-            const displayName = availableCalendars.find((c) => c.id === selectedId)?.name;
-            await createSyncConfig(integrationId, { calendarId: selectedId, ...(displayName ? { displayName } : {}) });
-            onAdded();
-        } catch (err) {
-            console.error('[calendar] add sync config failed:', err);
-            setSaveError(formatAddCalendarError(err));
-            setIsSaving(false);
-        }
+        startSaving(async () => {
+            try {
+                const displayName = availableCalendars.find((c) => c.id === selectedId)?.name;
+                await createSyncConfig(integrationId, { calendarId: selectedId, ...(displayName ? { displayName } : {}) });
+                onAdded();
+            } catch (err) {
+                console.error('[calendar] add sync config failed:', err);
+                setSaveError(formatAddCalendarError(err));
+            }
+        });
     }
 
     return (
@@ -865,7 +865,7 @@ interface DisconnectDialogProps {
 
 function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: DisconnectDialogProps) {
     const [action, setAction] = useState<UnlinkAction>('keepLinkedEntities');
-    const [isDeleting, setIsDeleting] = useState(false);
+    const [isDeleting, startDeleting] = useTransition();
     const [deleteError, setDeleteError] = useState<string | null>(null);
     const { syncAndRefresh } = useAppData();
     const isMountedRef = useRef(true);
@@ -885,20 +885,21 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: Disc
         }
     }, [open]);
 
-    async function onConfirm() {
-        setIsDeleting(true);
+    function onConfirm() {
         setDeleteError(null);
-        try {
-            await deleteIntegration(integrationId, action);
-            onDisconnected();
-            onClose();
-            // Sync IDB so calendar items removed server-side are reflected locally immediately.
-            syncAndRefresh().catch(() => {});
-        } catch {
-            if (isMountedRef.current) setDeleteError('Failed to disconnect. Please try again.');
-        } finally {
-            if (isMountedRef.current) setIsDeleting(false);
-        }
+        startDeleting(async () => {
+            try {
+                await deleteIntegration(integrationId, action);
+                onDisconnected();
+                onClose();
+                // Sync IDB so calendar items removed server-side are reflected locally immediately.
+                syncAndRefresh().catch(() => {});
+            } catch {
+                // isMountedRef guards the error setter — useTransition discards isPending writes
+                // automatically on unmount, so it doesn't need its own guard.
+                if (isMountedRef.current) setDeleteError('Failed to disconnect. Please try again.');
+            }
+        });
     }
 
     return (

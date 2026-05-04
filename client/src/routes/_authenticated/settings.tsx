@@ -13,7 +13,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import classNames from 'classnames';
 import type { IDBPDatabase } from 'idb';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useTransition } from 'react';
 import { getPushStatus } from '../../api/pushApi';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -453,7 +453,7 @@ function isBrowserPushCapable() {
 
 function NotificationsSection({ db }: { db: IDBPDatabase<MyDB> }) {
     const [status, setStatus] = useState<NotificationStatus>(() => (isBrowserPushCapable() ? 'loading' : 'unsupported'));
-    const [isRequesting, setIsRequesting] = useState(false);
+    const [isRequesting, startRequesting] = useTransition();
 
     // Resolves the current state by combining the browser's authoritative `Notification.permission`
     // with a `/push/status` round-trip — both must be OK for the section to show "enabled".
@@ -480,15 +480,15 @@ function NotificationsSection({ db }: { db: IDBPDatabase<MyDB> }) {
         void refreshStatus();
     }, [refreshStatus]);
 
-    async function onEnableOrRegister() {
-        setIsRequesting(true);
-        try {
-            await requestAndRegisterPushSubscription(db);
-        } finally {
-            // Re-derive status from the browser + server regardless of whether the call succeeded.
-            await refreshStatus();
-            setIsRequesting(false);
-        }
+    function onEnableOrRegister() {
+        startRequesting(async () => {
+            try {
+                await requestAndRegisterPushSubscription(db);
+            } finally {
+                // Re-derive status from the browser + server regardless of whether the call succeeded.
+                await refreshStatus();
+            }
+        });
     }
 
     return (

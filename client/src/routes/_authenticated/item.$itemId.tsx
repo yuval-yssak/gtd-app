@@ -19,7 +19,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
-import { useState } from 'react';
+import { useState, useTransition } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { CalendarFields } from '../../components/clarify/CalendarFields';
 import { NextActionFields } from '../../components/clarify/NextActionFields';
@@ -173,7 +173,7 @@ function InboxClarifyContent({ item, db, dest, workContexts, people, refreshItem
     const [nextActionForm, setNextActionForm] = useState<NextActionFormState>(emptyNextAction);
     const [calendarForm, setCalendarForm] = useState<CalendarFormState>(emptyCalendar);
     const [waitingForForm, setWaitingForForm] = useState<WaitingForFormState>(emptyWaitingFor);
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isSubmitting, startSubmitting] = useTransition();
 
     function isConfirmDisabled(): boolean {
         if (!destination) {
@@ -188,12 +188,11 @@ function InboxClarifyContent({ item, db, dest, workContexts, people, refreshItem
         return false;
     }
 
-    async function onConfirm() {
+    function onConfirm() {
         if (!destination || isSubmitting) {
             return;
         }
-        setIsSubmitting(true);
-        try {
+        startSubmitting(async () => {
             if (destination === 'trash') {
                 await clarifyToTrash(db, item);
             } else if (destination === 'done') {
@@ -206,11 +205,10 @@ function InboxClarifyContent({ item, db, dest, workContexts, people, refreshItem
                 await clarifyToWaitingFor(db, item, buildWaitingForMeta(waitingForForm));
             }
             await refreshItems();
-        } finally {
-            setIsSubmitting(false);
-        }
-        // Navigate after finally so a throwing refreshItems() doesn't silently dismiss the page.
-        onBack();
+            // Navigate only after refreshItems() resolves — a throw here propagates out of the
+            // transition and skips onBack(), so we don't silently dismiss the page on failure.
+            onBack();
+        });
     }
 
     return (
@@ -352,15 +350,14 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
     const [moveDest, setMoveDest] = useState<MoveDest | null>(null);
     const [calForm, setCalForm] = useState<CalendarFormState>(emptyCalendar);
     const [wfForm, setWfForm] = useState<WaitingForFormState>(emptyWaitingFor);
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isSubmitting, startSubmitting] = useTransition();
 
-    async function onSave() {
+    function onSave() {
         const trimmedTitle = title.trim();
         if (!trimmedTitle || isSubmitting) {
             return;
         }
-        setIsSubmitting(true);
-        try {
+        startSubmitting(async () => {
             const trimmedNotes = notes.trim();
             // Destructure out all mutable optional fields before re-applying from form state,
             // so clearing a field (e.g. removing all contexts) actually removes it from the item.
@@ -391,56 +388,43 @@ function NextActionEditContent({ item, db, workContexts, people, refreshItems, o
             };
             await updateItem(db, updated);
             await refreshItems();
-        } finally {
-            setIsSubmitting(false);
-        }
-        // Navigate after finally so a throwing refreshItems() doesn't silently dismiss the page.
-        onBack();
+            // Navigate only after refreshItems() resolves — a throw skips onBack(), so we don't
+            // silently dismiss the page on failure.
+            onBack();
+        });
     }
 
-    async function onMoveInstant(mutation: (db: IDBPDatabase<MyDB>, item: StoredItem) => Promise<StoredItem>) {
+    function onMoveInstant(mutation: (db: IDBPDatabase<MyDB>, item: StoredItem) => Promise<StoredItem>) {
         if (isSubmitting) {
             return;
         }
-        setIsSubmitting(true);
-        try {
+        startSubmitting(async () => {
             await mutation(db, item);
             await refreshItems();
-        } finally {
-            setIsSubmitting(false);
-        }
-        // Navigate after finally so a throwing refreshItems() doesn't silently dismiss the page.
-        onBack();
+            onBack();
+        });
     }
 
-    async function onConfirmCalendar() {
+    function onConfirmCalendar() {
         if (isSubmitting) {
             return;
         }
-        setIsSubmitting(true);
-        try {
+        startSubmitting(async () => {
             await clarifyToCalendar(db, item, buildCalendarMeta(calForm, calendarOptions));
             await refreshItems();
-        } finally {
-            setIsSubmitting(false);
-        }
-        // Navigate after finally so a throwing refreshItems() doesn't silently dismiss the page.
-        onBack();
+            onBack();
+        });
     }
 
-    async function onConfirmWaitingFor() {
+    function onConfirmWaitingFor() {
         if (isSubmitting) {
             return;
         }
-        setIsSubmitting(true);
-        try {
+        startSubmitting(async () => {
             await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
             await refreshItems();
-        } finally {
-            setIsSubmitting(false);
-        }
-        // Navigate after finally so a throwing refreshItems() doesn't silently dismiss the page.
-        onBack();
+            onBack();
+        });
     }
 
     return (
@@ -626,28 +610,26 @@ function SimpleEditContent({ item, db, refreshItems, onBack }: SimpleEditProps) 
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
-    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [isSubmitting, startSubmitting] = useTransition();
 
     const pageTitle = item.status === 'calendar' ? 'Edit calendar item' : 'Edit waiting for';
 
-    async function onSave() {
+    function onSave() {
         const trimmedTitle = title.trim();
         if (!trimmedTitle || isSubmitting) {
             return;
         }
-        setIsSubmitting(true);
-        try {
+        startSubmitting(async () => {
             const trimmedNotes = notes.trim();
             // exactOptionalPropertyTypes: omit the key rather than assigning undefined
             const { notes: _n, ...rest } = item;
             const updated: StoredItem = trimmedNotes ? { ...rest, title: trimmedTitle, notes: trimmedNotes } : { ...rest, title: trimmedTitle };
             await updateItem(db, updated);
             await refreshItems();
-        } finally {
-            setIsSubmitting(false);
-        }
-        // Navigate after finally so a throwing refreshItems() doesn't silently dismiss the page.
-        onBack();
+            // Navigate only after refreshItems() resolves — a throw skips onBack(), so we don't
+            // silently dismiss the page on failure.
+            onBack();
+        });
     }
 
     return (
