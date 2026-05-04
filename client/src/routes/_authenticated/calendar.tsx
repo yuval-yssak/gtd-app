@@ -14,7 +14,6 @@ import dayjs from 'dayjs';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { EditItemDialog } from '../../components/EditItemDialog';
-import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
@@ -27,7 +26,7 @@ export const Route = createFileRoute('/_authenticated/calendar')({
 
 function CalendarPage() {
     const { db } = Route.useRouteContext();
-    const { items, routines, people, workContexts, refreshItems, isInitialLoading } = useAppData();
+    const { items, routines, people, workContexts, refreshItems } = useAppData();
     const navigate = useNavigate();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
@@ -63,23 +62,6 @@ function CalendarPage() {
             setEditingItem(item);
         }
     };
-
-    if (isInitialLoading) {
-        return (
-            <Box>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 3,
-                    }}
-                >
-                    Calendar
-                </Typography>
-                <PageLoadingSpinner />
-            </Box>
-        );
-    }
 
     if (calendarItems.length === 0) {
         return (

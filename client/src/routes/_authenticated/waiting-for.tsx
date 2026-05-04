@@ -15,7 +15,6 @@ import dayjs from 'dayjs';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { EditItemDialog } from '../../components/EditItemDialog';
-import { PageLoadingSpinner } from '../../components/PageLoadingSpinner';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
@@ -29,7 +28,7 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
-    const { items, people, routines, workContexts, refreshItems, isInitialLoading } = useAppData();
+    const { items, people, routines, workContexts, refreshItems } = useAppData();
     const navigate = useNavigate();
     const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
 
@@ -60,23 +59,6 @@ function WaitingForPage() {
     };
 
     const isOverdue = (item: StoredItem) => item.expectedBy !== undefined && item.expectedBy < dayjs().format('YYYY-MM-DD');
-
-    if (isInitialLoading) {
-        return (
-            <Box>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 3,
-                    }}
-                >
-                    Waiting For
-                </Typography>
-                <PageLoadingSpinner />
-            </Box>
-        );
-    }
 
     if (waitingItems.length === 0) {
         return (
