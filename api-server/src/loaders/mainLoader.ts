@@ -1,6 +1,7 @@
 import { type Db, MongoClient } from 'mongodb';
 import { type Auth, createAuth } from '../auth/betterAuth.js';
 import { mongoDBConfig } from '../config.js';
+import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
@@ -48,6 +49,7 @@ async function loadDataAccess(customDBName?: string) {
         calendarIntegrationsDAO.init(dbClient, resolvedDBName),
         calendarSyncConfigsDAO.init(dbClient, resolvedDBName),
         sentEmailsDAO.init(dbClient, resolvedDBName),
+        apiTokensDAO.init(dbClient, resolvedDBName),
     ]);
     // Convert any legacy single-cursor-per-device rows to per-(device, user) shape.
     // Idempotent + boot-only — see deviceSyncStateMigration.ts.

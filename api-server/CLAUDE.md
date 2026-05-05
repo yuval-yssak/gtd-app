@@ -5,12 +5,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev          # Start dev server with ts-node-dev (hot reload) on port 4000
+npm run dev          # Start dev server with tsx watch (hot reload) on port 4000
 npm run build        # Compile TypeScript to build/
 npm start            # Run compiled server (production)
-npm test             # Run Vitest tests
-npm run check        # Biome lint check
-npm run fix          # Auto-fix lint + format (Biome)
+npm run test         # Run Vitest tests
+npm run typecheck    # tsc --noEmit
+npm run lint         # Biome lint check
+npm run lint:fix     # Auto-fix lint + format (Biome)
 ```
 
 Run a single test file: `npx vitest run src/tests/auth.test.ts`
@@ -41,7 +42,7 @@ All OAuth routes are handled by Better Auth: `GET|POST /auth/*` → `auth.handle
 1. Create a router in `src/routes/<feature>.ts`
 2. Register it in `index.ts` with `.route('/feature', featureRouter)` on the Hono app
 
-The items router (`src/routes/items.ts`) is active with `POST /items` and `GET /items` handlers.
+Currently mounted: `/sync` (offline-first batch sync), `/push` (web push subscriptions), `/devices` (device-side session list), `/calendar` (Google Calendar integration), `/auth/*` (Better Auth handler), and `/dev` (dev-only login/reset, mounted only when `NODE_ENV !== 'production'`). There is no top-level `/items` REST router — all item mutations flow through `POST /sync/push` as `OperationInterface` snapshots.
 
 ## Environment Variables (`.env`)
 
@@ -64,6 +65,6 @@ PORT=4000
 
 ## Key Types
 
-- `ItemInterface` (`src/types/entities.ts`) — `status` is `inbox | nextAction | calendar | waitingFor | done | trash`; `user` is a `string` UUID (Better Auth ID, not `ObjectId`); optional GTD fields (`workContexts`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `timeStart`, `timeEnd`) vary by status
+- `ItemInterface` (`src/types/entities.ts`) — `status` is `inbox | nextAction | calendar | waitingFor | somedayMaybe | done | trash`; `user` is a `string` UUID (Better Auth ID, not `ObjectId`); optional GTD fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`) vary by status
 - `AuthVariables` (`src/types/authTypes.ts`) — Hono context variables `{ session: Session }` for typed `c.get('session')`
 - `Session` — inferred from Better Auth via `Auth['$Infer']['Session']`

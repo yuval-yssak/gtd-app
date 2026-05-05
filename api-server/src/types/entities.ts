@@ -92,6 +92,17 @@ export interface ItemInterface {
      * enabling last-write-wins conflict resolution only when GCal actually changed it.
      */
     lastSyncedNotes?: string;
+    /**
+     * Caller-supplied dedupe key, set only by the public API. Sparse-unique on (user, externalId)
+     * so re-running an import with the same key upserts instead of creating duplicates.
+     */
+    externalId?: string;
+    /**
+     * sha256 of `${title}\n${notes ?? ''}` at creation time. Set only by the public API on inbox items
+     * so a duplicate capture within the dedupe window can return the existing item instead of inserting
+     * a new one. Recomputed only on create — later edits do not update it.
+     */
+    contentHash?: string;
 }
 
 export interface RoutineItemTemplate {
@@ -386,3 +397,22 @@ export interface CalendarSyncConfigInterface {
 
 /** Union of all entity types that can appear as an operation snapshot. */
 export type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface;
+
+/**
+ * Personal API token issued by the user from the app's settings page. Authenticates calls to
+ * the public `/v1/*` API. Only the sha256 hash is stored — the plaintext is shown to the user
+ * exactly once at creation.
+ */
+export interface ApiTokenInterface {
+    _id: string;
+    user: string; // Better Auth user ID
+    /** sha256 hex of the plaintext token (`gtd_<random>`). Unique. */
+    tokenHash: string;
+    /** Human label provided at creation, e.g. "iOS Shortcut", "Local MCP". */
+    label: string;
+    createdTs: string;
+    /** Updated best-effort on every authenticated request. May lag a few seconds behind. */
+    lastUsedTs?: string;
+    /** Set when the token was revoked. Once set, the token can never authenticate again. */
+    revokedTs?: string;
+}

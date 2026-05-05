@@ -9,6 +9,7 @@ import { calendarRoutes } from './routes/calendar.js';
 import { deviceRoutes } from './routes/devices.js';
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
+import { v1ItemsRoutes } from './routes/v1Items.js';
 
 function resolveCommitHash() {
     try {
@@ -26,8 +27,9 @@ const app = new Hono()
             // Allow all origins in dev; restrict to clientUrl in production
             origin: (origin) => (process.env.NODE_ENV !== 'production' ? origin : origin === clientUrl ? origin : null),
             credentials: true, // required so browsers send cookies cross-origin
-            // X-Device-Id lets the auth middleware track which devices host which accounts
-            allowHeaders: ['Content-Type', 'X-Device-Id'],
+            // X-Device-Id lets the auth middleware track which devices host which accounts.
+            // Authorization carries `Bearer gtd_<token>` for the public /v1 API.
+            allowHeaders: ['Content-Type', 'X-Device-Id', 'Authorization'],
             // PATCH needed for partial updates (e.g., calendar sync config)
             allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
         }),
@@ -38,6 +40,7 @@ const app = new Hono()
     .route('/push', pushRoutes)
     .route('/devices', deviceRoutes)
     .route('/calendar', calendarRoutes)
+    .route('/v1', v1ItemsRoutes)
     .get('/version', (c) => c.json({ commitHash: COMMIT_HASH }));
 
 // Exported for Hono RPC — client imports this type to get a fully-typed fetch client
