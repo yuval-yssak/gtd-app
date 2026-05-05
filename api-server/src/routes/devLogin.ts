@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { generateId } from 'better-auth';
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
+import { issueApiToken } from '../auth/apiTokens.js';
 import { SESSION_COOKIE_NAME } from '../auth/constants.js';
 import { auth, db } from '../loaders/mainLoader.js';
 
@@ -470,6 +471,29 @@ export const devLoginRoutes = new Hono()
         const ctx: Parameters<typeof upsertCalendarItem>[2] = { userId: body.userId, now, ops: [] };
         await upsertCalendarItem(body.event, { integration, config }, ctx);
         return c.json({ ok: true, opsRecorded: ctx.ops.length });
+    })
+
+    // POST /dev/api-tokens — issue a personal API token for the currently logged-in user.
+    // Stand-in for a settings-page mint UI: the dev runs this from a browser/curl with their
+    // session cookie and pastes the resulting plaintext into their MCP env file.
+    // Production parity will require the same endpoint behind the regular session middleware
+    // plus a settings-page token list/revoke UI.
+    .post('/api-tokens', async (c) => {
+        const session = await auth.api.getSession({ headers: c.req.raw.headers });
+        if (!session) {
+            return c.json({ error: 'Unauthorized: log in first' }, 401);
+        }
+        // Dev-only safety net: cap mints per user so an accidental loop can't fill the collection.
+        // Production will gate this behind a settings UI with explicit user actions and revoke flow.
+        const existing = await db.collection('apiTokens').countDocuments({ user: session.user.id });
+        if (existing >= 50) {
+            return c.json({ error: 'Token cap reached (50). Revoke unused tokens before minting new ones.' }, 429);
+        }
+        const body = await c.req.json<{ label?: string }>().catch(() => ({}) as { label?: string });
+        const label = body.label?.trim() || 'unlabeled';
+        const { plaintext, record } = await issueApiToken(session.user.id, label);
+        // plaintext is shown exactly once — caller is responsible for storing it.
+        return c.json({ id: record._id, label: record.label, createdTs: record.createdTs, plaintext });
     })
 
     // GET /dev/calendar/integrations?userId=... — read calendarIntegrations rows for a user

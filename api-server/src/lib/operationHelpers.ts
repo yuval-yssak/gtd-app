@@ -6,17 +6,34 @@ import type { EntitySnapshot, OperationInterface } from '../types/entities.js';
 // `entityType` widened to all four entity types so the reassign endpoint (which moves
 // people / workContexts as well as items / routines) can publish ops without a parallel helper.
 type RecordOperationInput =
-    | { entityType: 'item' | 'routine' | 'person' | 'workContext'; entityId: string; snapshot: EntitySnapshot; opType: 'create' | 'update'; now: string }
-    | { entityType: 'item' | 'routine' | 'person' | 'workContext'; entityId: string; snapshot: null; opType: 'delete'; now: string };
+    | {
+          entityType: 'item' | 'routine' | 'person' | 'workContext';
+          entityId: string;
+          snapshot: EntitySnapshot;
+          opType: 'create' | 'update';
+          now: string;
+          deviceId?: string;
+      }
+    | {
+          entityType: 'item' | 'routine' | 'person' | 'workContext';
+          entityId: string;
+          snapshot: null;
+          opType: 'delete';
+          now: string;
+          deviceId?: string;
+      };
 
-/** Records a server-originated operation so all devices learn about the change via sync pull. Returns the created operation. */
+/**
+ * Records a server-originated operation so all devices learn about the change via sync pull.
+ * `deviceId` defaults to 'server' for ops with no real originating device (calendar webhook,
+ * routine generator, etc.). The public API passes `api:<tokenId>` so the device value reflects
+ * which integration drove the change. Returns the created operation.
+ */
 export async function recordOperation(userId: string, op: RecordOperationInput): Promise<OperationInterface> {
-    // deviceId: 'server' — server-originated ops have no real device; the sync pull
-    // mechanism filters by ts, not deviceId, so this value is just a marker.
     const operation: OperationInterface = {
         _id: randomUUID(),
         user: userId,
-        deviceId: 'server',
+        deviceId: op.deviceId ?? 'server',
         ts: op.now,
         entityType: op.entityType,
         entityId: op.entityId,
