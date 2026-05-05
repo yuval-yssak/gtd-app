@@ -46,16 +46,20 @@ src/
 ├── auth/
 │   ├── betterAuth.ts              # Better Auth OAuth config (Google + GitHub)
 │   ├── middleware.ts              # authenticateRequest — session → Hono context
+│   ├── apiTokens.ts               # Public-API token issuance + bearer resolver (sha256 storage)
+│   ├── bearerMiddleware.ts        # authenticateBearer — Authorization: Bearer gtd_… → c.var.apiAuth
 │   └── constants.ts               # Cookie name constant
 ├── routes/
 │   ├── sync.ts                    # Sync endpoints (bootstrap, push, pull, SSE)
+│   ├── v1Items.ts                 # Public REST API (POST/GET items, GET :id, complete)
 │   ├── push.ts                    # Web Push subscription management
 │   ├── calendar.ts                # Google Calendar OAuth + management
-│   └── devLogin.ts                # Dev-only login helper (non-production)
+│   └── devLogin.ts                # Dev-only login + token mint (non-production)
 ├── dataAccess/
 │   ├── abstractDAO.ts             # Generic MongoDB wrapper (CRUD, bulk, aggregation)
-│   ├── itemsDAO.ts                # Items collection
+│   ├── itemsDAO.ts                # Items collection (incl. externalId / contentHash indexes)
 │   ├── operationsDAO.ts           # Sync operation log
+│   ├── apiTokensDAO.ts            # Personal API tokens (hashed plaintext)
 │   ├── routinesDAO.ts             # Recurring task templates
 │   ├── peopleDAO.ts               # Contacts
 │   ├── workContextsDAO.ts         # Context tags
@@ -83,6 +87,7 @@ src/
     ├── auth.test.ts               # Authentication tests
     ├── calendar.test.ts           # Calendar integration tests
     ├── tokenEncryption.test.ts    # Encryption tests
+    ├── v1Items.test.ts            # Public /v1 API tests (bearer auth, dedupe, pagination, complete)
     └── helpers.ts                 # Test utilities (oauthLogin, authenticatedRequest)
 ```
 
@@ -121,16 +126,32 @@ src/
 | `PATCH` | `/calendar/integrations/:id` | Yes | Update integration (e.g. change target calendar) |
 | `DELETE` | `/calendar/integrations/:id?action=...` | Yes | Unlink integration (`keepEvents`, `deleteEvents`, `deleteAll`) |
 
+### Public API (`/v1/*`)
+
+External integrations and the local MCP server. All endpoints take `Authorization: Bearer gtd_<token>`. Full contract: [`docs/PUBLIC_API.md`](../docs/PUBLIC_API.md).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/v1/items` | Create an inbox item. Idempotent: `externalId` (strict, sparse-unique) or 24h content-hash dedupe (best-effort). |
+| `GET` | `/v1/items` | List/search with `q`, `status`, `since`, opaque cursor pagination. |
+| `GET` | `/v1/items/:id` | Fetch one item. |
+| `POST` | `/v1/items/:id/complete` | Mark done. Idempotent on already-done items. |
+
+Public-API mutations record an `OperationInterface` with `deviceId="api:<tokenId>"` and reuse the same SSE / web-push / GCal pushback pipeline as `/sync/push` — first-party clients see public-API writes live without any extra wiring.
+
 ### Dev (non-production only)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/dev/login` | Upserts user by email, returns session cookie |
+| `POST` | `/dev/api-tokens` | Mint an API token for the logged-in user (returns plaintext once). Capped at 50/user. |
 | `DELETE` | `/dev/reset` | Wipes all collections (test cleanup) |
 
 ## Authentication
 
-**Better Auth** handles all OAuth and session management.
+Two parallel auth modes share the same user identity space.
+
+### Better Auth (cookie sessions) — first-party client
 
 - **Providers:** Google and GitHub. Accounts with the same email are automatically linked to one user.
 - **Session:** Stored in MongoDB (`session` collection). HTTP-only cookie `better-auth.session_token`.
@@ -139,6 +160,15 @@ src/
 - **Collections managed by Better Auth:** `user`, `session`, `account`, `verification`.
 
 In production, cookies are `Secure` with `SameSite=none` for cross-domain API access.
+
+### Bearer tokens (`gtd_<random>`) — public `/v1/*` API
+
+- **Issuance:** `issueApiToken(userId, label)` in `src/auth/apiTokens.ts`. The plaintext is returned once and never stored — only its sha256 hash lives in the `apiTokens` collection.
+- **Resolution:** `resolveBearerToken(authorizationHeader)` looks up by `tokenHash`, rejects revoked rows.
+- **Middleware:** `authenticateBearer` (`src/auth/bearerMiddleware.ts`) parses `Authorization: Bearer gtd_<…>` and sets `c.var.apiAuth = { userId, tokenId }`. Bumps `lastUsedTs` fire-and-forget.
+- **Token mint:** `POST /dev/api-tokens` is the only mint route today. A production-safe `POST /account/tokens` plus a settings-page UI is tracked in [issue #19](https://github.com/yuval-yssak/gtd-app/issues/19); without it, staging and production are deployed-but-inert (every `/v1/*` call returns 401).
+
+A bearer-authenticated request and a cookie-authenticated request resolve to the same `user.id`. The two modes do not coexist on a single endpoint — `/v1/*` is bearer-only; everything else is cookie-only.
 
 ## Sync Architecture
 
@@ -210,6 +240,31 @@ When Google rejects a refresh token (revoke, password change, idle, admin policy
 
 The grace window can be shortened for dev/tests via `CALENDAR_AUTH_GRACE_MS` (milliseconds; default 24 h). Detection is centralized in `isInvalidGrantError` (`src/calendarProviders/GoogleCalendarProvider.ts`) and applied at provider call sites with `withAuthFailureHandling(integrationId, () => provider.*)`.
 
+## Public API (`/v1/*`)
+
+A small bearer-token-authenticated REST surface for external integrations and the local MCP server (`tools/mcp-gtd/`). Distinct from `/sync/*`, which is the internal offline-first protocol.
+
+Full contract: [`docs/PUBLIC_API.md`](../docs/PUBLIC_API.md).
+
+### Design tenets
+
+1. **Reuse the sync pipeline, don't bypass it.** Every public-API mutation builds an `OperationInterface` snapshot and calls the same `applyEntitySnapshotOp` + `notifyUserViaSse` + `notifyViaWebPush` + `maybePushToGCal` helpers as `/sync/push`. This means SSE notifies live clients, web push wakes closed clients, GCal pushback fires for calendar-linked items, and every other device pulls the change on its next sync — all for free.
+2. **`deviceId="api:<tokenId>"`** distinguishes public-API ops from real-device ops in the operations log, without polluting the `deviceSyncState` per-device-cursor table. Stale-device purging continues to work normally.
+3. **Allowlist response projection.** `presentItem` returns a `Pick<>`-narrowed view of `ItemInterface` so internal sync-anchor fields (`contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`) cannot leak into the public schema even if a future field is added without thinking about it.
+
+### Idempotency
+
+| Strategy | Trigger | Enforcement | Concurrent safety |
+|---|---|---|---|
+| `externalId` provided | caller supplies stable key | sparse-unique partial index `(user, externalId)` | strict — race-loser is recovered via E11000 catch + re-fetch in `resolveCreateItem` |
+| `externalId` omitted | content-hash window | 24h lookup against `(user, status, contentHash, createdTs)` | best-effort — no unique index, two simultaneous identical posts can produce two rows. Documented in `PUBLIC_API.md`. |
+
+### Token mint flow (today)
+
+There is no production-safe mint endpoint yet. Local development uses `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) which accepts a label, returns the plaintext exactly once, and stores only the sha256 hash. The plaintext is shown in the response body and never appears anywhere else.
+
+Production rollout — settings-page UI + `POST /account/tokens` + `GET`/`DELETE` for list+revoke — is tracked in [issue #19](https://github.com/yuval-yssak/gtd-app/issues/19).
+
 ## Email (stub)
 
 Outbound email is currently a stub. `src/lib/emailStub.ts` exposes `sendEmail(...)`, which (a) writes a row to the `sentEmails` MongoDB collection and (b) logs `[email-stub] kind=... to=... subject=...`. No external email provider is wired up.
@@ -235,8 +290,9 @@ DAOs are initialized as singletons in `loadDataAccess()` before the server start
 
 | DAO | Collection | Key Indexes |
 |---|---|---|
-| ItemsDAO | `items` | `user`, `user+status`, `user+expectedBy`, `user+timeStart`, `user+updatedTs` |
+| ItemsDAO | `items` | `user`, `user+status`, `user+expectedBy`, `user+timeStart`, `user+updatedTs`, `user+externalId` (unique sparse, public-API dedupe), `user+status+contentHash+createdTs` (public-API content dedupe) |
 | OperationsDAO | `operations` | `user+ts`, `user+entityType+entityId+ts` |
+| ApiTokensDAO | `apiTokens` | `tokenHash` (unique), `user` |
 | RoutinesDAO | `routines` | `user`, `user+updatedTs` |
 | PeopleDAO | `people` | `user`, `user+updatedTs` |
 | WorkContextsDAO | `workContexts` | `user`, `user+updatedTs` |

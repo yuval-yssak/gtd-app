@@ -29,20 +29,38 @@ The Hono app is built directly in `index.ts` (no separate `app.ts`). `AppType` i
 `UsersDAO` no longer exists — Better Auth manages users natively in its own MongoDB collections (`user`, `session`, `account`, `verification`).
 
 ### Auth
-Auth is handled by **Better Auth** (`src/auth/betterAuth.ts`). `createAuth(db)` is called in `loadDataAccess()` and exported as a live ESM binding (`auth`) from `mainLoader.ts`.
 
-All OAuth routes are handled by Better Auth: `GET|POST /auth/*` → `auth.handler(c.req.raw)` in `index.ts`.
+Two parallel auth modes share the same user identity space.
 
-- **Providers**: Google and GitHub OAuth. Accounts with the same email are linked automatically to one user.
-- **Session**: Stored in MongoDB (`session` collection). HTTP-only cookie `better-auth.session_token`.
-- **Middleware**: `authenticateRequest` (`src/auth/middleware.ts`) calls `auth.api.getSession({ headers: c.req.raw.headers })` and attaches `session` to the Hono context via `c.set('session', session)`.
-- **User ID**: Access on protected routes via `c.get('session').user.id` — a string UUID (not `ObjectId`).
+**Better Auth (cookie sessions)** — first-party client + dev tooling.
+- Implementation: `src/auth/betterAuth.ts`. `createAuth(db)` runs in `loadDataAccess()` and the result is exported as a live ESM binding (`auth`) from `mainLoader.ts`.
+- All OAuth routes go to Better Auth: `GET|POST /auth/*` → `auth.handler(c.req.raw)` in `index.ts`.
+- Providers: Google and GitHub OAuth. Accounts with the same email are linked automatically to one user.
+- Session: Stored in MongoDB (`session` collection). HTTP-only cookie `better-auth.session_token`.
+- Middleware: `authenticateRequest` (`src/auth/middleware.ts`) calls `auth.api.getSession({ headers: c.req.raw.headers })` and attaches `session` to the Hono context via `c.set('session', session)`. Read with `c.get('session').user.id` — a string UUID (not `ObjectId`).
+
+**Bearer tokens (`gtd_<random>`)** — public `/v1/*` API used by external integrations and the local MCP server.
+- Issuance: `issueApiToken(userId, label)` in `src/auth/apiTokens.ts`. Plaintext is shown to the caller exactly once; only the sha256 hash is persisted in the `apiTokens` collection.
+- Resolution: `resolveBearerToken(authorizationHeader)` looks up by `tokenHash` and rejects revoked rows.
+- Middleware: `authenticateBearer` (`src/auth/bearerMiddleware.ts`) parses `Authorization: Bearer gtd_<…>` and sets `c.var.apiAuth = { userId, tokenId }`. Bumps `lastUsedTs` fire-and-forget.
+- Token mint UI does not exist yet — production callers cannot mint tokens until it does. For local dev, `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) accepts a label and returns the plaintext.
+
+A user identified by Better Auth and a user identified by a bearer token resolve to the same `user.id` — both auth paths converge on Better Auth's UUIDs.
 
 ### Adding New Routes
 1. Create a router in `src/routes/<feature>.ts`
 2. Register it in `index.ts` with `.route('/feature', featureRouter)` on the Hono app
 
-Currently mounted: `/sync` (offline-first batch sync), `/push` (web push subscriptions), `/devices` (device-side session list), `/calendar` (Google Calendar integration), `/auth/*` (Better Auth handler), and `/dev` (dev-only login/reset, mounted only when `NODE_ENV !== 'production'`). There is no top-level `/items` REST router — all item mutations flow through `POST /sync/push` as `OperationInterface` snapshots.
+Currently mounted:
+- `/sync` — offline-first batch sync (the first-party client's only mutation surface — see "Sync Architecture")
+- `/v1` — public REST API (`v1Items.ts`); bearer-auth, idempotent create + list/search + complete. Documented in `docs/PUBLIC_API.md`. Reuses `recordOperation` + SSE/web-push/GCal pushback so public-API writes flow through the same fan-out as `/sync`.
+- `/push` — web push subscriptions
+- `/devices` — device-side session list (which accounts a device hosts)
+- `/calendar` — Google Calendar OAuth + management
+- `/auth/*` — Better Auth handler
+- `/dev` — dev-only login/reset/token-mint, mounted only when `NODE_ENV !== 'production'`
+
+When adding a new route under `/v1/*`, mount `authenticateBearer` via `.use('*', authenticateBearer)` on the sub-router and read `c.var.apiAuth.userId` instead of `c.get('session').user.id`.
 
 ## Environment Variables (`.env`)
 
@@ -65,6 +83,23 @@ PORT=4000
 
 ## Key Types
 
-- `ItemInterface` (`src/types/entities.ts`) — `status` is `inbox | nextAction | calendar | waitingFor | somedayMaybe | done | trash`; `user` is a `string` UUID (Better Auth ID, not `ObjectId`); optional GTD fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`) vary by status
-- `AuthVariables` (`src/types/authTypes.ts`) — Hono context variables `{ session: Session }` for typed `c.get('session')`
-- `Session` — inferred from Better Auth via `Auth['$Infer']['Session']`
+- `ItemInterface` (`src/types/entities.ts`) — `status` is `inbox | nextAction | calendar | waitingFor | somedayMaybe | done | trash`; `user` is a `string` UUID (Better Auth ID, not `ObjectId`); optional GTD fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`) vary by status. Public-API-only fields: `externalId` (caller dedupe key, sparse-unique on `(user, externalId)`) and `contentHash` (sha256 of `${title}\n${notes}` for 24h content-dedupe — internal, never returned via the public API).
+- `ApiTokenInterface` (`src/types/entities.ts`) — `apiTokens` collection. Stores sha256 `tokenHash` (unique), `user`, `label`, `createdTs`, optional `lastUsedTs`/`revokedTs`. The plaintext token is never persisted.
+- `AuthVariables` (`src/types/authTypes.ts`) — Hono context variables `{ session: Session }` for typed `c.get('session')` on cookie-authenticated routes.
+- `BearerVariables` (`src/auth/bearerMiddleware.ts`) — `{ apiAuth: { userId, tokenId } }` for typed `c.var.apiAuth` on bearer-authenticated routes.
+- `Session` — inferred from Better Auth via `Auth['$Infer']['Session']`.
+
+## Public API conventions (`/v1/*`)
+
+Mutation flow is intentionally identical to `/sync/push` so a single notification fan-out covers both:
+
+1. Persist the entity (`itemsDAO.insertOne` / `replaceById`).
+2. `recordOperation(userId, { ..., deviceId: 'api:<tokenId>' })` — server-originated op with the token's pseudo-device id, so other devices learn about the change on their next pull. The `api:` prefix distinguishes public-API writes from the existing `'server'` marker (calendar webhook, routine generator) without polluting the real `deviceSyncState` table.
+3. `notifyChange(op, tokenId)` — fans out to SSE (live tabs), web push (closed tabs), and GCal pushback (best-effort, fire-and-forget).
+
+Idempotency:
+- `externalId` provided → strict, enforced by sparse-unique partial index `(user, externalId)`. The `POST /v1/items` handler catches E11000 from concurrent inserts and returns the race-winner with `X-Idempotent-Replay: true`.
+- `externalId` omitted → best-effort: 24h content-hash lookup. No unique index (one would block legitimate recurring captures). Documented in `docs/PUBLIC_API.md`.
+
+Public response shape:
+- `presentItem` (`v1Items.ts`) is an **allowlist** projection — internal sync-anchor fields (`contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`) must never leak. When you add a new public field, extend `PUBLIC_FIELDS`; when you add a new internal field, do nothing — the allowlist hides it by default.
