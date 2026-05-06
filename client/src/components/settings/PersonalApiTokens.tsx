@@ -1,6 +1,7 @@
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -194,11 +195,28 @@ interface TokenRowProps {
     isRevoking: boolean;
 }
 
+/** Active tokens whose lastUsedTs is older than this (or never set) earn the "unused" chip,
+ * giving users a visual signal of which rows are safe to revoke. 90 days matches typical
+ * security-hygiene guidance for personal-access tokens. */
+export const UNUSED_THRESHOLD_DAYS = 90;
+
+/** Exported for unit tests; pure (modulo `dayjs()` clock) so it can be tested without rendering. */
+export function isTokenUnused(token: PersonalApiToken, now: dayjs.Dayjs = dayjs()): boolean {
+    if (token.revokedTs !== undefined) {
+        return false;
+    }
+    if (!token.lastUsedTs) {
+        return true;
+    }
+    return now.diff(dayjs(token.lastUsedTs), 'day') >= UNUSED_THRESHOLD_DAYS;
+}
+
 function TokenRow({ token, onRevoke, isRevoking }: TokenRowProps) {
     const isRevoked = token.revokedTs !== undefined;
     const created = `Created ${dayjs(token.createdTs).format('MMM D, YYYY')}`;
     const lastUsed = token.lastUsedTs ? `Last used ${dayjs().to(dayjs(token.lastUsedTs))}` : 'Never used';
     const secondary = isRevoked ? `${created} · Revoked ${dayjs(token.revokedTs).format('MMM D, YYYY')}` : `${created} · ${lastUsed}`;
+    const showUnusedChip = isTokenUnused(token);
     return (
         <ListItem
             disableGutters
@@ -212,7 +230,15 @@ function TokenRow({ token, onRevoke, isRevoking }: TokenRowProps) {
                 )
             }
         >
-            <ListItemText primary={token.label} secondary={secondary} />
+            <ListItemText
+                primary={
+                    <Box className={styles.primaryLine}>
+                        <Box component="span">{token.label}</Box>
+                        {showUnusedChip && <Chip size="small" variant="outlined" label="unused" data-testid="unusedTokenChip" />}
+                    </Box>
+                }
+                secondary={secondary}
+            />
         </ListItem>
     );
 }

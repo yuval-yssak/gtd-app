@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { SESSION_COOKIE_NAME } from '../auth/constants.js';
+import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import { auth, db } from '../loaders/mainLoader.js';
 
 // Guard: this module must never be loaded in production — throw immediately if it slips through.
@@ -494,6 +495,23 @@ export const devLoginRoutes = new Hono()
         const { plaintext, record } = await issueApiToken(session.user.id, label);
         // plaintext is shown exactly once — caller is responsible for storing it.
         return c.json({ id: record._id, label: record.label, createdTs: record.createdTs, plaintext });
+    })
+
+    // POST /dev/api-tokens/:id/touch — override the apiToken row's lastUsedTs so e2e tests can
+    // exercise the "unused" chip behaviour without waiting 90 days. Body: { lastUsedTs: ISO }.
+    // Bypasses auth so the spec doesn't have to thread a session cookie through.
+    .post('/api-tokens/:id/touch', async (c) => {
+        const id = c.req.param('id');
+        const body = await c.req.json<{ lastUsedTs?: string }>().catch(() => ({}) as { lastUsedTs?: string });
+        if (typeof body.lastUsedTs !== 'string' || body.lastUsedTs.trim() === '') {
+            return c.json({ error: 'lastUsedTs (ISO datetime string) required' }, 400);
+        }
+        const existing = await apiTokensDAO.findOne({ _id: id });
+        if (!existing) {
+            return c.json({ error: 'token not found' }, 404);
+        }
+        await apiTokensDAO.touchLastUsed(id, body.lastUsedTs);
+        return c.json({ ok: true });
     })
 
     // GET /dev/calendar/integrations?userId=... — read calendarIntegrations rows for a user

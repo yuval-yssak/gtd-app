@@ -101,6 +101,54 @@ test.describe('Personal API tokens (settings)', () => {
         });
     });
 
+    test('renders an "unused" chip on tokens that have never been used or are older than 90 days', async ({ browser }) => {
+        const email = `unused-chip-${dayjs().valueOf()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            await page.goto(`${CLIENT_URL}/settings`);
+
+            // 1. Mint two tokens.
+            await page.getByTestId('createTokenButton').click();
+            await page.getByTestId('tokenLabelInput').locator('input').fill('Stale token');
+            await page.getByTestId('confirmCreateTokenButton').click();
+            await page.getByTestId('dismissRevealButton').click();
+
+            await page.getByTestId('createTokenButton').click();
+            await page.getByTestId('tokenLabelInput').locator('input').fill('Fresh token');
+            await page.getByTestId('confirmCreateTokenButton').click();
+            await page.getByTestId('dismissRevealButton').click();
+
+            // Both tokens have lastUsedTs unset → both show "unused".
+            await expect(page.getByTestId('unusedTokenChip')).toHaveCount(2);
+
+            // 2. Look up the stale token's id from the list endpoint, then push lastUsedTs back 100 days.
+            const listRes = await page.context().request.get('http://localhost:4000/account/tokens');
+            const { tokens } = (await listRes.json()) as { tokens: Array<{ id: string; label: string }> };
+            const staleId = tokens.find((t) => t.label === 'Stale token')?.id;
+            const freshId = tokens.find((t) => t.label === 'Fresh token')?.id;
+            expect(staleId).toBeTruthy();
+            expect(freshId).toBeTruthy();
+
+            const oldTs = dayjs().subtract(100, 'day').toISOString();
+            const recentTs = dayjs().subtract(1, 'day').toISOString();
+            const stalePoke = await page.context().request.post(`http://localhost:4000/dev/api-tokens/${staleId}/touch`, { data: { lastUsedTs: oldTs } });
+            expect(stalePoke.status()).toBe(200);
+            const freshPoke = await page.context().request.post(`http://localhost:4000/dev/api-tokens/${freshId}/touch`, { data: { lastUsedTs: recentTs } });
+            expect(freshPoke.status()).toBe(200);
+
+            await page.reload();
+            // Stale shows the chip; fresh does not.
+            const chip = page.getByTestId('unusedTokenChip');
+            await expect(chip).toHaveCount(1);
+            // Confirm the chip is on the right row by walking up to the row's primary text.
+            const staleRow = page.getByTestId('tokenRow').filter({ hasText: 'Stale token' });
+            await expect(staleRow.getByTestId('unusedTokenChip')).toBeVisible();
+            const freshRow = page.getByTestId('tokenRow').filter({ hasText: 'Fresh token' });
+            await expect(freshRow.getByTestId('unusedTokenChip')).toHaveCount(0);
+        });
+    });
+
     test('reveal dialog cannot be dismissed by Escape or backdrop click', async ({ browser }) => {
         const email = `reveal-pin-${dayjs().valueOf()}@example.com`;
         await resetServerForEmails([email]);
