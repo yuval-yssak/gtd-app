@@ -78,9 +78,26 @@ If you lose a token, revoke it and create a new one. There is no recovery path.
 |---|---|
 | `401 Unauthorized` | Missing header, malformed token, unknown token, or token is revoked. |
 | `403 Forbidden` | Token is valid but the action is out of scope (reserved — currently all tokens have full v1 scope). |
-| `429 Too Many Requests` | Reserved — the API does not currently rate-limit, but clients should retry on `429` with the `Retry-After` header when it ships. |
+| `429 Too Many Requests` | Per-token rate limit exceeded. The response carries a `Retry-After: <seconds>` header — back off and retry after that interval. |
 
-There is no rate limiting today. Per-token limits will be added before opening the API to third-party use; treat absence as a temporary condition.
+### Rate limits
+
+Each token has two independent buckets that refill continuously over a one-minute window:
+
+| Bucket | Endpoints | Capacity |
+|---|---|---|
+| Write | `POST /v1/items`, `POST /v1/items/:id/complete` | **60 / minute** |
+| Read | `GET /v1/items`, `GET /v1/items/:id` | **600 / minute** |
+
+A separate **30 / minute per-IP** bucket caps unauthenticated traffic so a flood of bad-credential calls cannot exhaust server resources before reaching the auth check.
+
+Hitting a bucket returns:
+
+```json
+{ "error": "Rate limit exceeded. Slow down and retry after a brief pause.", "code": "rate_limited" }
+```
+
+with `Retry-After: <seconds>` in the response headers. Read and write buckets are independent — a hot read loop will not starve writes from the same token.
 
 ## Conventions
 

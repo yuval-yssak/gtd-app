@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
+import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ItemsRoutes } from '../routes/v1Items.js';
 import type { ItemInterface } from '../types/entities.js';
@@ -28,6 +29,9 @@ beforeEach(async () => {
         db.collection('operations').deleteMany({}),
         db.collection('apiTokens').deleteMany({}),
     ]);
+    // Drop the in-process rate-limit counters so the limiter doesn't reject calls in tests
+    // that share a token across many requests (e.g. cursor pagination).
+    __resetDefaultStoreForTests();
     vi.restoreAllMocks();
 });
 
