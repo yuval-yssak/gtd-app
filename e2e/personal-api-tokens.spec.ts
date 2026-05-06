@@ -23,6 +23,8 @@ test.describe('Personal API tokens (settings)', () => {
 
             await page.getByTestId('createTokenButton').click();
             await page.getByTestId('tokenLabelInput').locator('input').fill('Local MCP');
+            // Tick the clarify scope so the resulting row exposes three scope chips.
+            await page.getByTestId('scopeCheckbox-items.clarify').locator('input').check();
             await page.getByTestId('confirmCreateTokenButton').click();
 
             // Reveal dialog shows the plaintext exactly once. The plaintext starts with `gtd_` per
@@ -36,11 +38,12 @@ test.describe('Personal API tokens (settings)', () => {
             await page.getByTestId('dismissRevealButton').click();
             await expect(reveal).toBeHidden();
 
-            // List now shows the row with label + "Never used".
+            // List now shows the row with label, "Never used", and the three scope chips.
             const row = page.getByTestId('tokenRow');
             await expect(row).toHaveCount(1);
             await expect(row).toContainText('Local MCP');
             await expect(row).toContainText('Never used');
+            await expect(row.getByTestId('tokenScopeChip')).toHaveCount(3);
 
             // Revoke flow.
             await page.getByTestId('revokeTokenButton').click();

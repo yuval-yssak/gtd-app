@@ -40,7 +40,9 @@ export const ANON_BUCKET: BucketConfig = { capacity: 30, refillPerSec: 30 / 60 }
  * have to spin up a Hono context to assert routing.
  */
 export function classifyRequest(method: string, path: string): 'write' | 'read' | null {
-    const isWrite = method === 'POST' && (path === '/v1/items' || path === '/v1/items/bulk' || /^\/v1\/items\/[^/]+\/complete$/.test(path));
+    const isWrite =
+        (method === 'POST' && (path === '/v1/items' || path === '/v1/items/bulk' || /^\/v1\/items\/[^/]+\/complete$/.test(path))) ||
+        (method === 'PATCH' && /^\/v1\/items\/[^/]+$/.test(path));
     if (isWrite) return 'write';
     const isRead = method === 'GET' && (path === '/v1/items' || /^\/v1\/items\/[^/]+$/.test(path));
     if (isRead) return 'read';
@@ -151,9 +153,10 @@ export function authenticatedRateLimit(deps: MiddlewareDeps = {}): MiddlewareHan
 }
 
 /**
- * Rate-limits requests that have NOT yet authenticated. Mounted BEFORE `authenticateBearer` so
- * a flood of bad-credential calls (or unauthenticated probing) can't blow up the database with
- * `findActiveByHash` lookups. Keyed by client IP because there's no token to scope by.
+ * Rate-limits requests that have NOT yet authenticated. Reusable as a standalone middleware,
+ * but on /v1 specifically the anon-bucket consumption is now handled inline by `authenticateBearer`
+ * so successful-auth requests don't burn anon tokens. Kept exported for unit tests and any
+ * future endpoint that wants a pure pre-auth IP-bucket check.
  */
 export function anonymousRateLimit(deps: MiddlewareDeps = {}): MiddlewareHandler {
     const store = deps.store ?? defaultStore;

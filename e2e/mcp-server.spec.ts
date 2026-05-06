@@ -157,7 +157,10 @@ test.describe('MCP server (mcp-gtd)', () => {
 
         await withOneLoggedInDevice(browser, email, async (page) => {
             // Mint a real bearer token via the page's session.
-            const mintRes = await page.context().request.post(`${API_URL}/account/tokens`, { data: { label: 'mcp-e2e' } });
+            // The MCP spec exercises every tool, including complete (clarify scope) and bulk (capture scope).
+            const mintRes = await page.context().request.post(`${API_URL}/account/tokens`, {
+                data: { label: 'mcp-e2e', scopes: ['items.capture', 'items.read', 'items.clarify'] },
+            });
             const { plaintext } = (await mintRes.json()) as { plaintext: string };
 
             const mcp = new McpStdioClient(plaintext);

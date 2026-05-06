@@ -221,18 +221,25 @@ describe('integration with the real /v1 router', () => {
         const { plaintext } = await issueApiToken(user.id, 'rate-limit-test');
 
         const headers = { Authorization: `Bearer ${plaintext}` };
-        // Drain the read bucket. We use the read bucket because its capacity (600) will exhaust
-        // any test environment's per-token state. We only fire ~601 lightweight GETs which is fast.
-        let lastStatus = 200;
-        for (let i = 0; i < READ_BUCKET.capacity + 1; i++) {
-            const res = await app.fetch(new Request('http://localhost:4000/v1/items', { headers }));
-            lastStatus = res.status;
-            if (res.status === 429) {
-                expect(res.headers.get('Retry-After')).not.toBeNull();
-                expect(((await res.json()) as { code: string }).code).toBe('rate_limited');
+        // Drain the read bucket. The bucket continuously refills (10 tok/s for the read bucket),
+        // so the simple `for capacity+1` loop can't outrun the refill on a fast machine.
+        // Fire requests in parallel to deplete faster than the refill rate, then repeat until
+        // we observe a 429. With an in-memory limiter and Hono's tiny per-request overhead,
+        // 600 parallel reads run in well under a second — comfortably faster than the
+        // 600/min refill could replenish.
+        let attempts = 0;
+        while (attempts < 5) {
+            const responses = await Promise.all(
+                Array.from({ length: READ_BUCKET.capacity + 50 }, () => app.fetch(new Request('http://localhost:4000/v1/items', { headers }))),
+            );
+            const limited = responses.find((r) => r.status === 429);
+            if (limited) {
+                expect(limited.headers.get('Retry-After')).not.toBeNull();
+                expect(((await limited.json()) as { code: string }).code).toBe('rate_limited');
                 return;
             }
+            attempts++;
         }
-        throw new Error(`Expected 429 within ${READ_BUCKET.capacity + 1} requests, but the bucket never exhausted (lastStatus=${lastStatus})`);
+        throw new Error('Read bucket never exhausted after 5 parallel waves');
     });
 });

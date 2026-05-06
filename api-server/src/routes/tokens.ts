@@ -4,7 +4,7 @@ import { issueApiToken } from '../auth/apiTokens.js';
 import { authenticateRequest } from '../auth/middleware.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import type { ApiTokenInterface } from '../types/entities.js';
+import { type ApiTokenInterface, type ApiTokenScope, DEFAULT_API_TOKEN_SCOPES, VALID_API_TOKEN_SCOPES } from '../types/entities.js';
 
 /**
  * Per-user cap on active (not revoked) tokens, enforced on POST.
@@ -19,13 +19,20 @@ interface PublicTokenView {
     id: string;
     label: string;
     createdTs: string;
+    /** Capabilities granted to this token (capture / clarify / read). Defaults backfilled per row. */
+    scopes: ApiTokenScope[];
     lastUsedTs?: string;
     revokedTs?: string;
 }
 
 /** Projects internal token shape to the public view. Strips `tokenHash` and `user` so neither leaks. */
 function presentToken(token: ApiTokenInterface): PublicTokenView {
-    const view: PublicTokenView = { id: token._id, label: token.label, createdTs: token.createdTs };
+    const view: PublicTokenView = {
+        id: token._id,
+        label: token.label,
+        createdTs: token.createdTs,
+        scopes: token.scopes ?? DEFAULT_API_TOKEN_SCOPES,
+    };
     if (token.lastUsedTs !== undefined) view.lastUsedTs = token.lastUsedTs;
     if (token.revokedTs !== undefined) view.revokedTs = token.revokedTs;
     return view;
@@ -33,9 +40,13 @@ function presentToken(token: ApiTokenInterface): PublicTokenView {
 
 interface CreateBody {
     label?: unknown;
+    scopes?: unknown;
 }
 
-type MintError = { code: 'token_cap_reached'; status: 429; message: string } | { code: 'invalid_label'; status: 400; message: string };
+type MintError =
+    | { code: 'token_cap_reached'; status: 429; message: string }
+    | { code: 'invalid_label'; status: 400; message: string }
+    | { code: 'invalid_scopes'; status: 400; message: string };
 
 function parseLabel(raw: CreateBody): { ok: true; label: string } | { ok: false; error: MintError } {
     if (raw.label === undefined || raw.label === null || (typeof raw.label === 'string' && raw.label.trim() === '')) {
@@ -48,11 +59,35 @@ function parseLabel(raw: CreateBody): { ok: true; label: string } | { ok: false;
     return { ok: true, label: raw.label.trim() };
 }
 
+function parseScopes(raw: CreateBody): { ok: true; scopes: ApiTokenScope[] } | { ok: false; error: MintError } {
+    if (raw.scopes === undefined) {
+        return { ok: true, scopes: DEFAULT_API_TOKEN_SCOPES };
+    }
+    if (!Array.isArray(raw.scopes) || raw.scopes.length === 0) {
+        return { ok: false, error: { code: 'invalid_scopes', status: 400, message: 'scopes must be a non-empty array of strings' } };
+    }
+    const seen = new Set<ApiTokenScope>();
+    for (const s of raw.scopes) {
+        if (typeof s !== 'string' || !VALID_API_TOKEN_SCOPES.has(s as ApiTokenScope)) {
+            return {
+                ok: false,
+                error: {
+                    code: 'invalid_scopes',
+                    status: 400,
+                    message: `unknown scope ${JSON.stringify(s)}; allowed: ${[...VALID_API_TOKEN_SCOPES].join(', ')}`,
+                },
+            };
+        }
+        seen.add(s as ApiTokenScope);
+    }
+    return { ok: true, scopes: [...seen] };
+}
+
 /** Mint orchestration extracted so the route handler stays at one level of abstraction. */
 async function mintTokenForUser(
     userId: string,
     raw: CreateBody,
-): Promise<{ ok: true; record: { _id: string; label: string; createdTs: string }; plaintext: string } | { ok: false; error: MintError }> {
+): Promise<{ ok: true; record: ApiTokenInterface; plaintext: string } | { ok: false; error: MintError }> {
     // count-then-insert is a TOCTOU on the cap: two concurrent POSTs from the same session can
     // both pass with active=cap-1, both insert, ending at cap+1. The cap is a UX guardrail rather
     // than a security boundary (settings UI is single-tab in normal use), so we accept the race
@@ -68,11 +103,15 @@ async function mintTokenForUser(
             },
         };
     }
-    const parsed = parseLabel(raw);
-    if (!parsed.ok) {
-        return { ok: false, error: parsed.error };
+    const parsedLabel = parseLabel(raw);
+    if (!parsedLabel.ok) {
+        return { ok: false, error: parsedLabel.error };
     }
-    const { plaintext, record } = await issueApiToken(userId, parsed.label);
+    const parsedScopes = parseScopes(raw);
+    if (!parsedScopes.ok) {
+        return { ok: false, error: parsedScopes.error };
+    }
+    const { plaintext, record } = await issueApiToken(userId, parsedLabel.label, parsedScopes.scopes);
     return { ok: true, plaintext, record };
 }
 
@@ -88,7 +127,13 @@ export const tokensRoutes = new Hono<{ Variables: AuthVariables }>()
         if (!result.ok) {
             return c.json({ error: result.error.message, code: result.error.code }, result.error.status);
         }
-        return c.json({ id: result.record._id, label: result.record.label, createdTs: result.record.createdTs, plaintext: result.plaintext });
+        return c.json({
+            id: result.record._id,
+            label: result.record.label,
+            createdTs: result.record.createdTs,
+            scopes: result.record.scopes ?? DEFAULT_API_TOKEN_SCOPES,
+            plaintext: result.plaintext,
+        });
     })
 
     // GET /account/tokens — list the caller's tokens (active + revoked).

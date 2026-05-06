@@ -8,6 +8,10 @@ declare const styles: {
     readonly plaintextText: string;
     readonly primaryLine: string;
     readonly revokedRow: string;
+    readonly scopesError: string;
+    readonly scopesGroup: string;
+    readonly scopesHelp: string;
+    readonly scopesLabel: string;
     readonly warning: string;
 };
 export = styles;

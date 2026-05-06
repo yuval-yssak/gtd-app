@@ -77,6 +77,41 @@ describe('createToken', () => {
         expect(JSON.parse(call.init?.body as string)).toEqual({ label: 'iOS Shortcut' });
     });
 
+    it('passes scopes through when provided so callers can mint capability-restricted tokens', async () => {
+        fetchSpy.mockImplementationOnce((input, init) => {
+            recordFetchCall(input, init);
+            return Promise.resolve(
+                makeJsonResponse({
+                    id: 'tok-1',
+                    label: 'capture-only',
+                    createdTs: '2026-01-01T00:00:00.000Z',
+                    scopes: ['items.capture'],
+                    plaintext: 'gtd_secret',
+                }),
+            );
+        });
+        const result = await createToken('capture-only', ['items.capture']);
+        expect(result.scopes).toEqual(['items.capture']);
+        expect(JSON.parse(fetchCalls[0]!.init?.body as string)).toEqual({ label: 'capture-only', scopes: ['items.capture'] });
+    });
+
+    it('omits scopes from the request body when caller does not specify, so server uses its default', async () => {
+        fetchSpy.mockImplementationOnce((input, init) => {
+            recordFetchCall(input, init);
+            return Promise.resolve(
+                makeJsonResponse({
+                    id: 'tok-1',
+                    label: 'l',
+                    createdTs: '2026-01-01T00:00:00.000Z',
+                    scopes: ['items.capture', 'items.read'],
+                    plaintext: 'gtd_x',
+                }),
+            );
+        });
+        await createToken('l');
+        expect(JSON.parse(fetchCalls[0]!.init?.body as string)).toEqual({ label: 'l' });
+    });
+
     it('preserves the token_cap_reached code so callers can branch on it', async () => {
         fetchSpy.mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ error: 'Token cap reached (20).', code: 'token_cap_reached' }, 429)));
         const err = await createToken('x').catch((e) => e);

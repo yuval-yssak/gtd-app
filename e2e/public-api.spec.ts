@@ -21,7 +21,12 @@ interface Plaintext {
 }
 
 async function mintTokenViaSession(request: APIRequestContext, label: string): Promise<Plaintext> {
-    const res = await request.post(`${API_URL}/account/tokens`, { data: { label } });
+    // Mint with all three scopes by default — most tests in this spec exercise the full /v1 surface
+    // (POST + GET + PATCH + complete). Scope-restricted callers are tested in the dedicated PATCH
+    // spec further down (`mintTokenViaSession` callers there opt in to capture-only explicitly).
+    const res = await request.post(`${API_URL}/account/tokens`, {
+        data: { label, scopes: ['items.capture', 'items.read', 'items.clarify'] },
+    });
     expect(res.status()).toBe(200);
     const body = (await res.json()) as Plaintext;
     return body;
@@ -186,6 +191,50 @@ test.describe('public /v1 API', () => {
                 });
                 expect(differentContent.status()).toBe(201);
                 expect((await differentContent.json())._id).not.toBe(firstId);
+            });
+        });
+    });
+
+    test('PATCH clarifies an inbox item; capture-only token gets 403 forbidden_scope', async ({ browser }) => {
+        const email = `patch-${dayjs().valueOf()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const session = page.context().request;
+            // Mint two tokens with different scope sets.
+            const captureOnly = await session.post(`${API_URL}/account/tokens`, { data: { label: 'capture', scopes: ['items.capture', 'items.read'] } });
+            const clarifyToken = await session.post(`${API_URL}/account/tokens`, {
+                data: { label: 'clarify', scopes: ['items.capture', 'items.read', 'items.clarify'] },
+            });
+            const { plaintext: capturePlaintext } = (await captureOnly.json()) as { plaintext: string };
+            const { plaintext: clarifyPlaintext } = (await clarifyToken.json()) as { plaintext: string };
+
+            await withBearerOnlyContext(browser, async (apiContext) => {
+                // Create with the clarify token so we have an inbox item to patch.
+                const created = await apiContext.request.post(`${API_URL}/v1/items`, {
+                    headers: { Authorization: `Bearer ${clarifyPlaintext}` },
+                    data: { title: 'Patch me', externalId: 'patch-1' },
+                });
+                const { _id } = (await created.json()) as { _id: string };
+
+                // Capture-only token cannot PATCH.
+                const forbidden = await apiContext.request.patch(`${API_URL}/v1/items/${_id}`, {
+                    headers: { Authorization: `Bearer ${capturePlaintext}` },
+                    data: { status: 'nextAction' },
+                });
+                expect(forbidden.status()).toBe(403);
+                expect(((await forbidden.json()) as { code: string }).code).toBe('forbidden_scope');
+
+                // Clarify token succeeds and the metadata round-trips.
+                const ok = await apiContext.request.patch(`${API_URL}/v1/items/${_id}`, {
+                    headers: { Authorization: `Bearer ${clarifyPlaintext}` },
+                    data: { status: 'nextAction', energy: 'high', urgent: true },
+                });
+                expect(ok.status()).toBe(200);
+                const body = (await ok.json()) as { status: string; energy: string; urgent: boolean };
+                expect(body.status).toBe('nextAction');
+                expect(body.energy).toBe('high');
+                expect(body.urgent).toBe(true);
             });
         });
     });

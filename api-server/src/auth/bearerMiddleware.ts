@@ -1,31 +1,67 @@
 import dayjs from 'dayjs';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
+import { type ApiTokenScope, DEFAULT_API_TOKEN_SCOPES } from '../types/entities.js';
 import { resolveBearerToken } from './apiTokens.js';
+import { ANON_BUCKET, defaultStore, tryConsume } from './rateLimitMiddleware.js';
 
 /** Hono context variables made available to v1 route handlers after the bearer middleware runs. */
 export type BearerVariables = {
     apiAuth: {
         userId: string;
         tokenId: string;
+        /** Capabilities the token holder can exercise. Always populated post-middleware (see lazy backfill below). */
+        scopes: ApiTokenScope[];
     };
 };
 
+/** Best-effort client IP extraction matching the rate-limiter's logic. */
+function extractClientIp(c: Context): string {
+    const xff = c.req.header('x-forwarded-for');
+    if (xff) {
+        const first = xff.split(',')[0]?.trim();
+        if (first) return first;
+    }
+    return c.req.header('x-real-ip') ?? 'unknown';
+}
+
 /**
  * Authenticates `/v1/*` requests via `Authorization: Bearer gtd_<token>`.
- * Sets `c.var.apiAuth.{userId, tokenId}` on success; returns 401 otherwise.
+ * Sets `c.var.apiAuth.{userId, tokenId, scopes}` on success; returns 401 otherwise.
+ *
+ * Scope backfill: tokens minted before issue #19 step 7 do not carry `scopes`. Rather than run a
+ * one-shot migration, we lazily backfill on first authenticated use — populating both the in-row
+ * value (so subsequent reads are O(1)) and the request's `apiAuth.scopes`. New tokens already
+ * carry scopes from `issueApiToken`, so the backfill is a transient measure.
+ *
+ * Anonymous-bucket consumption: failed-auth requests consume from the IP-keyed anon bucket
+ * (30/min, see `rateLimitMiddleware.ts`). Successful-auth requests do NOT touch the anon bucket —
+ * they're scoped by `tokenId` via `authenticatedRateLimit` instead. This split prevents a noisy
+ * test environment from accidentally exhausting the anon bucket with valid tokens.
  *
  * lastUsedTs is bumped fire-and-forget so a transient Mongo blip can't 500 every authenticated call.
- * The bump can lag a few seconds behind the actual request — the token-list view in settings is the
- * only consumer and a few seconds of staleness is fine there.
  */
 export const authenticateBearer: MiddlewareHandler<{ Variables: BearerVariables }> = async (c, next) => {
     const token = await resolveBearerToken(c.req.header('Authorization'));
     if (!token) {
+        const result = tryConsume(defaultStore, `anon:${extractClientIp(c)}`, ANON_BUCKET, Date.now());
+        if (!result.allowed) {
+            console.log('[rate-limit]', { bucket: 'anon', ip: extractClientIp(c), route: c.req.path, method: c.req.method });
+            c.header('Retry-After', String(result.retryAfterSec));
+            return c.json({ error: 'Rate limit exceeded. Slow down and retry after a brief pause.', code: 'rate_limited' }, 429);
+        }
         return c.json({ error: 'Unauthorized', code: 'unauthorized' }, 401);
     }
 
-    c.set('apiAuth', { userId: token.user, tokenId: token._id });
+    const scopes = token.scopes ?? DEFAULT_API_TOKEN_SCOPES;
+    if (token.scopes === undefined) {
+        // One-time write per legacy token; idempotent.
+        void apiTokensDAO.setScopes(token._id, scopes).catch((err) => {
+            console.error('[apiTokens] scopes backfill failed', { tokenId: token._id, err });
+        });
+    }
+
+    c.set('apiAuth', { userId: token.user, tokenId: token._id, scopes });
 
     void apiTokensDAO.touchLastUsed(token._id, dayjs().toISOString()).catch((err) => {
         console.error('[apiTokens] touchLastUsed failed', { tokenId: token._id, err });

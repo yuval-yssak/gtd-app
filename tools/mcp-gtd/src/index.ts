@@ -107,6 +107,31 @@ export function buildServer(client: GtdClient): McpServer {
     );
 
     server.tool(
+        'clarify_inbox_item',
+        'Clarify an inbox item: set its status to nextAction, waitingFor, or somedayMaybe and attach metadata. Requires the items.clarify scope on the token.',
+        {
+            id: z.string().describe('Item _id (UUID).'),
+            status: z.enum(['nextAction', 'waitingFor', 'somedayMaybe']).optional(),
+            workContextIds: z.array(z.string()).optional(),
+            peopleIds: z.array(z.string()).optional(),
+            waitingForPersonId: z.string().optional(),
+            energy: z.enum(['low', 'medium', 'high']).optional(),
+            time: z.number().nonnegative().optional(),
+            focus: z.boolean().optional(),
+            urgent: z.boolean().optional(),
+            expectedBy: z.string().optional(),
+            ignoreBefore: z.string().optional(),
+            notes: z.string().optional(),
+        },
+        async (args) => {
+            const { id, ...rest } = args;
+            const fields = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+            const result = await callClient(() => client.clarifyItem(id, fields));
+            return result.ok ? asTextResponse(result.value) : asErrorResponse(result.error);
+        },
+    );
+
+    server.tool(
         'bulk_import_inbox_items',
         'Bulk-import inbox items from a legacy system. Each item MUST carry an `externalId` so re-runs after a partial failure are idempotent. Returns one result per item with status: created | replayed | failed. Capped at 5,000 items per call.',
         {
