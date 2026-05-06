@@ -40,10 +40,17 @@ Two parallel auth modes share the same user identity space.
 - Middleware: `authenticateRequest` (`src/auth/middleware.ts`) calls `auth.api.getSession({ headers: c.req.raw.headers })` and attaches `session` to the Hono context via `c.set('session', session)`. Read with `c.get('session').user.id` — a string UUID (not `ObjectId`).
 
 **Bearer tokens (`gtd_<random>`)** — public `/v1/*` API used by external integrations and the local MCP server.
-- Issuance: `issueApiToken(userId, label)` in `src/auth/apiTokens.ts`. Plaintext is shown to the caller exactly once; only the sha256 hash is persisted in the `apiTokens` collection.
+- Issuance: `issueApiToken(userId, label, scopes?)` in `src/auth/apiTokens.ts`. Plaintext is shown to the caller exactly once; only the sha256 hash is persisted in the `apiTokens` collection.
 - Resolution: `resolveBearerToken(authorizationHeader)` looks up by `tokenHash` and rejects revoked rows.
-- Middleware: `authenticateBearer` (`src/auth/bearerMiddleware.ts`) parses `Authorization: Bearer gtd_<…>` and sets `c.var.apiAuth = { userId, tokenId }`. Bumps `lastUsedTs` fire-and-forget.
-- Token mint UI does not exist yet — production callers cannot mint tokens until it does. For local dev, `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) accepts a label and returns the plaintext.
+- Middleware: `authenticateBearer` (`src/auth/bearerMiddleware.ts`) parses `Authorization: Bearer gtd_<…>` and sets `c.var.apiAuth = { userId, tokenId, scopes }`. Bumps `lastUsedTs` fire-and-forget. On failed auth, consumes from the IP-keyed anon rate-limit bucket so a flood of bad credentials cannot exhaust tokenHash lookups.
+- Production token-mint UI lives at `Settings → Personal API tokens`. Per-user cap of 20 active tokens. For local dev, `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) is the convenience shortcut.
+- **Scopes**: `items.capture`, `items.read`, `items.clarify`, `webhooks.manage`. Default-mint is `[items.capture, items.read]`. Pre-scopes tokens are lazily backfilled on first authenticated use.
+
+> ⚠️ **Do not add an in-process token cache** in `apiTokens.ts` or `bearerMiddleware.ts` without
+> also wiring an invalidation channel (SSE/Redis pub-sub). Revocation today goes straight to
+> Mongo; the next request that authenticates re-reads the row, so `DELETE /account/tokens/:id`
+> propagates within milliseconds. A cache without invalidation lets revoked tokens linger,
+> and on multi-instance deploys the divergence is unbounded.
 
 A user identified by Better Auth and a user identified by a bearer token resolve to the same `user.id` — both auth paths converge on Better Auth's UUIDs.
 
