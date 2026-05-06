@@ -75,6 +75,9 @@ jobs:
                   VAPID_SUBJECT: "${{ vars.VAPID_SUBJECT }}"
                   CALENDAR_WEBHOOK_URL: "${{ vars.CALENDAR_WEBHOOK_URL }}"
                   CALENDAR_ENCRYPTION_KEY: "${{ secrets.CALENDAR_ENCRYPTION_KEY }}"
+                  # Outbound webhook delivery worker: off in production until you opt in by setting
+                  # the GitHub Environment variable WEBHOOKS_ENABLED=true. Empty string == off.
+                  WEBHOOKS_ENABLED: "${{ vars.WEBHOOKS_ENABLED }}"
                   EOF
                   # SSE connection registry is in-process — multi-instance fanout would lose
                   # webhook-triggered notifications when the webhook lands on an instance that
