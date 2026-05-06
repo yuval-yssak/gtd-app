@@ -18,5 +18,6 @@ declare namespace NodeJS {
         CALENDAR_WEBHOOK_CRON_SECRET?: string;
         CALENDAR_AUTH_GRACE_MS?: string;
         COMMIT_HASH?: string;
+        WEBHOOKS_ENABLED?: string;
     }
 }

@@ -398,18 +398,69 @@ export interface CalendarSyncConfigInterface {
 /** Union of all entity types that can appear as an operation snapshot. */
 export type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface;
 
+/** Discrete event types webhooks can subscribe to. Adding a new event requires extending `mapOpToEvents`. */
+export type WebhookEvent = 'item.created' | 'item.completed';
+
+export const VALID_WEBHOOK_EVENTS: ReadonlySet<WebhookEvent> = new Set(['item.created', 'item.completed']);
+
+/**
+ * Outbound webhook subscription. The user provides a `url` and an `events` filter; the
+ * server enqueues a delivery for each matching public-API mutation, signs the payload with
+ * `secret` (HMAC-SHA256), and POSTs to the URL. Subscriptions auto-disable after enough
+ * consecutive failures so a dead endpoint can't keep generating zombie deliveries.
+ */
+export interface WebhookSubscriptionInterface {
+    _id: string;
+    user: string;
+    url: string;
+    events: WebhookEvent[];
+    /** HMAC-SHA256 secret. 32 random bytes, base64url. Shown to the caller exactly once at creation. */
+    secret: string;
+    createdTs: string;
+    /** Bumped on every successful 2xx delivery. */
+    lastDeliveredTs?: string;
+    /** Consecutive failures since the last success. Resets to 0 on a 2xx delivery. */
+    failureCount?: number;
+    /** Set when the subscription was auto-disabled or revoked. New events for disabled subs are not enqueued. */
+    disabledTs?: string;
+    disabledReason?: string;
+}
+
+/**
+ * One pending or completed delivery attempt. Acts as both queue (`deliveredTs unset, abandonedTs unset`)
+ * and audit log (rows are kept after delivery for diagnostics, with TTL governed by the surrounding
+ * operations cleanup story rather than by a separate purge).
+ */
+export interface WebhookDeliveryInterface {
+    _id: string;
+    user: string;
+    subscriptionId: string;
+    event: WebhookEvent;
+    /** Snapshot of the payload at enqueue time — deliveries cannot drift if the source entity changes. */
+    payload: unknown;
+    /** Number of attempts so far (0 before the first send). */
+    attempts: number;
+    /** Earliest time the worker should pick this up. Pushed forward on retry. */
+    nextAttemptTs: string;
+    lastError?: string;
+    deliveredTs?: string;
+    abandonedTs?: string;
+    /** Optimistic-lock claim flag: set true while a worker is delivering, reset on completion. */
+    claimed?: boolean;
+}
+
 /**
  * Capability scopes granted to a personal API token. A token is permitted to perform any
  * action whose scope appears in its `scopes` array. Issuing tokens with the smallest possible
  * scope set is the right hygiene; e.g. a Raycast capture extension only needs `items.capture`.
  */
-export type ApiTokenScope = 'items.capture' | 'items.clarify' | 'items.read';
+export type ApiTokenScope = 'items.capture' | 'items.clarify' | 'items.read' | 'webhooks.manage';
 
 /** Default scopes minted onto a token when the caller did not specify any. */
 export const DEFAULT_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];
 
 /** Allowlist enforced by the mint endpoint. Anything outside this set is rejected with 400. */
-export const VALID_API_TOKEN_SCOPES: ReadonlySet<ApiTokenScope> = new Set(['items.capture', 'items.clarify', 'items.read']);
+export const VALID_API_TOKEN_SCOPES: ReadonlySet<ApiTokenScope> = new Set(['items.capture', 'items.clarify', 'items.read', 'webhooks.manage']);
 
 /**
  * Personal API token issued by the user from the app's settings page. Authenticates calls to

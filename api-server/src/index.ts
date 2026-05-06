@@ -10,6 +10,7 @@ import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
 import { tokensRoutes } from './routes/tokens.js';
 import { v1ItemsRoutes } from './routes/v1Items.js';
+import { webhookRoutes } from './routes/webhooks.js';
 
 function resolveCommitHash() {
     try {
@@ -41,6 +42,7 @@ const app = new Hono()
     // from any origin. The bearer token is the auth gate.
     .use('/v1/*', publicCors())
     .route('/v1', v1ItemsRoutes)
+    .route('/v1/webhooks', webhookRoutes)
     // /account/tokens lives outside /v1 because it is session-authed (cookie), not bearer-authed.
     // Bearer-only token mint would be a chicken-and-egg.
     .use('/account/tokens/*', strictCors())
@@ -66,6 +68,17 @@ async function start() {
     if (process.env.CALENDAR_WEBHOOK_URL) {
         const { startWebhookRenewalTimer } = await import('./lib/webhookRenewal.js');
         startWebhookRenewalTimer();
+    }
+
+    // Outbound webhook delivery worker. In dev/test the worker runs by default so e2e can
+    // exercise the full delivery pipeline without manual env-var setup. In production the
+    // operator must explicitly opt in via WEBHOOKS_ENABLED=true so a misconfigured deploy can't
+    // accidentally start delivering against random URLs.
+    const webhooksEnabled = process.env.NODE_ENV !== 'production' || process.env.WEBHOOKS_ENABLED === 'true';
+    if (webhooksEnabled) {
+        const { startWebhookDeliveryWorker } = await import('./lib/webhookDeliveryWorker.js');
+        startWebhookDeliveryWorker();
+        console.log('[webhooks] delivery worker started');
     }
 
     const port = Number(process.env.PORT ?? 4000);

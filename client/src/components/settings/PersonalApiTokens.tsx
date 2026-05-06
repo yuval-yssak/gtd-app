@@ -38,6 +38,7 @@ const SCOPE_DESCRIPTIONS: Record<ApiTokenScope, string> = {
     'items.capture': 'Create inbox items',
     'items.read': 'List, search, and read items',
     'items.clarify': 'Clarify and complete items',
+    'webhooks.manage': 'Register and manage webhook subscriptions',
 };
 
 type CreateState = { phase: 'closed' } | { phase: 'form' } | { phase: 'reveal'; plaintext: string; label: string };

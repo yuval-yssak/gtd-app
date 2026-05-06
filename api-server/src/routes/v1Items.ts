@@ -10,6 +10,7 @@ import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
 import { recordOperation } from '../lib/operationHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
+import { enqueueWebhookDeliveries } from '../lib/webhookDeliveryWorker.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
 import { type ItemInterface, ItemStatus, type OperationInterface } from '../types/entities.js';
 
@@ -89,6 +90,11 @@ async function notifyChange(op: OperationInterface, tokenId: string): Promise<vo
     await notifyViaWebPush(op.user, null, [op], op.ts);
     void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
         console.error('[v1-items] gcal pushback failed', { tokenId, opType: op.opType, err });
+    });
+    // Webhook fan-out is the fourth leg. Best-effort: a Mongo blip enqueueing deliveries should
+    // not fail the originating /v1 request — the worker will retry on next tick if the row is in.
+    void enqueueWebhookDeliveries(op).catch((err) => {
+        console.error('[v1-items] webhook enqueue failed', { tokenId, opType: op.opType, err });
     });
 }
 
