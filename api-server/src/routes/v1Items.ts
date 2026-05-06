@@ -3,7 +3,8 @@ import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import type { Filter } from 'mongodb';
 import { authenticateBearer, type BearerVariables } from '../auth/bearerMiddleware.js';
-import { anonymousRateLimit, authenticatedRateLimit } from '../auth/rateLimitMiddleware.js';
+import { authenticatedRateLimit } from '../auth/rateLimitMiddleware.js';
+import { requireScope } from '../auth/scopeMiddleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
@@ -429,6 +430,177 @@ async function completeItem({ userId, tokenId, itemId }: CompleteContext): Promi
     return { ok: true, item: updated, alreadyDone: false };
 }
 
+// ── PATCH /v1/items/:id (clarify) ───────────────────────────────────────────────────────────
+//
+// Allows an `inbox` item to be clarified into `nextAction`, `waitingFor`, or `somedayMaybe`,
+// with metadata. Calendar transitions are intentionally excluded (calendar items have a
+// distinct creation path with their own scheduling fields), and `done`/`trash` are excluded
+// because they have explicit endpoints (or in the case of trash, are out of scope for the
+// public API today). Requires the `items.clarify` scope.
+
+const PATCH_ALLOWED_STATUSES: ReadonlyArray<ItemInterface['status']> = ['nextAction', 'waitingFor', 'somedayMaybe'];
+const PATCH_ALLOWED_FIELDS = new Set([
+    'status',
+    'workContextIds',
+    'peopleIds',
+    'waitingForPersonId',
+    'energy',
+    'time',
+    'focus',
+    'urgent',
+    'expectedBy',
+    'ignoreBefore',
+    'notes',
+]);
+
+type PatchBody = Record<string, unknown>;
+
+type PatchError = { status: 400 | 404 | 409; code: string; message: string };
+
+type PatchedFields = Partial<
+    Pick<
+        ItemInterface,
+        'status' | 'workContextIds' | 'peopleIds' | 'waitingForPersonId' | 'energy' | 'time' | 'focus' | 'urgent' | 'expectedBy' | 'ignoreBefore' | 'notes'
+    >
+>;
+
+/** Pure validator — no DB access. Returns the typed-narrowed delta or a structured error. */
+function parsePatchBody(raw: PatchBody): { ok: true; value: PatchedFields } | { ok: false; error: PatchError } {
+    for (const key of Object.keys(raw)) {
+        if (!PATCH_ALLOWED_FIELDS.has(key)) {
+            return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${key}" cannot be set via the public API` } };
+        }
+    }
+    if (Object.keys(raw).length === 0) {
+        return { ok: false, error: { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' } };
+    }
+    const value: PatchedFields = {};
+    const status = raw['status'];
+    if (status !== undefined) {
+        if (typeof status !== 'string' || !PATCH_ALLOWED_STATUSES.includes(status as ItemInterface['status'])) {
+            return {
+                ok: false,
+                error: { status: 400, code: 'invalid_status', message: `status must be one of: ${PATCH_ALLOWED_STATUSES.join(', ')}` },
+            };
+        }
+        value.status = status as ItemInterface['status'];
+    }
+    const workContextIds = raw['workContextIds'];
+    if (workContextIds !== undefined) {
+        if (!Array.isArray(workContextIds) || !workContextIds.every((id) => typeof id === 'string')) {
+            return { ok: false, error: { status: 400, code: 'invalid_workContextIds', message: 'workContextIds must be an array of strings' } };
+        }
+        value.workContextIds = workContextIds as string[];
+    }
+    const peopleIds = raw['peopleIds'];
+    if (peopleIds !== undefined) {
+        if (!Array.isArray(peopleIds) || !peopleIds.every((id) => typeof id === 'string')) {
+            return { ok: false, error: { status: 400, code: 'invalid_peopleIds', message: 'peopleIds must be an array of strings' } };
+        }
+        value.peopleIds = peopleIds as string[];
+    }
+    const waitingForPersonId = raw['waitingForPersonId'];
+    if (waitingForPersonId !== undefined) {
+        if (typeof waitingForPersonId !== 'string' || waitingForPersonId.trim() === '') {
+            return { ok: false, error: { status: 400, code: 'invalid_waitingForPersonId', message: 'waitingForPersonId must be a non-empty string' } };
+        }
+        value.waitingForPersonId = waitingForPersonId;
+    }
+    const energy = raw['energy'];
+    if (energy !== undefined) {
+        if (energy !== 'low' && energy !== 'medium' && energy !== 'high') {
+            return { ok: false, error: { status: 400, code: 'invalid_energy', message: 'energy must be one of: low, medium, high' } };
+        }
+        value.energy = energy;
+    }
+    const time = raw['time'];
+    if (time !== undefined) {
+        if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
+            return { ok: false, error: { status: 400, code: 'invalid_time', message: 'time must be a non-negative number' } };
+        }
+        value.time = time;
+    }
+    const focus = raw['focus'];
+    if (focus !== undefined) {
+        if (typeof focus !== 'boolean') {
+            return { ok: false, error: { status: 400, code: 'invalid_focus', message: 'focus must be a boolean' } };
+        }
+        value.focus = focus;
+    }
+    const urgent = raw['urgent'];
+    if (urgent !== undefined) {
+        if (typeof urgent !== 'boolean') {
+            return { ok: false, error: { status: 400, code: 'invalid_urgent', message: 'urgent must be a boolean' } };
+        }
+        value.urgent = urgent;
+    }
+    const expectedBy = raw['expectedBy'];
+    if (expectedBy !== undefined) {
+        if (typeof expectedBy !== 'string') {
+            return { ok: false, error: { status: 400, code: 'invalid_expectedBy', message: 'expectedBy must be an ISO date string' } };
+        }
+        value.expectedBy = expectedBy;
+    }
+    const ignoreBefore = raw['ignoreBefore'];
+    if (ignoreBefore !== undefined) {
+        if (typeof ignoreBefore !== 'string') {
+            return { ok: false, error: { status: 400, code: 'invalid_ignoreBefore', message: 'ignoreBefore must be an ISO date string' } };
+        }
+        value.ignoreBefore = ignoreBefore;
+    }
+    const notes = raw['notes'];
+    if (notes !== undefined) {
+        if (typeof notes !== 'string') {
+            return { ok: false, error: { status: 400, code: 'invalid_notes', message: 'notes must be a string' } };
+        }
+        value.notes = notes;
+    }
+    return { ok: true, value };
+}
+
+interface PatchContext {
+    userId: string;
+    tokenId: string;
+    itemId: string;
+    delta: PatchedFields;
+}
+
+type PatchResult = { ok: true; item: ItemInterface } | { ok: false; error: PatchError };
+
+/**
+ * Applies the validated delta to an inbox item. Persists the change, records a server-originated
+ * `update` op, and fans out via `notifyChange` (SSE / push / GCal pushback) just like the in-app
+ * clarify flow.
+ */
+async function patchItem({ userId, tokenId, itemId, delta }: PatchContext): Promise<PatchResult> {
+    const existing = await itemsDAO.findByOwnerAndId(itemId, userId);
+    if (!existing) {
+        return { ok: false, error: { status: 404, code: 'not_found', message: 'item not found' } };
+    }
+    // Status transitions: only inbox → {nextAction, waitingFor, somedayMaybe}. If the caller is
+    // not transitioning status, the existing status must already be one of those (or inbox if
+    // they're only enriching metadata pre-clarify, which is also allowed).
+    if (delta.status !== undefined && existing.status !== 'inbox') {
+        return {
+            ok: false,
+            error: { status: 409, code: 'invalid_transition', message: `status transitions via PATCH are only allowed from "inbox"` },
+        };
+    }
+    const now = dayjs().toISOString();
+    const updated: ItemInterface = { ...existing, ...delta, updatedTs: now };
+    await itemsDAO.replaceById(itemId, updated);
+    const op = await recordOperation(userId, {
+        entityType: 'item',
+        entityId: itemId,
+        snapshot: updated,
+        opType: 'update',
+        now,
+        deviceId: `api:${tokenId}`,
+    });
+    await notifyChange(op, tokenId);
+    return { ok: true, item: updated };
+}
+
 /**
  * Allowlist projection for API responses. We use an allowlist (not an omit) so that a future
  * internal sync-anchor field added to ItemInterface (e.g. another lastSyncedXxxTs) does not
@@ -503,17 +675,17 @@ function presentItem(item: ItemInterface): PublicItem {
 }
 
 export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
-    // Anonymous limiter runs first so a flood of bad-credential calls can't burn through
-    // tokenHash lookups on the apiTokens collection.
-    .use('*', anonymousRateLimit())
+    // authenticateBearer also consumes from the IP-keyed anon bucket on failed auth, so a flood
+    // of bad-credential calls can't keep hammering tokenHash lookups. Successful auth skips the
+    // anon bucket and uses the tokenId-keyed limiter below instead.
     .use('*', authenticateBearer)
-    // Per-token limiter runs AFTER auth so it has tokenId to scope by. Read and write
-    // buckets are independent (see `rateLimitMiddleware.ts`).
+    // Per-token limiter runs AFTER auth so it has tokenId to scope by. Read and write buckets
+    // are independent (see `rateLimitMiddleware.ts`).
     .use('*', authenticatedRateLimit())
 
     // ── POST /v1/items/bulk — migration import ──────────────────────────────
     // Mounted before /items so Hono's POST /items handler doesn't shadow this on path-collision.
-    .post('/items/bulk', async (c) => {
+    .post('/items/bulk', requireScope('items.capture'), async (c) => {
         const { userId, tokenId } = c.var.apiAuth;
         const raw = (await c.req.json().catch(() => null)) as BulkBody | null;
         if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) {
@@ -531,7 +703,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
     })
 
     // ── POST /v1/items — capture an inbox item ──────────────────────────────
-    .post('/items', async (c) => {
+    .post('/items', requireScope('items.capture'), async (c) => {
         const { userId, tokenId } = c.var.apiAuth;
         const raw = (await c.req.json().catch(() => null)) as CreateItemBody | null;
         if (!raw || typeof raw !== 'object') {
@@ -549,7 +721,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
     })
 
     // ── GET /v1/items — list / search ───────────────────────────────────────
-    .get('/items', async (c) => {
+    .get('/items', requireScope('items.read'), async (c) => {
         const { userId } = c.var.apiAuth;
         const parsed = parseListQuery(new URL(c.req.url));
         if (!parsed.ok) {
@@ -567,7 +739,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
     })
 
     // ── GET /v1/items/:id ───────────────────────────────────────────────────
-    .get('/items/:id', async (c) => {
+    .get('/items/:id', requireScope('items.read'), async (c) => {
         const { userId } = c.var.apiAuth;
         const id = c.req.param('id');
         const item = await itemsDAO.findByOwnerAndId(id, userId);
@@ -577,8 +749,27 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
         return c.json(presentItem(item));
     })
 
+    // ── PATCH /v1/items/:id — clarify (inbox → nextAction / waitingFor / somedayMaybe) ─────
+    .patch('/items/:id', requireScope('items.clarify'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const raw = (await c.req.json().catch(() => null)) as PatchBody | null;
+        if (!raw || typeof raw !== 'object') {
+            return c.json({ error: 'request body must be a JSON object', code: 'invalid_body' }, 400);
+        }
+        const parsed = parsePatchBody(raw);
+        if (!parsed.ok) {
+            return c.json({ error: parsed.error.message, code: parsed.error.code }, parsed.error.status);
+        }
+        const result = await patchItem({ userId, tokenId, itemId: id, delta: parsed.value });
+        if (!result.ok) {
+            return c.json({ error: result.error.message, code: result.error.code }, result.error.status);
+        }
+        return c.json(presentItem(result.item));
+    })
+
     // ── POST /v1/items/:id/complete ─────────────────────────────────────────
-    .post('/items/:id/complete', async (c) => {
+    .post('/items/:id/complete', requireScope('items.clarify'), async (c) => {
         const { userId, tokenId } = c.var.apiAuth;
         const id = c.req.param('id');
         const result = await completeItem({ userId, tokenId, itemId: id });

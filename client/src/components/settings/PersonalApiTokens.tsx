@@ -1,12 +1,14 @@
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import Checkbox from '@mui/material/Checkbox';
 import Chip from '@mui/material/Chip';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogContentText from '@mui/material/DialogContentText';
 import DialogTitle from '@mui/material/DialogTitle';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
@@ -18,10 +20,25 @@ import classNames from 'classnames';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
-import { createToken, listTokens, type PersonalApiToken, revokeToken, TokensApiError } from '../../api/tokensApi';
+import {
+    ALL_API_TOKEN_SCOPES,
+    type ApiTokenScope,
+    createToken,
+    DEFAULT_NEW_TOKEN_SCOPES,
+    listTokens,
+    type PersonalApiToken,
+    revokeToken,
+    TokensApiError,
+} from '../../api/tokensApi';
 import styles from './PersonalApiTokens.module.css';
 
 dayjs.extend(relativeTime);
+
+const SCOPE_DESCRIPTIONS: Record<ApiTokenScope, string> = {
+    'items.capture': 'Create inbox items',
+    'items.read': 'List, search, and read items',
+    'items.clarify': 'Clarify and complete items',
+};
 
 type CreateState = { phase: 'closed' } | { phase: 'form' } | { phase: 'reveal'; plaintext: string; label: string };
 type RevokeState = { phase: 'closed' } | { phase: 'confirm'; token: PersonalApiToken };
@@ -73,11 +90,11 @@ export function PersonalApiTokens() {
         setCreateState({ phase: 'form' });
     }
 
-    function onCreateSubmit(label: string) {
+    function onCreateSubmit(label: string, scopes: ApiTokenScope[]) {
         setActionError(null);
         startCreating(async () => {
             try {
-                const created = await createToken(label);
+                const created = await createToken(label, scopes);
                 setCreateState({ phase: 'reveal', plaintext: created.plaintext, label: created.label });
                 await refresh();
             } catch (err) {
@@ -235,6 +252,9 @@ function TokenRow({ token, onRevoke, isRevoking }: TokenRowProps) {
                     <Box className={styles.primaryLine}>
                         <Box component="span">{token.label}</Box>
                         {showUnusedChip && <Chip size="small" variant="outlined" label="unused" data-testid="unusedTokenChip" />}
+                        {token.scopes.map((scope) => (
+                            <Chip key={scope} size="small" variant="outlined" label={scope} data-testid="tokenScopeChip" />
+                        ))}
                     </Box>
                 }
                 secondary={secondary}
@@ -246,7 +266,7 @@ function TokenRow({ token, onRevoke, isRevoking }: TokenRowProps) {
 interface CreateDialogProps {
     state: CreateState;
     onCancel: () => void;
-    onSubmit: (label: string) => void;
+    onSubmit: (label: string, scopes: ApiTokenScope[]) => void;
     onDismissReveal: () => void;
     isCreating: boolean;
 }
@@ -254,17 +274,34 @@ interface CreateDialogProps {
 function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }: CreateDialogProps) {
     const [label, setLabel] = useState('');
     const [labelError, setLabelError] = useState<string | null>(null);
+    const [scopes, setScopes] = useState<Set<ApiTokenScope>>(() => new Set(DEFAULT_NEW_TOKEN_SCOPES));
+    const [scopesError, setScopesError] = useState<string | null>(null);
     const [copyError, setCopyError] = useState<string | null>(null);
 
     useEffect(() => {
         if (state.phase === 'form') {
             setLabel('');
             setLabelError(null);
+            setScopes(new Set(DEFAULT_NEW_TOKEN_SCOPES));
+            setScopesError(null);
         }
         if (state.phase === 'reveal') {
             setCopyError(null);
         }
     }, [state.phase]);
+
+    function toggleScope(scope: ApiTokenScope) {
+        setScopes((prev) => {
+            const next = new Set(prev);
+            if (next.has(scope)) {
+                next.delete(scope);
+            } else {
+                next.add(scope);
+            }
+            return next;
+        });
+        if (scopesError !== null) setScopesError(null);
+    }
 
     if (state.phase === 'closed') {
         return null;
@@ -277,7 +314,11 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
                 setLabelError('Label is required.');
                 return;
             }
-            onSubmit(trimmed);
+            if (scopes.size === 0) {
+                setScopesError('Pick at least one capability.');
+                return;
+            }
+            onSubmit(trimmed, [...scopes]);
         }
         return (
             <Dialog open onClose={onCancel} data-testid="createTokenDialog">
@@ -301,6 +342,40 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
                         autoComplete="off"
                         data-testid="tokenLabelInput"
                     />
+                    <Box className={styles.scopesGroup}>
+                        <Typography variant="body2" className={styles.scopesLabel}>
+                            Capabilities
+                        </Typography>
+                        {ALL_API_TOKEN_SCOPES.map((scope) => (
+                            <FormControlLabel
+                                key={scope}
+                                control={
+                                    <Checkbox
+                                        size="small"
+                                        checked={scopes.has(scope)}
+                                        onChange={() => toggleScope(scope)}
+                                        data-testid={`scopeCheckbox-${scope}`}
+                                    />
+                                }
+                                label={
+                                    <Box>
+                                        <Typography variant="body2" component="span">
+                                            <code>{scope}</code>
+                                        </Typography>
+                                        <Typography variant="caption" component="span" className={styles.scopesHelp}>
+                                            {' '}
+                                            — {SCOPE_DESCRIPTIONS[scope]}
+                                        </Typography>
+                                    </Box>
+                                }
+                            />
+                        ))}
+                        {scopesError && (
+                            <Typography variant="caption" className={styles.scopesError} data-testid="scopesError">
+                                {scopesError}
+                            </Typography>
+                        )}
+                    </Box>
                 </DialogContent>
                 <DialogActions>
                     <Button onClick={onCancel}>Cancel</Button>

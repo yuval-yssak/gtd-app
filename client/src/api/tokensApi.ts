@@ -1,9 +1,15 @@
 import { API_SERVER } from '../constants/globals';
 
+export type ApiTokenScope = 'items.capture' | 'items.clarify' | 'items.read';
+
+export const ALL_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read', 'items.clarify'];
+export const DEFAULT_NEW_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];
+
 export interface PersonalApiToken {
     id: string;
     label: string;
     createdTs: string;
+    scopes: ApiTokenScope[];
     lastUsedTs?: string;
     revokedTs?: string;
 }
@@ -16,6 +22,7 @@ export interface CreatedToken {
     id: string;
     label: string;
     createdTs: string;
+    scopes: ApiTokenScope[];
     plaintext: string;
 }
 
@@ -51,11 +58,12 @@ export async function listTokens(): Promise<PersonalApiToken[]> {
     return body.tokens;
 }
 
-export async function createToken(label: string): Promise<CreatedToken> {
+export async function createToken(label: string, scopes?: ApiTokenScope[]): Promise<CreatedToken> {
+    const body = scopes !== undefined ? { label, scopes } : { label };
     const res = await apiFetch('/account/tokens', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label }),
+        body: JSON.stringify(body),
     });
     return (await res.json()) as CreatedToken;
 }

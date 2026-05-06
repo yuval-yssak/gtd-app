@@ -1,5 +1,5 @@
 import type { MongoClient } from 'mongodb';
-import type { ApiTokenInterface } from '../types/entities.js';
+import type { ApiTokenInterface, ApiTokenScope } from '../types/entities.js';
 import AbstractDAO from './abstractDAO.js';
 
 class ApiTokensDAO extends AbstractDAO<ApiTokenInterface> {
@@ -24,6 +24,11 @@ class ApiTokensDAO extends AbstractDAO<ApiTokenInterface> {
     /** Best-effort lastUsedTs bump — never blocks the request lifecycle. Errors are caller's responsibility. */
     async touchLastUsed(tokenId: string, now: string): Promise<void> {
         await this._collection.updateOne({ _id: tokenId }, { $set: { lastUsedTs: now } });
+    }
+
+    /** Sets the scopes array on an existing token. Used by the bearer middleware's lazy backfill of pre-scopes rows. */
+    async setScopes(tokenId: string, scopes: ApiTokenScope[]): Promise<void> {
+        await this._collection.updateOne({ _id: tokenId }, { $set: { scopes } });
     }
 
     /** Lists every token belonging to `userId`, including revoked ones. Sorted by createdTs DESC. */

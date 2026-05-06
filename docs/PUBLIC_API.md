@@ -62,6 +62,20 @@ curl -X POST http://localhost:4000/dev/api-tokens \
 
 Use the Settings UI (above) for staging and production.
 
+### Token scopes
+
+Each token carries a `scopes` array — the capabilities it is permitted to exercise. Issuing tokens with the smallest scope set is the right hygiene. The Settings UI lets you tick the capabilities at mint time; the HTTP endpoint accepts a `scopes` field on `POST /account/tokens`.
+
+| Scope | Allows |
+|---|---|
+| `items.capture` | `POST /v1/items`, `POST /v1/items/bulk` |
+| `items.read` | `GET /v1/items`, `GET /v1/items/:id` |
+| `items.clarify` | `PATCH /v1/items/:id`, `POST /v1/items/:id/complete` |
+
+Default scopes when omitted: `['items.capture', 'items.read']` (capture-and-list — the minimum useful set for an inbox-only Raycast/iOS Shortcut style integration).
+
+A request hitting an endpoint that the token's scopes do not cover returns `403` with `code: forbidden_scope`. Pre-scopes tokens (issued before this surface shipped) are backfilled to the default set on first authenticated use.
+
 ### Token lifecycle
 
 | Action | Effect |
@@ -261,6 +275,32 @@ The endpoint counts as a **single write** against the per-token rate limit.
 
 ---
 
+### `PATCH /v1/items/:id` — clarify with metadata
+
+Transitions an `inbox` item to one of `nextAction`, `waitingFor`, or `somedayMaybe` and attaches GTD metadata. **Requires the `items.clarify` scope.**
+
+Allowed fields in the request body (all optional except that at least one must be present):
+
+`status`, `workContextIds`, `peopleIds`, `waitingForPersonId`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `notes`.
+
+Any other field returns `400` `forbidden_field`. The endpoint does not allow status transitions to `calendar` (calendar items have a separate creation path), `done` (use `POST /complete`), or `trash`.
+
+**Errors**
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `400` | `forbidden_field` | Body included a field outside the allowlist. |
+| `400` | `empty_body` | Body had no settable fields. |
+| `400` | `invalid_status` | Status is not one of: `nextAction`, `waitingFor`, `somedayMaybe`. |
+| `400` | `invalid_<field>` | Field had the wrong type (e.g. `energy` not in `low|medium|high`). |
+| `403` | `forbidden_scope` | Token lacks `items.clarify`. |
+| `404` | `not_found` | Item doesn't exist for this user. |
+| `409` | `invalid_transition` | Item is not in `inbox` (status transitions via PATCH only originate from inbox). |
+
+**Response** — `200 OK` with the updated item.
+
+---
+
 ### `POST /v1/items/:id/complete` — mark as done
 
 Transitions any item to `done` and bumps `updatedTs`. Idempotent: completing an already-`done` item returns `200` and the unchanged item.
@@ -302,6 +342,7 @@ A minimal Model Context Protocol server lives at `tools/mcp-gtd/` (planned). It 
 | `search_items({ query?, status?, limit? })` | `GET /v1/items` |
 | `get_item({ id })` | `GET /v1/items/:id` |
 | `create_inbox_item({ title, notes?, externalId? })` | `POST /v1/items` |
+| `clarify_inbox_item({ id, status?, energy?, ... })` | `PATCH /v1/items/:id` |
 | `complete_item({ id })` | `POST /v1/items/:id/complete` |
 | `bulk_import_inbox_items({ items, chunkSize? })` | `POST /v1/items/bulk` |
 

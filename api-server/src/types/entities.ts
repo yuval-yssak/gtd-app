@@ -399,6 +399,19 @@ export interface CalendarSyncConfigInterface {
 export type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface;
 
 /**
+ * Capability scopes granted to a personal API token. A token is permitted to perform any
+ * action whose scope appears in its `scopes` array. Issuing tokens with the smallest possible
+ * scope set is the right hygiene; e.g. a Raycast capture extension only needs `items.capture`.
+ */
+export type ApiTokenScope = 'items.capture' | 'items.clarify' | 'items.read';
+
+/** Default scopes minted onto a token when the caller did not specify any. */
+export const DEFAULT_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];
+
+/** Allowlist enforced by the mint endpoint. Anything outside this set is rejected with 400. */
+export const VALID_API_TOKEN_SCOPES: ReadonlySet<ApiTokenScope> = new Set(['items.capture', 'items.clarify', 'items.read']);
+
+/**
  * Personal API token issued by the user from the app's settings page. Authenticates calls to
  * the public `/v1/*` API. Only the sha256 hash is stored — the plaintext is shown to the user
  * exactly once at creation.
@@ -411,6 +424,12 @@ export interface ApiTokenInterface {
     /** Human label provided at creation, e.g. "iOS Shortcut", "Local MCP". */
     label: string;
     createdTs: string;
+    /**
+     * Capabilities the token is allowed to exercise. Pre-scopes tokens have this field absent;
+     * the bearer middleware lazily backfills `DEFAULT_API_TOKEN_SCOPES` on first use so the
+     * scope check downstream always sees a populated array.
+     */
+    scopes?: ApiTokenScope[];
     /** Updated best-effort on every authenticated request. May lag a few seconds behind. */
     lastUsedTs?: string;
     /** Set when the token was revoked. Once set, the token can never authenticate again. */

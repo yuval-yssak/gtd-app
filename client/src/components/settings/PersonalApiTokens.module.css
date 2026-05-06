@@ -47,5 +47,26 @@
 .primaryLine {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.5rem;
+}
+
+.scopesGroup {
+    display: flex;
+    flex-direction: column;
+    margin-top: 1rem;
+}
+
+.scopesLabel {
+    font-weight: 500;
+    margin-bottom: 0.25rem;
+}
+
+.scopesHelp {
+    color: var(--mui-palette-text-secondary);
+}
+
+.scopesError {
+    color: var(--mui-palette-error-main);
+    margin-top: 0.25rem;
 }

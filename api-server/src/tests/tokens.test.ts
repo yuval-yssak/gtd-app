@@ -69,7 +69,7 @@ describe('POST /account/tokens', () => {
         const body = (await res.json()) as Record<string, unknown>;
         expect(body).not.toHaveProperty('tokenHash');
         expect(body).not.toHaveProperty('user');
-        expect(Object.keys(body).sort()).toEqual(['createdTs', 'id', 'label', 'plaintext']);
+        expect(Object.keys(body).sort()).toEqual(['createdTs', 'id', 'label', 'plaintext', 'scopes']);
     });
 
     it('treats a non-JSON body as an empty object and falls back to "unlabeled"', async () => {

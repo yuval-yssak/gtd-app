@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
-import type { ApiTokenInterface } from '../types/entities.js';
+import { type ApiTokenInterface, type ApiTokenScope, DEFAULT_API_TOKEN_SCOPES } from '../types/entities.js';
 
 const TOKEN_PREFIX = 'gtd_';
 // 32 random bytes → 43-char base64url. With the prefix this yields ~47 chars total, plenty of entropy
@@ -24,8 +24,8 @@ interface CreateTokenResult {
     record: ApiTokenInterface;
 }
 
-/** Issues a new token for `userId` with the given label. The plaintext appears only in the return value. */
-export async function issueApiToken(userId: string, label: string): Promise<CreateTokenResult> {
+/** Issues a new token for `userId` with the given label and scopes. Defaults to capture+read when scopes are omitted. */
+export async function issueApiToken(userId: string, label: string, scopes: ApiTokenScope[] = DEFAULT_API_TOKEN_SCOPES): Promise<CreateTokenResult> {
     const plaintext = generateTokenPlaintext();
     const record: ApiTokenInterface = {
         _id: randomUUID(),
@@ -33,6 +33,7 @@ export async function issueApiToken(userId: string, label: string): Promise<Crea
         tokenHash: hashToken(plaintext),
         label,
         createdTs: dayjs().toISOString(),
+        scopes,
     };
     await apiTokensDAO.insertOne(record);
     return { plaintext, record };

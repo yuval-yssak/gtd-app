@@ -60,6 +60,20 @@ export interface BulkImportResponse {
     counts: { created: number; replayed: number; failed: number };
 }
 
+export interface ClarifyFields {
+    status?: 'nextAction' | 'waitingFor' | 'somedayMaybe';
+    workContextIds?: string[];
+    peopleIds?: string[];
+    waitingForPersonId?: string;
+    energy?: 'low' | 'medium' | 'high';
+    time?: number;
+    focus?: boolean;
+    urgent?: boolean;
+    expectedBy?: string;
+    ignoreBefore?: string;
+    notes?: string;
+}
+
 export class GtdApiError extends Error {
     constructor(
         readonly status: number,
@@ -110,7 +124,11 @@ export class GtdClient {
         return this.request<GtdItem>('POST', `/items/${encodeURIComponent(id)}/complete`, {});
     }
 
-    private async request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+    async clarifyItem(id: string, fields: ClarifyFields): Promise<GtdItem> {
+        return this.request<GtdItem>('PATCH', `/items/${encodeURIComponent(id)}`, fields);
+    }
+
+    private async request<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {
         const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` };
         if (body !== undefined) headers['Content-Type'] = 'application/json';
         const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
