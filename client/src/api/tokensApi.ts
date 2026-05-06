@@ -1,8 +1,8 @@
 import { API_SERVER } from '../constants/globals';
 
-export type ApiTokenScope = 'items.capture' | 'items.clarify' | 'items.read';
+export type ApiTokenScope = 'items.capture' | 'items.clarify' | 'items.read' | 'webhooks.manage';
 
-export const ALL_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read', 'items.clarify'];
+export const ALL_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read', 'items.clarify', 'webhooks.manage'];
 export const DEFAULT_NEW_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];
 
 export interface PersonalApiToken {

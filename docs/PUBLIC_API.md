@@ -322,6 +322,63 @@ Transitions any item to `done` and bumps `updatedTs`. Idempotent: completing an 
 - A `routine`-generated item completing may trigger generation of the next instance, identical to the in-app flow.
 - An `OperationInterface` is logged with `deviceId = "api:<tokenId>"` so all the user's devices pull the change on their next sync.
 
+## Webhooks
+
+Subscribe a URL to receive signed POST notifications when items change. Useful for Zapier / n8n / Make integrations that want push events instead of polling. Requires the `webhooks.manage` scope on the calling token.
+
+### Endpoints
+
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| `POST` | `/v1/webhooks` | `{ url, events: WebhookEvent[] }` | Returns `{ id, url, events, createdTs, secret }`. **Secret is shown exactly once.** |
+| `GET` | `/v1/webhooks` | — | Returns `{ subscriptions: [...] }`. Secret is never echoed. |
+| `DELETE` | `/v1/webhooks/:id` | — | Hard-deletes the subscription. Already-enqueued deliveries remain in the audit log. |
+
+**Limits**: per-user cap of 10 active subscriptions. Hitting it returns `429 subscription_cap_reached`.
+
+### Event types
+
+| Event | Fires when |
+|---|---|
+| `item.created` | A new `inbox` item is captured (via `POST /v1/items` or `POST /v1/items/bulk`). |
+| `item.completed` | An item transitions to `done` (via `POST /v1/items/:id/complete`). |
+
+### Delivery contract
+
+The worker POSTs the payload to the subscribed URL with these headers:
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `application/json` |
+| `X-GTD-Event` | The event name (e.g. `item.created`). |
+| `X-GTD-Delivery-Id` | UUID of the delivery — useful for idempotent receivers. |
+| `X-GTD-Signature` | `sha256=<hex>`, where hex is `HMAC-SHA256(secret, body)`. |
+
+**Verifying signatures (Node.js example):**
+
+```js
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function isValidSignature(secret, body, signatureHeader) {
+    const expected = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
+    const a = Buffer.from(expected);
+    const b = Buffer.from(signatureHeader);
+    return a.length === b.length && timingSafeEqual(a, b);
+}
+```
+
+### Retry & disable policy
+
+- 3 attempts per delivery, with exponential backoff: 1m → 5m → 30m.
+- After 3 failed attempts the delivery is abandoned (audit log retained).
+- After **7 consecutive abandoned deliveries**, the subscription is auto-disabled. New events are not enqueued for disabled subscriptions; the row stays visible in `GET /v1/webhooks` with `disabledTs` and `disabledReason: "consecutive_failures"` set so the user can see what happened. Delete and re-create to reactivate.
+
+### Production gating
+
+The delivery worker is **off by default in production**. Set `WEBHOOKS_ENABLED=true` on the Cloud Run service to turn it on. In dev/test the worker runs by default.
+
+---
+
 ## How the public API relates to `/sync`
 
 Every public-API write is converted into the same `OperationInterface` snapshot the in-app sync layer uses, then handed to the same `applyEntitySnapshotOp` helper (`api-server/src/routes/sync.ts`). Consequences:
