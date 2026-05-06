@@ -301,6 +301,19 @@ Any other field returns `400` `forbidden_field`. The endpoint does not allow sta
 
 ---
 
+### `GET /v1/people` and `GET /v1/work-contexts` — read-only catalogues
+
+Read-only access to the user's contacts and work-context tags, in support of clarify flows that need real ids rather than guessed strings. Same auth, pagination, and `since` semantics as `GET /v1/items`. Requires the `items.read` scope.
+
+| Endpoint | Response | Pagination |
+|---|---|---|
+| `GET /v1/people` | `{ people: PublicPerson[], nextCursor?: string }` | `?limit=` (default 100, max 500), `?cursor=`, `?since=ISODateTime` |
+| `GET /v1/work-contexts` | `{ workContexts: PublicWorkContext[], nextCursor?: string }` | same |
+
+Both endpoints scrub the internal `user` field; the rest of the schema mirrors what's stored.
+
+---
+
 ### `POST /v1/items/:id/complete` — mark as done
 
 Transitions any item to `done` and bumps `updatedTs`. Idempotent: completing an already-`done` item returns `200` and the unchanged item.
@@ -402,6 +415,8 @@ A minimal Model Context Protocol server lives at `tools/mcp-gtd/` (planned). It 
 | `clarify_inbox_item({ id, status?, energy?, ... })` | `PATCH /v1/items/:id` |
 | `complete_item({ id })` | `POST /v1/items/:id/complete` |
 | `bulk_import_inbox_items({ items, chunkSize? })` | `POST /v1/items/bulk` |
+| `list_people({ limit?, cursor? })` | `GET /v1/people` |
+| `list_work_contexts({ limit?, cursor? })` | `GET /v1/work-contexts` |
 
 ### Configuration
 

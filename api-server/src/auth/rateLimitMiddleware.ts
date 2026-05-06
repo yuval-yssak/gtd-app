@@ -44,7 +44,14 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
         (method === 'POST' && (path === '/v1/items' || path === '/v1/items/bulk' || /^\/v1\/items\/[^/]+\/complete$/.test(path))) ||
         (method === 'PATCH' && /^\/v1\/items\/[^/]+$/.test(path));
     if (isWrite) return 'write';
-    const isRead = method === 'GET' && (path === '/v1/items' || /^\/v1\/items\/[^/]+$/.test(path));
+    const isRead =
+        method === 'GET' &&
+        (path === '/v1/items' ||
+            /^\/v1\/items\/[^/]+$/.test(path) ||
+            path === '/v1/people' ||
+            /^\/v1\/people\/[^/]+$/.test(path) ||
+            path === '/v1/work-contexts' ||
+            /^\/v1\/work-contexts\/[^/]+$/.test(path));
     if (isRead) return 'read';
     return null;
 }
