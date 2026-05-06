@@ -15,6 +15,14 @@ if (process.env.NODE_ENV === 'production') {
 
 const SESSION_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+/**
+ * Per-user cap for the dev-only POST /dev/api-tokens endpoint. Higher than the production cap
+ * because rapid mint/revoke during local testing is normal — this is a safety net against
+ * runaway loops, not a security boundary. Production cap (20) lives in `routes/tokens.ts` as
+ * `PROD_TOKEN_CAP_PER_USER`. DO NOT extract into a shared constant; see issue #19 step 12.
+ */
+export const DEV_TOKEN_CAP_PER_USER = 50;
+
 // Replicates better-call's signCookieValue + encodeURIComponent wrapping.
 // Format: encodeURIComponent("rawToken.base64(HMAC-SHA256(rawToken, secret))")
 // Buffer.from(..., 'utf8') ensures encoding matches Web Crypto's TextEncoder used by Better Auth.
@@ -476,19 +484,20 @@ export const devLoginRoutes = new Hono()
 
     // POST /dev/api-tokens — issue a personal API token for the currently logged-in user.
     // Stand-in for a settings-page mint UI: the dev runs this from a browser/curl with their
-    // session cookie and pastes the resulting plaintext into their MCP env file.
-    // Production parity will require the same endpoint behind the regular session middleware
-    // plus a settings-page token list/revoke UI.
+    // session cookie and pastes the resulting plaintext into their MCP env file. Production has
+    // its own mint endpoint at `POST /account/tokens` (session-authed via the SPA).
     .post('/api-tokens', async (c) => {
         const session = await auth.api.getSession({ headers: c.req.raw.headers });
         if (!session) {
             return c.json({ error: 'Unauthorized: log in first' }, 401);
         }
         // Dev-only safety net: cap mints per user so an accidental loop can't fill the collection.
-        // Production will gate this behind a settings UI with explicit user actions and revoke flow.
+        // DO NOT extract into a shared constant with `PROD_TOKEN_CAP_PER_USER` in `routes/tokens.ts`.
+        // Dev (50) and prod (20) have different risk profiles — see issue #19 step 12 and the
+        // tripwire test in `tests/tokenCapsAreSeparate.test.ts` that fails if these values converge.
         const existing = await db.collection('apiTokens').countDocuments({ user: session.user.id });
-        if (existing >= 50) {
-            return c.json({ error: 'Token cap reached (50). Revoke unused tokens before minting new ones.' }, 429);
+        if (existing >= DEV_TOKEN_CAP_PER_USER) {
+            return c.json({ error: `Token cap reached (${DEV_TOKEN_CAP_PER_USER}). Revoke unused tokens before minting new ones.` }, 429);
         }
         const body = await c.req.json<{ label?: string }>().catch(() => ({}) as { label?: string });
         const label = body.label?.trim() || 'unlabeled';
