@@ -6,6 +6,7 @@ declare const styles: {
     readonly loadingState: string;
     readonly plaintextBox: string;
     readonly plaintextText: string;
+    readonly primaryLine: string;
     readonly revokedRow: string;
     readonly warning: string;
 };
