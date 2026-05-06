@@ -60,6 +60,33 @@ export interface BulkImportResponse {
     counts: { created: number; replayed: number; failed: number };
 }
 
+export interface PublicPerson {
+    _id: string;
+    name: string;
+    email?: string;
+    phone?: string;
+    notes?: string;
+    createdTs: string;
+    updatedTs: string;
+}
+
+export interface PublicWorkContext {
+    _id: string;
+    name: string;
+    createdTs: string;
+    updatedTs: string;
+}
+
+export interface ListPeopleResponse {
+    people: PublicPerson[];
+    nextCursor?: string;
+}
+
+export interface ListWorkContextsResponse {
+    workContexts: PublicWorkContext[];
+    nextCursor?: string;
+}
+
 export interface ClarifyFields {
     status?: 'nextAction' | 'waitingFor' | 'somedayMaybe';
     workContextIds?: string[];
@@ -126,6 +153,22 @@ export class GtdClient {
 
     async clarifyItem(id: string, fields: ClarifyFields): Promise<GtdItem> {
         return this.request<GtdItem>('PATCH', `/items/${encodeURIComponent(id)}`, fields);
+    }
+
+    async listPeople(limit?: number, cursor?: string): Promise<ListPeopleResponse> {
+        const query = new URLSearchParams();
+        if (limit !== undefined) query.set('limit', String(limit));
+        if (cursor !== undefined) query.set('cursor', cursor);
+        const qs = query.toString();
+        return this.request<ListPeopleResponse>('GET', `/people${qs ? `?${qs}` : ''}`);
+    }
+
+    async listWorkContexts(limit?: number, cursor?: string): Promise<ListWorkContextsResponse> {
+        const query = new URLSearchParams();
+        if (limit !== undefined) query.set('limit', String(limit));
+        if (cursor !== undefined) query.set('cursor', cursor);
+        const qs = query.toString();
+        return this.request<ListWorkContextsResponse>('GET', `/work-contexts${qs ? `?${qs}` : ''}`);
     }
 
     private async request<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {

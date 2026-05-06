@@ -132,6 +132,32 @@ export function buildServer(client: GtdClient): McpServer {
     );
 
     server.tool(
+        'list_people',
+        'List the user\'s contacts. Returns up to `limit` people. Use to populate `peopleIds` / `waitingForPersonId` when clarifying.',
+        {
+            limit: z.number().int().min(1).max(500).optional(),
+            cursor: z.string().optional(),
+        },
+        async (args) => {
+            const result = await callClient(() => client.listPeople(args.limit, args.cursor));
+            return result.ok ? asTextResponse(result.value) : asErrorResponse(result.error);
+        },
+    );
+
+    server.tool(
+        'list_work_contexts',
+        'List the user\'s work contexts (tags like "near a phone", "at the laptop"). Returns up to `limit` rows. Use to populate `workContextIds` when clarifying.',
+        {
+            limit: z.number().int().min(1).max(500).optional(),
+            cursor: z.string().optional(),
+        },
+        async (args) => {
+            const result = await callClient(() => client.listWorkContexts(args.limit, args.cursor));
+            return result.ok ? asTextResponse(result.value) : asErrorResponse(result.error);
+        },
+    );
+
+    server.tool(
         'bulk_import_inbox_items',
         'Bulk-import inbox items from a legacy system. Each item MUST carry an `externalId` so re-runs after a partial failure are idempotent. Returns one result per item with status: created | replayed | failed. Capped at 5,000 items per call.',
         {
