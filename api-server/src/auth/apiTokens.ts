@@ -1,3 +1,14 @@
+/**
+ * Personal API token issuance + bearer-header resolution.
+ *
+ * REVOCATION-PROPAGATION GUARDRAIL (issue #19 step 11): do NOT add an in-process token cache
+ * (e.g. `Map<tokenId, ApiTokenInterface>`) here or in `bearerMiddleware.ts` without also wiring
+ * an invalidation channel (SSE/Redis pub-sub). Revocation today goes straight to Mongo and the
+ * very next request that authenticates re-reads the row, so a `DELETE /account/tokens/:id`
+ * propagates within milliseconds. A cache without invalidation breaks that contract — revoked
+ * tokens would keep authenticating until the cache entry expired, and on multi-instance deploys
+ * the divergence is unbounded. The 1ms saved per request is not worth the consistency story.
+ */
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';

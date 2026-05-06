@@ -1,3 +1,11 @@
+/**
+ * Bearer-token authentication middleware for /v1/*.
+ *
+ * REVOCATION-PROPAGATION GUARDRAIL (issue #19 step 11): same constraint as `apiTokens.ts` —
+ * do NOT add an in-process token cache here. `resolveBearerToken` reads Mongo on every request
+ * by design so revocation takes effect within ms. A cache without invalidation lets revoked
+ * tokens linger; on multi-instance deploys the staleness window is unbounded.
+ */
 import dayjs from 'dayjs';
 import type { Context, MiddlewareHandler } from 'hono';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
