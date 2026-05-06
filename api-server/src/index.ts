@@ -9,6 +9,7 @@ import { calendarRoutes } from './routes/calendar.js';
 import { deviceRoutes } from './routes/devices.js';
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
+import { tokensRoutes } from './routes/tokens.js';
 import { v1ItemsRoutes } from './routes/v1Items.js';
 
 function resolveCommitHash() {
@@ -41,6 +42,9 @@ const app = new Hono()
     .route('/devices', deviceRoutes)
     .route('/calendar', calendarRoutes)
     .route('/v1', v1ItemsRoutes)
+    // /account/tokens lives outside /v1 because it is session-authed (cookie), not bearer-authed.
+    // Bearer-only token mint would be a chicken-and-egg.
+    .route('/account/tokens', tokensRoutes)
     .get('/version', (c) => c.json({ commitHash: COMMIT_HASH }));
 
 // Exported for Hono RPC — client imports this type to get a fully-typed fetch client

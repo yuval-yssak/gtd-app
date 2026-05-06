@@ -26,7 +26,31 @@ Authorization: Bearer gtd_<random>
 
 Tokens are user-scoped — every authenticated request resolves to the issuing user, identical to a Better Auth session. Each token is shown **exactly once** at creation; only its SHA-256 hash is persisted.
 
-A settings-page UI to mint and revoke tokens is planned but not yet shipped. In the meantime, dev environments can mint a token by calling `POST /dev/api-tokens` while logged in:
+### Mint, list, revoke (Settings UI)
+
+In any environment (production, staging, local dev), sign in to the app and open **Settings → Personal API tokens**:
+
+1. Click **Create token**, give it a label (e.g. `iOS Shortcut`, `Local MCP`), and click **Create**.
+2. Copy the plaintext value from the reveal dialog. **This is the only time it is shown.**
+3. To revoke: click **Revoke** on the row. Any integration using that token immediately starts returning `401`.
+
+The list shows each token's label, creation date, and last-used time, plus revocation status for any tokens you have revoked.
+
+A per-user cap of **20 active tokens** is enforced; revoke unused ones before creating new ones. Hitting the cap returns `429 token_cap_reached` from the underlying `POST /account/tokens` endpoint.
+
+### Mint, list, revoke (HTTP)
+
+The Settings UI calls these endpoints under `/account/tokens` (Better Auth session-cookie required):
+
+| Method | Path | Body | Notes |
+|---|---|---|---|
+| `POST` | `/account/tokens` | `{ "label": "..." }` | Returns `{ id, label, createdTs, plaintext }`. |
+| `GET` | `/account/tokens` | — | Returns `{ tokens: [...] }` (no plaintext, no hash). |
+| `DELETE` | `/account/tokens/:id` | — | Idempotent: revoking an already-revoked token still returns `200`. |
+
+### Local development shortcut
+
+For convenience in local dev, `POST /dev/api-tokens` accepts a session cookie and returns a token without going through the UI. It is gated behind `NODE_ENV !== 'production'` (the `/dev/*` namespace is removed from the app entirely in staging and prod):
 
 ```bash
 curl -X POST http://localhost:4000/dev/api-tokens \
@@ -36,7 +60,7 @@ curl -X POST http://localhost:4000/dev/api-tokens \
 # → { "id": "...", "label": "Local MCP", "createdTs": "...", "plaintext": "gtd_..." }
 ```
 
-The `/dev/*` namespace is gated behind `NODE_ENV !== 'production'`, so the same call against staging/production returns `404`. The settings UI is what unblocks production use.
+Use the Settings UI (above) for staging and production.
 
 ### Token lifecycle
 
