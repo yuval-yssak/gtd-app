@@ -459,7 +459,21 @@ const PATCH_ALLOWED_FIELDS = new Set([
     'notes',
 ]);
 
-type PatchBody = Record<string, unknown>;
+interface PatchBody {
+    status?: unknown;
+    workContextIds?: unknown;
+    peopleIds?: unknown;
+    waitingForPersonId?: unknown;
+    energy?: unknown;
+    time?: unknown;
+    focus?: unknown;
+    urgent?: unknown;
+    expectedBy?: unknown;
+    ignoreBefore?: unknown;
+    notes?: unknown;
+    /** Catch-all so we can detect forbidden_field. Bracket access forced by noPropertyAccessFromIndexSignature. */
+    [key: string]: unknown;
+}
 
 type PatchError = { status: 400 | 404 | 409; code: string; message: string };
 
@@ -481,7 +495,7 @@ function parsePatchBody(raw: PatchBody): { ok: true; value: PatchedFields } | { 
         return { ok: false, error: { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' } };
     }
     const value: PatchedFields = {};
-    const status = raw['status'];
+    const status = raw.status;
     if (status !== undefined) {
         if (typeof status !== 'string' || !PATCH_ALLOWED_STATUSES.includes(status as ItemInterface['status'])) {
             return {
@@ -491,70 +505,70 @@ function parsePatchBody(raw: PatchBody): { ok: true; value: PatchedFields } | { 
         }
         value.status = status as ItemInterface['status'];
     }
-    const workContextIds = raw['workContextIds'];
+    const workContextIds = raw.workContextIds;
     if (workContextIds !== undefined) {
         if (!Array.isArray(workContextIds) || !workContextIds.every((id) => typeof id === 'string')) {
             return { ok: false, error: { status: 400, code: 'invalid_workContextIds', message: 'workContextIds must be an array of strings' } };
         }
         value.workContextIds = workContextIds as string[];
     }
-    const peopleIds = raw['peopleIds'];
+    const peopleIds = raw.peopleIds;
     if (peopleIds !== undefined) {
         if (!Array.isArray(peopleIds) || !peopleIds.every((id) => typeof id === 'string')) {
             return { ok: false, error: { status: 400, code: 'invalid_peopleIds', message: 'peopleIds must be an array of strings' } };
         }
         value.peopleIds = peopleIds as string[];
     }
-    const waitingForPersonId = raw['waitingForPersonId'];
+    const waitingForPersonId = raw.waitingForPersonId;
     if (waitingForPersonId !== undefined) {
         if (typeof waitingForPersonId !== 'string' || waitingForPersonId.trim() === '') {
             return { ok: false, error: { status: 400, code: 'invalid_waitingForPersonId', message: 'waitingForPersonId must be a non-empty string' } };
         }
         value.waitingForPersonId = waitingForPersonId;
     }
-    const energy = raw['energy'];
+    const energy = raw.energy;
     if (energy !== undefined) {
         if (energy !== 'low' && energy !== 'medium' && energy !== 'high') {
             return { ok: false, error: { status: 400, code: 'invalid_energy', message: 'energy must be one of: low, medium, high' } };
         }
         value.energy = energy;
     }
-    const time = raw['time'];
+    const time = raw.time;
     if (time !== undefined) {
         if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
             return { ok: false, error: { status: 400, code: 'invalid_time', message: 'time must be a non-negative number' } };
         }
         value.time = time;
     }
-    const focus = raw['focus'];
+    const focus = raw.focus;
     if (focus !== undefined) {
         if (typeof focus !== 'boolean') {
             return { ok: false, error: { status: 400, code: 'invalid_focus', message: 'focus must be a boolean' } };
         }
         value.focus = focus;
     }
-    const urgent = raw['urgent'];
+    const urgent = raw.urgent;
     if (urgent !== undefined) {
         if (typeof urgent !== 'boolean') {
             return { ok: false, error: { status: 400, code: 'invalid_urgent', message: 'urgent must be a boolean' } };
         }
         value.urgent = urgent;
     }
-    const expectedBy = raw['expectedBy'];
+    const expectedBy = raw.expectedBy;
     if (expectedBy !== undefined) {
         if (typeof expectedBy !== 'string') {
             return { ok: false, error: { status: 400, code: 'invalid_expectedBy', message: 'expectedBy must be an ISO date string' } };
         }
         value.expectedBy = expectedBy;
     }
-    const ignoreBefore = raw['ignoreBefore'];
+    const ignoreBefore = raw.ignoreBefore;
     if (ignoreBefore !== undefined) {
         if (typeof ignoreBefore !== 'string') {
             return { ok: false, error: { status: 400, code: 'invalid_ignoreBefore', message: 'ignoreBefore must be an ISO date string' } };
         }
         value.ignoreBefore = ignoreBefore;
     }
-    const notes = raw['notes'];
+    const notes = raw.notes;
     if (notes !== undefined) {
         if (typeof notes !== 'string') {
             return { ok: false, error: { status: 400, code: 'invalid_notes', message: 'notes must be a string' } };
