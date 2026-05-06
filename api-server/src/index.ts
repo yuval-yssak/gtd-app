@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { publicCors, strictCors } from './auth/corsProfiles.js';
+import { v1RequestLogger } from './lib/v1Logger.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
 import { deviceRoutes } from './routes/devices.js';
@@ -42,6 +43,9 @@ const app = new Hono()
     // /v1 is the public bearer-authed surface — relaxed CORS so external integrations can call it
     // from any origin. The bearer token is the auth gate.
     .use('/v1/*', publicCors())
+    // v1RequestLogger emits one structured JSON line per /v1/* request. Mounted before the
+    // routers so it captures durations across auth, rate-limit, and the handler.
+    .use('/v1/*', v1RequestLogger())
     .route('/v1', v1ItemsRoutes)
     .route('/v1', v1ReferencesRoutes)
     .route('/v1/webhooks', webhookRoutes)
