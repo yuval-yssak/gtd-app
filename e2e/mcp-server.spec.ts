@@ -187,6 +187,16 @@ test.describe('MCP server (mcp-gtd)', () => {
                 // 4. complete_item — transitions to done.
                 const completed = (await callTool(mcp, 'complete_item', { id: created._id })) as { _id: string; status: string };
                 expect(completed.status).toBe('done');
+
+                // 5. bulk_import_inbox_items — capture three items in one tool call, all created.
+                const bulk = (await callTool(mcp, 'bulk_import_inbox_items', {
+                    items: [
+                        { title: 'Bulk A', externalId: 'mcp-bulk-a' },
+                        { title: 'Bulk B', externalId: 'mcp-bulk-b' },
+                        { title: 'Bulk C', externalId: 'mcp-bulk-c' },
+                    ],
+                })) as { counts: { created: number; replayed: number; failed: number } };
+                expect(bulk.counts).toEqual({ created: 3, replayed: 0, failed: 0 });
             } finally {
                 mcp.close();
             }

@@ -15,6 +15,12 @@ import { type ItemInterface, ItemStatus, type OperationInterface } from '../type
 // 24h content-dedupe window: covers retries / double-taps without collapsing genuine recurring
 // captures. Callers wanting strict idempotency should provide externalId instead.
 const CONTENT_DEDUPE_WINDOW_HOURS = 24;
+
+// Bulk import limits (issue #19 step 6). Tuned to keep a single request bounded — anything
+// larger should be chunked client-side.
+const MAX_BULK_ITEMS = 5_000;
+const DEFAULT_BULK_CHUNK_SIZE = 100;
+const MAX_BULK_CHUNK_SIZE = 500;
 // `done` is the only public-API transition. `trash` is intentionally not allowed: undeleting
 // requires the in-app UI and silently trashing items via the API would surprise users.
 const COMPLETABLE_FROM: ReadonlyArray<ItemInterface['status']> = ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done'];
@@ -171,6 +177,125 @@ async function resolveCreateItem({ userId, tokenId, body }: CreateItemContext): 
         }
         throw err;
     }
+}
+
+interface BulkBody {
+    items?: unknown;
+    chunkSize?: unknown;
+}
+
+interface BulkItemRequest {
+    title?: unknown;
+    notes?: unknown;
+    externalId?: unknown;
+}
+
+interface BulkItemResult {
+    externalId: string;
+    status: 'created' | 'replayed' | 'failed';
+    _id?: string;
+    error?: string;
+    code?: string;
+}
+
+interface BulkResponse {
+    results: BulkItemResult[];
+    counts: { created: number; replayed: number; failed: number };
+}
+
+interface BulkContext {
+    userId: string;
+    tokenId: string;
+    items: unknown[];
+    chunkSize: number;
+}
+
+/** Coerces a caller-provided chunkSize to the supported range, applying the default when missing. */
+function clampBulkChunkSize(raw: unknown): number {
+    if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) {
+        return DEFAULT_BULK_CHUNK_SIZE;
+    }
+    return Math.min(raw, MAX_BULK_CHUNK_SIZE);
+}
+
+/**
+ * Validates a single bulk item. Bulk imports require `externalId` on every item — re-running
+ * the import after a partial failure must be idempotent, and that requires a stable per-item key.
+ */
+function parseBulkItem(raw: BulkItemRequest): { ok: true; value: ParsedCreateBody & { externalId: string } } | { ok: false; error: BulkItemResult } {
+    if (raw.externalId === undefined || typeof raw.externalId !== 'string' || raw.externalId.trim() === '') {
+        return {
+            ok: false,
+            error: {
+                externalId: typeof raw.externalId === 'string' ? raw.externalId : '',
+                status: 'failed',
+                code: 'externalId_required',
+                error: 'bulk imports require an externalId on every item',
+            },
+        };
+    }
+    const externalId = raw.externalId.trim();
+    if (typeof raw.title !== 'string' || raw.title.trim() === '') {
+        return { ok: false, error: { externalId, status: 'failed', code: 'invalid_title', error: 'title must be a non-empty string' } };
+    }
+    if (raw.notes !== undefined && typeof raw.notes !== 'string') {
+        return { ok: false, error: { externalId, status: 'failed', code: 'invalid_notes', error: 'notes must be a string when provided' } };
+    }
+    const value: ParsedCreateBody & { externalId: string } = { title: raw.title.trim(), externalId };
+    if (raw.notes !== undefined) value.notes = raw.notes;
+    return { ok: true, value };
+}
+
+/** Processes a single item — pre-validated — and reports its outcome. Failures here are
+ * persistence-level (Mongo unavailable, etc.); validation failures never reach this path. */
+async function importOneItem(ctx: { userId: string; tokenId: string; body: ParsedCreateBody & { externalId: string } }): Promise<BulkItemResult> {
+    try {
+        const { item, replayed } = await resolveCreateItem({ userId: ctx.userId, tokenId: ctx.tokenId, body: ctx.body });
+        // resolveCreateItem assigns `_id: randomUUID()` to every persisted item, and pre-existing
+        // matches always come from Mongo with `_id` populated, so the optional in ItemInterface._id
+        // never applies on this path. Default to '' defensively rather than spreading undefined.
+        return { externalId: ctx.body.externalId, status: replayed ? 'replayed' : 'created', _id: item._id ?? '' };
+    } catch (err) {
+        return {
+            externalId: ctx.body.externalId,
+            status: 'failed',
+            code: 'persistence_failed',
+            error: err instanceof Error ? err.message : 'unknown error',
+        };
+    }
+}
+
+/**
+ * Validates each row, then processes the batch in chunks. Within a chunk, items are processed in
+ * parallel via Promise.all. Across chunks, processing is sequential so a flood of concurrent
+ * Mongo connections can't blow up under a 5,000-item import.
+ */
+async function processBulkImport(ctx: BulkContext): Promise<BulkResponse> {
+    const validated: Array<{ ok: true; body: ParsedCreateBody & { externalId: string } } | { ok: false; error: BulkItemResult }> = ctx.items.map((row) => {
+        const parsed = parseBulkItem((row ?? {}) as BulkItemRequest);
+        return parsed.ok ? { ok: true, body: parsed.value } : { ok: false, error: parsed.error };
+    });
+    const results: BulkItemResult[] = [];
+    for (let chunkStart = 0; chunkStart < validated.length; chunkStart += ctx.chunkSize) {
+        const chunkEnd = Math.min(chunkStart + ctx.chunkSize, validated.length);
+        const chunkResults = await Promise.all(
+            validated.slice(chunkStart, chunkEnd).map(async (entry) => {
+                if (!entry.ok) {
+                    return entry.error;
+                }
+                return importOneItem({ userId: ctx.userId, tokenId: ctx.tokenId, body: entry.body });
+            }),
+        );
+        results.push(...chunkResults);
+    }
+    const counts = results.reduce(
+        (acc, r) => {
+            acc[r.status] += 1;
+            return acc;
+        },
+        { created: 0, replayed: 0, failed: 0 },
+    );
+    return { results, counts };
 }
 
 interface ListQuery {
@@ -385,6 +510,25 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
     // Per-token limiter runs AFTER auth so it has tokenId to scope by. Read and write
     // buckets are independent (see `rateLimitMiddleware.ts`).
     .use('*', authenticatedRateLimit())
+
+    // ── POST /v1/items/bulk — migration import ──────────────────────────────
+    // Mounted before /items so Hono's POST /items handler doesn't shadow this on path-collision.
+    .post('/items/bulk', async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const raw = (await c.req.json().catch(() => null)) as BulkBody | null;
+        if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items)) {
+            return c.json({ error: 'request body must be { items: [...] }', code: 'invalid_body' }, 400);
+        }
+        if (raw.items.length === 0) {
+            return c.json({ error: 'items must not be empty', code: 'invalid_body' }, 400);
+        }
+        if (raw.items.length > MAX_BULK_ITEMS) {
+            return c.json({ error: `bulk imports are capped at ${MAX_BULK_ITEMS} items per request`, code: 'too_many_items' }, 413);
+        }
+        const chunkSize = clampBulkChunkSize(raw.chunkSize);
+        const result = await processBulkImport({ userId, tokenId, items: raw.items, chunkSize });
+        return c.json(result);
+    })
 
     // ── POST /v1/items — capture an inbox item ──────────────────────────────
     .post('/items', async (c) => {

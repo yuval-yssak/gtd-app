@@ -40,6 +40,26 @@ export interface CreateInboxItemParams {
     externalId?: string;
 }
 
+/** A single item in a bulk import. `externalId` is required so re-runs are idempotent. */
+export interface BulkImportItem {
+    title: string;
+    externalId: string;
+    notes?: string;
+}
+
+export interface BulkImportResult {
+    externalId: string;
+    status: 'created' | 'replayed' | 'failed';
+    _id?: string;
+    error?: string;
+    code?: string;
+}
+
+export interface BulkImportResponse {
+    results: BulkImportResult[];
+    counts: { created: number; replayed: number; failed: number };
+}
+
 export class GtdApiError extends Error {
     constructor(
         readonly status: number,
@@ -79,6 +99,11 @@ export class GtdClient {
 
     async createInboxItem(params: CreateInboxItemParams): Promise<GtdItem> {
         return this.request<GtdItem>('POST', '/items', params);
+    }
+
+    async bulkImportInboxItems(items: BulkImportItem[], chunkSize?: number): Promise<BulkImportResponse> {
+        const body = chunkSize !== undefined ? { items, chunkSize } : { items };
+        return this.request<BulkImportResponse>('POST', '/items/bulk', body);
     }
 
     async completeItem(id: string): Promise<GtdItem> {

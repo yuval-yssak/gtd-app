@@ -190,6 +190,29 @@ test.describe('public /v1 API', () => {
         });
     });
 
+    test('bulk import creates many items in one call and is idempotent on re-run', async ({ browser }) => {
+        const email = `bulk-${dayjs().valueOf()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const { plaintext } = await mintTokenViaSession(page.context().request, 'bulk');
+            await withBearerOnlyContext(browser, async (apiContext) => {
+                const auth = { Authorization: `Bearer ${plaintext}` };
+                const items = Array.from({ length: 50 }, (_, i) => ({ title: `Bulk ${i}`, externalId: `bulk-${i}` }));
+
+                const first = await apiContext.request.post(`${API_URL}/v1/items/bulk`, { headers: auth, data: { items } });
+                expect(first.status()).toBe(200);
+                const firstBody = (await first.json()) as { counts: { created: number; replayed: number; failed: number } };
+                expect(firstBody.counts).toEqual({ created: 50, replayed: 0, failed: 0 });
+
+                // Re-import — every row should now report `replayed`.
+                const second = await apiContext.request.post(`${API_URL}/v1/items/bulk`, { headers: auth, data: { items } });
+                const secondBody = (await second.json()) as { counts: { created: number; replayed: number; failed: number } };
+                expect(secondBody.counts).toEqual({ created: 0, replayed: 50, failed: 0 });
+            });
+        });
+    });
+
     test('revoked token returns 401; new token from the same user works', async ({ browser }) => {
         const email = `revoke-and-remint-${dayjs().valueOf()}@example.com`;
         await resetServerForEmails([email]);
