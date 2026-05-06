@@ -11,7 +11,7 @@ function readConfig(): { baseUrl: string; token: string } {
         throw new Error('GTD_API_BASE_URL env var is required (e.g. http://localhost:4000/v1)');
     }
     if (!token) {
-        throw new Error('GTD_API_TOKEN env var is required (issue one via the app or POST /dev/api-tokens)');
+        throw new Error('GTD_API_TOKEN env var is required (mint one in the app under Settings → Personal API tokens, or in local dev via POST /dev/api-tokens)');
     }
     return { baseUrl, token };
 }

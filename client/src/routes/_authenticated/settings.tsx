@@ -16,6 +16,7 @@ import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useState, useTransition } from 'react';
 import { getPushStatus } from '../../api/pushApi';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
+import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
@@ -118,6 +119,32 @@ function SettingsPage() {
             <InboxSection />
             {/* Notifications section */}
             <NotificationsSection db={db} />
+            {/* Personal API tokens */}
+            <Paper variant="outlined" className={styles.section}>
+                <Box className={styles.sectionContent}>
+                    <Typography
+                        variant="subtitle1"
+                        sx={{
+                            fontWeight: 600,
+                            mb: 0.5,
+                        }}
+                    >
+                        Personal API tokens
+                    </Typography>
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                            mb: 2,
+                        }}
+                    >
+                        Bearer tokens for the public <code>/v1</code> API. Use them to integrate this account with shortcuts, automations, or the local MCP
+                        server.
+                    </Typography>
+                    <Divider className={styles.divider} />
+                    <PersonalApiTokens />
+                </Box>
+            </Paper>
             {/* App info */}
             <Paper variant="outlined">
                 <Box className={styles.sectionContent}>
