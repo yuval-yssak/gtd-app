@@ -2,8 +2,7 @@ import { execSync } from 'node:child_process';
 import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { cors } from 'hono/cors';
-import { clientUrl } from './config.js';
+import { publicCors, strictCors } from './auth/corsProfiles.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
 import { deviceRoutes } from './routes/devices.js';
@@ -22,28 +21,29 @@ function resolveCommitHash() {
 
 const COMMIT_HASH = process.env.COMMIT_HASH ?? resolveCommitHash();
 
+// CORS is applied per-router rather than globally (issue #19 step 4): cookie-authed routes get
+// the strict profile (origin = clientUrl in prod), and the bearer-authed /v1 router gets the
+// public profile (origin = '*'). See `auth/corsProfiles.ts` for the rationale.
 const app = new Hono()
-    .use(
-        cors({
-            // Allow all origins in dev; restrict to clientUrl in production
-            origin: (origin) => (process.env.NODE_ENV !== 'production' ? origin : origin === clientUrl ? origin : null),
-            credentials: true, // required so browsers send cookies cross-origin
-            // X-Device-Id lets the auth middleware track which devices host which accounts.
-            // Authorization carries `Bearer gtd_<token>` for the public /v1 API.
-            allowHeaders: ['Content-Type', 'X-Device-Id', 'Authorization'],
-            // PATCH needed for partial updates (e.g., calendar sync config)
-            allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-        }),
-    )
-    // auth is a live ESM binding — assigned in loadDataAccess() before serve() is called, so it's safe to reference lazily here
+    // auth is a live ESM binding — assigned in loadDataAccess() before serve() is called, so it's safe to reference lazily here.
+    // CORS for /auth/* must come before the handler so OPTIONS preflight is answered correctly.
+    .use('/auth/*', strictCors())
     .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
+    .use('/sync/*', strictCors())
     .route('/sync', syncRoutes)
+    .use('/push/*', strictCors())
     .route('/push', pushRoutes)
+    .use('/devices/*', strictCors())
     .route('/devices', deviceRoutes)
+    .use('/calendar/*', strictCors())
     .route('/calendar', calendarRoutes)
+    // /v1 is the public bearer-authed surface — relaxed CORS so external integrations can call it
+    // from any origin. The bearer token is the auth gate.
+    .use('/v1/*', publicCors())
     .route('/v1', v1ItemsRoutes)
     // /account/tokens lives outside /v1 because it is session-authed (cookie), not bearer-authed.
     // Bearer-only token mint would be a chicken-and-egg.
+    .use('/account/tokens/*', strictCors())
     .route('/account/tokens', tokensRoutes)
     .get('/version', (c) => c.json({ commitHash: COMMIT_HASH }));
 
@@ -56,6 +56,9 @@ async function start() {
     // Dynamic import so the module (and its production guard) is never evaluated in production.
     if (process.env.NODE_ENV !== 'production') {
         const { devLoginRoutes } = await import('./routes/devLogin.js');
+        // /dev is hit by the e2e helpers and the dev console; same strict-CORS profile so
+        // browser-driven dev login keeps working with credentials cross-origin.
+        app.use('/dev/*', strictCors());
         app.route('/dev', devLoginRoutes);
     }
 
