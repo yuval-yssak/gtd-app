@@ -40,7 +40,7 @@ export const ANON_BUCKET: BucketConfig = { capacity: 30, refillPerSec: 30 / 60 }
  * have to spin up a Hono context to assert routing.
  */
 export function classifyRequest(method: string, path: string): 'write' | 'read' | null {
-    const isWrite = method === 'POST' && (path === '/v1/items' || /^\/v1\/items\/[^/]+\/complete$/.test(path));
+    const isWrite = method === 'POST' && (path === '/v1/items' || path === '/v1/items/bulk' || /^\/v1\/items\/[^/]+\/complete$/.test(path));
     if (isWrite) return 'write';
     const isRead = method === 'GET' && (path === '/v1/items' || /^\/v1\/items\/[^/]+$/.test(path));
     if (isRead) return 'read';

@@ -219,6 +219,48 @@ Sorted by `updatedTs DESC, _id DESC`. Stable across concurrent writes — newly 
 
 ---
 
+### `POST /v1/items/bulk` — migration import
+
+Capture many inbox items in one round-trip. **`externalId` is required on every item** — re-running the import after a partial failure must be idempotent, and that requires a stable per-item key. Items without `externalId` are reported as `failed` but do not abort the batch.
+
+**Request body**
+
+```json
+{
+  "items": [
+    { "title": "Buy oat milk", "externalId": "legacy-42" },
+    { "title": "Reply to Sam", "notes": "thread://abc", "externalId": "legacy-43" }
+  ],
+  "chunkSize": 100
+}
+```
+
+**Limits**
+
+| Limit | Value | Failure |
+|---|---|---|
+| Items per request | 5,000 | `413` `too_many_items` |
+| Chunk size | clamped to 1–500 (default 100) | silently clamped |
+
+The endpoint counts as a **single write** against the per-token rate limit.
+
+**Response** — always `200 OK` with a per-item result, even when individual items fail validation. Whole-request errors (oversize, missing body) return `4xx`.
+
+```json
+{
+  "results": [
+    { "externalId": "legacy-42", "status": "created", "_id": "uuid-…" },
+    { "externalId": "legacy-43", "status": "replayed", "_id": "uuid-…" },
+    { "externalId": "legacy-44", "status": "failed", "code": "invalid_title", "error": "title must be a non-empty string" }
+  ],
+  "counts": { "created": 1, "replayed": 1, "failed": 1 }
+}
+```
+
+**Idempotency** — re-running the same batch is safe: every successful row in the second run reports `replayed` with the same `_id` as the first.
+
+---
+
 ### `POST /v1/items/:id/complete` — mark as done
 
 Transitions any item to `done` and bumps `updatedTs`. Idempotent: completing an already-`done` item returns `200` and the unchanged item.
@@ -261,6 +303,7 @@ A minimal Model Context Protocol server lives at `tools/mcp-gtd/` (planned). It 
 | `get_item({ id })` | `GET /v1/items/:id` |
 | `create_inbox_item({ title, notes?, externalId? })` | `POST /v1/items` |
 | `complete_item({ id })` | `POST /v1/items/:id/complete` |
+| `bulk_import_inbox_items({ items, chunkSize? })` | `POST /v1/items/bulk` |
 
 ### Configuration
 

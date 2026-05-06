@@ -106,6 +106,28 @@ export function buildServer(client: GtdClient): McpServer {
         },
     );
 
+    server.tool(
+        'bulk_import_inbox_items',
+        'Bulk-import inbox items from a legacy system. Each item MUST carry an `externalId` so re-runs after a partial failure are idempotent. Returns one result per item with status: created | replayed | failed. Capped at 5,000 items per call.',
+        {
+            items: z
+                .array(
+                    z.object({
+                        title: z.string().min(1),
+                        externalId: z.string().min(1).describe('Stable id from the source system; the dedupe key.'),
+                        notes: z.string().optional(),
+                    }),
+                )
+                .min(1)
+                .max(5_000),
+            chunkSize: z.number().int().min(1).max(500).optional(),
+        },
+        async (args) => {
+            const result = await callClient(() => client.bulkImportInboxItems(args.items, args.chunkSize));
+            return result.ok ? asTextResponse(result.value) : asErrorResponse(result.error);
+        },
+    );
+
     return server;
 }
 
