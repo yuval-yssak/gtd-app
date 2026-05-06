@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import type { Filter } from 'mongodb';
 import { authenticateBearer, type BearerVariables } from '../auth/bearerMiddleware.js';
+import { anonymousRateLimit, authenticatedRateLimit } from '../auth/rateLimitMiddleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
@@ -377,7 +378,13 @@ function presentItem(item: ItemInterface): PublicItem {
 }
 
 export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
+    // Anonymous limiter runs first so a flood of bad-credential calls can't burn through
+    // tokenHash lookups on the apiTokens collection.
+    .use('*', anonymousRateLimit())
     .use('*', authenticateBearer)
+    // Per-token limiter runs AFTER auth so it has tokenId to scope by. Read and write
+    // buckets are independent (see `rateLimitMiddleware.ts`).
+    .use('*', authenticatedRateLimit())
 
     // ── POST /v1/items — capture an inbox item ──────────────────────────────
     .post('/items', async (c) => {
