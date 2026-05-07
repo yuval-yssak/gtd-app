@@ -366,6 +366,43 @@ Tests run sequentially (`fileParallelism: false`) because they share MongoDB col
 - **Trigger:** Push to `staging` or `production` branch, or manual via `./scripts/deploy.sh api staging|production`
 - **Images:** Pushed to Google Artifact Registry
 
+## Scripts
+
+One-shot maintenance scripts live in `src/scripts/`. Run them via `tsx`, against the same `.env` the server uses.
+
+### Import from FacileThings (`importFacileThings.ts`)
+
+Imports a FacileThings XML export directly into MongoDB for a single user. Writes nothing through the API — connects via `loadDataAccess()` and upserts items by `(user, externalId)` so re-runs replace rows in place rather than duplicating.
+
+```bash
+cd api-server
+npx tsx --env-file=.env src/scripts/importFacileThings.ts \
+  --email <user-email> \
+  --file /path/to/facilethings_export.xml \
+  [--dry-run]
+```
+
+**What gets imported.** Items only. Routines, people, and work contexts are skipped — the script doesn't try to reconstruct them. Hashtags and `@mentions` stay inline in titles.
+
+**Bucket → status mapping.**
+
+| FacileThings list | App status |
+|---|---|
+| Inbox | `inbox` |
+| Next Actions | `nextAction` |
+| Tickler File | `nextAction` with `ignoreBefore = reminder` |
+| Waiting For | `waitingFor` |
+| Calendar / Someday/Maybe / Reference Material | `somedayMaybe` |
+| Done | `done` |
+
+**Caveats.**
+- Only Done items completed in the last 18 months are kept (older ones are dropped).
+- Calendar items lose their `timeStart` and collapse into `somedayMaybe`; the original reminder is preserved in the notes footer. The script never creates GCal-linked items.
+- Every imported item's `createdTs` is the import time. Original FacileThings dates (reminder, doneAt, list, project, area, goal, priority, energy, time) are appended to notes under `— Imported from FacileThings —`.
+- Idempotent: re-running with the same XML upserts on `externalId = "ft:<index>"` rather than duplicating.
+
+**Use `--dry-run`** to print the planned counts (items per status, skipped older Done items) without writing.
+
 ## Gotchas
 
 - **SSE is single-process:** The connection registry is in-memory. Scaling to multiple instances requires a shared pub/sub layer (e.g. Redis).
