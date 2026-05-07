@@ -167,6 +167,52 @@ describe('applyCalendarForm', () => {
         expect(updated.calendarSyncConfigId).toBe('cfg-1');
         expect(updated.calendarIntegrationId).toBe('int-1');
     });
+
+    // Regression: an in-place edit on a calendar-linked item rendered with empty calendarOptions
+    // (resolved empty: fetch failed or user has no integrations) used to drop both link IDs from
+    // the saved snapshot, leaving GCal pushback with no integration to push to. Preserve the
+    // existing link when the form still names it.
+    it('preserves existing link IDs when calendarOptions is empty but the form still names the same config', () => {
+        const item: StoredItem = {
+            ...BASE_ITEM,
+            calendarSyncConfigId: 'cfg-existing',
+            calendarIntegrationId: 'int-existing',
+            calendarEventId: 'evt-existing',
+        };
+        const updated = applyCalendarForm(item, { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-existing' }, []);
+        expect(updated.calendarSyncConfigId).toBe('cfg-existing');
+        expect(updated.calendarIntegrationId).toBe('int-existing');
+        expect(updated.calendarEventId).toBe('evt-existing');
+    });
+
+    // The preservation branch only fires when the form still names the same config. A form that
+    // names a *different* config than the item carries must clear — preserving would silently
+    // pin the item to the old calendar despite the form claiming otherwise.
+    it('clears link IDs when the form names a different configId than the item carries (with empty options)', () => {
+        const item: StoredItem = {
+            ...BASE_ITEM,
+            calendarSyncConfigId: 'cfg-existing',
+            calendarIntegrationId: 'int-existing',
+        };
+        const updated = applyCalendarForm(item, { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-different' }, []);
+        expect(updated.calendarSyncConfigId).toBeUndefined();
+        expect(updated.calendarIntegrationId).toBeUndefined();
+    });
+
+    // An item already corrupted by the pre-fix bug — has calendarEventId but no calendarIntegrationId —
+    // cannot recover its link from the client. The preservation branch must not fabricate a missing
+    // integrationId; it should fall through to clear so the corruption is at least not amplified.
+    it('does not fabricate link IDs for an item that is missing calendarIntegrationId', () => {
+        const item: StoredItem = {
+            ...BASE_ITEM,
+            calendarSyncConfigId: 'cfg-existing',
+            calendarEventId: 'evt-existing',
+            // calendarIntegrationId intentionally absent — already-corrupted shape.
+        };
+        const updated = applyCalendarForm(item, { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-existing' }, []);
+        expect(updated.calendarSyncConfigId).toBeUndefined();
+        expect(updated.calendarIntegrationId).toBeUndefined();
+    });
 });
 
 describe('mergeFormsIntoItem', () => {

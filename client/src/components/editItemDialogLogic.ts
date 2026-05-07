@@ -121,17 +121,40 @@ export function applyCalendarPatch(prev: CalendarFormState, patch: Partial<Calen
  * previously-selected config rather than silently preserving the old one. `calendarEventId`,
  * `lastPushedToGCalTs`, and `routineId` survive via `...rest` so outbound push still sees this
  * as an existing-event edit.
+ *
+ * Preservation rule: when the form still names the same configId the item already carries, the
+ * existing link IDs are preserved even if `calendarOptions` resolved empty (fetch failed, or no
+ * integrations connected). Otherwise that empty-options state would silently drop both link IDs
+ * from a linked GCal item, leaving server-side pushback unable to resolve a push context (the
+ * bug that left edits invisible to GCal). Only an explicit switch to "Default" or to a different
+ * option clears the link.
  */
 export function applyCalendarForm(item: StoredItem, cal: CalendarFormState, calendarOptions: CalendarOption[]): StoredItem {
     const meta: CalendarMeta = buildCalendarMeta(cal, calendarOptions);
     const { calendarSyncConfigId: _csc, calendarIntegrationId: _ci, ...rest } = item;
-    return {
-        ...rest,
-        timeStart: meta.timeStart,
-        timeEnd: meta.timeEnd,
-        ...(meta.calendarSyncConfigId ? { calendarSyncConfigId: meta.calendarSyncConfigId } : {}),
-        ...(meta.calendarIntegrationId ? { calendarIntegrationId: meta.calendarIntegrationId } : {}),
-    };
+    const link = pickLinkForInPlaceEdit(item, cal, meta);
+    return { ...rest, timeStart: meta.timeStart, timeEnd: meta.timeEnd, ...link };
+}
+
+/** Either both link IDs together (paired link) or neither (cleared). The discriminated shape
+ *  prevents callers from spreading a half-set link onto an item. */
+type CalendarLink = { calendarSyncConfigId: string; calendarIntegrationId: string } | Record<string, never>;
+
+/**
+ * Picks which (configId, integrationId) pair to write back onto the item during an in-place edit.
+ * - Meta resolved a real option → use it (covers picker change, fresh selection, reassign).
+ * - Form still names the same configId the item already carries → preserve the existing IDs
+ *   (covers the empty-options race that was silently dropping the link on save).
+ * - Otherwise → clear (form switched to "Default", or to a configId the item never had).
+ */
+function pickLinkForInPlaceEdit(item: StoredItem, cal: CalendarFormState, meta: CalendarMeta): CalendarLink {
+    if (meta.calendarSyncConfigId && meta.calendarIntegrationId) {
+        return { calendarSyncConfigId: meta.calendarSyncConfigId, calendarIntegrationId: meta.calendarIntegrationId };
+    }
+    if (cal.calendarSyncConfigId && cal.calendarSyncConfigId === item.calendarSyncConfigId && item.calendarIntegrationId) {
+        return { calendarSyncConfigId: item.calendarSyncConfigId, calendarIntegrationId: item.calendarIntegrationId };
+    }
+    return {};
 }
 
 export function applyWaitingForForm(item: StoredItem, wf: WaitingForFormState): StoredItem {
