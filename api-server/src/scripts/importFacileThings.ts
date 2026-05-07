@@ -34,6 +34,7 @@ import { readFileSync } from 'node:fs';
 import { generateId } from 'better-auth';
 import dayjs from 'dayjs';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import { recordOperation } from '../lib/operationHelpers.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { ItemInterface, ItemStatus } from '../types/entities.js';
 
@@ -287,25 +288,46 @@ function buildItemDoc(plan: PlannedImport, userId: string, nowIso: string): Item
     return doc;
 }
 
+async function upsertItemAndRecordOp(plan: PlannedImport, userId: string, nowIso: string): Promise<'create' | 'update'> {
+    const doc = buildItemDoc(plan, userId, nowIso);
+    // Upsert by (user, externalId): re-running the import replaces the row in place.
+    // We can't use `replaceById` because the _id we just generated won't match an existing
+    // row from a prior run; the externalId is the stable identity here.
+    const res = await itemsDAO.updateOne({ user: userId, externalId: plan.externalId }, { $set: doc as never }, { upsert: true });
+    const isCreate = res.upsertedCount > 0;
+    // On replace the upserted _id is null; re-read the row so the op carries the row's actual _id.
+    const persisted = isCreate ? doc : await itemsDAO.findOne({ user: userId, externalId: plan.externalId });
+    if (!persisted?._id) {
+        throw new Error(`item missing after upsert externalId=${plan.externalId}`);
+    }
+    // Record a sync operation so already-bootstrapped devices see the import on next pull.
+    // Without this, items written directly to the items collection are invisible to /sync/pull.
+    await recordOperation(userId, {
+        entityType: 'item',
+        entityId: persisted._id,
+        snapshot: persisted,
+        opType: isCreate ? 'create' : 'update',
+        now: nowIso,
+        deviceId: 'import:facilethings',
+    });
+    return isCreate ? 'create' : 'update';
+}
+
 async function importDirect(plans: PlannedImport[], userId: string, counters: RunCounters) {
     const nowIso = dayjs().toISOString();
     let processed = 0;
     for (const plan of plans) {
         processed++;
-        const doc = buildItemDoc(plan, userId, nowIso);
         try {
-            // Upsert by (user, externalId): re-running the import replaces the row in place.
-            // We can't use `replaceById` because the _id we just generated won't match an existing
-            // row from a prior run; the externalId is the stable identity here.
-            const res = await itemsDAO.updateOne({ user: userId, externalId: plan.externalId }, { $set: doc as never }, { upsert: true });
-            if (res.upsertedCount > 0) {
+            const outcome = await upsertItemAndRecordOp(plan, userId, nowIso);
+            if (outcome === 'create') {
                 counters.upserted++;
             } else {
                 counters.replaced++;
             }
         } catch (err) {
             counters.failed++;
-            console.warn(`  ! upsert failed externalId=${plan.externalId}: ${(err as Error).message}`);
+            console.warn(`  ! upsert+op record failed externalId=${plan.externalId}: ${(err as Error).message}`);
         }
         if (processed % 200 === 0) console.log(`  upsert: ${processed}/${plans.length}`);
     }
