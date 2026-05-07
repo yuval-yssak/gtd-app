@@ -701,6 +701,242 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(notifySpy).not.toHaveBeenCalled();
     });
 
+    // ── Outbound backfill: app-created entities pushed to GCal on "Sync now" ────────────
+    //
+    // Repairs the scenario where a user creates calendar items / routines BEFORE connecting
+    // their Google Calendar (or while offline). Without this, those entities stay locally-only
+    // forever — no automatic mechanism would push them up. After connecting + clicking
+    // "Sync now," they should land on Google Calendar.
+
+    /** Inserts an unlinked calendar item (no calendarEventId, no routineId). */
+    async function insertUnlinkedItem(userId: string, overrides: Partial<ItemInterface> = {}): Promise<ItemInterface> {
+        const now = dayjs().toISOString();
+        const item: ItemInterface = {
+            _id: overrides._id ?? 'item-unlinked-1',
+            user: userId,
+            status: 'calendar',
+            title: 'Standalone meeting',
+            timeStart: dayjs().add(1, 'day').toISOString(),
+            timeEnd: dayjs().add(1, 'day').add(30, 'minute').toISOString(),
+            createdTs: now,
+            updatedTs: now,
+            ...overrides,
+        };
+        await itemsDAO.insertOne(item);
+        return item;
+    }
+
+    it('pushes unlinked calendar items to GCal as part of Sync now', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertUnlinkedItem(userId, { _id: 'item-backfill-1', title: 'Backfilled item' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('gcal-id-1');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { ok: boolean; pushedItems: number };
+        expect(body.pushedItems).toBe(1);
+
+        expect(createSpy).toHaveBeenCalledOnce();
+        const updated = await itemsDAO.findByOwnerAndId('item-backfill-1', userId);
+        expect(updated?.calendarEventId).toBe('gcal-id-1');
+        expect(updated?.calendarIntegrationId).toBe('int-1');
+        expect(updated?.calendarSyncConfigId).toBe('sync-config-1');
+        expect(updated?.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('pushes unlinked calendar-type routines to GCal as part of Sync now', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // App-side routine creation never stamps calendarIntegrationId — the backfill should add it.
+        const routine = makeRoutine(userId, { _id: 'routine-backfill-1', title: 'Backfilled routine' });
+        await routinesDAO.insertOne(routine);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-recurring-1');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { pushedRoutines: number };
+        expect(body.pushedRoutines).toBe(1);
+
+        expect(createSpy).toHaveBeenCalledOnce();
+        const updated = await routinesDAO.findByOwnerAndId('routine-backfill-1', userId);
+        expect(updated?.calendarEventId).toBe('gcal-recurring-1');
+        expect(updated?.calendarIntegrationId).toBe('int-1');
+        expect(updated?.calendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('skips items that are already linked (calendarEventId set)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertUnlinkedItem(userId, { _id: 'item-already', calendarEventId: 'evt-existing', calendarIntegrationId: 'int-1' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { pushedItems: number };
+        expect(body.pushedItems).toBe(0);
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips routine-generated items (routineId set)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // routineId set → represented by the routine's master event; no individual GCal event.
+        await insertUnlinkedItem(userId, { _id: 'item-routine-instance', routineId: 'r-x' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { pushedItems: number };
+        expect(body.pushedItems).toBe(0);
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips inactive routines during backfill', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = makeRoutine(userId, { _id: 'routine-inactive', active: false });
+        await routinesDAO.insertOne(routine);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { pushedRoutines: number };
+        expect(body.pushedRoutines).toBe(0);
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('only backfills onto the default config when multiple configs exist', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // Default config + a non-default config on the same integration. Item should land on the default.
+        const { integration } = await insertIntegrationWithConfig(userId);
+        await calendarSyncConfigsDAO.insertOne(
+            makeSyncConfig(userId, integration._id, { _id: 'sync-config-2', calendarId: 'work@group.calendar.google.com', isDefault: false }),
+        );
+        await insertUnlinkedItem(userId, { _id: 'item-default-only' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('gcal-default');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Item count == 1 even though 2 configs are synced inbound: backfill only runs against the default.
+        expect(createSpy).toHaveBeenCalledOnce();
+        // Argument 0 to createEvent is the calendarId — must be the default's, not the non-default's.
+        const firstCall = createSpy.mock.calls[0]!;
+        expect(firstCall[0]).toBe('primary');
+    });
+
+    it('paces backfill calls with sleeps to stay under GCal rate limits', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertUnlinkedItem(userId, { _id: 'item-pace-1', title: 'A' });
+        await insertUnlinkedItem(userId, { _id: 'item-pace-2', title: 'B' });
+        await insertUnlinkedItem(userId, { _id: 'item-pace-3', title: 'C' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        let n = 0;
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockImplementation(async () => `gcal-${n++}`);
+
+        const start = Date.now();
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        const elapsed = Date.now() - start;
+        expect(res.status).toBe(200);
+        // Three items → two inter-call sleeps of 150ms → ≥ 300ms minimum total.
+        // Use a generous lower bound (250ms) to absorb scheduler jitter without rewarding regressions.
+        expect(elapsed).toBeGreaterThanOrEqual(250);
+    });
+
+    it('notifies SSE when backfill produces links even if there are no inbound events', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertUnlinkedItem(userId, { _id: 'item-sse-backfill' });
+
+        const notifySpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        // Inbound is empty — only the backfill produces ops.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('gcal-sse');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Without this notify, the originating client wouldn't refresh and would still display
+        // the item as unlinked (no calendarEventId in IndexedDB) until something else triggered a pull.
+        expect(notifySpy).toHaveBeenCalledWith(userId, expect.objectContaining({ type: 'update' }));
+    });
+
+    it('running Sync now twice does not create duplicate GCal events for unlinked items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertUnlinkedItem(userId, { _id: 'item-idempotent-1' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        // Both calls go through the inbound pull first. Mock both list paths because the first
+        // sync stores a syncToken which makes the second sync take the incremental path.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue({ events: [], nextSyncToken: 'tok-2' });
+
+        // First call: GCal accepts the create (returns the supplied id), but simulate a local DB
+        // write failure so the item never gets `calendarEventId`. This is the exact failure mode
+        // the deterministic-id design protects against — the next retry must NOT create a second
+        // event on Google.
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockImplementation(async (_calId, _event, _tz, options) => {
+            // Echo back the supplied id so we can assert it's deterministic across calls below.
+            return options?.id ?? 'gcal-fallback';
+        });
+        // Force the first updateOne to fail mid-flight so the local link doesn't get written.
+        const updateOneSpy = vi.spyOn(itemsDAO, 'updateOne').mockRejectedValueOnce(new Error('mongo blip'));
+
+        const res1 = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res1.status).toBe(200);
+
+        // After call #1: GCal got a create, but the item is still unlinked locally.
+        expect(createSpy).toHaveBeenCalledOnce();
+        const idAfterFirst = createSpy.mock.calls[0]![3]?.id;
+        expect(idAfterFirst).toBeTruthy();
+        const itemAfterFirst = await itemsDAO.findByOwnerAndId('item-idempotent-1', userId);
+        expect(itemAfterFirst?.calendarEventId).toBeUndefined();
+
+        // Restore updateOne for the second pass; rig createEvent to throw 409 (the deterministic
+        // id is already on Google's side), simulating the expected GCal response on retry.
+        updateOneSpy.mockRestore();
+        createSpy.mockReset();
+        const conflictErr = Object.assign(new Error('Conflict'), { code: 409 });
+        createSpy.mockRejectedValue(conflictErr);
+
+        const res2 = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res2.status).toBe(200);
+
+        // The retry must send the SAME deterministic id (proving idempotency) and treat 409 as
+        // success-with-existing — the item is now linked locally with that id.
+        expect(createSpy).toHaveBeenCalledOnce();
+        const idAfterSecond = createSpy.mock.calls[0]![3]?.id;
+        expect(idAfterSecond).toBe(idAfterFirst);
+
+        const linked = await itemsDAO.findByOwnerAndId('item-idempotent-1', userId);
+        expect(linked?.calendarEventId).toBe(idAfterFirst);
+    });
+
     it('trashes an existing item when its GCal event is cancelled', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -5851,12 +6087,7 @@ describe('routine startDate', () => {
 
         // createRecurringEvent itself computes seriesStartDate internally — we assert it was called
         // with the routine that has startDate set. Trailing options arg (deterministic id) ignored here.
-        expect(createSpy).toHaveBeenCalledWith(
-            expect.objectContaining({ startDate: '2026-06-15' }),
-            'primary',
-            'Asia/Jerusalem',
-            expect.anything(),
-        );
+        expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ startDate: '2026-06-15' }), 'primary', 'Asia/Jerusalem', expect.anything());
     });
 });
 
