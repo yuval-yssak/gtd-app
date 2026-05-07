@@ -407,14 +407,10 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
     return (
         <Dialog
             open
-            // reason='backdropClick' is fired on outside-clicks; ignoring it here keeps the modal
-            // pinned until the user clicks "I've copied it". Esc is suppressed via disableEscapeKeyDown.
-            onClose={(_event, reason) => {
-                if (reason === 'backdropClick') {
-                    return;
-                }
-            }}
-            disableEscapeKeyDown
+            // Both backdropClick and escapeKeyDown are no-ops so the modal stays pinned
+            // until the user clicks "I've copied it". MUI 9 removed disableEscapeKeyDown,
+            // so Esc is suppressed by ignoring the reason here.
+            onClose={() => {}}
             data-testid="tokenRevealDialog"
         >
             <DialogTitle>Token created</DialogTitle>
