@@ -130,7 +130,7 @@ describe('enqueueWebhookDeliveries', () => {
 describe('runWorkerTick', () => {
     it('on 2xx: marks delivered, sets lastDeliveredTs, resets failureCount', async () => {
         await seedSubscription();
-        await enqueueWebhookDeliveries(SAMPLE_OP);
+        await enqueueWebhookDeliveries(SAMPLE_OP, '2026-05-06T12:00:00.000Z');
         // Pre-set a failureCount to confirm it gets cleared.
         await webhookSubscriptionsDAO.recordFailure('sub-1', 99, '2026-05-05T00:00:00.000Z');
 
@@ -148,7 +148,7 @@ describe('runWorkerTick', () => {
 
     it('signs the request body with HMAC-SHA256 and includes the headers', async () => {
         await seedSubscription({ secret: 'shh' });
-        await enqueueWebhookDeliveries(SAMPLE_OP);
+        await enqueueWebhookDeliveries(SAMPLE_OP, '2026-05-06T12:00:00.000Z');
         const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
         await runWorkerTick({ fetchImpl, now: () => new Date('2026-05-06T12:00:01.000Z') });
         expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -162,7 +162,7 @@ describe('runWorkerTick', () => {
 
     it('on non-2xx: schedules retry with backoff; abandons after MAX_DELIVERY_ATTEMPTS', async () => {
         await seedSubscription();
-        await enqueueWebhookDeliveries(SAMPLE_OP);
+        await enqueueWebhookDeliveries(SAMPLE_OP, '2026-05-06T12:00:00.000Z');
         const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 500, statusText: 'Server Error' });
 
         // Simulate worker ticks at increasing times, each time advancing past the previous retry's delay.
@@ -184,7 +184,7 @@ describe('runWorkerTick', () => {
         const baseTime = new Date('2026-05-06T12:00:00.000Z');
         // Fire enough deliveries that each runs through MAX_DELIVERY_ATTEMPTS and abandons.
         for (let i = 0; i < MAX_CONSECUTIVE_FAILURES_BEFORE_DISABLE; i++) {
-            await enqueueWebhookDeliveries({ ...SAMPLE_OP, _id: `op-${i}`, entityId: `item-${i}` });
+            await enqueueWebhookDeliveries({ ...SAMPLE_OP, _id: `op-${i}`, entityId: `item-${i}` }, '2026-05-06T12:00:00.000Z');
         }
         // Run enough ticks for each delivery's attempts to all complete. CLAIMS_PER_TICK is 10
         // so all 7 are picked up at once; we run MAX_DELIVERY_ATTEMPTS ticks to exhaust each.
@@ -199,7 +199,7 @@ describe('runWorkerTick', () => {
 
     it('drops orphan deliveries when the subscription was deleted', async () => {
         await seedSubscription();
-        await enqueueWebhookDeliveries(SAMPLE_OP);
+        await enqueueWebhookDeliveries(SAMPLE_OP, '2026-05-06T12:00:00.000Z');
         await webhookSubscriptionsDAO.deleteByOwner('sub-1', 'u1');
         const fetchImpl = vi.fn().mockResolvedValue({ ok: true, status: 200, statusText: 'OK' });
         await runWorkerTick({ fetchImpl, now: () => new Date('2026-05-06T12:00:01.000Z') });

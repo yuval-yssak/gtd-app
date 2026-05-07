@@ -63,13 +63,17 @@ export function mapOpToEvents(op: OperationInterface): WebhookEvent[] {
  * Enqueues one webhookDeliveries row per matching active subscription. Caller fires this
  * from `notifyChange` (`v1Items.ts`) on every public-API mutation. No-ops when there are no
  * matching subscriptions, which is the common case for users who haven't set webhooks up.
+ *
+ * `nowIso` defaults to the real wall clock; tests pin it so the queued `nextAttemptTs` and
+ * the worker's `now` come from the same fake clock (otherwise a test running in the future
+ * sees a delivery scheduled for "now" that's still ahead of its hardcoded tick time).
  */
-export async function enqueueWebhookDeliveries(op: OperationInterface): Promise<void> {
+export async function enqueueWebhookDeliveries(op: OperationInterface, nowIso: string = dayjs().toISOString()): Promise<void> {
     const events = mapOpToEvents(op);
     if (events.length === 0) {
         return;
     }
-    const now = dayjs().toISOString();
+    const now = nowIso;
     for (const event of events) {
         const subs = await webhookSubscriptionsDAO.listActiveForEvent(op.user, event);
         if (subs.length === 0) {
