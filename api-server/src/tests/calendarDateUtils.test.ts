@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDateTime, endDateTime, seriesStartDate } from '../calendarProviders/GoogleCalendarProvider.js';
+import { buildDateTime, buildDeterministicGCalId, endDateTime, isDuplicateIdError, seriesStartDate } from '../calendarProviders/GoogleCalendarProvider.js';
 import type { RoutineInterface } from '../types/entities.js';
 
 function makeRoutine(rrule: string, createdTs: string): RoutineInterface {
@@ -109,5 +109,56 @@ describe('seriesStartDate', () => {
         // UNTIL predates createdTs — the rule yields zero occurrences.
         const routine = makeRoutine('FREQ=WEEKLY;BYDAY=MO;UNTIL=20260101T000000Z', '2026-04-22T16:57:27.117Z');
         expect(() => seriesStartDate(routine)).toThrow(/no occurrences/);
+    });
+});
+
+describe('buildDeterministicGCalId', () => {
+    it('returns the same id for the same (entityId, integrationId) pair', () => {
+        const a = buildDeterministicGCalId('item-1', 'integration-A');
+        const b = buildDeterministicGCalId('item-1', 'integration-A');
+        expect(a).toBe(b);
+    });
+
+    it('returns different ids for different entities under the same integration', () => {
+        const a = buildDeterministicGCalId('item-1', 'integration-A');
+        const b = buildDeterministicGCalId('item-2', 'integration-A');
+        expect(a).not.toBe(b);
+    });
+
+    it('returns different ids for the same entity under different integrations', () => {
+        const a = buildDeterministicGCalId('item-1', 'integration-A');
+        const b = buildDeterministicGCalId('item-1', 'integration-B');
+        expect(a).not.toBe(b);
+    });
+
+    it('produces a 32-char id within the allowed alphabet [a-v0-9]', () => {
+        // GCal accepts client-supplied ids of 5–1024 chars from base32hex; sha256 hex is a strict
+        // subset of [a-v0-9] (it's [0-9a-f]), so the assertion checks both length and alphabet.
+        const id = buildDeterministicGCalId('some-uuid', 'integration-id');
+        expect(id).toMatch(/^gtd[0-9a-f]{29}$/);
+        expect(id.length).toBe(32);
+    });
+});
+
+describe('isDuplicateIdError', () => {
+    it('returns true for an error with numeric code 409', () => {
+        const err = Object.assign(new Error('Conflict'), { code: 409 });
+        expect(isDuplicateIdError(err)).toBe(true);
+    });
+
+    it('returns false for non-409 numeric codes', () => {
+        const err = Object.assign(new Error('Internal Server Error'), { code: 500 });
+        expect(isDuplicateIdError(err)).toBe(false);
+    });
+
+    it('returns false for errors without a numeric code', () => {
+        expect(isDuplicateIdError(new Error('Something went wrong'))).toBe(false);
+    });
+
+    it('returns false for non-error values', () => {
+        expect(isDuplicateIdError(null)).toBe(false);
+        expect(isDuplicateIdError(undefined)).toBe(false);
+        expect(isDuplicateIdError('boom')).toBe(false);
+        expect(isDuplicateIdError({ code: 409 })).toBe(false);
     });
 });

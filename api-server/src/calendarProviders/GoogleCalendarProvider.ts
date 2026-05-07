@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import { google } from 'googleapis';
@@ -100,6 +101,28 @@ export function isInvalidGrantError(err: unknown): boolean {
         return true;
     }
     return false;
+}
+
+/**
+ * Builds a deterministic Google Calendar event id for the given (entity, integration) pair.
+ * GCal accepts client-supplied ids of 5–1024 chars from the alphabet [a-v0-9] (RFC 2938 base32hex);
+ * sha256 hex output is [0-9a-f] which is a strict subset, so we slice the digest directly. The
+ * `gtd` prefix lets us spot app-originated events on Google's side and keeps total length at 32
+ * chars (well under the 1024 max). Determinism is what closes the duplicate-event hole when
+ * `events.insert` succeeds on Google but the local DB write fails — the next retry sends the
+ * same id and Google replies 409 instead of accepting a second event.
+ */
+export function buildDeterministicGCalId(entityId: string, integrationId: string): string {
+    const digest = createHash('sha256').update(`${entityId}:${integrationId}`).digest('hex');
+    return `gtd${digest.slice(0, 29)}`;
+}
+
+/** True when err is a Gaxios/googleapis duplicate-id conflict (the id already exists on Google's side). */
+export function isDuplicateIdError(err: unknown): boolean {
+    if (!isGoogleApiError(err)) {
+        return false;
+    }
+    return err.code === 409;
 }
 
 /** Parses raw Google Calendar API event items into typed GCalEvent objects. Skips all-day events (no dateTime). */
@@ -209,7 +232,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         return response.data.timeZone ?? 'UTC';
     }
 
-    async createRecurringEvent(routine: RoutineInterface, calendarId: string, timeZone: string): Promise<string> {
+    async createRecurringEvent(routine: RoutineInterface, calendarId: string, timeZone: string, options?: { id?: string }): Promise<string> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const template = routine.calendarItemTemplate;
         if (!template) {
@@ -220,16 +243,18 @@ export class GoogleCalendarProvider implements CalendarProvider {
         // GCal recurrence uses RRULE: prefix — the stored rrule omits it.
         const recurrence = [`RRULE:${routine.rrule}`];
 
-        const response = await cal.events.insert({
-            calendarId,
-            requestBody: {
-                summary: routine.title,
-                start: buildDateTime(startDate, template.timeOfDay, timeZone),
-                end: endDateTime(startDate, template.timeOfDay, template.duration, timeZone),
-                recurrence,
-                ...(routine.template.notes !== undefined ? { description: markdownToHtml(routine.template.notes) } : {}),
-            },
-        });
+        // Caller may supply a deterministic id so retries collide on 409 instead of creating a
+        // second series. Without it, Google generates a fresh id per call.
+        const requestBody = {
+            summary: routine.title,
+            start: buildDateTime(startDate, template.timeOfDay, timeZone),
+            end: endDateTime(startDate, template.timeOfDay, template.duration, timeZone),
+            recurrence,
+            ...(routine.template.notes !== undefined ? { description: markdownToHtml(routine.template.notes) } : {}),
+            ...(options?.id ? { id: options.id } : {}),
+        };
+
+        const response = await cal.events.insert({ calendarId, requestBody });
 
         const eventId = response.data.id;
         if (!eventId) {
@@ -378,17 +403,19 @@ export class GoogleCalendarProvider implements CalendarProvider {
         calendarId: string,
         event: { title: string; timeStart: string; timeEnd: string; description?: string },
         timeZone: string,
+        options?: { id?: string },
     ): Promise<string> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
-        const response = await cal.events.insert({
-            calendarId,
-            requestBody: {
-                summary: event.title,
-                start: { dateTime: event.timeStart, timeZone },
-                end: { dateTime: event.timeEnd, timeZone },
-                ...(event.description !== undefined ? { description: event.description } : {}),
-            },
-        });
+        // Caller may supply a deterministic id so retries collide on 409 instead of creating a
+        // second event. Without it, Google generates a fresh id per call.
+        const requestBody = {
+            summary: event.title,
+            start: { dateTime: event.timeStart, timeZone },
+            end: { dateTime: event.timeEnd, timeZone },
+            ...(event.description !== undefined ? { description: event.description } : {}),
+            ...(options?.id ? { id: options.id } : {}),
+        };
+        const response = await cal.events.insert({ calendarId, requestBody });
         const eventId = response.data.id;
         if (!eventId) {
             throw new Error('Google Calendar did not return an event ID');

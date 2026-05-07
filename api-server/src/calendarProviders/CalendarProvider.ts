@@ -45,7 +45,8 @@ export interface GCalEvent {
 export interface CalendarProvider {
     /** Fetches the IANA timezone of a calendar from the provider (e.g. "Asia/Jerusalem"). */
     getCalendarTimeZone(calendarId: string): Promise<string>;
-    createRecurringEvent(routine: RoutineInterface, calendarId: string, timeZone: string): Promise<string>; // returns eventId
+    /** When `options.id` is provided, GCal uses it as the event's id; on duplicate (409), the caller treats it as already-linked. */
+    createRecurringEvent(routine: RoutineInterface, calendarId: string, timeZone: string, options?: { id?: string }): Promise<string>; // returns eventId
     updateRecurringEvent(eventId: string, routine: RoutineInterface, calendarId: string, timeZone: string): Promise<void>;
     deleteRecurringEvent(eventId: string, calendarId: string): Promise<void>;
     /**
@@ -68,8 +69,14 @@ export interface CalendarProvider {
     watchEvents(calendarId: string, webhookUrl: string, channelId: string): Promise<{ resourceId: string; expiration: string }>;
     /** Stops a previously registered push notification channel. */
     stopWatch(channelId: string, resourceId: string): Promise<void>;
-    /** Creates a single (non-recurring) event. Returns the event ID. */
-    createEvent(calendarId: string, event: { title: string; timeStart: string; timeEnd: string; description?: string }, timeZone: string): Promise<string>;
+    /** Creates a single (non-recurring) event. Returns the event ID.
+     * When `options.id` is provided, GCal uses it as the event's id; on duplicate (409), the caller treats it as already-linked. */
+    createEvent(
+        calendarId: string,
+        event: { title: string; timeStart: string; timeEnd: string; description?: string },
+        timeZone: string,
+        options?: { id?: string },
+    ): Promise<string>;
     /**
      * Updates fields on an existing single event. `colorId` semantics: `undefined` leaves the
      * existing colorId untouched; `null` clears it (resets to the calendar's default color);
