@@ -20,7 +20,7 @@ import routinesDAO from '../dataAccess/routinesDAO.js';
 import { withAuthFailureHandling } from '../lib/calendarAuthEscalation.js';
 import { integrationStatus } from '../lib/calendarIntegrationStatus.js';
 import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
-import { ensureTimeZone, pushRoutineDeletion } from '../lib/calendarPushback.js';
+import { ensureTimeZone, type PushContext, pushItemToGCalWithContext, pushRoutineDeletion, pushRoutineToGCalWithContext } from '../lib/calendarPushback.js';
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
@@ -995,24 +995,129 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
             return prev + count;
         }, Promise.resolve(0));
 
-        // Notify the user's open SSE channels so the client (this device + others on the same
-        // user) pulls the new ops. Without this, a freshly-connected calendar's events stay
-        // invisible until the next webhook arrives — the originating client triggers the sync
-        // but isn't told to pull when the server finishes producing ops.
-        if (ops.length > 0) {
-            console.log(`[calendar] manual sync produced ops — notifying SSE + push | userId=${userId} ops=${ops.length}`);
-            notifyUserViaSse(userId, { type: 'update', ts: now });
-            await notifyViaWebPush(userId, null, ops, now).catch((err) => {
-                console.error(`[calendar] web push failed for user ${userId}:`, err);
-            });
+        // Outbound backfill: push app-created calendar items / routines that have never been
+        // linked to a GCal event. Without this, "Sync now" is one-way (Google → app); a user who
+        // creates calendar entities before connecting Google never sees them on their calendar.
+        // Scoped to the default config because that's where new entities normally land — see
+        // resolveDefaultPushContext semantics in calendarPushback.ts.
+        const defaultConfig = configs.find((cfg) => cfg.isDefault);
+        let pushedItems = 0;
+        let pushedRoutines = 0;
+        if (defaultConfig) {
+            const ctx: PushContext = {
+                integration,
+                config: defaultConfig,
+                provider,
+                timeZone: defaultConfig.timeZone ?? 'UTC',
+            };
+            pushedItems = await backfillUnlinkedItems(ctx, userId);
+            pushedRoutines = await backfillUnlinkedRoutines(ctx, userId);
         }
 
-        return c.json({ ok: true, syncedRoutines: syncResults, syncedCalendars: configs.length });
+        // Notify the user's open SSE channels so the client (this device + others on the same
+        // user) pulls the new ops. Inbound import ops live in the local `ops` array; backfill ops
+        // are written via recordOperation inside the push helpers and live outside that array.
+        // Notify when either path produced changes so the originating client refreshes.
+        const backfillProducedOps = pushedItems + pushedRoutines > 0;
+        if (ops.length > 0 || backfillProducedOps) {
+            console.log(
+                `[calendar] manual sync produced ops — notifying SSE + push | userId=${userId} inboundOps=${ops.length} pushedItems=${pushedItems} pushedRoutines=${pushedRoutines}`,
+            );
+            notifyUserViaSse(userId, { type: 'update', ts: now });
+            // Web push fan-out only sends the inbound `ops` array; backfill push-back ops were
+            // recorded but aren't in this batch. The SSE tickle above is sufficient to make
+            // connected clients re-pull and pick up the backfill ops.
+            if (ops.length > 0) {
+                await notifyViaWebPush(userId, null, ops, now).catch((err) => {
+                    console.error(`[calendar] web push failed for user ${userId}:`, err);
+                });
+            }
+        }
+
+        return c.json({
+            ok: true,
+            syncedRoutines: syncResults,
+            syncedCalendars: configs.length,
+            pushedItems,
+            pushedRoutines,
+        });
     } catch (err) {
         console.error(`[calendar] sync failed for integration ${integrationId}:`, err);
         return c.json({ error: 'Failed to sync with Google Calendar' }, 502);
     }
 });
+
+/** Inter-call pacing for backfill push loops. ~7 req/s sustained, well under GCal's 600/min/user. */
+const BACKFILL_PACE_MS = 150;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Pushes app-created calendar items that have no `calendarEventId` yet to GCal. Used by the
+ * "Sync now" handler to repair pre-connect / offline-created items. Sequential with a small
+ * pacing sleep to stay under GCal's per-user rate limit.
+ */
+async function backfillUnlinkedItems(ctx: PushContext, userId: string): Promise<number> {
+    // The `routineId: { $exists: false }` exclusion mirrors the guard in handleItemPush —
+    // routine-generated items don't have their own GCal event; their presence is the routine's
+    // recurring series. The `calendarEventId: { $exists: false }` filter is also the idempotency
+    // gate: items already linked from a previous run are skipped without a Google round-trip.
+    const items = await itemsDAO.findArray({
+        user: userId,
+        status: 'calendar',
+        calendarEventId: { $exists: false },
+        routineId: { $exists: false },
+    });
+    if (items.length === 0) {
+        return 0;
+    }
+    console.log(`[calendar] backfilling ${items.length} unlinked calendar items | userId=${userId}`);
+    let pushed = 0;
+    for (let i = 0; i < items.length; i++) {
+        if (i > 0) {
+            await sleep(BACKFILL_PACE_MS);
+        }
+        const item = items[i];
+        if (!item) continue;
+        const result = await pushItemToGCalWithContext(item, ctx, userId);
+        if (result.status === 'created') {
+            pushed++;
+        }
+    }
+    console.log(`[calendar] backfill items complete | pushed=${pushed} of=${items.length}`);
+    return pushed;
+}
+
+/**
+ * Pushes app-created calendar-type routines that have no `calendarEventId` yet to GCal. App-side
+ * routine creation never stamps `calendarIntegrationId`; the helper writes it on link.
+ */
+async function backfillUnlinkedRoutines(ctx: PushContext, userId: string): Promise<number> {
+    const routines = await routinesDAO.findArray({
+        user: userId,
+        routineType: 'calendar',
+        calendarEventId: { $exists: false },
+        // Mirror handleRoutinePush's inactive-skip semantics — capped/paused routines don't push.
+        active: { $ne: false },
+    });
+    if (routines.length === 0) {
+        return 0;
+    }
+    console.log(`[calendar] backfilling ${routines.length} unlinked calendar routines | userId=${userId}`);
+    let pushed = 0;
+    for (let i = 0; i < routines.length; i++) {
+        if (i > 0) {
+            await sleep(BACKFILL_PACE_MS);
+        }
+        const routine = routines[i];
+        if (!routine) continue;
+        const result = await pushRoutineToGCalWithContext(routine, ctx, userId);
+        if (result.status === 'created') {
+            pushed++;
+        }
+    }
+    console.log(`[calendar] backfill routines complete | pushed=${pushed} of=${routines.length}`);
+    return pushed;
+}
 
 /** Syncs a single calendar config: routine exceptions + event import. Returns the number of routines synced. */
 async function syncSingleCalendar(
