@@ -108,7 +108,7 @@ function SettingsPage() {
                         automatically.
                     </Typography>
                     <Divider className={styles.divider} />
-                    <CalendarIntegrations db={db} />
+                    <CalendarIntegrations />
                 </Box>
             </Paper>
             {/* Calendar horizon */}

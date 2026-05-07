@@ -5,7 +5,6 @@ import { SettingsRouterDecorator } from '../../../.storybook/RouterDecorator';
 import type { CalendarIntegration } from '../../api/calendarApi';
 import type { AppData } from '../../contexts/AppDataProvider';
 import { AppDataContext } from '../../contexts/AppDataProvider';
-import { mockDb } from '../../test-utils/storybookMocks';
 import { CalendarIntegrations } from './CalendarIntegrations';
 
 // ── Mock AppData context value ─────────────────────────────────────────────────
@@ -89,7 +88,6 @@ const meta = {
     parameters: { layout: 'padded' },
     tags: ['autodocs'],
     decorators: [MockAppDataDecorator, SettingsRouterDecorator],
-    args: { db: mockDb },
 } satisfies Meta<typeof CalendarIntegrations>;
 
 export default meta;

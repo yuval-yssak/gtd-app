@@ -9,8 +9,9 @@ import {
     removeAccount,
     setActiveAccount,
     upsertAccount,
+    wipeUserData,
 } from '../db/accountHelpers';
-import type { MyDB, StoredAccount } from '../types/MyDB';
+import type { MyDB, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
 function makeAccount(id: string, addedAt: number, overrides: Partial<StoredAccount> = {}): StoredAccount {
@@ -168,5 +169,155 @@ describe('getLoggedInUserIds', () => {
 
     it('returns an empty array when no accounts exist', async () => {
         expect(await getLoggedInUserIds(db)).toEqual([]);
+    });
+});
+
+// ── wipeUserData ──────────────────────────────────────────────────────────────
+
+function makeItem(id: string, userId: string): StoredItem {
+    return {
+        _id: id,
+        userId,
+        status: 'inbox',
+        title: `item-${id}`,
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: '2026-01-01T00:00:00.000Z',
+    };
+}
+
+function makeRoutine(id: string, userId: string): StoredRoutine {
+    return {
+        _id: id,
+        userId,
+        title: `routine-${id}`,
+        routineType: 'nextAction',
+        rrule: 'FREQ=DAILY',
+        template: {},
+        active: true,
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: '2026-01-01T00:00:00.000Z',
+    };
+}
+
+function makePerson(id: string, userId: string): StoredPerson {
+    return {
+        _id: id,
+        userId,
+        name: `person-${id}`,
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: '2026-01-01T00:00:00.000Z',
+    };
+}
+
+function makeWorkContext(id: string, userId: string): StoredWorkContext {
+    return {
+        _id: id,
+        userId,
+        name: `ctx-${id}`,
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: '2026-01-01T00:00:00.000Z',
+    };
+}
+
+function makeSyncOp(userId: string, entityId: string): Omit<SyncOperation, 'id'> {
+    return {
+        userId,
+        entityType: 'item',
+        entityId,
+        opType: 'create',
+        queuedAt: '2026-01-01T00:00:00.000Z',
+        snapshot: makeItem(entityId, userId),
+    };
+}
+
+async function seedTwoUsersData() {
+    // user A
+    await db.put('items', makeItem('itemA1', 'userA'));
+    await db.put('items', makeItem('itemA2', 'userA'));
+    await db.put('routines', makeRoutine('rA1', 'userA'));
+    await db.put('people', makePerson('pA1', 'userA'));
+    await db.put('workContexts', makeWorkContext('cA1', 'userA'));
+    await db.put('syncCursors', { userId: 'userA', lastSyncedTs: '2026-01-01T00:00:00.000Z' });
+    await db.add('syncOperations', makeSyncOp('userA', 'itemA1') as SyncOperation);
+    await db.add('syncOperations', makeSyncOp('userA', 'itemA2') as SyncOperation);
+    // user B (must survive the wipe of A)
+    await db.put('items', makeItem('itemB1', 'userB'));
+    await db.put('routines', makeRoutine('rB1', 'userB'));
+    await db.put('people', makePerson('pB1', 'userB'));
+    await db.put('workContexts', makeWorkContext('cB1', 'userB'));
+    await db.put('syncCursors', { userId: 'userB', lastSyncedTs: '2026-01-02T00:00:00.000Z' });
+    await db.add('syncOperations', makeSyncOp('userB', 'itemB1') as SyncOperation);
+    // device meta — must never be touched
+    await db.put('deviceMeta', { _id: 'local', deviceId: 'device-1', flushingTs: null });
+}
+
+describe('wipeUserData', () => {
+    it('removes the target user rows from items/routines/people/workContexts', async () => {
+        await seedTwoUsersData();
+        await wipeUserData('userA', db);
+
+        expect(await db.getAllFromIndex('items', 'userId', 'userA')).toEqual([]);
+        expect(await db.getAllFromIndex('routines', 'userId', 'userA')).toEqual([]);
+        expect(await db.getAllFromIndex('people', 'userId', 'userA')).toEqual([]);
+        expect(await db.getAllFromIndex('workContexts', 'userId', 'userA')).toEqual([]);
+    });
+
+    it('preserves the other user rows untouched', async () => {
+        await seedTwoUsersData();
+        await wipeUserData('userA', db);
+
+        expect((await db.getAllFromIndex('items', 'userId', 'userB')).map((i) => i._id)).toEqual(['itemB1']);
+        expect((await db.getAllFromIndex('routines', 'userId', 'userB')).map((r) => r._id)).toEqual(['rB1']);
+        expect((await db.getAllFromIndex('people', 'userId', 'userB')).map((p) => p._id)).toEqual(['pB1']);
+        expect((await db.getAllFromIndex('workContexts', 'userId', 'userB')).map((c) => c._id)).toEqual(['cB1']);
+    });
+
+    it('deletes only the target user row from syncCursors', async () => {
+        await seedTwoUsersData();
+        await wipeUserData('userA', db);
+
+        expect(await db.get('syncCursors', 'userA')).toBeUndefined();
+        expect(await db.get('syncCursors', 'userB')).toEqual({ userId: 'userB', lastSyncedTs: '2026-01-02T00:00:00.000Z' });
+    });
+
+    it('drops only the target user rows from syncOperations', async () => {
+        await seedTwoUsersData();
+        await wipeUserData('userA', db);
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        expect(ops[0]?.userId).toBe('userB');
+        expect(ops[0]?.entityId).toBe('itemB1');
+    });
+
+    it('preserves deviceMeta', async () => {
+        await seedTwoUsersData();
+        await wipeUserData('userA', db);
+
+        expect(await db.get('deviceMeta', 'local')).toEqual({ _id: 'local', deviceId: 'device-1', flushingTs: null });
+    });
+
+    it('preserves the accounts directory', async () => {
+        // wipeUserData is the entity-data wipe; account directory teardown is the caller's job.
+        await upsertAccount(makeAccount('userA', 1000), db);
+        await upsertAccount(makeAccount('userB', 2000), db);
+        await seedTwoUsersData();
+
+        await wipeUserData('userA', db);
+
+        const accounts = await getAllAccounts(db);
+        expect(accounts.map((a) => a.id)).toEqual(['userA', 'userB']);
+    });
+
+    it('is a no-op for an unknown userId', async () => {
+        await seedTwoUsersData();
+        await wipeUserData('ghost', db);
+
+        // Every previously-seeded row is still there.
+        expect(await db.getAllFromIndex('items', 'userId', 'userA')).toHaveLength(2);
+        expect(await db.getAllFromIndex('items', 'userId', 'userB')).toHaveLength(1);
+        expect(await db.get('syncCursors', 'userA')).toBeDefined();
+        expect(await db.get('syncCursors', 'userB')).toBeDefined();
+        expect(await db.getAll('syncOperations')).toHaveLength(3);
     });
 });

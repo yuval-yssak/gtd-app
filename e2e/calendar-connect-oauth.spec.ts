@@ -1,13 +1,14 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { withOneLoggedInDevice } from './helpers/context';
 
-// E2E coverage for Step 2 of the multi-account calendar plan: the pre-OAuth account picker
-// (ConnectAccountPickerDialog) and the post-OAuth mismatch error UI.
+// E2E coverage for the active-account-only Calendar Sync flow: clicking "Connect Google Calendar"
+// goes straight to /calendar/auth/google?login_hint=<active.email> with no picker dialog. Also
+// covers the post-OAuth mismatch error UI.
 //
 // We do NOT drive real Google OAuth from these tests. Instead:
-//   - For the redirect path: stub `window.location.href` so the test can assert the URL the
-//     app would navigate to (login_hint=<email>) without actually leaving the page.
+//   - For the redirect path: intercept the top-level navigation to /calendar/auth/google so the
+//     test can assert the URL the app would navigate to without actually leaving the page.
 //   - For the mismatch UI: hit POST /dev/calendar/simulate-mismatch which performs the same
 //     server-side redirect to /settings?calendarConnectError=mismatch as the real callback.
 
@@ -28,103 +29,41 @@ async function interceptOAuthStart(page: Page, captured: { href: string | null }
     });
 }
 
-test.describe('calendar connect — OAuth account picker', () => {
-    test('Connect button opens the account picker listing the active Google account', async ({ browser }) => {
-        const email = `connect-single-${dayjs().valueOf()}@example.com`;
+test.describe('calendar connect — active-account flow', () => {
+    test('Connect button is labelled with the active account email and visible on settings', async ({ browser }) => {
+        const email = `connect-active-label-${dayjs().valueOf()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(SETTINGS_URL);
-            await expect(page.getByRole('button', { name: 'Connect Google Calendar' })).toBeVisible({ timeout: 10_000 });
-            await page.getByRole('button', { name: 'Connect Google Calendar' }).click();
+            // The button label embeds the active email so the active-account scope is unambiguous.
+            const connectBtn = page.getByRole('button', { name: new RegExp(`Connect Google Calendar for ${email}`) });
+            await expect(connectBtn).toBeVisible({ timeout: 10_000 });
 
-            // Dialog renders the account email and the per-row connect CTA.
-            await expect(page.getByRole('dialog', { name: /Connect Google Calendar/i })).toBeVisible();
+            // The scope-notice banner names the active account and points to the account switcher.
+            await expect(page.getByText(/Managing calendars for/)).toBeVisible();
             await expect(page.getByText(email, { exact: true })).toBeVisible();
-            await expect(page.getByText('Connect this calendar account')).toBeVisible();
         });
     });
 
-    test('picking the active account redirects with login_hint=<email>', async ({ browser }) => {
-        const email = `connect-redirect-${dayjs().valueOf()}@example.com`;
+    test('clicking Connect goes straight to /calendar/auth/google?login_hint=<active.email> (no picker dialog)', async ({ browser }) => {
+        const email = `connect-active-redirect-${dayjs().valueOf()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(SETTINGS_URL);
             const captured: { href: string | null } = { href: null };
             await interceptOAuthStart(page, captured);
 
-            await expect(page.getByRole('button', { name: 'Connect Google Calendar' })).toBeVisible({ timeout: 10_000 });
-            await page.getByRole('button', { name: 'Connect Google Calendar' }).click();
-            await page.getByText('Connect this calendar account').click();
+            const connectBtn = page.getByRole('button', { name: new RegExp(`Connect Google Calendar for ${email}`) });
+            await expect(connectBtn).toBeVisible({ timeout: 10_000 });
+            await connectBtn.click();
 
+            // The picker dialog has been removed — the click should drive the redirect directly.
+            // No "Connect this calendar account" CTA exists any more.
             await expect.poll(() => captured.href, { timeout: 15_000 }).not.toBeNull();
             const url = new URL(captured.href ?? '');
             expect(url.pathname).toBe('/calendar/auth/google');
             expect(url.searchParams.get('login_hint')).toBe(email);
-        });
-    });
 
-    test('picker lists every Google-provider account when the device hosts multiple', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
-        const emailA = `connect-multi-a-${stamp}@example.com`;
-        const emailB = `connect-multi-b-${stamp}@example.com`;
-        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page) => {
-            await page.goto(SETTINGS_URL);
-
-            await expect(page.getByRole('button', { name: 'Connect Google Calendar' })).toBeVisible({ timeout: 10_000 });
-            await page.getByRole('button', { name: 'Connect Google Calendar' }).click();
-
-            // Both accounts surface their own ListItemButton with their email visible.
-            await expect(page.getByText(emailA, { exact: true })).toBeVisible();
-            await expect(page.getByText(emailB, { exact: true })).toBeVisible();
-        });
-    });
-
-    test('picking the non-active account redirects with that email in login_hint after switching session', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
-        const emailA = `connect-pivot-a-${stamp}@example.com`;
-        const emailB = `connect-pivot-b-${stamp}@example.com`;
-        // emailA is the active session by default (activeIndex=0). We pick emailB → multiSession.setActive(B) → redirect with login_hint=B.
-        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page) => {
-            await page.goto(SETTINGS_URL);
-            const captured: { href: string | null } = { href: null };
-            await interceptOAuthStart(page, captured);
-
-            await expect(page.getByRole('button', { name: 'Connect Google Calendar' })).toBeVisible({ timeout: 10_000 });
-            await page.getByRole('button', { name: 'Connect Google Calendar' }).click();
-            // Click the row whose secondary text is emailB — Material UI renders `secondary` inside the same ListItemButton.
-            await page.getByRole('button', { name: new RegExp(emailB) }).click();
-
-            await expect.poll(() => captured.href, { timeout: 15_000 }).not.toBeNull();
-            const url = new URL(captured.href ?? '');
-            expect(url.searchParams.get('login_hint')).toBe(emailB);
-        });
-    });
-
-    test('empty state surfaces an explanatory message when no Google accounts are signed in', async ({ browser }) => {
-        const email = `connect-empty-${dayjs().valueOf()}@example.com`;
-        await withOneLoggedInDevice(browser, email, async (page) => {
-            // Forge a non-google account in IDB so the picker filter (provider === 'google') excludes everyone.
-            // Mutating the cached IDB row is enough — the dialog reads via useAccounts which subscribes to IDB.
-            await page.evaluate(
-                async (uid) => {
-                    type AccountIDB = { provider: string; id: string };
-                    type DBHandle = {
-                        get(store: 'accounts', key: string): Promise<AccountIDB | undefined>;
-                        put(store: 'accounts', value: AccountIDB): Promise<unknown>;
-                    };
-                    const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-                    const acct = await dbHandle.get('accounts', uid);
-                    if (acct) {
-                        acct.provider = 'github';
-                        await dbHandle.put('accounts', acct);
-                    }
-                },
-                await readActiveAccountId(page),
-            );
-            await page.reload();
-            await page.goto(SETTINGS_URL);
-
-            await expect(page.getByRole('button', { name: 'Connect Google Calendar' })).toBeVisible({ timeout: 10_000 });
-            await page.getByRole('button', { name: 'Connect Google Calendar' }).click();
-            await expect(page.getByText(/No Google accounts are signed into GTD on this device/)).toBeVisible();
+            // Sanity: the old picker dialog must not appear.
+            await expect(page.getByRole('dialog', { name: /Connect Google Calendar/i })).toHaveCount(0);
         });
     });
 });
@@ -155,15 +94,3 @@ test.describe('calendar connect — OAuth mismatch error', () => {
         });
     });
 });
-
-async function readActiveAccountId(page: Page): Promise<string> {
-    const id = await page.evaluate(async () => {
-        type Harness = { getActiveAccountId(): Promise<string | null> };
-        const h = (window as unknown as { __gtd: Harness }).__gtd;
-        return h.getActiveAccountId();
-    });
-    if (!id) {
-        throw new Error('no active account id');
-    }
-    return id;
-}

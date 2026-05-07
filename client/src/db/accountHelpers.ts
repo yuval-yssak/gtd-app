@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import type { IDBPDatabase } from 'idb';
+import type { IDBPDatabase, IDBPTransaction } from 'idb';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
 
 export async function upsertAccount(account: StoredAccount, db: IDBPDatabase<MyDB>): Promise<void> {
@@ -80,4 +80,52 @@ export async function removeAccount(userId: string, db: IDBPDatabase<MyDB>): Pro
 export async function clearAllAccounts(db: IDBPDatabase<MyDB>): Promise<void> {
     await db.clear('accounts');
     await db.delete('activeAccount', 'active');
+}
+
+/**
+ * Wipes every IDB row owned by a single user when their session ends — items, routines, people,
+ * workContexts, the per-user sync cursor, and any sync operations still queued under that userId.
+ * `deviceMeta` and other accounts' rows are intentionally untouched: the deviceId must outlive
+ * any single sign-out so push subscriptions and operation log purges stay attached to the same
+ * physical device, and other logged-in accounts on this browser must keep their data.
+ *
+ * Runs in a single multi-store readwrite transaction so a tab close mid-wipe can never leave
+ * orphan rows belonging to a userId that's no longer in `accounts`.
+ */
+export async function wipeUserData(userId: string, db: IDBPDatabase<MyDB>): Promise<void> {
+    const tx = db.transaction(['items', 'routines', 'people', 'workContexts', 'syncOperations', 'syncCursors'], 'readwrite');
+    await Promise.all([
+        deleteByUserIdIndexInTx(tx, 'items', userId),
+        deleteByUserIdIndexInTx(tx, 'routines', userId),
+        deleteByUserIdIndexInTx(tx, 'people', userId),
+        deleteByUserIdIndexInTx(tx, 'workContexts', userId),
+        deleteSyncOperationsForUserInTx(tx, userId),
+        tx.objectStore('syncCursors').delete(userId),
+    ]);
+    await tx.done;
+}
+
+type UserScopedStore = 'items' | 'routines' | 'people' | 'workContexts';
+
+type WipeStores = Array<'items' | 'routines' | 'people' | 'workContexts' | 'syncOperations' | 'syncCursors'>;
+type WipeTx = IDBPTransaction<MyDB, WipeStores, 'readwrite'>;
+
+async function deleteByUserIdIndexInTx(tx: WipeTx, store: UserScopedStore, userId: string): Promise<void> {
+    let cursor = await tx.objectStore(store).index('userId').openCursor(IDBKeyRange.only(userId));
+    while (cursor) {
+        await cursor.delete();
+        cursor = await cursor.continue();
+    }
+}
+
+async function deleteSyncOperationsForUserInTx(tx: WipeTx, userId: string): Promise<void> {
+    // syncOperations has no userId index — we iterate the whole store and drop matching rows.
+    // The queue is normally tiny (only unflushed ops); a full scan is fine.
+    let cursor = await tx.objectStore('syncOperations').openCursor();
+    while (cursor) {
+        if (cursor.value.userId === userId) {
+            await cursor.delete();
+        }
+        cursor = await cursor.continue();
+    }
 }

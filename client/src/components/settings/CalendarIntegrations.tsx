@@ -14,7 +14,6 @@ import IconButton from '@mui/material/IconButton';
 import InputLabel from '@mui/material/InputLabel';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Radio from '@mui/material/Radio';
@@ -24,7 +23,6 @@ import Switch from '@mui/material/Switch';
 import Typography from '@mui/material/Typography';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import {
     type CalendarIntegration,
@@ -42,11 +40,8 @@ import {
     updateSyncConfig,
 } from '../../api/calendarApi';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { setActiveAccount } from '../../db/accountHelpers';
-import { useAccounts } from '../../hooks/useAccounts';
-import { authClient } from '../../lib/authClient';
 import { hasAtLeastOne } from '../../lib/typeUtils';
-import type { MyDB, StoredAccount } from '../../types/MyDB';
+import type { StoredAccount } from '../../types/MyDB';
 
 /**
  * Maps a `createSyncConfig` failure to a user-facing message. The thrown Error from `apiFetch`
@@ -95,17 +90,12 @@ function useCalendarList(integrationId: string): { calendars: GoogleCalendar[]; 
     return { calendars, isLoading, fetchError };
 }
 
-interface CalendarIntegrationsProps {
-    db: IDBPDatabase<MyDB>;
-}
-
-export function CalendarIntegrations({ db }: CalendarIntegrationsProps) {
+export function CalendarIntegrations() {
     const [integrations, setIntegrations] = useState<CalendarIntegration[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [chooseCalendarFor, setChooseCalendarFor] = useState<CalendarIntegration | null>(null);
-    const [isPickerOpen, setIsPickerOpen] = useState(false);
-    const { syncAndRefresh } = useAppData();
+    const { account, syncAndRefresh } = useAppData();
     const navigate = useNavigate();
     // calendarConnected and calendarConnectError are set by the OAuth callback redirect; the first
     // auto-opens the calendar picker, the second renders a mismatch error inline.
@@ -183,8 +173,19 @@ export function CalendarIntegrations({ db }: CalendarIntegrationsProps) {
         );
     }
 
+    function onConnectActiveAccount() {
+        if (!account) {
+            return;
+        }
+        // Active-user only: hand the active account's email as login_hint so Google's picker
+        // pre-selects it. The server still validates that the eventually-authorized email
+        // matches both the hint and the active session before storing tokens.
+        initiateGoogleCalendarAuth(account.email);
+    }
+
     return (
         <Box>
+            <ActiveAccountScopeNotice account={account} />
             {calendarConnectError === 'mismatch' && <ConnectMismatchError onDismiss={dismissMismatchError} />}
             {integrations.length === 0 && (
                 <Typography
@@ -206,10 +207,9 @@ export function CalendarIntegrations({ db }: CalendarIntegrationsProps) {
                     onChooseCalendar={() => setChooseCalendarFor(integration)}
                 />
             ))}
-            <Button variant="outlined" size="small" onClick={() => setIsPickerOpen(true)}>
-                Connect Google Calendar
+            <Button variant="outlined" size="small" onClick={onConnectActiveAccount} disabled={!account}>
+                {account ? `Connect Google Calendar for ${account.email}` : 'Connect Google Calendar'}
             </Button>
-            {isPickerOpen && <ConnectAccountPickerDialog db={db} onClose={() => setIsPickerOpen(false)} />}
             {chooseCalendarFor && (
                 <ChooseCalendarDialog
                     integration={chooseCalendarFor}
@@ -221,6 +221,34 @@ export function CalendarIntegrations({ db }: CalendarIntegrationsProps) {
                     }}
                 />
             )}
+        </Box>
+    );
+}
+
+/**
+ * Banner above the integration list that names the active account and tells the user to switch
+ * accounts (via the account switcher) if they want to manage a different one's calendars. This
+ * was previously implicit — users could mistake the section for a global multi-account picker.
+ */
+function ActiveAccountScopeNotice({ account }: { account: StoredAccount | null }) {
+    if (!account) {
+        return null;
+    }
+    return (
+        <Box
+            sx={{
+                mb: 2,
+                p: 1.25,
+                borderRadius: 1,
+                backgroundColor: 'action.hover',
+            }}
+        >
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                Managing calendars for <strong>{account.email}</strong>
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                To connect or disconnect a different account's calendar, switch to that account first.
+            </Typography>
         </Box>
     );
 }
@@ -252,125 +280,6 @@ function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
             </Button>
         </Box>
     );
-}
-
-interface ConnectAccountPickerDialogProps {
-    db: IDBPDatabase<MyDB>;
-    onClose: () => void;
-}
-
-/**
- * Pre-OAuth picker: lists every Google account already signed into GTD on this device. Choosing
- * one redirects to `/calendar/auth/google?login_hint=<email>`; if the chosen account isn't the
- * currently active session, we first call `multiSession.setActive` so the OAuth callback resolves
- * the same identity via cookie. The server still validates userinfo + session emails before
- * storing tokens.
- */
-function ConnectAccountPickerDialog({ db, onClose }: ConnectAccountPickerDialogProps) {
-    const { activeAccount, allAccounts } = useAccounts(db);
-    const [pendingAccountId, setPendingAccountId] = useState<string | null>(null);
-    const [pickerError, setPickerError] = useState<string | null>(null);
-
-    const googleAccounts = allAccounts.filter((a) => a.provider === 'google');
-
-    async function onChooseAccount(account: StoredAccount) {
-        setPendingAccountId(account.id);
-        setPickerError(null);
-        try {
-            await switchToAccountIfNeeded(account, activeAccount?.id);
-            // Persist the chosen account in IDB so that after the OAuth redirect the multi-user
-            // sync orchestrator restores THIS account as the active session — not the one IDB had
-            // before the picker was opened. Without this, the integration is created under the
-            // newly-OAuth'd userId but later POSTs (e.g. /sync-configs) run under the restored
-            // session and get 404'd by the integration ownership check.
-            await setActiveAccount(account.id, db);
-            initiateGoogleCalendarAuth(account.email);
-        } catch (err) {
-            console.error('[calendar] failed to switch session before OAuth:', err);
-            setPickerError('Could not switch to that account. Please try again.');
-            setPendingAccountId(null);
-        }
-    }
-
-    return (
-        <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
-            <DialogTitle>Connect Google Calendar</DialogTitle>
-            <DialogContent>
-                <DialogContentText
-                    sx={{
-                        mb: 2,
-                    }}
-                >
-                    Choose which Google account's calendar you want to connect. We'll only ask for calendar access.
-                </DialogContentText>
-                {googleAccounts.length === 0 ? (
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                            fontStyle: 'italic',
-                        }}
-                    >
-                        No Google accounts are signed into GTD on this device. Add a Google account from the account switcher first, then come back here to
-                        connect its calendar.
-                    </Typography>
-                ) : (
-                    <List dense disablePadding>
-                        {googleAccounts.map((acct) => (
-                            <ListItem key={acct.id} disableGutters disablePadding>
-                                <ListItemButton onClick={() => onChooseAccount(acct)} disabled={pendingAccountId !== null}>
-                                    <ListItemText
-                                        primary={acct.name ?? acct.email}
-                                        secondary={acct.email}
-                                        slotProps={{
-                                            primary: { variant: 'body2' },
-                                            secondary: { variant: 'caption' },
-                                        }}
-                                    />
-                                    <Typography variant="caption" color="primary">
-                                        {pendingAccountId === acct.id ? 'Redirecting…' : 'Connect this calendar account'}
-                                    </Typography>
-                                </ListItemButton>
-                            </ListItem>
-                        ))}
-                    </List>
-                )}
-                {pickerError && (
-                    <Typography
-                        variant="body2"
-                        color="error"
-                        sx={{
-                            mt: 1,
-                        }}
-                    >
-                        {pickerError}
-                    </Typography>
-                )}
-            </DialogContent>
-            <DialogActions>
-                <Button onClick={onClose} disabled={pendingAccountId !== null}>
-                    Cancel
-                </Button>
-            </DialogActions>
-        </Dialog>
-    );
-}
-
-/**
- * If the picked account isn't the current active session, switch to it first via Better Auth's
- * multi-session API so the OAuth callback's session-email check resolves the chosen identity.
- * Throws if the target session can't be found (e.g. expired) — caller surfaces the error.
- */
-async function switchToAccountIfNeeded(account: StoredAccount, activeAccountId: string | undefined): Promise<void> {
-    if (account.id === activeAccountId) {
-        return;
-    }
-    const { data: sessions } = await authClient.multiSession.listDeviceSessions();
-    const target = sessions?.find((s) => s.user.id === account.id);
-    if (!target) {
-        throw new Error('No device session found for the chosen account');
-    }
-    await authClient.multiSession.setActive({ sessionToken: target.session.token });
 }
 
 /** Fetches sync configs for an integration, with unmount-safe cancellation. */
