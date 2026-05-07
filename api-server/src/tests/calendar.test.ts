@@ -5850,8 +5850,13 @@ describe('routine startDate', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
 
         // createRecurringEvent itself computes seriesStartDate internally — we assert it was called
-        // with the routine that has startDate set.
-        expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ startDate: '2026-06-15' }), 'primary', 'Asia/Jerusalem');
+        // with the routine that has startDate set. Trailing options arg (deterministic id) ignored here.
+        expect(createSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ startDate: '2026-06-15' }),
+            'primary',
+            'Asia/Jerusalem',
+            expect.anything(),
+        );
     });
 });
 
