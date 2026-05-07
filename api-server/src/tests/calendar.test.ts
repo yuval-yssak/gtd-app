@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import { google } from 'googleapis';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
+import { buildDeterministicGCalId, GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -11,6 +11,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { gcalCreationInFlight, maybePushToGCal } from '../lib/calendarPushback.js';
 import * as sseConnections from '../lib/sseConnections.js';
+import * as webPush from '../lib/webPush.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { calendarRoutes, pickSplitParent } from '../routes/calendar.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
@@ -746,6 +747,10 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(updated?.calendarIntegrationId).toBe('int-1');
         expect(updated?.calendarSyncConfigId).toBe('sync-config-1');
         expect(updated?.lastPushedToGCalTs).toBeTruthy();
+        // An operation must be recorded so other devices learn about the newly-linked event id.
+        const recordedOps = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-backfill-1' });
+        expect(recordedOps).toHaveLength(1);
+        expect(recordedOps[0]!.snapshot).toMatchObject({ calendarEventId: 'gcal-id-1', calendarIntegrationId: 'int-1' });
     });
 
     it('pushes unlinked calendar-type routines to GCal as part of Sync now', async () => {
@@ -865,13 +870,14 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(elapsed).toBeGreaterThanOrEqual(250);
     });
 
-    it('notifies SSE when backfill produces links even if there are no inbound events', async () => {
+    it('notifies SSE and web push with backfill ops even if there are no inbound events', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
         await insertUnlinkedItem(userId, { _id: 'item-sse-backfill' });
 
-        const notifySpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+        const sseSpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+        const pushSpy = vi.spyOn(webPush, 'notifyViaWebPush').mockResolvedValue();
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
         // Inbound is empty — only the backfill produces ops.
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
@@ -880,9 +886,17 @@ describe('POST /calendar/integrations/:id/sync', () => {
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
 
-        // Without this notify, the originating client wouldn't refresh and would still display
-        // the item as unlinked (no calendarEventId in IndexedDB) until something else triggered a pull.
-        expect(notifySpy).toHaveBeenCalledWith(userId, expect.objectContaining({ type: 'update' }));
+        // SSE refreshes the calling client. Web push reaches devices without an open SSE channel —
+        // backfill ops must reach both, otherwise closed-tab devices never learn the items got linked.
+        expect(sseSpy).toHaveBeenCalledWith(userId, expect.objectContaining({ type: 'update' }));
+        expect(pushSpy).toHaveBeenCalledOnce();
+        const opsArg = pushSpy.mock.calls[0]![2];
+        expect(opsArg).toHaveLength(1);
+        expect(opsArg![0]).toMatchObject({
+            entityType: 'item',
+            entityId: 'item-sse-backfill',
+            opType: 'update',
+        });
     });
 
     it('running Sync now twice does not create duplicate GCal events for unlinked items', async () => {
@@ -912,8 +926,11 @@ describe('POST /calendar/integrations/:id/sync', () => {
 
         // After call #1: GCal got a create, but the item is still unlinked locally.
         expect(createSpy).toHaveBeenCalledOnce();
+        // Compute the expected id directly from the helper so the assertion fails loudly if the
+        // hashing scheme changes — a fragile mock-call-by-index lookup would silently pass.
+        const expectedId = buildDeterministicGCalId('item-idempotent-1', 'int-1');
         const idAfterFirst = createSpy.mock.calls[0]![3]?.id;
-        expect(idAfterFirst).toBeTruthy();
+        expect(idAfterFirst).toBe(expectedId);
         const itemAfterFirst = await itemsDAO.findByOwnerAndId('item-idempotent-1', userId);
         expect(itemAfterFirst?.calendarEventId).toBeUndefined();
 
@@ -930,11 +947,10 @@ describe('POST /calendar/integrations/:id/sync', () => {
         // The retry must send the SAME deterministic id (proving idempotency) and treat 409 as
         // success-with-existing — the item is now linked locally with that id.
         expect(createSpy).toHaveBeenCalledOnce();
-        const idAfterSecond = createSpy.mock.calls[0]![3]?.id;
-        expect(idAfterSecond).toBe(idAfterFirst);
+        expect(createSpy.mock.calls[0]![3]?.id).toBe(expectedId);
 
         const linked = await itemsDAO.findByOwnerAndId('item-idempotent-1', userId);
-        expect(linked?.calendarEventId).toBe(idAfterFirst);
+        expect(linked?.calendarEventId).toBe(expectedId);
     });
 
     it('trashes an existing item when its GCal event is cancelled', async () => {

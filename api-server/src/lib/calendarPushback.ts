@@ -38,6 +38,24 @@ export interface PushContext {
     timeZone: string;
 }
 
+/**
+ * Wraps a GCal create call with the deterministic-id idempotency contract: if Google rejects
+ * with 409 (the supplied id is already on Google's side from a prior push that crashed before
+ * we could write the link locally), treat it as success and return the same id — we can trust
+ * the event is ours because we generated the id ourselves.
+ */
+async function createOr409Relink(integrationId: string, deterministicId: string, doInsert: () => Promise<string>): Promise<string> {
+    try {
+        return await withAuthFailureHandling(integrationId, doInsert);
+    } catch (err) {
+        if (isDuplicateIdError(err)) {
+            console.log(`[gcal-pushback] GCal event ${deterministicId} already exists (409) — relinking`);
+            return deterministicId;
+        }
+        throw err;
+    }
+}
+
 /** Identifiers linking an entity to its calendar source — avoids threading 4+ args through helpers. */
 interface CalendarLink {
     integrationId: string | undefined;
@@ -259,8 +277,12 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
     await stampItemLastPushed(userId, itemId, htmlForSync);
 }
 
-/** Outcome of a context-explicit push helper — informs the caller whether GCal-side state changed. */
-export type PushOutcome = { status: 'created' | 'already-linked' | 'skipped'; eventId?: string };
+/**
+ * Outcome of a context-explicit push helper — informs the caller whether GCal-side state changed
+ * and surfaces the recorded operation so the caller can include it in any downstream notify
+ * fan-out (web push, etc.) without round-tripping the DB.
+ */
+export type PushOutcome = { status: 'created' | 'already-linked' | 'skipped'; eventId?: string; recordedOp?: OperationInterface };
 
 /** Creates a new Google Calendar event for an app-created calendar item. */
 async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
@@ -317,32 +339,19 @@ export async function pushItemToGCalWithContext(snapshot: ItemInterface, ctx: Pu
         // of creating a second event.
         const deterministicId = buildDeterministicGCalId(snapshot._id, integration._id);
         console.log(`[gcal-pushback] creating new GCal event | itemId=${snapshot._id} title=${snapshot.title} gcalId=${deterministicId}`);
-        let calendarEventId: string;
-        try {
-            calendarEventId = await withAuthFailureHandling(integration._id, () =>
-                provider.createEvent(
-                    config.calendarId,
-                    {
-                        title: snapshot.title,
-                        timeStart,
-                        timeEnd,
-                        ...(snapshot.notes !== undefined ? { description: markdownToHtml(snapshot.notes) } : {}),
-                    },
-                    timeZone,
-                    { id: deterministicId },
-                ),
-            );
-        } catch (err) {
-            if (isDuplicateIdError(err)) {
-                // Google already has an event with this id — left over from a prior push that crashed
-                // before we wrote the link locally. Re-link to it; we can trust the id is ours because
-                // we generated it deterministically.
-                console.log(`[gcal-pushback] item ${snapshot._id} GCal event ${deterministicId} already exists (409) — relinking`);
-                calendarEventId = deterministicId;
-            } else {
-                throw err;
-            }
-        }
+        const calendarEventId = await createOr409Relink(integration._id, deterministicId, () =>
+            provider.createEvent(
+                config.calendarId,
+                {
+                    title: snapshot.title,
+                    timeStart,
+                    timeEnd,
+                    ...(snapshot.notes !== undefined ? { description: markdownToHtml(snapshot.notes) } : {}),
+                },
+                timeZone,
+                { id: deterministicId },
+            ),
+        );
 
         const now = dayjs().toISOString();
         await itemsDAO.updateOne(
@@ -360,10 +369,10 @@ export async function pushItemToGCalWithContext(snapshot: ItemInterface, ctx: Pu
         );
         // Record an operation so other devices learn about the newly-linked calendar event ID.
         const updated = await itemsDAO.findByOwnerAndId(snapshot._id, userId);
-        if (updated) {
-            await recordOperation(userId, { entityType: 'item', entityId: snapshot._id, snapshot: updated, opType: 'update', now });
-        }
-        return { status: 'created', eventId: calendarEventId };
+        const recordedOp = updated
+            ? await recordOperation(userId, { entityType: 'item', entityId: snapshot._id, snapshot: updated, opType: 'update', now })
+            : undefined;
+        return { status: 'created', eventId: calendarEventId, ...(recordedOp ? { recordedOp } : {}) };
     } catch (err) {
         console.error(`[calendar-pushback] failed to create GCal event for item ${snapshot._id}:`, err);
         return { status: 'skipped' };
@@ -620,19 +629,9 @@ export async function pushRoutineToGCalWithContext(snapshot: RoutineInterface, c
         }
 
         const deterministicId = buildDeterministicGCalId(snapshot._id, ctx.integration._id);
-        let calendarEventId: string;
-        try {
-            calendarEventId = await withAuthFailureHandling(ctx.integration._id, () =>
-                ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId, ctx.timeZone, { id: deterministicId }),
-            );
-        } catch (err) {
-            if (isDuplicateIdError(err)) {
-                console.log(`[gcal-pushback] routine ${snapshot._id} GCal event ${deterministicId} already exists (409) — relinking`);
-                calendarEventId = deterministicId;
-            } else {
-                throw err;
-            }
-        }
+        const calendarEventId = await createOr409Relink(ctx.integration._id, deterministicId, () =>
+            ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId, ctx.timeZone, { id: deterministicId }),
+        );
         const now = dayjs().toISOString();
         await routinesDAO.updateOne(
             { _id: snapshot._id, user: userId },
@@ -650,10 +649,10 @@ export async function pushRoutineToGCalWithContext(snapshot: RoutineInterface, c
         );
         // Record an operation so other devices sync the newly-linked calendar event ID.
         const updated = await routinesDAO.findByOwnerAndId(snapshot._id, userId);
-        if (updated) {
-            await recordOperation(userId, { entityType: 'routine', entityId: snapshot._id, snapshot: updated, opType: 'update', now });
-        }
-        return { status: 'created', eventId: calendarEventId };
+        const recordedOp = updated
+            ? await recordOperation(userId, { entityType: 'routine', entityId: snapshot._id, snapshot: updated, opType: 'update', now })
+            : undefined;
+        return { status: 'created', eventId: calendarEventId, ...(recordedOp ? { recordedOp } : {}) };
     } catch (err) {
         console.error(`[calendar-pushback] failed to create recurring event for routine ${snapshot._id}:`, err);
         return { status: 'skipped' };

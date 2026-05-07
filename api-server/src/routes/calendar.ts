@@ -20,7 +20,14 @@ import routinesDAO from '../dataAccess/routinesDAO.js';
 import { withAuthFailureHandling } from '../lib/calendarAuthEscalation.js';
 import { integrationStatus } from '../lib/calendarIntegrationStatus.js';
 import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
-import { ensureTimeZone, type PushContext, pushItemToGCalWithContext, pushRoutineDeletion, pushRoutineToGCalWithContext } from '../lib/calendarPushback.js';
+import {
+    ensureTimeZone,
+    type PushContext,
+    type PushOutcome,
+    pushItemToGCalWithContext,
+    pushRoutineDeletion,
+    pushRoutineToGCalWithContext,
+} from '../lib/calendarPushback.js';
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
@@ -999,47 +1006,43 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
         // linked to a GCal event. Without this, "Sync now" is one-way (Google → app); a user who
         // creates calendar entities before connecting Google never sees them on their calendar.
         // Scoped to the default config because that's where new entities normally land — see
-        // resolveDefaultPushContext semantics in calendarPushback.ts.
+        // resolveDefaultPushContext semantics in calendarPushback.ts. The default config's
+        // timeZone is refreshed in-place by syncSingleCalendar above, so the `?? 'UTC'` fallback
+        // is unreachable in practice — kept for defensive narrowing.
         const defaultConfig = configs.find((cfg) => cfg.isDefault);
-        let pushedItems = 0;
-        let pushedRoutines = 0;
-        if (defaultConfig) {
-            const ctx: PushContext = {
-                integration,
-                config: defaultConfig,
-                provider,
-                timeZone: defaultConfig.timeZone ?? 'UTC',
-            };
-            pushedItems = await backfillUnlinkedItems(ctx, userId);
-            pushedRoutines = await backfillUnlinkedRoutines(ctx, userId);
-        }
+        const backfill = defaultConfig
+            ? await runOutboundBackfill(
+                  {
+                      integration,
+                      config: defaultConfig,
+                      provider,
+                      timeZone: defaultConfig.timeZone ?? 'UTC',
+                  },
+                  userId,
+              )
+            : { pushedItems: 0, pushedRoutines: 0, recordedOps: [] };
 
-        // Notify the user's open SSE channels so the client (this device + others on the same
-        // user) pulls the new ops. Inbound import ops live in the local `ops` array; backfill ops
-        // are written via recordOperation inside the push helpers and live outside that array.
-        // Notify when either path produced changes so the originating client refreshes.
-        const backfillProducedOps = pushedItems + pushedRoutines > 0;
-        if (ops.length > 0 || backfillProducedOps) {
+        // Both the inbound import path and the backfill path produce ops via recordOperation; we
+        // need both fed into the SSE + web push fan-out so live tabs refresh AND closed-tab
+        // devices learn to pull. Mirrors the documented "single notification fan-out covers both"
+        // contract in api-server/CLAUDE.md (Public API conventions).
+        const allOps = [...ops, ...backfill.recordedOps];
+        if (allOps.length > 0) {
             console.log(
-                `[calendar] manual sync produced ops — notifying SSE + push | userId=${userId} inboundOps=${ops.length} pushedItems=${pushedItems} pushedRoutines=${pushedRoutines}`,
+                `[calendar] manual sync produced ops — notifying SSE + push | userId=${userId} inboundOps=${ops.length} pushedItems=${backfill.pushedItems} pushedRoutines=${backfill.pushedRoutines}`,
             );
             notifyUserViaSse(userId, { type: 'update', ts: now });
-            // Web push fan-out only sends the inbound `ops` array; backfill push-back ops were
-            // recorded but aren't in this batch. The SSE tickle above is sufficient to make
-            // connected clients re-pull and pick up the backfill ops.
-            if (ops.length > 0) {
-                await notifyViaWebPush(userId, null, ops, now).catch((err) => {
-                    console.error(`[calendar] web push failed for user ${userId}:`, err);
-                });
-            }
+            await notifyViaWebPush(userId, null, allOps, now).catch((err) => {
+                console.error(`[calendar] web push failed for user ${userId}:`, err);
+            });
         }
 
         return c.json({
             ok: true,
             syncedRoutines: syncResults,
             syncedCalendars: configs.length,
-            pushedItems,
-            pushedRoutines,
+            pushedItems: backfill.pushedItems,
+            pushedRoutines: backfill.pushedRoutines,
         });
     } catch (err) {
         console.error(`[calendar] sync failed for integration ${integrationId}:`, err);
@@ -1051,72 +1054,60 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
 const BACKFILL_PACE_MS = 150;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/**
- * Pushes app-created calendar items that have no `calendarEventId` yet to GCal. Used by the
- * "Sync now" handler to repair pre-connect / offline-created items. Sequential with a small
- * pacing sleep to stay under GCal's per-user rate limit.
- */
-async function backfillUnlinkedItems(ctx: PushContext, userId: string): Promise<number> {
-    // The `routineId: { $exists: false }` exclusion mirrors the guard in handleItemPush —
-    // routine-generated items don't have their own GCal event; their presence is the routine's
-    // recurring series. The `calendarEventId: { $exists: false }` filter is also the idempotency
-    // gate: items already linked from a previous run are skipped without a Google round-trip.
-    const items = await itemsDAO.findArray({
-        user: userId,
-        status: 'calendar',
-        calendarEventId: { $exists: false },
-        routineId: { $exists: false },
-    });
-    if (items.length === 0) {
-        return 0;
-    }
-    console.log(`[calendar] backfilling ${items.length} unlinked calendar items | userId=${userId}`);
-    let pushed = 0;
-    for (let i = 0; i < items.length; i++) {
-        if (i > 0) {
-            await sleep(BACKFILL_PACE_MS);
-        }
-        const item = items[i];
-        if (!item) continue;
-        const result = await pushItemToGCalWithContext(item, ctx, userId);
-        if (result.status === 'created') {
-            pushed++;
-        }
-    }
-    console.log(`[calendar] backfill items complete | pushed=${pushed} of=${items.length}`);
-    return pushed;
+interface BackfillResult {
+    pushedItems: number;
+    pushedRoutines: number;
+    recordedOps: OperationInterface[];
 }
 
 /**
- * Pushes app-created calendar-type routines that have no `calendarEventId` yet to GCal. App-side
- * routine creation never stamps `calendarIntegrationId`; the helper writes it on link.
+ * Runs the outbound backfill: push app-created calendar items + routines that have never been
+ * linked to a GCal event. Returns counts and the recorded ops for downstream notification.
  */
-async function backfillUnlinkedRoutines(ctx: PushContext, userId: string): Promise<number> {
-    const routines = await routinesDAO.findArray({
-        user: userId,
-        routineType: 'calendar',
-        calendarEventId: { $exists: false },
-        // Mirror handleRoutinePush's inactive-skip semantics — capped/paused routines don't push.
-        active: { $ne: false },
-    });
-    if (routines.length === 0) {
-        return 0;
+async function runOutboundBackfill(ctx: PushContext, userId: string): Promise<BackfillResult> {
+    // The `routineId: { $exists: false }` exclusion mirrors the guard in handleItemPush —
+    // routine-generated items don't have their own GCal event; their presence is the routine's
+    // recurring series. The `calendarEventId: { $exists: false }` filter is also the idempotency
+    // gate: entities already linked from a previous run are skipped without a Google round-trip.
+    const [items, routines] = await Promise.all([
+        itemsDAO.findArray({
+            user: userId,
+            status: 'calendar',
+            calendarEventId: { $exists: false },
+            routineId: { $exists: false },
+        }),
+        routinesDAO.findArray({
+            user: userId,
+            routineType: 'calendar',
+            calendarEventId: { $exists: false },
+            // Mirror handleRoutinePush's inactive-skip semantics — capped/paused routines don't push.
+            active: { $ne: false },
+        }),
+    ]);
+    if (items.length + routines.length === 0) {
+        return { pushedItems: 0, pushedRoutines: 0, recordedOps: [] };
     }
-    console.log(`[calendar] backfilling ${routines.length} unlinked calendar routines | userId=${userId}`);
-    let pushed = 0;
-    for (let i = 0; i < routines.length; i++) {
+    console.log(`[calendar] backfilling | userId=${userId} items=${items.length} routines=${routines.length}`);
+    const itemOutcomes = await pushPaced(items, (item) => pushItemToGCalWithContext(item, ctx, userId));
+    const routineOutcomes = await pushPaced(routines, (routine) => pushRoutineToGCalWithContext(routine, ctx, userId));
+    const all = [...itemOutcomes, ...routineOutcomes];
+    const pushedItems = itemOutcomes.filter((o) => o.status === 'created').length;
+    const pushedRoutines = routineOutcomes.filter((o) => o.status === 'created').length;
+    const recordedOps = all.flatMap((o) => (o.recordedOp ? [o.recordedOp] : []));
+    console.log(`[calendar] backfill complete | pushedItems=${pushedItems} pushedRoutines=${pushedRoutines}`);
+    return { pushedItems, pushedRoutines, recordedOps };
+}
+
+/** Sequentially pushes each entity through `push`, sleeping between calls to pace under GCal's rate limit. */
+async function pushPaced<T>(entities: T[], push: (entity: T) => Promise<PushOutcome>): Promise<PushOutcome[]> {
+    return entities.reduce<Promise<PushOutcome[]>>(async (prevP, entity, i) => {
+        const prev = await prevP;
         if (i > 0) {
             await sleep(BACKFILL_PACE_MS);
         }
-        const routine = routines[i];
-        if (!routine) continue;
-        const result = await pushRoutineToGCalWithContext(routine, ctx, userId);
-        if (result.status === 'created') {
-            pushed++;
-        }
-    }
-    console.log(`[calendar] backfill routines complete | pushed=${pushed} of=${routines.length}`);
-    return pushed;
+        const outcome = await push(entity);
+        return [...prev, outcome];
+    }, Promise.resolve([]));
 }
 
 /** Syncs a single calendar config: routine exceptions + event import. Returns the number of routines synced. */
