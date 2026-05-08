@@ -17,7 +17,7 @@ import {
 import { generateCalendarItemsToHorizon } from '../db/routineItemHelpers';
 import { createRoutine } from '../db/routineMutations';
 import { waitForPendingFlush } from '../db/syncHelpers';
-import type { MyDB, StoredRoutine } from '../types/MyDB';
+import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
 // Mock sync API calls so they don't attempt to reach the server during tests
@@ -257,6 +257,31 @@ describe('clarifyToDone', () => {
         const nextItems = allItems.filter((i) => i.status === 'nextAction');
         expect(nextItems).toHaveLength(0);
     });
+
+    // `done` is an archival status — it preserves whatever status-specific fields the item carried
+    // at completion (timeStart, energy, etc.) so historical queries (e.g. "items completed for
+    // date X" via timeStart) keep working. The server-side matrix mirrors this allowance for the
+    // `done` and `trash` statuses; new statuses like `nextAction` and `calendar` enforce field
+    // gating actively.
+    it('preserves prior status-specific fields when transitioning to done (audit trail)', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Calendar to done' });
+        const calItem: StoredItem = {
+            ...item,
+            status: 'calendar',
+            timeStart: '2026-05-09T10:00:00.000Z',
+            timeEnd: '2026-05-09T11:00:00.000Z',
+            calendarEventId: 'evt-1',
+            calendarIntegrationId: 'integ-1',
+        };
+        await db.clear('syncOperations');
+
+        const done = await clarifyToDone(db, calItem);
+
+        expect(done.status).toBe('done');
+        expect(done.timeStart).toBe('2026-05-09T10:00:00.000Z');
+        expect(done.timeEnd).toBe('2026-05-09T11:00:00.000Z');
+        expect(done.calendarEventId).toBe('evt-1');
+    });
 });
 
 describe('clarifyToTrash', () => {
@@ -289,6 +314,29 @@ describe('clarifyToTrash', () => {
         const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
         const nextItems = allItems.filter((i) => i.status === 'nextAction' && i.routineId === routine._id);
         expect(nextItems).toHaveLength(1);
+    });
+
+    // Mirror of the clarifyToDone audit-trail test — `trash` is also archival, so we keep the
+    // prior status-specific fields rather than shedding them. The disposal-marker tests below
+    // rely on this (timeStart on the trashed instance lets us reason about which date it covered).
+    it('preserves prior status-specific fields when trashing a calendar item (audit trail)', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Cancel meeting' });
+        const calItem: StoredItem = {
+            ...item,
+            status: 'calendar',
+            timeStart: '2026-05-09T10:00:00.000Z',
+            timeEnd: '2026-05-09T11:00:00.000Z',
+            calendarEventId: 'evt-1',
+            calendarIntegrationId: 'integ-1',
+        };
+        await db.clear('syncOperations');
+
+        const trashed = await clarifyToTrash(db, calItem);
+
+        expect(trashed.status).toBe('trash');
+        expect(trashed.timeStart).toBe('2026-05-09T10:00:00.000Z');
+        expect(trashed.timeEnd).toBe('2026-05-09T11:00:00.000Z');
+        expect(trashed.calendarEventId).toBe('evt-1');
     });
 });
 

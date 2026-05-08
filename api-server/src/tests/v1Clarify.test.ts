@@ -155,6 +155,94 @@ describe('PATCH /v1/items/:id', () => {
         const r3 = await patch(plaintext, id, { time: -1 });
         expect(((await r3.json()) as { code: string }).code).toBe('invalid_time');
     });
+
+    // ─── status × field matrix: incompatible-field rejection ────────────────────────
+    // Without these checks, callers could PATCH `{status:'somedayMaybe', expectedBy:...}`
+    // and the silent-drop sanitizer would discard the field while returning 200. The
+    // matrix-aware guard surfaces a 400 with `incompatible_field_for_status` instead.
+
+    it('rejects PATCH { status: "somedayMaybe", expectedBy } — expectedBy not allowed under somedayMaybe', async () => {
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const id = await createInboxItem(plaintext, 'ext-1');
+        const res = await patch(plaintext, id, { status: 'somedayMaybe', expectedBy: '2026-06-01' });
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as { code: string; error: string };
+        expect(body.code).toBe('incompatible_field_for_status');
+        expect(body.error).toContain('expectedBy');
+        // Item must not have been updated.
+        const stored = await itemsDAO.findByOwnerAndId(id, userId);
+        expect(stored?.status).toBe('inbox');
+    });
+
+    it('rejects PATCH { status: "nextAction", waitingForPersonId } — waitingForPersonId not allowed under nextAction', async () => {
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const id = await createInboxItem(plaintext, 'ext-1');
+        const res = await patch(plaintext, id, { status: 'nextAction', waitingForPersonId: 'p-1' });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('incompatible_field_for_status');
+    });
+
+    it('rejects PATCH { status: "waitingFor", energy } — energy not allowed under waitingFor', async () => {
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const id = await createInboxItem(plaintext, 'ext-1');
+        const res = await patch(plaintext, id, { status: 'waitingFor', energy: 'low' });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('incompatible_field_for_status');
+    });
+
+    it('accepts PATCH { status: "waitingFor", waitingForPersonId, expectedBy } — all allowed', async () => {
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const id = await createInboxItem(plaintext, 'ext-1');
+        const res = await patch(plaintext, id, { status: 'waitingFor', waitingForPersonId: 'p-1', expectedBy: '2026-06-01' });
+        expect(res.status).toBe(200);
+    });
+});
+
+// ─── POST /v1/items/:id/complete — sanitization ─────────────────────────────────
+//
+// `completeItem` flips status to `done` and the sanitizer strips any status-specific fields
+// that don't belong on a `done` item. The resulting snapshot must pass strict-mode validation
+// in the shared apply pipeline.
+
+describe('POST /v1/items/:id/complete — preserves historical fields', () => {
+    // `done` is archival per the matrix — it keeps the prior status's fields so retrospectives
+    // can see what the item looked like at completion. The sanitizer is a no-op for done; only
+    // the status flag and updatedTs change.
+    it('preserves prior status-specific fields when completing a populated nextAction item', async () => {
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const itemId = '22222222-2222-2222-2222-222222222222';
+        await itemsDAO.insertOne({
+            _id: itemId,
+            user: userId,
+            status: ItemStatus.nextAction,
+            title: 'do the thing',
+            energy: 'low',
+            time: 30,
+            workContextIds: ['ctx-1'],
+            urgent: true,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/v1/items/${itemId}/complete`, {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${plaintext}` },
+            }),
+        );
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(itemId, userId);
+        expect(stored?.status).toBe('done');
+        expect(stored?.energy).toBe('low');
+        expect(stored?.time).toBe(30);
+        expect(stored?.workContextIds).toEqual(['ctx-1']);
+        expect(stored?.urgent).toBe(true);
+    });
 });
 
 describe('Token scopes', () => {

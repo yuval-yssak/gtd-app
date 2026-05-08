@@ -1,7 +1,6 @@
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
-import type AbstractDAO from '../dataAccess/abstractDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
@@ -9,24 +8,14 @@ import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { applyAndPublishOperations, OperationValidationError, type RawOperation } from '../lib/applyOperation.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
-import { maybePushToGCal } from '../lib/calendarPushback.js';
 import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
-import { notifyViaWebPush, vapidPublicKey } from '../lib/webPush.js';
+import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import {
-    deviceSyncStateId,
-    type EntitySnapshot,
-    type EntityType,
-    type ItemInterface,
-    type OperationInterface,
-    type OpType,
-    type PersonInterface,
-    type RoutineInterface,
-    type WorkContextInterface,
-} from '../types/entities.js';
+import { deviceSyncStateId, type EntitySnapshot, type EntityType, type OpType } from '../types/entities.js';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
 // Snapshot uses `userId` (IndexedDB field name); the server remaps it to `user`.
@@ -36,75 +25,6 @@ interface ClientOp {
     opType: OpType;
     queuedAt: string;
     snapshot: (Record<string, unknown> & { userId?: string }) | null;
-}
-
-// Single generic helper replacing four near-identical applyXxxOp functions.
-// The DAO provides deleteByOwner / findByOwnerAndId / replaceById; the only
-// varying pieces are the DAO instance and the snapshot type.
-async function applyEntitySnapshotOp<T extends EntitySnapshot>(
-    dao: AbstractDAO<T>,
-    userId: string,
-    entityId: string,
-    opType: OpType,
-    snapshot: T | null,
-): Promise<void> {
-    if (opType === 'delete') {
-        // userId guard ensures a user can never delete another user's entity via a crafted op
-        await dao.deleteByOwner(entityId, userId);
-        return;
-    }
-    if (!snapshot) {
-        return;
-    }
-
-    // Two-step last-write-wins: fetch current then replace only if incoming is newer or equal.
-    // Simpler than a conditional upsert query; safe for the low-throughput GTD use case.
-    const existing = await dao.findByOwnerAndId(entityId, userId);
-    if (!existing || existing.updatedTs <= snapshot.updatedTs) {
-        await dao.replaceById(entityId, snapshot);
-    }
-}
-
-/**
- * Routine-delete ops ship with `snapshot: null`. To drive the GCal push-back cascade
- * (delete the master recurring event; trash generated calendar items) we need the
- * pre-delete routine state. Mutates each matching op in-place so the same snapshot
- * is both recorded in the ops collection and handed to `maybePushToGCal`.
- *
- * MUST complete before the `applyEntityOp` Promise.all below, which hard-deletes the routine
- * from the DB — otherwise the lookup would race against the deletion and return null.
- */
-async function hydrateRoutineDeleteSnapshots(userId: string, ops: OperationInterface[]): Promise<void> {
-    const targets = ops.filter((op) => op.entityType === 'routine' && op.opType === 'delete' && !op.snapshot);
-    if (!targets.length) {
-        return;
-    }
-    await Promise.all(
-        targets.map(async (op) => {
-            const routine = await routinesDAO.findByOwnerAndId(op.entityId, userId);
-            if (routine) {
-                op.snapshot = routine;
-                return;
-            }
-            // Concurrent delete from another device already removed the routine. The cascade
-            // has already run (or is running) on that other device; this op becomes a no-op.
-            console.warn(`[sync-push] routine ${op.entityId} already deleted — snapshot hydration skipped, cascade will no-op`);
-        }),
-    );
-}
-
-function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {
-    const { entityType, entityId, opType, snapshot } = op;
-    switch (entityType) {
-        case 'item':
-            return applyEntitySnapshotOp(itemsDAO, userId, entityId, opType, snapshot as ItemInterface | null);
-        case 'routine':
-            return applyEntitySnapshotOp(routinesDAO, userId, entityId, opType, snapshot as RoutineInterface | null);
-        case 'person':
-            return applyEntitySnapshotOp(peopleDAO, userId, entityId, opType, snapshot as PersonInterface | null);
-        case 'workContext':
-            return applyEntitySnapshotOp(workContextsDAO, userId, entityId, opType, snapshot as WorkContextInterface | null);
-    }
 }
 
 const STALE_DEVICE_DAYS = 90;
@@ -210,36 +130,35 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         const now = dayjs().toISOString();
 
-        const serverOps = ops.map<OperationInterface>((op) => {
-            // Strip client-side `userId` and inject server-authoritative `user` from session
+        // Strip client-side `userId` and let `applyAndPublishOperations` stamp the
+        // server-authoritative `user`. The misroute guard above already ensured no snapshot tags
+        // disagree with the active session; we still re-stamp inside the pipeline as a defense.
+        const rawOps: RawOperation[] = ops.map((op) => {
             const { userId: _stripped, ...snapshotFields } = op.snapshot ?? {};
             const snapshot = op.snapshot ? ({ ...snapshotFields, user: user.id } as EntitySnapshot) : null;
-            return {
-                _id: crypto.randomUUID(),
-                user: user.id,
-                deviceId,
-                ts: now,
-                entityType: op.entityType,
-                entityId: op.entityId,
-                opType: op.opType,
-                snapshot,
-            };
+            return { entityType: op.entityType, entityId: op.entityId, opType: op.opType, snapshot };
         });
 
-        // Routine deletes arrive with snapshot=null from the client. Capture the pre-delete
-        // routine doc so `maybePushToGCal` can see the `calendarEventId` that needs removing
-        // from Google Calendar and scope the generated-items cascade to this routine.
-        await hydrateRoutineDeleteSnapshots(user.id, serverOps);
+        // Strict-mode validation: a malformed op aborts the entire batch with a structured 400.
+        // No partial application — the client retries the whole batch after fixing the offender.
+        try {
+            await applyAndPublishOperations(user.id, rawOps, { deviceId, now, strict: true });
+        } catch (err) {
+            if (err instanceof OperationValidationError) {
+                return c.json(
+                    {
+                        error: err.failure.message,
+                        code: err.failure.code,
+                        ...(err.failure.path?.length ? { path: err.failure.path } : {}),
+                        ...(err.failure.extra ? { extra: err.failure.extra } : {}),
+                    },
+                    400,
+                );
+            }
+            throw err;
+        }
 
-        await Promise.all([operationsDAO.insertMany(serverOps), ...serverOps.map((op) => applyEntityOp(user.id, op))]);
-
-        console.log(`[sync-push] applied ops, triggering GCal push-back for calendar-relevant ops`);
-
-        // Push calendar-relevant changes back to Google Calendar (fire-and-forget).
-        // Runs after applyEntityOp so the DB state is consistent when the push-back reads it.
-        void Promise.all(serverOps.map((op) => maybePushToGCal(op, buildCalendarProvider))).catch((err) => {
-            console.error('[calendar-pushback] failed:', err);
-        });
+        console.log(`[sync-push] applied ops via shared pipeline`);
 
         // Per-(device, user) cursor — see DeviceSyncStateInterface. A single shared per-device row
         // would let user A's pull advance the cursor past user B's boundary op on the same device.
@@ -248,14 +167,6 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             { $set: { lastSeenTs: now, deviceId, user: user.id }, $setOnInsert: { lastSyncedTs: dayjs(0).toISOString() } },
             { upsert: true },
         );
-
-        // Include the originating deviceId so the pushing device can ignore its own echo.
-        notifyUserViaSse(user.id, { type: 'update', ts: now, sourceDeviceId: deviceId });
-
-        // Web Push for devices that aren't currently connected via SSE (app closed).
-        // Include per-op summaries so the SW can show a meaningful notification body
-        // (e.g. "Updated: Call dentist") instead of a generic message.
-        await notifyViaWebPush(user.id, deviceId, serverOps, now);
 
         return c.json({ ok: true }, 200);
     })

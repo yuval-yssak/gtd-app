@@ -28,7 +28,8 @@
         "mongodb": "latest",
         "rrule": "^2.8.1",
         "turndown": "^7.2.4",
-        "web-push": "^3.6.7"
+        "web-push": "^3.6.7",
+        "zod": "^4.4.3"
     },
     "devDependencies": {
         "@biomejs/biome": "2.4.8",

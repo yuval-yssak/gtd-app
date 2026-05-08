@@ -1,4 +1,4 @@
-import { type Page, expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 
@@ -69,7 +69,7 @@ async function openAccountMenu(page: Page): Promise<void> {
     await trigger.click();
 }
 
-test.describe('sign-out wipes the previous user\'s IDB rows', () => {
+test.describe("sign-out wipes the previous user's IDB rows", () => {
     test('items / routines / people / workContexts / syncCursor / syncOperations are gone after sign-out; deviceMeta survives', async ({ browser }) => {
         const email = `signout-wipe-${dayjs().valueOf()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -82,14 +82,20 @@ test.describe('sign-out wipes the previous user\'s IDB rows', () => {
                     collect(title: string): Promise<unknown>;
                     createPerson(fields: { name: string }): Promise<unknown>;
                     createWorkContext(name: string): Promise<unknown>;
-                    createRoutine(fields: { title: string; rrule: string; routineType: 'nextAction' | 'calendar'; template: object }): Promise<unknown>;
+                    createRoutine(fields: {
+                        title: string;
+                        rrule: string;
+                        routineType: 'nextAction' | 'calendar';
+                        template: object;
+                        active: boolean;
+                    }): Promise<unknown>;
                     flush(): Promise<void>;
                 };
                 const h = (window as unknown as { __gtd: Harness }).__gtd;
                 await h.collect('seed inbox');
                 await h.createPerson({ name: 'seed person' });
                 await h.createWorkContext('seed-ctx');
-                await h.createRoutine({ title: 'seed routine', rrule: 'FREQ=DAILY', routineType: 'nextAction', template: {} });
+                await h.createRoutine({ title: 'seed routine', rrule: 'FREQ=DAILY', routineType: 'nextAction', template: {}, active: true });
                 await h.flush();
             });
 

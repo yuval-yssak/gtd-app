@@ -6,13 +6,9 @@ import { authenticateBearer, type BearerVariables } from '../auth/bearerMiddlewa
 import { authenticatedRateLimit } from '../auth/rateLimitMiddleware.js';
 import { requireScope } from '../auth/scopeMiddleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
-import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
-import { maybePushToGCal } from '../lib/calendarPushback.js';
-import { recordOperation } from '../lib/operationHelpers.js';
-import { notifyUserViaSse } from '../lib/sseConnections.js';
-import { enqueueWebhookDeliveries } from '../lib/webhookDeliveryWorker.js';
-import { notifyViaWebPush } from '../lib/webPush.js';
-import { type ItemInterface, ItemStatus, type OperationInterface } from '../types/entities.js';
+import { applyAndPublishOperation } from '../lib/applyOperation.js';
+import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST, type StatusSpecificField } from '../schemas/operations/item.js';
+import { type ItemInterface, ItemStatus } from '../types/entities.js';
 
 // 24h content-dedupe window: covers retries / double-taps without collapsing genuine recurring
 // captures. Callers wanting strict idempotency should provide externalId instead.
@@ -78,48 +74,23 @@ async function findByExternalId(userId: string, externalId: string): Promise<Ite
     return itemsDAO.findOne({ user: userId, externalId });
 }
 
-/**
- * Fans out a server-originated change to live clients (SSE), closed clients (web push), and
- * Google Calendar (best-effort pushback). Shared by both the create and complete paths so the
- * notification logic stays in one place.
- */
-async function notifyChange(op: OperationInterface, tokenId: string): Promise<void> {
-    notifyUserViaSse(op.user, { type: 'update', ts: op.ts });
-    // excludeDeviceId is null because the public API has no real client device — every device for
-    // this user is a candidate for the push notification.
-    await notifyViaWebPush(op.user, null, [op], op.ts);
-    void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
-        console.error('[v1-items] gcal pushback failed', { tokenId, opType: op.opType, err });
-    });
-    // Webhook fan-out is the fourth leg. Best-effort: a Mongo blip enqueueing deliveries should
-    // not fail the originating /v1 request — the worker will retry on next tick if the row is in.
-    void enqueueWebhookDeliveries(op).catch((err) => {
-        console.error('[v1-items] webhook enqueue failed', { tokenId, opType: op.opType, err });
-    });
-}
-
 /** Mongo duplicate-key error code. Surfaces from inserts that violate the (user, externalId) unique index. */
 function isDuplicateKeyError(err: unknown): boolean {
     return err instanceof Error && 'code' in err && (err as { code: number }).code === 11000;
 }
 
 /**
- * Persists a new inbox item: writes the entity, records a server-originated `create` op, and
- * fans out the change. Returns the persisted item. The caller is responsible for handling
- * E11000 duplicate-key errors raised by the (user, externalId) sparse-unique index — see
- * `resolveCreateItem` for the race-loser recovery path.
+ * Persists a new inbox item via the shared apply pipeline: insert → log op → fan out (SSE, push,
+ * GCal pushback, webhook). The (user, externalId) sparse-unique index can still raise E11000
+ * under concurrent inserts — `resolveCreateItem` catches that and resolves to the race-winner.
  */
 async function persistNewInboxItem(item: ItemInterface, tokenId: string): Promise<ItemInterface> {
     await itemsDAO.insertOne(item);
-    const op = await recordOperation(item.user, {
-        entityType: 'item',
-        entityId: item._id ?? '',
-        snapshot: item,
-        opType: 'create',
-        now: item.updatedTs,
-        deviceId: `api:${tokenId}`,
-    });
-    await notifyChange(op, tokenId);
+    await applyAndPublishOperation(
+        item.user,
+        { entityType: 'item', opType: 'create', entityId: item._id ?? '', snapshot: item },
+        { deviceId: `api:${tokenId}`, now: item.updatedTs },
+    );
     return item;
 }
 
@@ -409,7 +380,7 @@ type CompleteResult =
     | { ok: true; item: ItemInterface; alreadyDone: boolean }
     | { ok: false; status: 404 | 409; code: 'not_found' | 'not_completable'; message: string };
 
-/** Marks an item done if allowed; idempotent for already-done items. Pure of fan-out — caller decides. */
+/** Marks an item done if allowed; idempotent for already-done items. */
 async function completeItem({ userId, tokenId, itemId }: CompleteContext): Promise<CompleteResult> {
     const existing = await itemsDAO.findByOwnerAndId(itemId, userId);
     if (!existing) {
@@ -421,18 +392,12 @@ async function completeItem({ userId, tokenId, itemId }: CompleteContext): Promi
     if (!COMPLETABLE_FROM.includes(existing.status)) {
         return { ok: false, status: 409, code: 'not_completable', message: `cannot complete item in status "${existing.status}"` };
     }
+    // `done` items strip status-specific fields (energy/timeStart/etc) so the snapshot conforms
+    // to the status→field matrix. The shared apply pipeline enforces this in strict-mode after
+    // the audit lands; doing it here keeps the existing tests green.
     const now = dayjs().toISOString();
-    const updated: ItemInterface = { ...existing, status: 'done', updatedTs: now };
-    await itemsDAO.replaceById(itemId, updated);
-    const op = await recordOperation(userId, {
-        entityType: 'item',
-        entityId: itemId,
-        snapshot: updated,
-        opType: 'update',
-        now,
-        deviceId: `api:${tokenId}`,
-    });
-    await notifyChange(op, tokenId);
+    const updated: ItemInterface = sanitizeForStatus({ ...existing, status: 'done', updatedTs: now });
+    await applyAndPublishOperation(userId, { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated }, { deviceId: `api:${tokenId}`, now });
     return { ok: true, item: updated, alreadyDone: false };
 }
 
@@ -588,37 +553,87 @@ interface PatchContext {
 type PatchResult = { ok: true; item: ItemInterface } | { ok: false; error: PatchError };
 
 /**
- * Applies the validated delta to an inbox item. Persists the change, records a server-originated
- * `update` op, and fans out via `notifyChange` (SSE / push / GCal pushback) just like the in-app
- * clarify flow.
+ * Applies the validated delta to an inbox item via the shared apply pipeline. Status transitions
+ * are restricted to inbox → {nextAction, waitingFor, somedayMaybe} — calendar transitions live on
+ * a future endpoint, and `done`/`trash` have their own dedicated flows.
+ *
+ * Status×field matrix is enforced *before* the merge so a caller can't smuggle in a field that
+ * isn't valid under the resulting status (e.g. PATCH `{status:'somedayMaybe', expectedBy:...}`).
+ * The matrix lives in `schemas/operations/item.ts` and is single-source-of-truth.
  */
 async function patchItem({ userId, tokenId, itemId, delta }: PatchContext): Promise<PatchResult> {
     const existing = await itemsDAO.findByOwnerAndId(itemId, userId);
     if (!existing) {
         return { ok: false, error: { status: 404, code: 'not_found', message: 'item not found' } };
     }
-    // Status transitions: only inbox → {nextAction, waitingFor, somedayMaybe}. If the caller is
-    // not transitioning status, the existing status must already be one of those (or inbox if
-    // they're only enriching metadata pre-clarify, which is also allowed).
     if (delta.status !== undefined && existing.status !== 'inbox') {
         return {
             ok: false,
             error: { status: 409, code: 'invalid_transition', message: `status transitions via PATCH are only allowed from "inbox"` },
         };
     }
+    const targetStatus = delta.status ?? existing.status;
+    const fieldViolation = findIncompatibleField(targetStatus, delta);
+    if (fieldViolation) {
+        return {
+            ok: false,
+            error: {
+                status: 400,
+                code: 'incompatible_field_for_status',
+                message: `field "${fieldViolation}" is not allowed when status is "${targetStatus}"`,
+            },
+        };
+    }
     const now = dayjs().toISOString();
-    const updated: ItemInterface = { ...existing, ...delta, updatedTs: now };
-    await itemsDAO.replaceById(itemId, updated);
-    const op = await recordOperation(userId, {
-        entityType: 'item',
-        entityId: itemId,
-        snapshot: updated,
-        opType: 'update',
-        now,
-        deviceId: `api:${tokenId}`,
-    });
-    await notifyChange(op, tokenId);
+    // sanitizeForStatus strips fields that the *existing* row carried but no longer fit the new
+    // status — a defensive net for transitions, not a place to silently drop caller-supplied data.
+    const updated: ItemInterface = sanitizeForStatus({ ...existing, ...delta, updatedTs: now });
+    await applyAndPublishOperation(userId, { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated }, { deviceId: `api:${tokenId}`, now });
     return { ok: true, item: updated };
+}
+
+/** Returns the first patch-supplied field that isn't allowed under the target status, or null. */
+function findIncompatibleField(targetStatus: ItemInterface['status'], delta: PatchedFields): StatusSpecificField | null {
+    const allowed = STATUS_FIELD_MATRIX[targetStatus];
+    // PatchedFields only carries a subset of the matrix; the remaining status-specific fields
+    // (timeStart/timeEnd/calendarEventId/calendarIntegrationId) cannot land via PATCH today and
+    // would fail the type check below if iterated here.
+    const patchableFields: ReadonlyArray<StatusSpecificField & keyof PatchedFields> = [
+        'workContextIds',
+        'peopleIds',
+        'waitingForPersonId',
+        'energy',
+        'time',
+        'focus',
+        'urgent',
+        'expectedBy',
+        'ignoreBefore',
+    ];
+    for (const field of patchableFields) {
+        if (delta[field] !== undefined && !allowed.has(field)) {
+            return field;
+        }
+    }
+    return null;
+}
+
+/**
+ * Strips status-specific fields that don't belong on the new status. Used by the public API's
+ * complete/patch paths so a status transition automatically clears stale per-status metadata,
+ * keeping the snapshot conformant.
+ *
+ * Derived from `STATUS_FIELD_MATRIX` in `schemas/operations/item.ts` so the matrix has exactly
+ * one source of truth — adding a status or status-specific field there propagates here.
+ */
+function sanitizeForStatus(item: ItemInterface): ItemInterface {
+    const out: ItemInterface = { ...item };
+    const allowed = STATUS_FIELD_MATRIX[item.status];
+    for (const field of STATUS_SPECIFIC_FIELD_LIST) {
+        if (!allowed.has(field)) {
+            delete (out as unknown as Record<string, unknown>)[field];
+        }
+    }
+    return out;
 }
 
 /**

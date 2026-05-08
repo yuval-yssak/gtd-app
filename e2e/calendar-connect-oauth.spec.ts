@@ -101,7 +101,10 @@ test.describe('calendar connect — OAuth mismatch error', () => {
             await page.goto(DEV_SIMULATE_MISMATCH_URL);
             await page.waitForURL(/calendarConnectError=mismatch/);
 
-            await page.getByRole('button', { name: 'Dismiss' }).click();
+            // exact: true — without it, Playwright's substring match treats the connect-button text
+            // "Connect Google Calendar for connect-mismatch-dism…" (email truncation) as also matching
+            // "Dismiss", causing strict-mode locator violation.
+            await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
             // The router's navigate(replace) drops the query param.
             await expect(page).toHaveURL(/\/settings($|\?(?!.*calendarConnectError))/);
         });
