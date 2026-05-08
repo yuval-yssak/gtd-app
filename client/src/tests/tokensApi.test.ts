@@ -39,8 +39,10 @@ describe('listTokens', () => {
         const result = await listTokens();
         expect(result).toEqual([{ id: 'a', label: 'one', createdTs: '2026-01-01T00:00:00.000Z' }]);
         expect(fetchCalls).toHaveLength(1);
-        expect(fetchCalls[0]!.url).toContain('/account/tokens');
-        expect(fetchCalls[0]!.init?.credentials).toBe('include');
+        const [call] = fetchCalls;
+        if (!call) throw new Error('expected one fetch call');
+        expect(call.url).toContain('/account/tokens');
+        expect(call.init?.credentials).toBe('include');
     });
 
     it('throws TokensApiError carrying the server status, message, and code on non-2xx', async () => {
@@ -70,7 +72,8 @@ describe('createToken', () => {
         const result = await createToken('iOS Shortcut');
         expect(result.plaintext).toBe('gtd_secret');
         expect(result.label).toBe('iOS Shortcut');
-        const call = fetchCalls[0]!;
+        const [call] = fetchCalls;
+        if (!call) throw new Error('expected one fetch call');
         expect(call.init?.method).toBe('POST');
         expect(call.init?.credentials).toBe('include');
         expect((call.init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
@@ -92,7 +95,9 @@ describe('createToken', () => {
         });
         const result = await createToken('capture-only', ['items.capture']);
         expect(result.scopes).toEqual(['items.capture']);
-        expect(JSON.parse(fetchCalls[0]!.init?.body as string)).toEqual({ label: 'capture-only', scopes: ['items.capture'] });
+        const [call] = fetchCalls;
+        if (!call) throw new Error('expected one fetch call');
+        expect(JSON.parse(call.init?.body as string)).toEqual({ label: 'capture-only', scopes: ['items.capture'] });
     });
 
     it('omits scopes from the request body when caller does not specify, so server uses its default', async () => {
@@ -109,7 +114,9 @@ describe('createToken', () => {
             );
         });
         await createToken('l');
-        expect(JSON.parse(fetchCalls[0]!.init?.body as string)).toEqual({ label: 'l' });
+        const [call] = fetchCalls;
+        if (!call) throw new Error('expected one fetch call');
+        expect(JSON.parse(call.init?.body as string)).toEqual({ label: 'l' });
     });
 
     it('preserves the token_cap_reached code so callers can branch on it', async () => {
@@ -128,9 +135,11 @@ describe('revokeToken', () => {
             return Promise.resolve(makeJsonResponse({ ok: true }));
         });
         await revokeToken('tok-42');
-        expect(fetchCalls[0]!.url).toContain('/account/tokens/tok-42');
-        expect(fetchCalls[0]!.init?.method).toBe('DELETE');
-        expect(fetchCalls[0]!.init?.credentials).toBe('include');
+        const [call] = fetchCalls;
+        if (!call) throw new Error('expected one fetch call');
+        expect(call.url).toContain('/account/tokens/tok-42');
+        expect(call.init?.method).toBe('DELETE');
+        expect(call.init?.credentials).toBe('include');
     });
 
     it('throws TokensApiError on 404 with the server-supplied code', async () => {

@@ -96,7 +96,8 @@ test.describe('webhooks', () => {
                         'Expected at least one webhook delivery within 15s. The dev server starts the worker by default; check api-server logs for "[webhooks] delivery worker started".',
                     ).toBeGreaterThan(0);
 
-                    const delivery = receiver.received[0]!;
+                    const [delivery] = receiver.received;
+                    if (!delivery) throw new Error('expected at least one webhook delivery');
                     expect(delivery.headers['x-gtd-event']).toBe('item.created');
                     expect(delivery.headers['x-gtd-signature']).toMatch(/^sha256=[0-9a-f]{64}$/);
                     expect(delivery.headers['x-gtd-delivery-id']).toBeTruthy();

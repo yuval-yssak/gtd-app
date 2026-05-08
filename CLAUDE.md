@@ -191,7 +191,20 @@ After any code change — bug fix, feature, or refactor — run the following cy
 3. `npm run test`
 4. Invoke the `api-code-reviewer` subagent (canonical source: `api-server/.claude/agents/code-reviewer.md`)
 
-A stop hook (`scripts/post-change-checks.sh`) runs steps 1–4 automatically after each Claude response and re-invokes Claude if any fail.
+**E2E changes (any file under `e2e/`):**
+1. `cd e2e && npm run lint:fix`
+2. `npx playwright test <changed specs>` — only specs that actually changed; full suite is too slow for the inner loop
+
+A stop hook (`scripts/post-change-checks.sh`) runs the client / api-server / e2e blocks **in parallel** after each Claude response. It exits 2 (blocking) on any failure so Claude is automatically re-invoked until everything is green.
+
+**Lint warnings count as failures.** Biome warnings printed by `lint:fix` (typically `noNonNullAssertion` and other "unsafe fix" categories) must be cleaned up in the same turn that surfaces them. Do not finish a turn while warnings remain, even if the script exits 0. The preferred fix for `arr[0]!` in tests is destructure-then-narrow:
+```ts
+expect(arr).toHaveLength(1);
+const [call] = arr;
+if (!call) throw new Error('expected one X');
+// use `call` directly — no `?.` chain, no `!`
+```
+`?.` masks "array unexpectedly empty" bugs in tests; the throw makes the failure mode explicit.
 
 **The code-reviewer subagents are mandatory and non-negotiable.** Never consider a task complete until the relevant reviewer has been invoked and returned "Approved". If it returns "Changes requested", fix all issues and repeat the full cycle from step 1.
 
