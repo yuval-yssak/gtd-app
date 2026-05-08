@@ -8,7 +8,7 @@ import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { tokensRoutes } from '../routes/tokens.js';
-import { v1ItemsRoutes } from '../routes/v1Items.js';
+import { v1ItemsRoutes } from '../routes/v1/items.js';
 import { ItemStatus } from '../types/entities.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 

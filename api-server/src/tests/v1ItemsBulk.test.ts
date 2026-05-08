@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { v1ItemsRoutes } from '../routes/v1Items.js';
+import { v1ItemsRoutes } from '../routes/v1/items.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/v1', v1ItemsRoutes);

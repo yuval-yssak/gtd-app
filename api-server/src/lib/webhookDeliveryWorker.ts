@@ -61,7 +61,7 @@ export function mapOpToEvents(op: OperationInterface): WebhookEvent[] {
 
 /**
  * Enqueues one webhookDeliveries row per matching active subscription. Caller fires this
- * from `notifyChange` (`v1Items.ts`) on every public-API mutation. No-ops when there are no
+ * from `notifyChange` (`routes/v1/items.ts`) on every public-API mutation. No-ops when there are no
  * matching subscriptions, which is the common case for users who haven't set webhooks up.
  *
  * `nowIso` defaults to the real wall clock; tests pin it so the queued `nextAttemptTs` and

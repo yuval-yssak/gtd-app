@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { v1ItemsRoutes } from '../routes/v1Items.js';
+import { v1ItemsRoutes } from '../routes/v1/items.js';
 import type { ItemInterface } from '../types/entities.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 

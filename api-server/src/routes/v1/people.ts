@@ -1,18 +1,16 @@
 import { Hono } from 'hono';
-import { authenticateBearer, type BearerVariables } from '../auth/bearerMiddleware.js';
-import { authenticatedRateLimit } from '../auth/rateLimitMiddleware.js';
-import { requireScope } from '../auth/scopeMiddleware.js';
-import peopleDAO from '../dataAccess/peopleDAO.js';
-import workContextsDAO from '../dataAccess/workContextsDAO.js';
-import type { PersonInterface, WorkContextInterface } from '../types/entities.js';
+import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddleware.js';
+import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
+import { requireScope } from '../../auth/scopeMiddleware.js';
+import peopleDAO from '../../dataAccess/peopleDAO.js';
+import { presentPerson } from './projections/person.js';
 
 /**
- * Read-only public-API surface for the catalogues an LLM caller needs in order to clarify
- * an inbox item: the user's people and work contexts. Required by the `clarify_inbox_item` MCP
- * tool path so the model can populate `peopleIds` / `workContextIds` from real ids rather than
- * guessing strings. Mounted at `/v1/people` and `/v1/work-contexts` from `index.ts`.
+ * Read-only public-API surface for the user's people catalogue. Required by the
+ * `clarify_inbox_item` MCP tool path so the model can populate `peopleIds` from real ids
+ * rather than guessing strings. Mounted at `/v1/people` from `routes/v1/index.ts`.
  *
- * Response shape mirrors the v1Items list shape: `{ items: [...] }`-style envelope, allowlist
+ * Response shape mirrors the items list shape: `{ items: [...] }`-style envelope, allowlist
  * projection (no `user` field), pagination via opaque cursor + `limit`. Reuses `items.read` scope.
  */
 
@@ -63,37 +61,6 @@ function encodeCursor(row: { updatedTs: string; _id: string }): string {
     return Buffer.from(JSON.stringify({ u: row.updatedTs, i: row._id })).toString('base64url');
 }
 
-interface PublicPersonView {
-    _id: string;
-    name: string;
-    email?: string;
-    phone?: string;
-    externalCalendarId?: string;
-    notes?: string;
-    createdTs: string;
-    updatedTs: string;
-}
-
-interface PublicWorkContextView {
-    _id: string;
-    name: string;
-    createdTs: string;
-    updatedTs: string;
-}
-
-function presentPerson(p: PersonInterface): PublicPersonView {
-    const view: PublicPersonView = { _id: p._id, name: p.name, createdTs: p.createdTs, updatedTs: p.updatedTs };
-    if (p.email !== undefined) view.email = p.email;
-    if (p.phone !== undefined) view.phone = p.phone;
-    if (p.externalCalendarId !== undefined) view.externalCalendarId = p.externalCalendarId;
-    if (p.notes !== undefined) view.notes = p.notes;
-    return view;
-}
-
-function presentWorkContext(wc: WorkContextInterface): PublicWorkContextView {
-    return { _id: wc._id, name: wc.name, createdTs: wc.createdTs, updatedTs: wc.updatedTs };
-}
-
 interface CursorFilter {
     user: string;
     updatedTs?: { $gt: string };
@@ -106,13 +73,13 @@ function buildFilter(userId: string, query: ListQuery): CursorFilter {
         filter.updatedTs = { $gt: query.since };
     }
     if (query.cursor) {
-        // Same compound (updatedTs DESC, _id DESC) cursor as v1Items.
+        // Same compound (updatedTs DESC, _id DESC) cursor as routes/v1/items.
         filter.$or = [{ updatedTs: { $lt: query.cursor.updatedTs } }, { updatedTs: query.cursor.updatedTs, _id: { $lt: query.cursor.id } }];
     }
     return filter;
 }
 
-export const v1ReferencesRoutes = new Hono<{ Variables: BearerVariables }>()
+export const v1PeopleRoutes = new Hono<{ Variables: BearerVariables }>()
     .use('*', authenticateBearer)
     .use('*', authenticatedRateLimit())
 
@@ -130,20 +97,4 @@ export const v1ReferencesRoutes = new Hono<{ Variables: BearerVariables }>()
         const last = page.at(-1);
         const nextCursor = hasMore && last ? encodeCursor(last) : undefined;
         return c.json({ people: page.map(presentPerson), ...(nextCursor ? { nextCursor } : {}) });
-    })
-
-    // ── GET /v1/work-contexts ───────────────────────────────────────────────
-    .get('/work-contexts', requireScope('items.read'), async (c) => {
-        const { userId } = c.var.apiAuth;
-        const parsed = parseListQuery(new URL(c.req.url));
-        if (!parsed.ok) {
-            return c.json({ error: parsed.error.message, code: parsed.error.code }, 400);
-        }
-        const filter = buildFilter(userId, parsed.value);
-        const rows = await workContextsDAO.findArray(filter as never, { sort: { updatedTs: -1, _id: -1 }, limit: parsed.value.limit + 1 });
-        const hasMore = rows.length > parsed.value.limit;
-        const page = hasMore ? rows.slice(0, parsed.value.limit) : rows;
-        const last = page.at(-1);
-        const nextCursor = hasMore && last ? encodeCursor(last) : undefined;
-        return c.json({ workContexts: page.map(presentWorkContext), ...(nextCursor ? { nextCursor } : {}) });
     });

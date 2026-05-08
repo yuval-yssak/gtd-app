@@ -51,7 +51,7 @@ src/
 │   └── constants.ts               # Cookie name constant
 ├── routes/
 │   ├── sync.ts                    # Sync endpoints (bootstrap, push, pull, SSE)
-│   ├── v1Items.ts                 # Public REST API (POST/GET items, GET :id, complete)
+│   ├── v1/                        # Public REST API — split per entity (items, people, work-contexts) + projections
 │   ├── push.ts                    # Web Push subscription management
 │   ├── calendar.ts                # Google Calendar OAuth + management
 │   └── devLogin.ts                # Dev-only login + token mint (non-production)

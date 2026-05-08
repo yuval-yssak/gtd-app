@@ -16,7 +16,7 @@ export interface NotifyChangeOptions {
 
 /**
  * Single fan-out for any persisted operation. Replaces the inline fan-out in `routes/sync.ts`
- * and the per-route `notifyChange` in `routes/v1Items.ts`. Fires:
+ * and the per-route `notifyChange` in `routes/v1/items.ts`. Fires:
  *
  *   1. SSE to the user's live tabs (with sourceDeviceId echo-suppression)
  *   2. Web push to the user's other devices (skips the originating device when provided)

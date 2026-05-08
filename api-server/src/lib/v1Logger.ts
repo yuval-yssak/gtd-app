@@ -49,7 +49,7 @@ function buildLogLine(c: Context, durationMs: number): V1LogLine {
     return line;
 }
 
-/** Mounted at the top of `v1ItemsRoutes` (and any other /v1/* router) so durations include all
+/** Mounted at the top of every /v1/* router so durations include all
  * downstream middleware (auth, rate-limit, scope check). */
 export function v1RequestLogger(): MiddlewareHandler {
     return async (c, next) => {

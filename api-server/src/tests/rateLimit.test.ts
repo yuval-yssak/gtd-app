@@ -21,7 +21,7 @@ import {
     WRITE_BUCKET,
 } from '../auth/rateLimitMiddleware.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { v1ItemsRoutes } from '../routes/v1Items.js';
+import { v1ItemsRoutes } from '../routes/v1/items.js';
 import { oauthLogin } from './helpers.js';
 
 // Backing store the test owns so each test starts from an empty state without resetting modules.

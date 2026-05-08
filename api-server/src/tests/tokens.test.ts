@@ -5,7 +5,7 @@ import { hashToken, issueApiToken } from '../auth/apiTokens.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { PROD_TOKEN_CAP_PER_USER, tokensRoutes } from '../routes/tokens.js';
-import { v1ItemsRoutes } from '../routes/v1Items.js';
+import { v1ItemsRoutes } from '../routes/v1/items.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono()

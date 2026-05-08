@@ -10,8 +10,7 @@ import { deviceRoutes } from './routes/devices.js';
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
 import { tokensRoutes } from './routes/tokens.js';
-import { v1ItemsRoutes } from './routes/v1Items.js';
-import { v1ReferencesRoutes } from './routes/v1References.js';
+import { v1Routes } from './routes/v1/index.js';
 import { webhookRoutes } from './routes/webhooks.js';
 
 function resolveCommitHash() {
@@ -46,8 +45,7 @@ const app = new Hono()
     // v1RequestLogger emits one structured JSON line per /v1/* request. Mounted before the
     // routers so it captures durations across auth, rate-limit, and the handler.
     .use('/v1/*', v1RequestLogger())
-    .route('/v1', v1ItemsRoutes)
-    .route('/v1', v1ReferencesRoutes)
+    .route('/v1', v1Routes)
     .route('/v1/webhooks', webhookRoutes)
     // /account/tokens lives outside /v1 because it is session-authed (cookie), not bearer-authed.
     // Bearer-only token mint would be a chicken-and-egg.

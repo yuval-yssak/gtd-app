@@ -60,7 +60,7 @@ A user identified by Better Auth and a user identified by a bearer token resolve
 
 Currently mounted:
 - `/sync` — offline-first batch sync (the first-party client's only mutation surface — see "Sync Architecture")
-- `/v1` — public REST API (`v1Items.ts`); bearer-auth, idempotent create + list/search + complete. Documented in `docs/PUBLIC_API.md`. Reuses `recordOperation` + SSE/web-push/GCal pushback so public-API writes flow through the same fan-out as `/sync`.
+- `/v1` — public REST API (`routes/v1/`); bearer-auth, idempotent create + list/search + complete. Documented in `docs/PUBLIC_API.md`. Reuses `recordOperation` + SSE/web-push/GCal pushback so public-API writes flow through the same fan-out as `/sync`.
 - `/push` — web push subscriptions
 - `/devices` — device-side session list (which accounts a device hosts)
 - `/calendar` — Google Calendar OAuth + management
@@ -109,4 +109,4 @@ Idempotency:
 - `externalId` omitted → best-effort: 24h content-hash lookup. No unique index (one would block legitimate recurring captures). Documented in `docs/PUBLIC_API.md`.
 
 Public response shape:
-- `presentItem` (`v1Items.ts`) is an **allowlist** projection — internal sync-anchor fields (`contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`) must never leak. When you add a new public field, extend `PUBLIC_FIELDS`; when you add a new internal field, do nothing — the allowlist hides it by default.
+- `presentItem` (`routes/v1/projections/item.ts`) is an **allowlist** projection — internal sync-anchor fields (`contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`) must never leak. When you add a new public field, extend `PUBLIC_FIELDS`; when you add a new internal field, do nothing — the allowlist hides it by default.

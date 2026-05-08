@@ -7,10 +7,14 @@ import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { v1ReferencesRoutes } from '../routes/v1References.js';
+import { v1PeopleRoutes } from '../routes/v1/people.js';
+import { v1WorkContextsRoutes } from '../routes/v1/workContexts.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 
-const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/v1', v1ReferencesRoutes);
+const app = new Hono()
+    .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
+    .route('/v1', v1PeopleRoutes)
+    .route('/v1', v1WorkContextsRoutes);
 
 beforeAll(async () => {
     await loadDataAccess('gtd_test');
