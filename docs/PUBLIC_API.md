@@ -70,11 +70,23 @@ Each token carries a `scopes` array — the capabilities it is permitted to exer
 |---|---|
 | `items.capture` | `POST /v1/items`, `POST /v1/items/bulk` |
 | `items.read` | `GET /v1/items`, `GET /v1/items/:id` |
-| `items.clarify` | `PATCH /v1/items/:id`, `POST /v1/items/:id/complete` |
+| `items.write` | `PATCH /v1/items/:id`, `POST /v1/items/:id/complete` |
+| `routines.read` | `GET /v1/routines`, `GET /v1/routines/:id` |
+| `routines.write` | `POST /v1/routines`, `PATCH /v1/routines/:id`, `DELETE /v1/routines/:id`, plus the composite gestures (`/pause`, `/resume`, `/split`) |
+| `people.read` | `GET /v1/people`, `GET /v1/people/:id` |
+| `people.write` | `POST /v1/people`, `PATCH /v1/people/:id`, `DELETE /v1/people/:id` |
+| `contexts.read` | `GET /v1/work-contexts`, `GET /v1/work-contexts/:id` |
+| `contexts.write` | `POST /v1/work-contexts`, `PATCH /v1/work-contexts/:id`, `DELETE /v1/work-contexts/:id` |
+| `reassign` | `POST /v1/reassign` (cross-account entity moves) |
+| `webhooks.manage` | `POST /v1/webhooks`, `GET /v1/webhooks`, `DELETE /v1/webhooks/:id` |
 
 Default scopes when omitted: `['items.capture', 'items.read']` (capture-and-list — the minimum useful set for an inbox-only Raycast/iOS Shortcut style integration).
 
+`POST /v1/operations/batch` requires the **union** of scopes for every op in the batch. Missing any returns `403` with `code: forbidden_scope` and the offending `requiredScope` named in the response — no partial writes.
+
 A request hitting an endpoint that the token's scopes do not cover returns `403` with `code: forbidden_scope`. Pre-scopes tokens (issued before this surface shipped) are backfilled to the default set on first authenticated use.
+
+**Legacy `items.clarify` scope:** before the public-API overhaul there was a single `items.clarify` scope covering both PATCH and complete. Tokens minted with that scope continue to work — the bearer middleware backfills `items.write` in-memory at auth time. New mints reject `items.clarify` with `400 invalid_scopes` and a hint pointing at `items.write`.
 
 ### Token lifecycle
 
@@ -91,7 +103,7 @@ If you lose a token, revoke it and create a new one. There is no recovery path.
 | Status | Reason |
 |---|---|
 | `401 Unauthorized` | Missing header, malformed token, unknown token, or token is revoked. |
-| `403 Forbidden` | Token is valid but the action is out of scope (reserved — currently all tokens have full v1 scope). |
+| `403 Forbidden` | Token is valid but the action is out of scope. The response includes `code: forbidden_scope` and the `requiredScope` that was missing. |
 | `429 Too Many Requests` | Per-token rate limit exceeded. The response carries a `Retry-After: <seconds>` header — back off and retry after that interval. |
 
 ### Rate limits
@@ -100,8 +112,8 @@ Each token has two independent buckets that refill continuously over a one-minut
 
 | Bucket | Endpoints | Capacity |
 |---|---|---|
-| Write | `POST /v1/items`, `POST /v1/items/:id/complete` | **60 / minute** |
-| Read | `GET /v1/items`, `GET /v1/items/:id` | **600 / minute** |
+| Write | All `POST` / `PATCH` / `DELETE` under `/v1/*` (items, routines, people, work-contexts, composite gestures, reassign, operations/batch) | **60 / minute** |
+| Read | All `GET` under `/v1/*` (items, routines, people, work-contexts) | **600 / minute** |
 
 A separate **30 / minute per-IP** bucket caps unauthenticated traffic so a flood of bad-credential calls cannot exhaust server resources before reaching the auth check.
 
@@ -128,14 +140,14 @@ The full item shape is `ItemInterface` in `api-server/src/types/entities.ts`. Th
 | Field | Type | Notes |
 |---|---|---|
 | `_id` | string (UUID) | Stable identifier. |
-| `status` | `inbox \| nextAction \| calendar \| waitingFor \| somedayMaybe \| done \| trash` | The public API only creates `inbox` items and only transitions to `done`. |
+| `status` | `inbox \| nextAction \| calendar \| waitingFor \| somedayMaybe \| done \| trash` | `POST /v1/items` always lands in `inbox`; transitions are driven by `PATCH /v1/items/:id` (any matrix-allowed transition except `trash`) and `POST /v1/items/:id/complete`. |
 | `title` | string | Required on create. |
 | `notes` | string? | Optional markdown. |
 | `createdTs` | string | Server-assigned on create. |
 | `updatedTs` | string | Server-assigned on every write. Conflict-resolution anchor. |
 | `externalId` | string? | Caller-provided dedupe key. Unique per `(user, externalId)`. |
 
-GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, calendar linkage, routine linkage) are **read-only** in v1. They surface on `GET` responses but cannot be set or modified through public-API writes. They are owned by the in-app clarify flow and the routine/calendar sync pipelines.
+GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `waitingForPersonId`, calendar linkage) are now **writable** through `PATCH /v1/items/:id` and `POST /v1/operations/batch` — subject to the status×field matrix (e.g. `expectedBy` is only valid on `nextAction` / `waitingFor` / `done` / `trash`; `timeStart`/`timeEnd` only on `calendar` / `done` / `trash`). Server-managed fields (`routineId`, `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `externalId`) remain off-limits — caller-supplied values are rejected with `400 forbidden_field`.
 
 ## Endpoints
 
@@ -275,42 +287,141 @@ The endpoint counts as a **single write** against the per-token rate limit.
 
 ---
 
-### `PATCH /v1/items/:id` — clarify with metadata
+### `PATCH /v1/items/:id` — full-surface update
 
-Transitions an `inbox` item to one of `nextAction`, `waitingFor`, or `somedayMaybe` and attaches GTD metadata. **Requires the `items.clarify` scope.**
+Updates any user-settable field on an existing item. **Requires the `items.write` scope.**
 
-Allowed fields in the request body (all optional except that at least one must be present):
+Allowed fields (all optional except at least one must be present): `title`, `notes`, `status`, `workContextIds`, `peopleIds`, `waitingForPersonId`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `calendarEventId`, `calendarIntegrationId`, `calendarSyncConfigId`.
 
-`status`, `workContextIds`, `peopleIds`, `waitingForPersonId`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `notes`.
+Status transitions are no longer restricted to `inbox` as the source — any matrix-allowed transition is accepted. Field combinations must satisfy the status×field matrix (e.g. `nextAction` + `timeStart` returns `400 status_field_violation`). The matrix is single-source-of-truth in `api-server/src/schemas/operations/item.ts`.
 
-Any other field returns `400` `forbidden_field`. The endpoint does not allow status transitions to `calendar` (calendar items have a separate creation path), `done` (use `POST /complete`), or `trash`.
+**Two exceptions to the broadened surface:**
+
+- `{status: 'trash'}` is rejected with `409 invalid_transition` — there is no `/v1` restore endpoint, so trashing via PATCH would create unrecoverable rows. Trash from the in-app UI instead.
+- Server-managed fields are rejected up front with `400 forbidden_field`: `_id`, `user`, `createdTs`, `updatedTs`, `routineId`, `contentHash`, `externalId`, and the four sync-anchor fields (`lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`).
+
+**Stale-field sanitization.** When a status transition makes an existing-row field invalid (e.g. moving a calendar item to `inbox` makes its `timeStart` no longer valid), the server strips the *existing* field automatically. Caller-supplied incompatible fields are NOT silently stripped — they surface as `status_field_violation` so client bugs are visible.
 
 **Errors**
 
 | Status | `code` | Meaning |
 |---|---|---|
-| `400` | `forbidden_field` | Body included a field outside the allowlist. |
-| `400` | `empty_body` | Body had no settable fields. |
-| `400` | `invalid_status` | Status is not one of: `nextAction`, `waitingFor`, `somedayMaybe`. |
-| `400` | `invalid_<field>` | Field had the wrong type (e.g. `energy` not in `low|medium|high`). |
-| `403` | `forbidden_scope` | Token lacks `items.clarify`. |
+| `400` | `invalid_body` | Request body is not a JSON object. |
+| `400` | `empty_body` | Body had no fields. |
+| `400` | `forbidden_field` | Body included a server-managed field. |
+| `400` | `invalid_operation` | Zod schema rejected a field type or shape. The response carries `path: [field]` to pinpoint the offender. |
+| `400` | `status_field_violation` | A caller-supplied field is incompatible with the target status under the matrix. The response carries `extra: { status, field }`. |
+| `403` | `forbidden_scope` | Token lacks `items.write`. |
 | `404` | `not_found` | Item doesn't exist for this user. |
-| `409` | `invalid_transition` | Item is not in `inbox` (status transitions via PATCH only originate from inbox). |
+| `409` | `invalid_transition` | Caller asked for `{status: 'trash'}`. |
 
 **Response** — `200 OK` with the updated item.
 
 ---
 
-### `GET /v1/people` and `GET /v1/work-contexts` — read-only catalogues
+### `/v1/people` and `/v1/work-contexts` — full CRUD
 
-Read-only access to the user's contacts and work-context tags, in support of clarify flows that need real ids rather than guessed strings. Same auth, pagination, and `since` semantics as `GET /v1/items`. Requires the `items.read` scope.
+Catalogues of the user's contacts and work-context tags. Pagination and `since` semantics mirror `GET /v1/items`. All endpoints scrub the internal `user` field from responses.
 
-| Endpoint | Response | Pagination |
+| Method | Path | Scope | Notes |
+|---|---|---|---|
+| `POST` | `/v1/people` | `people.write` | Body: `{ name, email?, phone?, externalCalendarId?, notes? }`. Returns 201. Server-managed fields (`_id`, `user`, `createdTs`, `updatedTs`) rejected with `forbidden_field`. |
+| `GET` | `/v1/people` | `people.read` | `?limit=` (default 100, max 500), `?cursor=`, `?since=ISODateTime`. |
+| `GET` | `/v1/people/:id` | `people.read` | 404 if missing or not yours. |
+| `PATCH` | `/v1/people/:id` | `people.write` | Same allowlist as POST. Empty body → `400 empty_body`. |
+| `DELETE` | `/v1/people/:id` | `people.write` | Idempotent: missing row returns 200 with `alreadyDeleted: true`. **Does not cascade** — references from items (`peopleIds`, `waitingForPersonId`) are left dangling and the client renders them as missing. |
+| `POST` | `/v1/work-contexts` | `contexts.write` | Body: `{ name }`. Otherwise mirrors `/v1/people`. |
+| `GET` | `/v1/work-contexts` | `contexts.read` | Same pagination shape. |
+| `GET` | `/v1/work-contexts/:id` | `contexts.read` | |
+| `PATCH` | `/v1/work-contexts/:id` | `contexts.write` | |
+| `DELETE` | `/v1/work-contexts/:id` | `contexts.write` | Idempotent. |
+
+---
+
+### `/v1/routines` — full CRUD plus composite gestures
+
+Routines are recurring task templates. They have a richer shape than items / people / workContexts (RRULE, template, exception list, calendar-link metadata) — the route layer leans on the operations schema (`RoutineSnapshotSchema` in `api-server/src/schemas/operations/routine.ts`) for field-level validation.
+
+| Method | Path | Scope | Notes |
+|---|---|---|---|
+| `POST` | `/v1/routines` | `routines.write` | Body shape: `{ title, routineType: 'nextAction' \| 'calendar', rrule, template: RoutineItemTemplate, active: boolean, ... }`. Returns 201. |
+| `GET` | `/v1/routines` | `routines.read` | Standard pagination. |
+| `GET` | `/v1/routines/:id` | `routines.read` | |
+| `PATCH` | `/v1/routines/:id` | `routines.write` | Writable fields: `title`, `routineType`, `rrule`, `template`, `active`, `startDate`, `calendarItemTemplate`, `calendarEventId`, `calendarIntegrationId`, `calendarSyncConfigId`. Server-managed fields (`splitFromRoutineId`, `lastGeneratedDate`, `routineExceptions`, `lastPushedToGCalTs`, `lastSyncedNotes`) and deprecated fields (`triggerMode`, `afterCompletionDelayDays`) are rejected with `forbidden_field`. |
+| `DELETE` | `/v1/routines/:id` | `routines.write` | Idempotent. The pre-delete snapshot is hydrated from DB and logged so other devices can apply the cascade locally. |
+| `POST` | `/v1/routines/:id/pause` | `routines.write` | Composite: trashes future open items + flips `active=false`. GCal cap-with-UNTIL fires downstream. |
+| `POST` | `/v1/routines/:id/resume` | `routines.write` | Composite: flips `active=true` and stamps `startDate=tomorrow` so the on-device generator starts a fresh series. |
+| `POST` | `/v1/routines/:id/split` | `routines.write` | Composite: caps the head with UNTIL, deletes future calendar items, creates a new tail routine. Body: `{ splitDate: 'YYYY-MM-DD', tailEdits?: { title?, rrule?, ... } }`. Returns 201 with `{ head, tail }`. |
+
+**Calendar-routine seeding limitation.** The server-side composite split caps the head and creates the tail routine, but does NOT materialize the tail's first calendar items — that lives client-side in `generateCalendarItemsToHorizon`. A pure-API consumer will see new items appear only after a connected client syncs. The GCal master event is still created via the existing `handleRoutinePush` pushback. This matches the in-app split gesture's contract.
+
+---
+
+### `POST /v1/reassign` — move an entity to another user
+
+Moves an item / routine / person / workContext from the calling token's user (`fromUserId`) to a different user. **Requires the `reassign` scope.**
+
+**Request body**
+
+```json
+{
+    "entityType": "item",
+    "entityId": "uuid-…",
+    "toUserId": "another-user-uuid",
+    "editPatch": { "title": "Optional rename ride-along" }
+}
+```
+
+| Field | Required | Notes |
 |---|---|---|
-| `GET /v1/people` | `{ people: PublicPerson[], nextCursor?: string }` | `?limit=` (default 100, max 500), `?cursor=`, `?since=ISODateTime` |
-| `GET /v1/work-contexts` | `{ workContexts: PublicWorkContext[], nextCursor?: string }` | same |
+| `entityType` | yes | `item`, `routine`, `person`, or `workContext`. |
+| `entityId` | yes | Target row, must belong to the calling user. |
+| `toUserId` | yes | Must differ from the calling user. |
+| `editPatch` | no | Whitelisted edits applied atomically (item path); see `ReassignItemEditPatch` in `api-server/src/lib/reassignEntity.ts`. |
+| `editRoutinePatch` | no | Routine equivalent. |
+| `targetCalendar` | when item is calendar-linked | `{ integrationId, syncConfigId }` for the destination GCal. |
 
-Both endpoints scrub the internal `user` field; the rest of the schema mirrors what's stored.
+**Errors**
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `400` | `invalid_entityType` / `invalid_entityId` / `invalid_toUserId` / `same_user` | Body validation. |
+| `403` | `forbidden_scope` | Token lacks `reassign`. |
+| `404` | `reassign_failed` | Entity not owned by the calling user, or routine-generated item (which cannot be reassigned). |
+| `502` | `reassign_failed` | GCal create-on-target failed; nothing was persisted. |
+
+**Security note.** Unlike `/sync/reassign` (which requires both userIds to have an active session on the calling device), `/v1/reassign` cannot validate that `toUserId` consents to receive the entity. The `reassign` scope is the only gate — mint these tokens carefully.
+
+**Pipeline carry-over.** The reassign path uses the legacy `recordOperation` shortcut rather than `applyAndPublishOperation`, so SSE / web push / webhook fan-out does NOT fire on a `/v1/reassign` write. Other devices learn about the move on their next pull cycle. (This matches the in-app `/sync/reassign` behaviour.) The recorded ops do carry `deviceId: api:<tokenId>` for audit attribution.
+
+---
+
+### `POST /v1/operations/batch` — heterogeneous batch writes
+
+Submit an array of primitive ops in one request. Use this when an integration needs to land several related changes atomically — e.g. create a workContext and several items that reference it.
+
+**Request body**
+
+```json
+{
+    "ops": [
+        { "entityType": "workContext", "opType": "create", "entityId": "uuid-1", "snapshot": { "_id": "uuid-1", "user": "...", "name": "near phone", "createdTs": "...", "updatedTs": "..." } },
+        { "entityType": "item",        "opType": "create", "entityId": "uuid-2", "snapshot": { "_id": "uuid-2", "user": "...", "status": "inbox", "title": "Call mom", "createdTs": "...", "updatedTs": "..." } }
+    ]
+}
+```
+
+Each op carries `entityType`, `opType` (`create` / `update` / `delete`), `entityId`, and a full `snapshot` (or `null` for delete). The server re-stamps `snapshot.user` to the calling token's user before persisting.
+
+**Atomicity guarantees**
+
+- **Scope:** the route computes the union of scopes the ops need (per `scopeForOp` in `api-server/src/routes/v1/operations.ts`) and rejects with `403 forbidden_scope` *before any write* if any are missing. The response includes `requiredScope` (the first missing) and `allRequiredScopes`.
+- **Validation:** every op is validated up-front (Zod + status×field matrix). If any fails, the batch rejects with `400` and the corresponding code (`invalid_operation` / `status_field_violation`) — no partial writes.
+- **NOT atomic against mid-flight Mongo failures.** Once validation passes, ops are persisted in parallel; a Mongo outage between two ops can leave the batch half-applied. This is the same caveat that has always existed on `/sync/push` (the same pipeline backs both surfaces).
+
+**Limits.** 500 ops per request (returns `400 too_many_ops` over). Batch counts as a single write against the per-token rate limit.
+
+**Response** — `200 OK` with `{ ok: true, count: <number-of-ops> }` on success, or one of the structured error shapes above.
 
 ---
 
@@ -405,7 +516,7 @@ There is no second write path, no risk of the sync log diverging from REST write
 
 ## Local MCP server
 
-A minimal Model Context Protocol server lives at `tools/mcp-gtd/` (planned). It exposes four tools that wrap the v1 API one-to-one:
+A minimal Model Context Protocol server lives at `tools/mcp-gtd/` (planned). It exposes a small set of tools that wrap the v1 API one-to-one:
 
 | MCP tool | Calls |
 |---|---|
@@ -456,16 +567,6 @@ The MCP scope is deliberately read + capture + complete. Clarify (inbox → next
 
 When clarify is added later, it should ship under a separate tool (`clarify_inbox_item`) and a separately-scoped token, so users can grant capture-only access without granting clarify.
 
-## Reserved surface (not implemented)
-
-These are noted so the URL space stays clean.
-
-| Path | Reserved for |
-|---|---|
-| `POST /v1/items/bulk` | Migration import — accepts `{ items: [...], chunkSize? }` with `externalId` upsert. |
-| `PATCH /v1/items/:id` | Clarify (inbox → nextAction with metadata). Will require a clarify-scoped token. |
-| `POST /v1/webhooks` | Outbound webhooks for "new inbox item" triggers. |
-| `GET /v1/people`, `GET /v1/work-contexts` | Read-only listing of related entities, needed by clarify. |
 
 ## Implementation notes (for the API server)
 
@@ -474,6 +575,6 @@ These are not part of the public contract, but help reviewers map the docs onto 
 - New router: `api-server/src/routes/v1Items.ts`, mounted in `index.ts` at `.route('/v1', v1Router)` where `v1Router` aggregates item routes (and any future v1 routes).
 - New DAO: `apiTokensDAO` for the `apiTokens` collection. Schema: `{ _id, user, tokenHash (sha256 hex), label, createdTs, lastUsedTs, revokedTs? }`. Unique index on `tokenHash`.
 - New middleware: `authenticateBearer` parses `Authorization: Bearer gtd_<…>`, hashes, looks up by `tokenHash`, rejects if `revokedTs` set. On success it sets `c.set('session', { user: { id: token.user } })` so handlers can be agnostic about the auth source.
-- Content-hash dedupe: `sha256(title + ' ' + (notes ?? ''))`, stored as `contentHash` on inbox items, queried with `{ user, status: 'inbox', contentHash, createdTs: { $gte: 24h ago } }`. Index on `(user, status, contentHash)`.
+- Content-hash dedupe: `sha256(title + '
 - `externalId`: stored as a top-level field on `ItemInterface`. Sparse unique index on `(user, externalId)`. Add to the type with a JSDoc comment noting it is set only via the public API.
 - Each public-API mutation builds an `OperationInterface` (`deviceId = "api:<tokenId>"`, server-generated `ts`, full snapshot) and calls `applyEntitySnapshotOp` plus `notifyUserViaSse` / `notifyViaWebPush` / `maybePushToGCal` exactly as `/sync/push` does. The handler does not duplicate that logic — it imports the helpers.
