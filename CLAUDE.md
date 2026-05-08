@@ -183,17 +183,23 @@ After any code change — bug fix, feature, or refactor — run the following cy
 2. `npm run lint:fix` — Biome format + lint (may auto-correct files; subsequent steps run on the corrected state)
 3. `npm run typecheck`
 4. `npm run test`
-5. Invoke the `code-reviewer` subagent (`client/.claude/agents/code-reviewer.md`)
+5. Invoke the `client-code-reviewer` subagent (canonical source: `client/.claude/agents/code-reviewer.md`)
 
 **API server changes:**
 1. `cd api-server && npm run lint:fix` — Biome format + lint
 2. `npm run typecheck`
 3. `npm run test`
-4. Invoke the `code-reviewer` subagent (`api-server/.claude/agents/code-reviewer.md`)
+4. Invoke the `api-code-reviewer` subagent (canonical source: `api-server/.claude/agents/code-reviewer.md`)
 
 A stop hook (`scripts/post-change-checks.sh`) runs steps 1–4 automatically after each Claude response and re-invokes Claude if any fail.
 
-**The code-reviewer subagent is mandatory and non-negotiable.** Never consider a task complete until it has been invoked and returned "Approved". If it returns "Changes requested", fix all issues and repeat the full cycle from step 1.
+**The code-reviewer subagents are mandatory and non-negotiable.** Never consider a task complete until the relevant reviewer has been invoked and returned "Approved". If it returns "Changes requested", fix all issues and repeat the full cycle from step 1.
+
+### Why two agents (and where they live)
+
+The two reviewers are kept separate because they encode different stack-specific knowledge (React 19/MUI/IDB vs. Hono/MongoDB/Better Auth). Each canonical definition lives next to the code it reviews (`client/.claude/agents/`, `api-server/.claude/agents/`).
+
+For sessions started at the monorepo root, both agents are also exposed via symlinks at `/Users/yuvalyssak/gtd/.claude/agents/` (`client-code-reviewer.md` → client, `api-code-reviewer.md` → api-server). Edit the canonical files in the subdirectories — the symlinks track them automatically. The frontmatter `name:` fields (`client-code-reviewer`, `api-code-reviewer`) match the filenames, so each file resolves to one and only one agent regardless of which directory the session was started from.
 
 ## Running Locally
 

@@ -24,7 +24,7 @@ if [ -n "$CLIENT_CHANGED" ]; then
     npm run typecheck || { echo "❌ typecheck failed"; FAILED=1; }
     npm run test || { echo "❌ test failed"; FAILED=1; }
 
-    [ $FAILED -eq 0 ] && echo "✅ Client checks passed — invoke the code-reviewer agent next"
+    [ $FAILED -eq 0 ] && echo "✅ Client checks passed — invoke the client-code-reviewer agent next"
 fi
 
 if [ -n "$API_CHANGED" ]; then
@@ -35,7 +35,7 @@ if [ -n "$API_CHANGED" ]; then
     npm run typecheck || { echo "❌ typecheck failed"; FAILED=1; }
     npm run test || { echo "❌ test failed"; FAILED=1; }
 
-    [ $FAILED -eq 0 ] && echo "✅ API server checks passed — invoke the code-reviewer agent next"
+    [ $FAILED -eq 0 ] && echo "✅ API server checks passed — invoke the api-code-reviewer agent next"
 fi
 
 exit $FAILED

@@ -1,5 +1,5 @@
 ---
-name: code-reviewer
+name: api-code-reviewer
 description: "Reviews code for correctness, edge cases, race conditions, coding standards, and test quality in the GTD api-server — a Hono/Node.js/TypeScript backend."
 tools: "Glob, Grep, Read, WebFetch, WebSearch, LSP, ToolSearch, Bash"
 model: opus

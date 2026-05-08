@@ -1,5 +1,5 @@
 ---
-name: code-reviewer
+name: client-code-reviewer
 description: "Reviews code for correctness, edge cases, race conditions, coding standards, and test quality in the GTD client — a React 19/MUI offline-first PWA."
 tools: Glob, Grep, Read, WebFetch, WebSearch, LSP, ToolSearch, Bash
 model: opus

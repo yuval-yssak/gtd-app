@@ -27,7 +27,7 @@ import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
-import { Link, useLocation, useNavigate } from '@tanstack/react-router';
+import { createLink, useLocation, useNavigate } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
 import type { FileRouteTypes } from '../routeTree.gen';
 import type { MyDB } from '../types/MyDB';
@@ -71,6 +71,18 @@ const settingsNavItem: NavItemConfig = { label: 'Settings', icon: <SettingsIcon 
 // Bottom nav shows only the 4 most-used daily-driver sections
 const bottomNavItems = primaryItems.slice(0, 4);
 
+// Render ListItemButton AS an <a>, then let createLink make it a TanStack Link.
+// Real <a href> means middle-click / cmd-click / "Open in new tab" all work; a single DOM element means one tab stop per row.
+// Prop surface is hand-narrowed to what NavListItem passes (selected, dense) plus anchor attrs — widen here if a new call site needs more.
+// MUI v9's `ListItemButtonProps<'a'>` doesn't compose cleanly with React 19's ref-as-prop, so we don't reuse it.
+type ListItemButtonAnchorProps = Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, 'color'> & {
+    selected?: boolean;
+    dense?: boolean;
+    ref?: React.Ref<HTMLAnchorElement>;
+};
+const ListItemButtonAnchor = ({ ref, ...props }: ListItemButtonAnchorProps) => <ListItemButton ref={ref} component="a" {...props} />;
+const NavListItemButton = createLink(ListItemButtonAnchor);
+
 interface NavListItemProps {
     item: NavItemConfig;
     isActive: boolean;
@@ -89,13 +101,11 @@ function NavListItem({ item, isActive, onItemClick }: NavListItemProps) {
 
     return (
         <ListItem disablePadding>
-            {/* Link wraps the button so the full row is a client-side navigation target */}
-            <Link to={item.to} className={styles.navLink}>
-                <ListItemButton selected={isActive} onClick={onItemClick} dense>
-                    <ListItemIcon className={styles.listItemIcon}>{iconNode}</ListItemIcon>
-                    <ListItemText primary={item.label} slotProps={{ primary: { variant: 'body2' } }} />
-                </ListItemButton>
-            </Link>
+            {/* createLink fuses ListItemButton + TanStack Link into one element so the row has a single tab stop instead of nested <a> + role=button div */}
+            <NavListItemButton to={item.to} selected={isActive} onClick={onItemClick} dense className={styles.navLink}>
+                <ListItemIcon className={styles.listItemIcon}>{iconNode}</ListItemIcon>
+                <ListItemText primary={item.label} slotProps={{ primary: { variant: 'body2' } }} />
+            </NavListItemButton>
         </ListItem>
     );
 }

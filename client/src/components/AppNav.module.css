@@ -56,9 +56,8 @@
     }
 }
 
+/* Neutralize default <a> underline + blue color now that ListItemButton renders as a TanStack Link */
 .navLink {
-    display: block;
-    width: 100%;
     text-decoration: none;
     color: inherit;
 }
