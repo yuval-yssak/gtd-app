@@ -89,22 +89,29 @@ describe('PATCH /v1/items/:id', () => {
         expect(body.urgent).toBe(true);
     });
 
-    it('rejects status: calendar (calendar items have a separate creation path)', async () => {
+    // Phase 3 broadened PATCH to a full-surface update: calendar/done/trash transitions are
+    // now allowed, validated by RoutineSnapshotSchema/ItemSnapshotSchema in strict mode. The
+    // "rejects status:calendar" and "rejects status:done" assertions from the clarify-only era
+    // are folded into the matrix-coverage tests below.
+    it('accepts status: calendar with timeStart + timeEnd (Phase 3 broadened surface)', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
         const id = await createInboxItem(plaintext, 'ext-1');
-        const res = await patch(plaintext, id, { status: 'calendar' });
-        expect(res.status).toBe(400);
-        expect(((await res.json()) as { code: string }).code).toBe('invalid_status');
+        const res = await patch(plaintext, id, { status: 'calendar', timeStart: '2099-04-01T10:00:00Z', timeEnd: '2099-04-01T11:00:00Z' });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(id, userId);
+        expect(stored?.status).toBe('calendar');
+        expect(stored?.timeStart).toBe('2099-04-01T10:00:00Z');
     });
 
-    it('rejects status: done (use POST /complete)', async () => {
+    it('accepts status: done via PATCH (the POST /complete shortcut is still available)', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'done' });
-        expect(res.status).toBe(400);
-        expect(((await res.json()) as { code: string }).code).toBe('invalid_status');
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(id, userId);
+        expect(stored?.status).toBe('done');
     });
 
     it('rejects forbidden fields (e.g., user, contentHash)', async () => {
@@ -132,10 +139,10 @@ describe('PATCH /v1/items/:id', () => {
         expect(res.status).toBe(404);
     });
 
-    it('blocks status transitions from non-inbox items with invalid_transition', async () => {
+    it('Phase 3 broadened: status transitions from non-inbox items now succeed (e.g. nextAction → waitingFor)', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
-        // Seed an item directly in nextAction status — patch attempt to transition it elsewhere should 409.
+        // Seed an item directly in nextAction status — patch attempt to transition it elsewhere now succeeds.
         const itemId = '11111111-1111-1111-1111-111111111111';
         await itemsDAO.insertOne({
             _id: itemId,
@@ -145,21 +152,27 @@ describe('PATCH /v1/items/:id', () => {
             createdTs: '2026-01-01T00:00:00.000Z',
             updatedTs: '2026-01-01T00:00:00.000Z',
         });
-        const res = await patch(plaintext, itemId, { status: 'waitingFor' });
-        expect(res.status).toBe(409);
-        expect(((await res.json()) as { code: string }).code).toBe('invalid_transition');
+        // Transition to waitingFor (must include waitingForPersonId, valid under the matrix).
+        const res = await patch(plaintext, itemId, { status: 'waitingFor', waitingForPersonId: 'p-1' });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(itemId, userId);
+        expect(stored?.status).toBe('waitingFor');
+        expect(stored?.waitingForPersonId).toBe('p-1');
     });
 
-    it('rejects field type errors (energy / focus / time)', async () => {
+    it('rejects field type errors via Zod (energy / focus / time) with invalid_operation', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
         const id = await createInboxItem(plaintext, 'ext-1');
-        const r1 = await patch(plaintext, id, { energy: 'med' });
-        expect(((await r1.json()) as { code: string }).code).toBe('invalid_energy');
-        const r2 = await patch(plaintext, id, { focus: 'deep' });
-        expect(((await r2.json()) as { code: string }).code).toBe('invalid_focus');
-        const r3 = await patch(plaintext, id, { time: -1 });
-        expect(((await r3.json()) as { code: string }).code).toBe('invalid_time');
+        // Phase 3 — Zod validates types, surfaces a single `invalid_operation` code with a path
+        // that pinpoints the offending field. The hand-rolled per-field codes are gone.
+        const r1 = await patch(plaintext, id, { energy: 'med', status: 'nextAction' });
+        const b1 = (await r1.json()) as { code: string; path?: string[] };
+        expect(b1.code).toBe('invalid_operation');
+        const r2 = await patch(plaintext, id, { focus: 'deep', status: 'nextAction' });
+        expect(((await r2.json()) as { code: string }).code).toBe('invalid_operation');
+        const r3 = await patch(plaintext, id, { time: -1, status: 'nextAction' });
+        expect(((await r3.json()) as { code: string }).code).toBe('invalid_operation');
     });
 
     // ─── status × field matrix: incompatible-field rejection ────────────────────────
@@ -167,36 +180,40 @@ describe('PATCH /v1/items/:id', () => {
     // and the silent-drop sanitizer would discard the field while returning 200. The
     // matrix-aware guard surfaces a 400 with `incompatible_field_for_status` instead.
 
-    it('rejects PATCH { status: "somedayMaybe", expectedBy } — expectedBy not allowed under somedayMaybe', async () => {
+    // Phase 3 — the Zod-backed matrix validation surfaces violations as
+    // `status_field_violation` (the canonical code from `validateOperation`), replacing the
+    // legacy hand-rolled `incompatible_field_for_status`. `extra: { status, field }` carries
+    // the offending cell so callers can branch on it.
+    it('rejects PATCH { status: "somedayMaybe", expectedBy } with status_field_violation', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'somedayMaybe', expectedBy: '2026-06-01' });
         expect(res.status).toBe(400);
         const body = (await res.json()) as { code: string; error: string };
-        expect(body.code).toBe('incompatible_field_for_status');
+        expect(body.code).toBe('status_field_violation');
         expect(body.error).toContain('expectedBy');
         // Item must not have been updated.
         const stored = await itemsDAO.findByOwnerAndId(id, userId);
         expect(stored?.status).toBe('inbox');
     });
 
-    it('rejects PATCH { status: "nextAction", waitingForPersonId } — waitingForPersonId not allowed under nextAction', async () => {
+    it('rejects PATCH { status: "nextAction", waitingForPersonId } with status_field_violation', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'nextAction', waitingForPersonId: 'p-1' });
         expect(res.status).toBe(400);
-        expect(((await res.json()) as { code: string }).code).toBe('incompatible_field_for_status');
+        expect(((await res.json()) as { code: string }).code).toBe('status_field_violation');
     });
 
-    it('rejects PATCH { status: "waitingFor", energy } — energy not allowed under waitingFor', async () => {
+    it('rejects PATCH { status: "waitingFor", energy } with status_field_violation', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'waitingFor', energy: 'low' });
         expect(res.status).toBe(400);
-        expect(((await res.json()) as { code: string }).code).toBe('incompatible_field_for_status');
+        expect(((await res.json()) as { code: string }).code).toBe('status_field_violation');
     });
 
     it('accepts PATCH { status: "waitingFor", waitingForPersonId, expectedBy } — all allowed', async () => {

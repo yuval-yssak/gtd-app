@@ -6,8 +6,8 @@ import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddl
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
-import { applyAndPublishOperation } from '../../lib/applyOperation.js';
-import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST, type StatusSpecificField } from '../../schemas/operations/item.js';
+import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
+import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
 import { type ItemInterface, ItemStatus } from '../../types/entities.js';
 import { presentItem } from './projections/item.js';
 
@@ -20,8 +20,10 @@ const CONTENT_DEDUPE_WINDOW_HOURS = 24;
 const MAX_BULK_ITEMS = 5_000;
 const DEFAULT_BULK_CHUNK_SIZE = 100;
 const MAX_BULK_CHUNK_SIZE = 500;
-// `done` is the only public-API transition. `trash` is intentionally not allowed: undeleting
-// requires the in-app UI and silently trashing items via the API would surprise users.
+// Statuses from which `POST /v1/items/:id/complete` is allowed to move an item to `done`.
+// `trash` is intentionally not in this list: trashing belongs in the in-app UI because there is
+// no /v1 restore endpoint to undo it. The same gate exists on `PATCH /v1/items/:id` —
+// `{status: 'trash'}` returns 409 invalid_transition.
 const COMPLETABLE_FROM: ReadonlyArray<ItemInterface['status']> = ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done'];
 
 const ITEM_STATUSES = new Set<ItemInterface['status']>(Object.values(ItemStatus));
@@ -402,231 +404,156 @@ async function completeItem({ userId, tokenId, itemId }: CompleteContext): Promi
     return { ok: true, item: updated, alreadyDone: false };
 }
 
-// ── PATCH /v1/items/:id (clarify) ───────────────────────────────────────────────────────────
+// ── PATCH /v1/items/:id (full-surface update) ──────────────────────────────────────────────
 //
-// Allows an `inbox` item to be clarified into `nextAction`, `waitingFor`, or `somedayMaybe`,
-// with metadata. Calendar transitions are intentionally excluded (calendar items have a
-// distinct creation path with their own scheduling fields), and `done`/`trash` are excluded
-// because they have explicit endpoints (or in the case of trash, are out of scope for the
-// public API today). Requires the `items.write` scope. Tokens minted before the Phase 2 scope
-// extension carry the legacy `items.clarify` scope; bearerMiddleware backfills it to `items.write`
-// in-memory so they continue to work without re-issuance.
+// Phase 3 broadened this from a clarify-only handler to a general update surface: any status
+// transition allowed by the matrix (inbox → nextAction/waitingFor/somedayMaybe/calendar/done/trash,
+// nextAction → calendar, calendar → done, etc.) and any user-settable field including `title`,
+// `timeStart`/`timeEnd` for calendar items, etc. The route layer just narrows the writable-key
+// set; the apply pipeline's `strict: true` mode enforces every type, the status×field matrix,
+// and `floatingDateTime` rules via `RoutineSnapshotSchema`/`ItemSnapshotSchema`.
+//
+// Requires the `items.write` scope. Tokens minted before the Phase 2 scope extension carry
+// the legacy `items.clarify` scope; `bearerMiddleware` backfills it to `items.write` in-memory.
 
-const PATCH_ALLOWED_STATUSES: ReadonlyArray<ItemInterface['status']> = ['nextAction', 'waitingFor', 'somedayMaybe'];
-const PATCH_ALLOWED_FIELDS = new Set([
+// User-settable fields. Server-managed (`_id`, `user`, `createdTs`, `updatedTs`, `routineId`,
+// `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `externalId`)
+// are intentionally excluded — the route layer rejects them as `forbidden_field` before Zod
+// would (the snapshot schema is `.strict()` so it would also reject, but a friendlier route-level
+// error helps integrations debug). `routineId` cannot be set via the public API — items born of
+// a routine are server-generated; reassigning by hand would silently desynchronize the routine's
+// generation cursor.
+const PATCH_WRITABLE_FIELDS = new Set<keyof ItemInterface>([
     'status',
+    'title',
+    'notes',
     'workContextIds',
     'peopleIds',
     'waitingForPersonId',
+    'expectedBy',
+    'ignoreBefore',
+    'timeStart',
+    'timeEnd',
+    'calendarEventId',
+    'calendarIntegrationId',
+    'calendarSyncConfigId',
     'energy',
     'time',
     'focus',
     'urgent',
-    'expectedBy',
-    'ignoreBefore',
-    'notes',
 ]);
 
-interface PatchBody {
-    status?: unknown;
-    workContextIds?: unknown;
-    peopleIds?: unknown;
-    waitingForPersonId?: unknown;
-    energy?: unknown;
-    time?: unknown;
-    focus?: unknown;
-    urgent?: unknown;
-    expectedBy?: unknown;
-    ignoreBefore?: unknown;
-    notes?: unknown;
-    /** Catch-all so we can detect forbidden_field. Bracket access forced by noPropertyAccessFromIndexSignature. */
-    [key: string]: unknown;
-}
-
-type PatchError = { status: 400 | 404 | 409; code: string; message: string };
-
-type PatchedFields = Partial<
-    Pick<
-        ItemInterface,
-        'status' | 'workContextIds' | 'peopleIds' | 'waitingForPersonId' | 'energy' | 'time' | 'focus' | 'urgent' | 'expectedBy' | 'ignoreBefore' | 'notes'
-    >
->;
-
-/** Pure validator — no DB access. Returns the typed-narrowed delta or a structured error. */
-function parsePatchBody(raw: PatchBody): { ok: true; value: PatchedFields } | { ok: false; error: PatchError } {
-    for (const key of Object.keys(raw)) {
-        if (!PATCH_ALLOWED_FIELDS.has(key)) {
-            return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${key}" cannot be set via the public API` } };
-        }
-    }
-    if (Object.keys(raw).length === 0) {
-        return { ok: false, error: { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' } };
-    }
-    const value: PatchedFields = {};
-    const status = raw.status;
-    if (status !== undefined) {
-        if (typeof status !== 'string' || !PATCH_ALLOWED_STATUSES.includes(status as ItemInterface['status'])) {
-            return {
-                ok: false,
-                error: { status: 400, code: 'invalid_status', message: `status must be one of: ${PATCH_ALLOWED_STATUSES.join(', ')}` },
-            };
-        }
-        value.status = status as ItemInterface['status'];
-    }
-    const workContextIds = raw.workContextIds;
-    if (workContextIds !== undefined) {
-        if (!Array.isArray(workContextIds) || !workContextIds.every((id) => typeof id === 'string')) {
-            return { ok: false, error: { status: 400, code: 'invalid_workContextIds', message: 'workContextIds must be an array of strings' } };
-        }
-        value.workContextIds = workContextIds as string[];
-    }
-    const peopleIds = raw.peopleIds;
-    if (peopleIds !== undefined) {
-        if (!Array.isArray(peopleIds) || !peopleIds.every((id) => typeof id === 'string')) {
-            return { ok: false, error: { status: 400, code: 'invalid_peopleIds', message: 'peopleIds must be an array of strings' } };
-        }
-        value.peopleIds = peopleIds as string[];
-    }
-    const waitingForPersonId = raw.waitingForPersonId;
-    if (waitingForPersonId !== undefined) {
-        if (typeof waitingForPersonId !== 'string' || waitingForPersonId.trim() === '') {
-            return { ok: false, error: { status: 400, code: 'invalid_waitingForPersonId', message: 'waitingForPersonId must be a non-empty string' } };
-        }
-        value.waitingForPersonId = waitingForPersonId;
-    }
-    const energy = raw.energy;
-    if (energy !== undefined) {
-        if (energy !== 'low' && energy !== 'medium' && energy !== 'high') {
-            return { ok: false, error: { status: 400, code: 'invalid_energy', message: 'energy must be one of: low, medium, high' } };
-        }
-        value.energy = energy;
-    }
-    const time = raw.time;
-    if (time !== undefined) {
-        if (typeof time !== 'number' || !Number.isFinite(time) || time < 0) {
-            return { ok: false, error: { status: 400, code: 'invalid_time', message: 'time must be a non-negative number' } };
-        }
-        value.time = time;
-    }
-    const focus = raw.focus;
-    if (focus !== undefined) {
-        if (typeof focus !== 'boolean') {
-            return { ok: false, error: { status: 400, code: 'invalid_focus', message: 'focus must be a boolean' } };
-        }
-        value.focus = focus;
-    }
-    const urgent = raw.urgent;
-    if (urgent !== undefined) {
-        if (typeof urgent !== 'boolean') {
-            return { ok: false, error: { status: 400, code: 'invalid_urgent', message: 'urgent must be a boolean' } };
-        }
-        value.urgent = urgent;
-    }
-    const expectedBy = raw.expectedBy;
-    if (expectedBy !== undefined) {
-        if (typeof expectedBy !== 'string') {
-            return { ok: false, error: { status: 400, code: 'invalid_expectedBy', message: 'expectedBy must be an ISO date string' } };
-        }
-        value.expectedBy = expectedBy;
-    }
-    const ignoreBefore = raw.ignoreBefore;
-    if (ignoreBefore !== undefined) {
-        if (typeof ignoreBefore !== 'string') {
-            return { ok: false, error: { status: 400, code: 'invalid_ignoreBefore', message: 'ignoreBefore must be an ISO date string' } };
-        }
-        value.ignoreBefore = ignoreBefore;
-    }
-    const notes = raw.notes;
-    if (notes !== undefined) {
-        if (typeof notes !== 'string') {
-            return { ok: false, error: { status: 400, code: 'invalid_notes', message: 'notes must be a string' } };
-        }
-        value.notes = notes;
-    }
-    return { ok: true, value };
-}
+type PatchError = { status: 400 | 404 | 409; code: string; message: string; path?: ReadonlyArray<string | number>; extra?: { status: string; field: string } };
 
 interface PatchContext {
     userId: string;
     tokenId: string;
     itemId: string;
-    delta: PatchedFields;
+    raw: Record<string, unknown>;
 }
 
 type PatchResult = { ok: true; item: ItemInterface } | { ok: false; error: PatchError };
 
 /**
- * Applies the validated delta to an inbox item via the shared apply pipeline. Status transitions
- * are restricted to inbox → {nextAction, waitingFor, somedayMaybe} — calendar transitions live on
- * a future endpoint, and `done`/`trash` have their own dedicated flows.
+ * Applies the patch to the existing item via the shared apply pipeline. The pipeline's strict-
+ * mode Zod validation is the single source of truth for which transitions and field combinations
+ * are valid — the route layer only filters out non-writable keys (e.g. caller-supplied `user`).
  *
- * Status×field matrix is enforced *before* the merge so a caller can't smuggle in a field that
- * isn't valid under the resulting status (e.g. PATCH `{status:'somedayMaybe', expectedBy:...}`).
- * The matrix lives in `schemas/operations/item.ts` and is single-source-of-truth.
+ * Status transitions are no longer restricted to inbox-only. The matrix in
+ * `schemas/operations/item.ts` enforces the destination status's field set; the apply pipeline
+ * stamps `user`/`updatedTs` and `applyEntityOp`'s LWW guard handles concurrent writes.
  */
-async function patchItem({ userId, tokenId, itemId, delta }: PatchContext): Promise<PatchResult> {
+async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promise<PatchResult> {
+    if (Object.keys(raw).length === 0) {
+        return { ok: false, error: { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' } };
+    }
+    for (const key of Object.keys(raw)) {
+        if (!PATCH_WRITABLE_FIELDS.has(key as keyof ItemInterface)) {
+            return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${key}" cannot be set via the public API` } };
+        }
+    }
+    // Trash transitions stay out of the public API on purpose. Once an item is trashed the only
+    // way back is the in-app UI (no /v1 restore endpoint exists today), so silently letting
+    // callers PATCH `{status: 'trash'}` would create unrecoverable rows for headless integrations.
+    // Mirrors the same intent that gates trash out of POST /v1/items/:id/complete.
+    if (raw['status'] === 'trash') {
+        return {
+            ok: false,
+            error: { status: 409, code: 'invalid_transition', message: 'PATCH cannot transition to status "trash" — undeleting requires the in-app UI' },
+        };
+    }
     const existing = await itemsDAO.findByOwnerAndId(itemId, userId);
     if (!existing) {
         return { ok: false, error: { status: 404, code: 'not_found', message: 'item not found' } };
     }
-    if (delta.status !== undefined && existing.status !== 'inbox') {
-        return {
-            ok: false,
-            error: { status: 409, code: 'invalid_transition', message: `status transitions via PATCH are only allowed from "inbox"` },
-        };
-    }
-    const targetStatus = delta.status ?? existing.status;
-    const fieldViolation = findIncompatibleField(targetStatus, delta);
-    if (fieldViolation) {
-        return {
-            ok: false,
-            error: {
-                status: 400,
-                code: 'incompatible_field_for_status',
-                message: `field "${fieldViolation}" is not allowed when status is "${targetStatus}"`,
-            },
-        };
-    }
     const now = dayjs().toISOString();
-    // sanitizeForStatus strips fields that the *existing* row carried but no longer fit the new
-    // status — a defensive net for transitions, not a place to silently drop caller-supplied data.
-    const updated: ItemInterface = sanitizeForStatus({ ...existing, ...delta, updatedTs: now });
-    await applyAndPublishOperation(userId, { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated }, { deviceId: `api:${tokenId}`, now });
+    // Merge raw onto existing, then sanitize fields that came *from existing* but no longer fit
+    // the target status. Fields the caller explicitly supplied stay in the snapshot — if they
+    // violate the matrix, Zod surfaces a `status_field_violation` 400 rather than silently
+    // dropping the caller's intent. (The old clarify-only handler silently sanitized everything,
+    // which masked client-side bugs.)
+    // The cast through `ItemInterface` is a type-level lie at the merge boundary — `raw` is
+    // structurally `Record<string, unknown>` after the writable-key filter. Safety relies on
+    // (a) `PATCH_WRITABLE_FIELDS` having filtered non-ItemInterface keys, and (b) the apply
+    // pipeline's strict-mode Zod check rejecting any remaining shape errors.
+    const merged = { ...existing, ...raw, updatedTs: now } as ItemInterface;
+    const updated = sanitizeStaleFields(merged, raw);
+    try {
+        await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated },
+            { deviceId: `api:${tokenId}`, now, strict: true },
+        );
+    } catch (err) {
+        if (err instanceof OperationValidationError) {
+            return {
+                ok: false,
+                error: {
+                    status: 400,
+                    code: err.failure.code,
+                    message: err.failure.message,
+                    ...(err.failure.path ? { path: err.failure.path } : {}),
+                    // Propagate `extra: { status, field }` for status_field_violation so callers
+                    // can programmatically branch on the offending matrix cell.
+                    ...(err.failure.code === 'status_field_violation' && err.failure.extra ? { extra: err.failure.extra } : {}),
+                },
+            };
+        }
+        throw err;
+    }
     return { ok: true, item: updated };
 }
 
-/** Returns the first patch-supplied field that isn't allowed under the target status, or null. */
-function findIncompatibleField(targetStatus: ItemInterface['status'], delta: PatchedFields): StatusSpecificField | null {
-    const allowed = STATUS_FIELD_MATRIX[targetStatus];
-    // PatchedFields only carries a subset of the matrix; the remaining status-specific fields
-    // (timeStart/timeEnd/calendarEventId/calendarIntegrationId) cannot land via PATCH today and
-    // would fail the type check below if iterated here.
-    const patchableFields: ReadonlyArray<StatusSpecificField & keyof PatchedFields> = [
-        'workContextIds',
-        'peopleIds',
-        'waitingForPersonId',
-        'energy',
-        'time',
-        'focus',
-        'urgent',
-        'expectedBy',
-        'ignoreBefore',
-    ];
-    for (const field of patchableFields) {
-        if (delta[field] !== undefined && !allowed.has(field)) {
-            return field;
+/**
+ * Strips status-specific fields that don't belong on the new status, BUT only when those
+ * fields came from the existing row (not the caller's patch). Caller-supplied incompatible
+ * fields stay in the snapshot so Zod can surface a `status_field_violation` 400 — silently
+ * dropping the caller's intent would mask client bugs (the regression that the old
+ * `findIncompatibleField` guarded against).
+ *
+ * `done` and `trash` are archival — they accept all status-specific fields per the matrix,
+ * so this is a no-op for transitions to those states (preserves audit-trail metadata like
+ * a completed routine instance's `timeStart`).
+ */
+function sanitizeStaleFields(merged: ItemInterface, callerRaw: Record<string, unknown>): ItemInterface {
+    const out: ItemInterface = { ...merged };
+    const allowed = STATUS_FIELD_MATRIX[merged.status];
+    for (const field of STATUS_SPECIFIC_FIELD_LIST) {
+        if (allowed.has(field)) {
+            continue;
+        }
+        // The field is not allowed under the target status. Strip it ONLY if it came from the
+        // existing row — leaving caller-supplied incompatible fields lets Zod 400 them.
+        if (callerRaw[field] === undefined) {
+            delete (out as unknown as Record<string, unknown>)[field];
         }
     }
-    return null;
+    return out;
 }
 
 /**
- * Strips status-specific fields that don't belong on the new status. Used by the public API's
- * complete/patch paths so a status transition automatically clears stale per-status metadata,
- * keeping the snapshot conformant.
- *
- * Derived from `STATUS_FIELD_MATRIX` in `schemas/operations/item.ts` so the matrix has exactly
- * one source of truth — adding a status or status-specific field there propagates here.
+ * Used by `completeItem` for the POST /complete shortcut. The caller explicitly asked for a
+ * complete, so all stale fields are dropped (no caller-supplied conflicts possible).
  */
 function sanitizeForStatus(item: ItemInterface): ItemInterface {
     const out: ItemInterface = { ...item };
@@ -714,21 +641,25 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
         return c.json(presentItem(item));
     })
 
-    // ── PATCH /v1/items/:id — clarify (inbox → nextAction / waitingFor / somedayMaybe) ─────
+    // ── PATCH /v1/items/:id — full-surface update ───────────────────────────
     .patch('/items/:id', requireScope('items.write'), async (c) => {
         const { userId, tokenId } = c.var.apiAuth;
         const id = c.req.param('id');
-        const raw = (await c.req.json().catch(() => null)) as PatchBody | null;
-        if (!raw || typeof raw !== 'object') {
+        const raw = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
             return c.json({ error: 'request body must be a JSON object', code: 'invalid_body' }, 400);
         }
-        const parsed = parsePatchBody(raw);
-        if (!parsed.ok) {
-            return c.json({ error: parsed.error.message, code: parsed.error.code }, parsed.error.status);
-        }
-        const result = await patchItem({ userId, tokenId, itemId: id, delta: parsed.value });
+        const result = await patchItem({ userId, tokenId, itemId: id, raw });
         if (!result.ok) {
-            return c.json({ error: result.error.message, code: result.error.code }, result.error.status);
+            return c.json(
+                {
+                    error: result.error.message,
+                    code: result.error.code,
+                    ...(result.error.path ? { path: result.error.path } : {}),
+                    ...(result.error.extra ? { extra: result.error.extra } : {}),
+                },
+                result.error.status,
+            );
         }
         return c.json(presentItem(result.item));
     })

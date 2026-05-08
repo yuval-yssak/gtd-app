@@ -10,7 +10,10 @@ export const ItemSnapshotSchema = z
         _id: nonEmptyString,
         user: nonEmptyString,
         status: itemStatusSchema,
-        title: z.string(),
+        // Title is required and non-empty: empty-title items break list rendering, search, and
+        // every audit script that assumes title is meaningful. Enforced at the schema layer so
+        // /sync/push, /v1 PATCH, and /v1/operations/batch all reject empty titles uniformly.
+        title: nonEmptyString,
         createdTs: isoDateTime,
         updatedTs: isoDateTime,
         notes: z.string().optional(),
