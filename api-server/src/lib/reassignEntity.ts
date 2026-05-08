@@ -71,6 +71,12 @@ export interface ReassignParams {
     editPatch?: ReassignItemEditPatch;
     /** Routine edits that ride along atomically. Ignored for non-routine entityTypes. */
     editRoutinePatch?: ReassignRoutineEditPatch;
+    /**
+     * Stamped on every recorded operation. Defaults to `'server'` for the in-app /sync/reassign
+     * path; the public `/v1/reassign` route passes `api:<tokenId>` so audits can see which token
+     * drove the move.
+     */
+    deviceId?: string;
 }
 
 export type ReassignProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
@@ -369,8 +375,22 @@ async function persistItemMove(item: ItemInterface, params: ReassignParams): Pro
     const newSnapshot: ItemInterface = { ...item, user: params.toUserId, updatedTs: now };
     await itemsDAO.deleteByOwner(params.entityId, params.fromUserId);
     await itemsDAO.replaceById(params.entityId, newSnapshot);
-    await recordOperation(params.fromUserId, { entityType: 'item', entityId: params.entityId, snapshot: null, opType: 'delete', now });
-    await recordOperation(params.toUserId, { entityType: 'item', entityId: params.entityId, snapshot: newSnapshot, opType: 'create', now });
+    await recordOperation(params.fromUserId, {
+        entityType: 'item',
+        entityId: params.entityId,
+        snapshot: null,
+        opType: 'delete',
+        now,
+        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
+    });
+    await recordOperation(params.toUserId, {
+        entityType: 'item',
+        entityId: params.entityId,
+        snapshot: newSnapshot,
+        opType: 'create',
+        now,
+        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
+    });
 }
 
 // ── Routine ──────────────────────────────────────────────────────────────────
@@ -407,8 +427,22 @@ async function persistRoutineMove(routine: RoutineInterface, params: ReassignPar
     const newSnapshot: RoutineInterface = { ...patched, user: params.toUserId, updatedTs: now };
     await routinesDAO.deleteByOwner(params.entityId, params.fromUserId);
     await routinesDAO.replaceById(params.entityId, newSnapshot);
-    await recordOperation(params.fromUserId, { entityType: 'routine', entityId: params.entityId, snapshot: null, opType: 'delete', now });
-    await recordOperation(params.toUserId, { entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot, opType: 'create', now });
+    await recordOperation(params.fromUserId, {
+        entityType: 'routine',
+        entityId: params.entityId,
+        snapshot: null,
+        opType: 'delete',
+        now,
+        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
+    });
+    await recordOperation(params.toUserId, {
+        entityType: 'routine',
+        entityId: params.entityId,
+        snapshot: newSnapshot,
+        opType: 'create',
+        now,
+        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
+    });
 }
 
 /**
@@ -505,6 +539,20 @@ async function persistSimpleEntityMove<T extends PersonInterface | WorkContextIn
     const newSnapshot: T = { ...entity, user: params.toUserId, updatedTs: now };
     await dao.deleteByOwner(params.entityId, params.fromUserId);
     await dao.replaceById(params.entityId, newSnapshot);
-    await recordOperation(params.fromUserId, { entityType, entityId: params.entityId, snapshot: null, opType: 'delete', now });
-    await recordOperation(params.toUserId, { entityType, entityId: params.entityId, snapshot: newSnapshot, opType: 'create', now });
+    await recordOperation(params.fromUserId, {
+        entityType,
+        entityId: params.entityId,
+        snapshot: null,
+        opType: 'delete',
+        now,
+        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
+    });
+    await recordOperation(params.toUserId, {
+        entityType,
+        entityId: params.entityId,
+        snapshot: newSnapshot,
+        opType: 'create',
+        now,
+        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
+    });
 }

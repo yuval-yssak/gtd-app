@@ -47,7 +47,10 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
                 /^\/v1\/items\/[^/]+\/complete$/.test(path) ||
                 path === '/v1/people' ||
                 path === '/v1/work-contexts' ||
-                path === '/v1/routines')) ||
+                path === '/v1/routines' ||
+                /^\/v1\/routines\/[^/]+\/(pause|resume|split)$/.test(path) ||
+                path === '/v1/reassign' ||
+                path === '/v1/operations/batch')) ||
         (method === 'PATCH' &&
             (/^\/v1\/items\/[^/]+$/.test(path) ||
                 /^\/v1\/people\/[^/]+$/.test(path) ||

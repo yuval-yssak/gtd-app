@@ -43,6 +43,35 @@ describe('classifyRequest', () => {
         expect(classifyRequest('GET', '/v1/items/abc-123')).toBe('read');
     });
 
+    // Phase 2 step 4-6: composite, reassign, and batch endpoints all bucket as `write`.
+    it('routes the Phase 2 composite/reassign/batch endpoints into write', () => {
+        expect(classifyRequest('POST', '/v1/routines/r-1/pause')).toBe('write');
+        expect(classifyRequest('POST', '/v1/routines/r-1/resume')).toBe('write');
+        expect(classifyRequest('POST', '/v1/routines/r-1/split')).toBe('write');
+        expect(classifyRequest('POST', '/v1/reassign')).toBe('write');
+        expect(classifyRequest('POST', '/v1/operations/batch')).toBe('write');
+    });
+
+    // Phase 2 step 3 CRUD paths land in the right buckets.
+    it('routes the Phase 2 entity CRUD endpoints into the correct buckets', () => {
+        expect(classifyRequest('POST', '/v1/people')).toBe('write');
+        expect(classifyRequest('PATCH', '/v1/people/p-1')).toBe('write');
+        expect(classifyRequest('DELETE', '/v1/people/p-1')).toBe('write');
+        expect(classifyRequest('GET', '/v1/people')).toBe('read');
+        expect(classifyRequest('GET', '/v1/people/p-1')).toBe('read');
+
+        expect(classifyRequest('POST', '/v1/work-contexts')).toBe('write');
+        expect(classifyRequest('PATCH', '/v1/work-contexts/wc-1')).toBe('write');
+        expect(classifyRequest('DELETE', '/v1/work-contexts/wc-1')).toBe('write');
+        expect(classifyRequest('GET', '/v1/work-contexts/wc-1')).toBe('read');
+
+        expect(classifyRequest('POST', '/v1/routines')).toBe('write');
+        expect(classifyRequest('PATCH', '/v1/routines/r-1')).toBe('write');
+        expect(classifyRequest('DELETE', '/v1/routines/r-1')).toBe('write');
+        expect(classifyRequest('GET', '/v1/routines')).toBe('read');
+        expect(classifyRequest('GET', '/v1/routines/r-1')).toBe('read');
+    });
+
     it('returns null for paths not under /v1/items', () => {
         expect(classifyRequest('GET', '/account/tokens')).toBeNull();
         expect(classifyRequest('POST', '/sync/push')).toBeNull();

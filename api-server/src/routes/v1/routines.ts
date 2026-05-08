@@ -1,11 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
+import customParseFormat from 'dayjs/plugin/customParseFormat.js';
 import { Hono } from 'hono';
+
+// Strict-format parsing for the splitDate validator below (a regex would accept "2099-13-45").
+dayjs.extend(customParseFormat);
+
 import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddleware.js';
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import routinesDAO from '../../dataAccess/routinesDAO.js';
 import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
+import { pauseRoutine, resumeRoutine, type SplitParams, splitRoutine } from '../../lib/routineComposites.js';
 import type { RoutineInterface } from '../../types/entities.js';
 import { presentRoutine } from './projections/routine.js';
 
@@ -276,4 +282,87 @@ export const v1RoutinesRoutes = new Hono<{ Variables: BearerVariables }>()
             { deviceId: `api:${tokenId}`, strict: true },
         );
         return c.json({ ok: true });
+    })
+
+    // ── POST /v1/routines/:id/pause ─────────────────────────────────────────
+    // Composite: trash future open items + flip active=false. GCal cap-with-UNTIL is fired
+    // downstream by `handleRoutinePush` when the routine update op lands.
+    .post('/routines/:id/pause', requireScope('routines.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const result = await pauseRoutine({ userId, tokenId }, id);
+        if (!result.ok) {
+            return c.json({ error: result.message, code: result.code }, result.status);
+        }
+        return c.json(presentRoutine(result.routine));
+    })
+
+    // ── POST /v1/routines/:id/resume ────────────────────────────────────────
+    // Composite: flip active=true and stamp startDate=tomorrow so the on-device generator
+    // starts a fresh series (mirrors the existing in-app resume gesture).
+    .post('/routines/:id/resume', requireScope('routines.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const result = await resumeRoutine({ userId, tokenId }, id);
+        if (!result.ok) {
+            return c.json({ error: result.message, code: result.code }, result.status);
+        }
+        return c.json(presentRoutine(result.routine));
+    })
+
+    // ── POST /v1/routines/:id/split ─────────────────────────────────────────
+    // Composite: cap the head with UNTIL, delete its future calendar items, create a new tail
+    // routine carrying the user's edits. Calendar tails seed their items client-side on next
+    // sync (the server-side generator does not exist) — see lib/routineComposites.ts.
+    .post('/routines/:id/split', requireScope('routines.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const raw = (await c.req.json().catch(() => null)) as SplitBody | null;
+        const parsed = parseSplitBody(raw);
+        if (!parsed.ok) {
+            return c.json({ error: parsed.error.message, code: parsed.error.code }, 400);
+        }
+        try {
+            const result = await splitRoutine({ userId, tokenId }, id, parsed.value);
+            if (!result.ok) {
+                return c.json({ error: result.message, code: result.code }, result.status);
+            }
+            return c.json({ head: presentRoutine(result.head), tail: presentRoutine(result.tail) }, 201);
+        } catch (err) {
+            if (err instanceof OperationValidationError) {
+                return c.json({ error: err.failure.message, code: err.failure.code, ...(err.failure.path ? { path: err.failure.path } : {}) }, 400);
+            }
+            throw err;
+        }
     });
+
+interface SplitBody {
+    splitDate?: unknown;
+    tailEdits?: unknown;
+}
+
+type SplitBodyError = { code: 'invalid_body' | 'invalid_split_date' | 'invalid_tail_edits'; message: string };
+
+function parseSplitBody(raw: SplitBody | null): { ok: true; value: SplitParams } | { ok: false; error: SplitBodyError } {
+    if (!raw || typeof raw !== 'object') {
+        return { ok: false, error: { code: 'invalid_body', message: 'request body must be a JSON object' } };
+    }
+    // Strict dayjs parse: rejects structurally-invalid YYYY-MM-DD strings like "2099-13-45" that
+    // a regex would let through. Without this, the downstream `dayjs.utc(...).toISOString()` in
+    // `buildTail` throws RangeError → 500.
+    if (typeof raw.splitDate !== 'string' || !dayjs(raw.splitDate, 'YYYY-MM-DD', true).isValid()) {
+        return { ok: false, error: { code: 'invalid_split_date', message: 'splitDate must be a valid ISO date YYYY-MM-DD' } };
+    }
+    const value: SplitParams = { splitDate: raw.splitDate };
+    if (raw.tailEdits !== undefined) {
+        if (raw.tailEdits === null || typeof raw.tailEdits !== 'object' || Array.isArray(raw.tailEdits)) {
+            return { ok: false, error: { code: 'invalid_tail_edits', message: 'tailEdits must be an object when provided' } };
+        }
+        // The structural fields ride through to `splitRoutine` and ultimately `applyAndPublishOperation`,
+        // where `RoutineSnapshotSchema` validates the merged shape. We accept the raw bag here.
+        // The cast through NonNullable strips the `| undefined` from `SplitParams['tailEdits']` so
+        // assignment satisfies `exactOptionalPropertyTypes` (we just narrowed it above).
+        value.tailEdits = raw.tailEdits as NonNullable<SplitParams['tailEdits']>;
+    }
+    return { ok: true, value };
+}
