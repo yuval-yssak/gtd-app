@@ -21,11 +21,12 @@ interface Plaintext {
 }
 
 async function mintTokenViaSession(request: APIRequestContext, label: string): Promise<Plaintext> {
-    // Mint with all three scopes by default — most tests in this spec exercise the full /v1 surface
-    // (POST + GET + PATCH + complete). Scope-restricted callers are tested in the dedicated PATCH
-    // spec further down (`mintTokenViaSession` callers there opt in to capture-only explicitly).
+    // Mint with the full read+write set by default — most tests in this spec exercise the entire
+    // /v1 surface (POST + GET + PATCH + complete). Scope-restricted callers are tested in the
+    // dedicated PATCH spec further down (`mintTokenViaSession` callers there opt in to capture-only
+    // explicitly).
     const res = await request.post(`${API_URL}/account/tokens`, {
-        data: { label, scopes: ['items.capture', 'items.read', 'items.clarify'] },
+        data: { label, scopes: ['items.capture', 'items.read', 'items.write'] },
     });
     expect(res.status()).toBe(200);
     const body = (await res.json()) as Plaintext;
@@ -203,16 +204,16 @@ test.describe('public /v1 API', () => {
             const session = page.context().request;
             // Mint two tokens with different scope sets.
             const captureOnly = await session.post(`${API_URL}/account/tokens`, { data: { label: 'capture', scopes: ['items.capture', 'items.read'] } });
-            const clarifyToken = await session.post(`${API_URL}/account/tokens`, {
-                data: { label: 'clarify', scopes: ['items.capture', 'items.read', 'items.clarify'] },
+            const writerToken = await session.post(`${API_URL}/account/tokens`, {
+                data: { label: 'writer', scopes: ['items.capture', 'items.read', 'items.write'] },
             });
             const { plaintext: capturePlaintext } = (await captureOnly.json()) as { plaintext: string };
-            const { plaintext: clarifyPlaintext } = (await clarifyToken.json()) as { plaintext: string };
+            const { plaintext: writerPlaintext } = (await writerToken.json()) as { plaintext: string };
 
             await withBearerOnlyContext(browser, async (apiContext) => {
-                // Create with the clarify token so we have an inbox item to patch.
+                // Create with the writer token so we have an inbox item to patch.
                 const created = await apiContext.request.post(`${API_URL}/v1/items`, {
-                    headers: { Authorization: `Bearer ${clarifyPlaintext}` },
+                    headers: { Authorization: `Bearer ${writerPlaintext}` },
                     data: { title: 'Patch me', externalId: 'patch-1' },
                 });
                 const { _id } = (await created.json()) as { _id: string };
@@ -225,9 +226,9 @@ test.describe('public /v1 API', () => {
                 expect(forbidden.status()).toBe(403);
                 expect(((await forbidden.json()) as { code: string }).code).toBe('forbidden_scope');
 
-                // Clarify token succeeds and the metadata round-trips.
+                // Writer token succeeds and the metadata round-trips.
                 const ok = await apiContext.request.patch(`${API_URL}/v1/items/${_id}`, {
-                    headers: { Authorization: `Bearer ${clarifyPlaintext}` },
+                    headers: { Authorization: `Bearer ${writerPlaintext}` },
                     data: { status: 'nextAction', energy: 'high', urgent: true },
                 });
                 expect(ok.status()).toBe(200);

@@ -408,7 +408,9 @@ async function completeItem({ userId, tokenId, itemId }: CompleteContext): Promi
 // with metadata. Calendar transitions are intentionally excluded (calendar items have a
 // distinct creation path with their own scheduling fields), and `done`/`trash` are excluded
 // because they have explicit endpoints (or in the case of trash, are out of scope for the
-// public API today). Requires the `items.clarify` scope.
+// public API today). Requires the `items.write` scope. Tokens minted before the Phase 2 scope
+// extension carry the legacy `items.clarify` scope; bearerMiddleware backfills it to `items.write`
+// in-memory so they continue to work without re-issuance.
 
 const PATCH_ALLOWED_STATUSES: ReadonlyArray<ItemInterface['status']> = ['nextAction', 'waitingFor', 'somedayMaybe'];
 const PATCH_ALLOWED_FIELDS = new Set([
@@ -713,7 +715,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
     })
 
     // ── PATCH /v1/items/:id — clarify (inbox → nextAction / waitingFor / somedayMaybe) ─────
-    .patch('/items/:id', requireScope('items.clarify'), async (c) => {
+    .patch('/items/:id', requireScope('items.write'), async (c) => {
         const { userId, tokenId } = c.var.apiAuth;
         const id = c.req.param('id');
         const raw = (await c.req.json().catch(() => null)) as PatchBody | null;
@@ -732,7 +734,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
     })
 
     // ── POST /v1/items/:id/complete ─────────────────────────────────────────
-    .post('/items/:id/complete', requireScope('items.clarify'), async (c) => {
+    .post('/items/:id/complete', requireScope('items.write'), async (c) => {
         const { userId, tokenId } = c.var.apiAuth;
         const id = c.req.param('id');
         const result = await completeItem({ userId, tokenId, itemId: id });

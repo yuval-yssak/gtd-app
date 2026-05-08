@@ -1,8 +1,39 @@
 import { API_SERVER } from '../constants/globals';
 
-export type ApiTokenScope = 'items.capture' | 'items.clarify' | 'items.read' | 'webhooks.manage';
+/**
+ * Capability scopes the API understands. `items.clarify` is the legacy form: tokens minted before
+ * the Phase 2 scope extension carry it, the server backfills `items.write` in-memory at auth time,
+ * and the mint endpoint rejects new tokens that ask for it. Kept in the type union so the settings
+ * UI can display it on legacy rows; `MINTABLE_API_TOKEN_SCOPES` is the set users can actually pick.
+ */
+export type ApiTokenScope =
+    | 'items.capture'
+    | 'items.read'
+    | 'items.write'
+    | 'items.clarify'
+    | 'routines.read'
+    | 'routines.write'
+    | 'people.read'
+    | 'people.write'
+    | 'contexts.read'
+    | 'contexts.write'
+    | 'reassign'
+    | 'webhooks.manage';
 
-export const ALL_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read', 'items.clarify', 'webhooks.manage'];
+/** Scopes the user can pick when minting a new token. Excludes the legacy `items.clarify`. */
+export const MINTABLE_API_TOKEN_SCOPES: ApiTokenScope[] = [
+    'items.capture',
+    'items.read',
+    'items.write',
+    'routines.read',
+    'routines.write',
+    'people.read',
+    'people.write',
+    'contexts.read',
+    'contexts.write',
+    'reassign',
+    'webhooks.manage',
+];
 export const DEFAULT_NEW_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];
 
 export interface PersonalApiToken {

@@ -2,7 +2,7 @@
  * Same harness as `calendarApi.test.ts` — global fetch replaced per-test, then restored.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createToken, listTokens, revokeToken, TokensApiError } from '../api/tokensApi';
+import { type ApiTokenScope, createToken, listTokens, MINTABLE_API_TOKEN_SCOPES, revokeToken, TokensApiError } from '../api/tokensApi';
 
 interface FetchCall {
     url: string;
@@ -125,6 +125,17 @@ describe('createToken', () => {
         expect(err).toBeInstanceOf(TokensApiError);
         expect((err as TokensApiError).code).toBe('token_cap_reached');
         expect((err as TokensApiError).status).toBe(429);
+    });
+});
+
+describe('MINTABLE_API_TOKEN_SCOPES', () => {
+    // Load-bearing invariant of the Phase 2 client surface: the legacy `items.clarify` scope is
+    // still in the type union (so chips on legacy stored tokens render correctly) but must never
+    // be advertised in the mint UI. A unit test pins this contract directly — the e2e flow asserts
+    // `items.write` is checkable, not that `items.clarify` is absent.
+    it('does not advertise the legacy items.clarify scope to the mint UI', () => {
+        expect(MINTABLE_API_TOKEN_SCOPES).not.toContain<ApiTokenScope>('items.clarify');
+        expect(MINTABLE_API_TOKEN_SCOPES.length).toBeGreaterThan(0);
     });
 });
 

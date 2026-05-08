@@ -4,7 +4,7 @@ import { issueApiToken } from '../auth/apiTokens.js';
 import { authenticateRequest } from '../auth/middleware.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import { type ApiTokenInterface, type ApiTokenScope, DEFAULT_API_TOKEN_SCOPES, VALID_API_TOKEN_SCOPES } from '../types/entities.js';
+import { type ApiTokenInterface, type ApiTokenScope, DEFAULT_API_TOKEN_SCOPES, MINTABLE_API_TOKEN_SCOPES } from '../types/entities.js';
 
 /**
  * Per-user cap on active (not revoked) tokens, enforced on POST.
@@ -68,13 +68,16 @@ function parseScopes(raw: CreateBody): { ok: true; scopes: ApiTokenScope[] } | {
     }
     const seen = new Set<ApiTokenScope>();
     for (const s of raw.scopes) {
-        if (typeof s !== 'string' || !VALID_API_TOKEN_SCOPES.has(s as ApiTokenScope)) {
+        if (typeof s !== 'string' || !MINTABLE_API_TOKEN_SCOPES.has(s as ApiTokenScope)) {
+            // `items.clarify` is the most common reason a caller lands here post-extension —
+            // surface a hint pointing at its replacement instead of the bare allowed-list dump.
+            const hint = s === 'items.clarify' ? ' Use `items.write` instead.' : '';
             return {
                 ok: false,
                 error: {
                     code: 'invalid_scopes',
                     status: 400,
-                    message: `unknown scope ${JSON.stringify(s)}; allowed: ${[...VALID_API_TOKEN_SCOPES].join(', ')}`,
+                    message: `unknown scope ${JSON.stringify(s)}; allowed: ${[...MINTABLE_API_TOKEN_SCOPES].join(', ')}.${hint}`,
                 },
             };
         }

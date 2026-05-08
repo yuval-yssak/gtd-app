@@ -1,4 +1,10 @@
-/** PATCH /v1/items/:id (clarify) + token scopes — issue #19 step 7. */
+/** PATCH /v1/items/:id (clarify) + token scopes — issue #19 step 7.
+ *
+ * Phase 2 (api-overhaul-v1) renamed the gating scope from `items.clarify` to `items.write`.
+ * The tests below intentionally still issue tokens with `items.clarify` — they exercise the
+ * in-memory backfill bridge in `bearerMiddleware.ts` for every clarify-related scenario, so
+ * removing it here would silently drop bridge coverage. Modernize only when the bridge itself
+ * is being removed (Phase 3+). New scope-coverage tests live in `itemsClarifyBackfill.test.ts`. */
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';

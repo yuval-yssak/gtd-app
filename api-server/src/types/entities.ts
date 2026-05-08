@@ -453,14 +453,48 @@ export interface WebhookDeliveryInterface {
  * Capability scopes granted to a personal API token. A token is permitted to perform any
  * action whose scope appears in its `scopes` array. Issuing tokens with the smallest possible
  * scope set is the right hygiene; e.g. a Raycast capture extension only needs `items.capture`.
+ *
+ * `items.clarify` is the **legacy** scope: it appears on tokens minted before the Phase 2 scope
+ * extension. Old tokens carrying it are auto-backfilled to `items.write` at auth time
+ * (`bearerMiddleware.ts`), and the type stays in the union so reads from Mongo still narrow
+ * cleanly. The mint allowlist (`MINTABLE_API_TOKEN_SCOPES`) excludes it so new tokens never
+ * receive it again.
  */
-export type ApiTokenScope = 'items.capture' | 'items.clarify' | 'items.read' | 'webhooks.manage';
+export type ApiTokenScope =
+    | 'items.capture'
+    | 'items.read'
+    | 'items.write'
+    | 'items.clarify'
+    | 'routines.read'
+    | 'routines.write'
+    | 'people.read'
+    | 'people.write'
+    | 'contexts.read'
+    | 'contexts.write'
+    | 'reassign'
+    | 'webhooks.manage';
 
 /** Default scopes minted onto a token when the caller did not specify any. */
 export const DEFAULT_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];
 
-/** Allowlist enforced by the mint endpoint. Anything outside this set is rejected with 400. */
-export const VALID_API_TOKEN_SCOPES: ReadonlySet<ApiTokenScope> = new Set(['items.capture', 'items.clarify', 'items.read', 'webhooks.manage']);
+/**
+ * Allowlist enforced by the token mint endpoint. `items.clarify` is intentionally excluded —
+ * callers asking for it get a 400 with a hint to use `items.write` instead. Stored tokens that
+ * already carry `items.clarify` keep working via the backfill in `bearerMiddleware.ts`.
+ */
+export const MINTABLE_API_TOKEN_SCOPES: ReadonlySet<ApiTokenScope> = new Set([
+    'items.capture',
+    'items.read',
+    'items.write',
+    'routines.read',
+    'routines.write',
+    'people.read',
+    'people.write',
+    'contexts.read',
+    'contexts.write',
+    'reassign',
+    'webhooks.manage',
+]);
 
 /**
  * Personal API token issued by the user from the app's settings page. Authenticates calls to

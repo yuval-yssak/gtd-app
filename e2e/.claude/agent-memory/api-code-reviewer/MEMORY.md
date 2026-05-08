@@ -1,0 +1,1 @@
+- [Legacy scope deprecation pattern](feedback_legacy_scope_deprecation_pattern.md) — Keep value in union + parse-allowlist; exclude from mint-allowlist; in-memory bridge in bearerMiddleware; never rewrite stored row.

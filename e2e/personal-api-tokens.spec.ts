@@ -23,8 +23,9 @@ test.describe('Personal API tokens (settings)', () => {
 
             await page.getByTestId('createTokenButton').click();
             await page.getByTestId('tokenLabelInput').locator('input').fill('Local MCP');
-            // Tick the clarify scope so the resulting row exposes three scope chips.
-            await page.getByTestId('scopeCheckbox-items.clarify').locator('input').check();
+            // Tick items.write so the resulting row exposes three scope chips. (items.capture +
+            // items.read are pre-checked from DEFAULT_NEW_TOKEN_SCOPES.)
+            await page.getByTestId('scopeCheckbox-items.write').locator('input').check();
             await page.getByTestId('confirmCreateTokenButton').click();
 
             // Reveal dialog shows the plaintext exactly once. The plaintext starts with `gtd_` per

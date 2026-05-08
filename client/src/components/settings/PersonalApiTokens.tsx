@@ -21,11 +21,11 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import {
-    ALL_API_TOKEN_SCOPES,
     type ApiTokenScope,
     createToken,
     DEFAULT_NEW_TOKEN_SCOPES,
     listTokens,
+    MINTABLE_API_TOKEN_SCOPES,
     type PersonalApiToken,
     revokeToken,
     TokensApiError,
@@ -37,7 +37,16 @@ dayjs.extend(relativeTime);
 const SCOPE_DESCRIPTIONS: Record<ApiTokenScope, string> = {
     'items.capture': 'Create inbox items',
     'items.read': 'List, search, and read items',
-    'items.clarify': 'Clarify and complete items',
+    'items.write': 'Clarify, update, and complete items',
+    // Legacy scope; not selectable on new tokens. Description used only for chips on existing rows.
+    'items.clarify': 'Clarify and complete items (legacy — use items.write)',
+    'routines.read': 'List and read routines',
+    'routines.write': 'Create, update, pause/resume, and split routines',
+    'people.read': 'List and read people',
+    'people.write': 'Create, update, and delete people',
+    'contexts.read': 'List and read work contexts',
+    'contexts.write': 'Create, update, and delete work contexts',
+    reassign: 'Reassign items / routines across accounts',
     'webhooks.manage': 'Register and manage webhook subscriptions',
 };
 
@@ -347,7 +356,7 @@ function CreateDialog({ state, onCancel, onSubmit, onDismissReveal, isCreating }
                         <Typography variant="body2" className={styles.scopesLabel}>
                             Capabilities
                         </Typography>
-                        {ALL_API_TOKEN_SCOPES.map((scope) => (
+                        {MINTABLE_API_TOKEN_SCOPES.map((scope) => (
                             <FormControlLabel
                                 key={scope}
                                 control={

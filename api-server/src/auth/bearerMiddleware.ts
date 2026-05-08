@@ -61,13 +61,20 @@ export const authenticateBearer: MiddlewareHandler<{ Variables: BearerVariables 
         return c.json({ error: 'Unauthorized', code: 'unauthorized' }, 401);
     }
 
-    const scopes = token.scopes ?? DEFAULT_API_TOKEN_SCOPES;
+    const storedScopes = token.scopes ?? DEFAULT_API_TOKEN_SCOPES;
     if (token.scopes === undefined) {
         // One-time write per legacy token; idempotent.
-        void apiTokensDAO.setScopes(token._id, scopes).catch((err) => {
+        void apiTokensDAO.setScopes(token._id, storedScopes).catch((err) => {
             console.error('[apiTokens] scopes backfill failed', { tokenId: token._id, err });
         });
     }
+    // Phase 2 legacy bridge: pre-extension tokens carry `items.clarify` for what is now
+    // `items.write`. We backfill in-memory only — leaving the stored row untouched keeps the
+    // mint endpoint's "no new items.clarify" rule simple and means revocation/auditing of legacy
+    // tokens still works against the original scope string.
+    // The `as const` narrows the literal back to `ApiTokenScope` inside the spread; without it
+    // TypeScript widens the literal to `string` and `c.set('apiAuth', …)` rejects the mixed array.
+    const scopes = storedScopes.includes('items.clarify') && !storedScopes.includes('items.write') ? [...storedScopes, 'items.write' as const] : storedScopes;
 
     c.set('apiAuth', { userId: token.user, tokenId: token._id, scopes });
 
