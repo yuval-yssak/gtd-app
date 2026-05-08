@@ -1,6 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { withOneLoggedInDevice } from './helpers/context';
+import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 
 // E2E coverage for the active-account-only Calendar Sync flow: clicking "Connect Google Calendar"
 // goes straight to /calendar/auth/google?login_hint=<active.email> with no picker dialog. Also
@@ -38,9 +38,22 @@ test.describe('calendar connect — active-account flow', () => {
             const connectBtn = page.getByRole('button', { name: new RegExp(`Connect Google Calendar for ${email}`) });
             await expect(connectBtn).toBeVisible({ timeout: 10_000 });
 
-            // The scope-notice banner names the active account and points to the account switcher.
-            await expect(page.getByText(/Managing calendars for/)).toBeVisible();
-            await expect(page.getByText(email, { exact: true })).toBeVisible();
+            // With a single signed-in account the scope-notice banner is suppressed — the account
+            // section above already names the email and there's nothing to switch to.
+            await expect(page.getByText(/Managing calendars for/)).toHaveCount(0);
+        });
+    });
+
+    test('scope-notice banner appears only when more than one account is signed in', async ({ browser }) => {
+        const stamp = dayjs().valueOf();
+        const emailA = `connect-banner-a-${stamp}@example.com`;
+        const emailB = `connect-banner-b-${stamp}@example.com`;
+        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page) => {
+            await page.goto(SETTINGS_URL);
+            // emailA is the active session by default (activeIndex=0) in withTwoAccountsOnOneDevice.
+            await expect(page.getByText(/Managing calendars for/)).toBeVisible({ timeout: 10_000 });
+            await expect(page.getByText(emailA, { exact: true }).first()).toBeVisible();
+            await expect(page.getByText(/switch to that account first/)).toBeVisible();
         });
     });
 

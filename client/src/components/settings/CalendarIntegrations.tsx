@@ -95,7 +95,7 @@ export function CalendarIntegrations() {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [chooseCalendarFor, setChooseCalendarFor] = useState<CalendarIntegration | null>(null);
-    const { account, syncAndRefresh } = useAppData();
+    const { account, loggedInAccounts, syncAndRefresh } = useAppData();
     const navigate = useNavigate();
     // calendarConnected and calendarConnectError are set by the OAuth callback redirect; the first
     // auto-opens the calendar picker, the second renders a mismatch error inline.
@@ -185,7 +185,7 @@ export function CalendarIntegrations() {
 
     return (
         <Box>
-            <ActiveAccountScopeNotice account={account} />
+            <ActiveAccountScopeNotice account={account} hasMultipleAccounts={loggedInAccounts.length > 1} />
             {calendarConnectError === 'mismatch' && <ConnectMismatchError onDismiss={dismissMismatchError} />}
             {integrations.length === 0 && (
                 <Typography
@@ -227,11 +227,12 @@ export function CalendarIntegrations() {
 
 /**
  * Banner above the integration list that names the active account and tells the user to switch
- * accounts (via the account switcher) if they want to manage a different one's calendars. This
- * was previously implicit — users could mistake the section for a global multi-account picker.
+ * accounts (via the account switcher) if they want to manage a different one's calendars. Only
+ * useful when more than one account is signed in on this device — with a single account the
+ * Account section above already shows the email and there's nothing to switch to.
  */
-function ActiveAccountScopeNotice({ account }: { account: StoredAccount | null }) {
-    if (!account) {
+function ActiveAccountScopeNotice({ account, hasMultipleAccounts }: { account: StoredAccount | null; hasMultipleAccounts: boolean }) {
+    if (!account || !hasMultipleAccounts) {
         return null;
     }
     return (
