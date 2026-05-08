@@ -1,4 +1,11 @@
 {
+    "permissions": {
+        "allow": [
+            "Bash(mongosh:*)",
+            "Bash(op read op://Private/Database - GTD staging/*)",
+            "Bash(op item get Database - GTD staging:*)"
+        ]
+    },
     "hooks": {
         "Stop": [
             {
