@@ -1,17 +1,22 @@
+import { randomUUID } from 'node:crypto';
+import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddleware.js';
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import workContextsDAO from '../../dataAccess/workContextsDAO.js';
+import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
+import type { WorkContextInterface } from '../../types/entities.js';
 import { presentWorkContext } from './projections/workContext.js';
 
 /**
- * Read-only public-API surface for the user's work-context catalogue. Required by the
- * `clarify_inbox_item` MCP tool path so the model can populate `workContextIds` from real ids
- * rather than guessing strings. Mounted at `/v1/work-contexts` from `routes/v1/index.ts`.
+ * Public-API CRUD for the user's work-context catalogue. Read endpoints (`items.read` carry-over
+ * preserved for back-compat plus the new `contexts.read`) feed the clarify-inbox-item flow; write
+ * endpoints (`contexts.write`) let integrations manage the catalogue programmatically.
  *
- * Response shape mirrors the items list shape: `{ items: [...] }`-style envelope, allowlist
- * projection (no `user` field), pagination via opaque cursor + `limit`. Reuses `items.read` scope.
+ * Every write goes through `applyAndPublishOperation` in strict mode so the same validation,
+ * operations log, SSE/web-push fan-out, and webhook delivery that `/sync/push` enjoys also covers
+ * the public surface — no contract drift.
  */
 
 const DEFAULT_LIMIT = 100;
@@ -79,12 +84,89 @@ function buildFilter(userId: string, query: ListQuery): CursorFilter {
     return filter;
 }
 
+// Same allowlist for POST and PATCH — `_id`, `user`, `createdTs`, `updatedTs` are server-managed
+// and rejected with `forbidden_field` rather than silently dropped.
+const ALLOWED_FIELDS = new Set(['name']);
+
+interface CreateBody {
+    name?: unknown;
+    [key: string]: unknown;
+}
+
+type CreateError = { status: 400; code: 'invalid_body' | 'invalid_name' | 'forbidden_field'; message: string };
+
+function assertAllowedKeys(raw: object): { ok: true } | { ok: false; offending: string } {
+    for (const key of Object.keys(raw)) {
+        if (!ALLOWED_FIELDS.has(key)) {
+            return { ok: false, offending: key };
+        }
+    }
+    return { ok: true };
+}
+
+/** Validates the create body. Pure. */
+function parseCreateBody(raw: CreateBody | null): { ok: true; name: string } | { ok: false; error: CreateError } {
+    if (!raw || typeof raw !== 'object') {
+        return { ok: false, error: { status: 400, code: 'invalid_body', message: 'request body must be a JSON object' } };
+    }
+    const allowed = assertAllowedKeys(raw);
+    if (!allowed.ok) {
+        return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${allowed.offending}" cannot be set via the public API` } };
+    }
+    if (typeof raw.name !== 'string' || raw.name.trim() === '') {
+        return { ok: false, error: { status: 400, code: 'invalid_name', message: 'name must be a non-empty string' } };
+    }
+    return { ok: true, name: raw.name.trim() };
+}
+
+interface PatchBody {
+    name?: unknown;
+    [key: string]: unknown;
+}
+
+type PatchError = { status: 400; code: 'invalid_body' | 'empty_body' | 'invalid_name' | 'forbidden_field'; message: string };
+
+function parsePatchBody(raw: PatchBody | null): { ok: true; name: string } | { ok: false; error: PatchError } {
+    if (!raw || typeof raw !== 'object') {
+        return { ok: false, error: { status: 400, code: 'invalid_body', message: 'request body must be a JSON object' } };
+    }
+    const allowed = assertAllowedKeys(raw);
+    if (!allowed.ok) {
+        return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${allowed.offending}" cannot be set via the public API` } };
+    }
+    if (raw.name === undefined) {
+        return { ok: false, error: { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' } };
+    }
+    if (typeof raw.name !== 'string' || raw.name.trim() === '') {
+        return { ok: false, error: { status: 400, code: 'invalid_name', message: 'name must be a non-empty string' } };
+    }
+    return { ok: true, name: raw.name.trim() };
+}
+
 export const v1WorkContextsRoutes = new Hono<{ Variables: BearerVariables }>()
     .use('*', authenticateBearer)
     .use('*', authenticatedRateLimit())
 
+    // ── POST /v1/work-contexts ──────────────────────────────────────────────
+    .post('/work-contexts', requireScope('contexts.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const raw = (await c.req.json().catch(() => null)) as CreateBody | null;
+        const parsed = parseCreateBody(raw);
+        if (!parsed.ok) {
+            return c.json({ error: parsed.error.message, code: parsed.error.code }, parsed.error.status);
+        }
+        const now = dayjs().toISOString();
+        const snapshot: WorkContextInterface = { _id: randomUUID(), user: userId, name: parsed.name, createdTs: now, updatedTs: now };
+        await applyAndPublishOperation(
+            userId,
+            { entityType: 'workContext', opType: 'create', entityId: snapshot._id, snapshot },
+            { deviceId: `api:${tokenId}`, now, strict: true },
+        );
+        return c.json(presentWorkContext(snapshot), 201);
+    })
+
     // ── GET /v1/work-contexts ───────────────────────────────────────────────
-    .get('/work-contexts', requireScope('items.read'), async (c) => {
+    .get('/work-contexts', requireScope('contexts.read'), async (c) => {
         const { userId } = c.var.apiAuth;
         const parsed = parseListQuery(new URL(c.req.url));
         if (!parsed.ok) {
@@ -97,4 +179,64 @@ export const v1WorkContextsRoutes = new Hono<{ Variables: BearerVariables }>()
         const last = page.at(-1);
         const nextCursor = hasMore && last ? encodeCursor(last) : undefined;
         return c.json({ workContexts: page.map(presentWorkContext), ...(nextCursor ? { nextCursor } : {}) });
+    })
+
+    // ── GET /v1/work-contexts/:id ───────────────────────────────────────────
+    .get('/work-contexts/:id', requireScope('contexts.read'), async (c) => {
+        const { userId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const wc = await workContextsDAO.findByOwnerAndId(id, userId);
+        if (!wc) {
+            return c.json({ error: 'work context not found', code: 'not_found' }, 404);
+        }
+        return c.json(presentWorkContext(wc));
+    })
+
+    // ── PATCH /v1/work-contexts/:id ─────────────────────────────────────────
+    .patch('/work-contexts/:id', requireScope('contexts.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const raw = (await c.req.json().catch(() => null)) as PatchBody | null;
+        const parsed = parsePatchBody(raw);
+        if (!parsed.ok) {
+            return c.json({ error: parsed.error.message, code: parsed.error.code }, parsed.error.status);
+        }
+        const existing = await workContextsDAO.findByOwnerAndId(id, userId);
+        if (!existing) {
+            return c.json({ error: 'work context not found', code: 'not_found' }, 404);
+        }
+        const now = dayjs().toISOString();
+        const snapshot: WorkContextInterface = { ...existing, name: parsed.name, updatedTs: now };
+        try {
+            await applyAndPublishOperation(
+                userId,
+                { entityType: 'workContext', opType: 'update', entityId: id, snapshot },
+                { deviceId: `api:${tokenId}`, now, strict: true },
+            );
+        } catch (err) {
+            if (err instanceof OperationValidationError) {
+                return c.json({ error: err.failure.message, code: err.failure.code, ...(err.failure.path ? { path: err.failure.path } : {}) }, 400);
+            }
+            throw err;
+        }
+        return c.json(presentWorkContext(snapshot));
+    })
+
+    // ── DELETE /v1/work-contexts/:id ────────────────────────────────────────
+    // Idempotent: deleting an already-missing row returns 200 with `alreadyDeleted: true`. This
+    // is a deliberate divergence from `DELETE /account/tokens/:id` (which returns 404) — for
+    // public-API integrations a delete-after-delete is normally a benign retry, not an error.
+    .delete('/work-contexts/:id', requireScope('contexts.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const existing = await workContextsDAO.findByOwnerAndId(id, userId);
+        if (!existing) {
+            return c.json({ ok: true, alreadyDeleted: true });
+        }
+        await applyAndPublishOperation(
+            userId,
+            { entityType: 'workContext', opType: 'delete', entityId: id, snapshot: null },
+            { deviceId: `api:${tokenId}`, strict: true },
+        );
+        return c.json({ ok: true });
     });

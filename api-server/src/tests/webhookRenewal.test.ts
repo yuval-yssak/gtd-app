@@ -105,9 +105,11 @@ describe('webhook renewal — invalid_grant escalation', () => {
 
         await renewAllExpiring();
         // The escalation side-effect runs fire-and-forget inside withAuthFailureHandling. The
-        // unawaited handleAuthFailure performs several Mongo round-trips (findById → markSuspended →
-        // findById → sendEmail). Poll until the row is suspended rather than racing on a fixed delay.
-        await waitFor(async () => (await calendarIntegrationsDAO.findById('int-1'))?.status === 'suspended');
+        // unawaited handleAuthFailure performs several Mongo round-trips serially:
+        // findById → markSuspended → findById → sendEmail. Wait for the LAST step (the email
+        // row) so the assertions below race-free; previously this polled only on `status` and
+        // flaked under load when the email insert was still pending.
+        await waitFor(async () => (await sentEmailsDAO.findArray({ userId: 'user-1' })).length >= 1);
 
         const integration = await calendarIntegrationsDAO.findById('int-1');
         expect(integration?.status).toBe('suspended');
@@ -160,7 +162,9 @@ describe('webhook renewal — invalid_grant escalation', () => {
         });
 
         await renewAllExpiring();
-        await waitFor(async () => (await calendarIntegrationsDAO.findById('int-B'))?.status === 'suspended');
+        // Same race as the first test: the markSuspended → sendEmail chain is fire-and-forget.
+        // Wait for the email insert (last step) so the assertions below are race-free.
+        await waitFor(async () => (await sentEmailsDAO.findArray({ userId: 'user-2' })).length >= 1);
 
         const intA = await calendarIntegrationsDAO.findById('int-A');
         const intB = await calendarIntegrationsDAO.findById('int-B');

@@ -42,7 +42,7 @@ async function userWithToken(provider: 'google' | 'github' = 'google', overrides
     const { sessionCookie } = await oauthLogin(app, provider, overrides);
     const sessionRes = await app.fetch(new Request('http://localhost:4000/auth/get-session', { headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` } }));
     const { user } = (await sessionRes.json()) as { user: { id: string } };
-    const { plaintext } = await issueApiToken(user.id, 'refs', ['items.read']);
+    const { plaintext } = await issueApiToken(user.id, 'refs', ['people.read', 'contexts.read']);
     return { userId: user.id, token: plaintext };
 }
 
@@ -125,7 +125,7 @@ describe('GET /v1/people', () => {
         expect(((await res.json()) as { code: string }).code).toBe('invalid_limit');
     });
 
-    it('returns 403 when token lacks items.read scope', async () => {
+    it('returns 403 when token lacks people.read scope', async () => {
         const { sessionCookie } = await oauthLogin(app, 'google');
         const sessionRes = await app.fetch(
             new Request('http://localhost:4000/auth/get-session', { headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` } }),

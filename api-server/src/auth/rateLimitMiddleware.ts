@@ -41,8 +41,19 @@ export const ANON_BUCKET: BucketConfig = { capacity: 30, refillPerSec: 30 / 60 }
  */
 export function classifyRequest(method: string, path: string): 'write' | 'read' | null {
     const isWrite =
-        (method === 'POST' && (path === '/v1/items' || path === '/v1/items/bulk' || /^\/v1\/items\/[^/]+\/complete$/.test(path))) ||
-        (method === 'PATCH' && /^\/v1\/items\/[^/]+$/.test(path));
+        (method === 'POST' &&
+            (path === '/v1/items' ||
+                path === '/v1/items/bulk' ||
+                /^\/v1\/items\/[^/]+\/complete$/.test(path) ||
+                path === '/v1/people' ||
+                path === '/v1/work-contexts' ||
+                path === '/v1/routines')) ||
+        (method === 'PATCH' &&
+            (/^\/v1\/items\/[^/]+$/.test(path) ||
+                /^\/v1\/people\/[^/]+$/.test(path) ||
+                /^\/v1\/work-contexts\/[^/]+$/.test(path) ||
+                /^\/v1\/routines\/[^/]+$/.test(path))) ||
+        (method === 'DELETE' && (/^\/v1\/people\/[^/]+$/.test(path) || /^\/v1\/work-contexts\/[^/]+$/.test(path) || /^\/v1\/routines\/[^/]+$/.test(path)));
     if (isWrite) return 'write';
     const isRead =
         method === 'GET' &&
@@ -51,7 +62,9 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
             path === '/v1/people' ||
             /^\/v1\/people\/[^/]+$/.test(path) ||
             path === '/v1/work-contexts' ||
-            /^\/v1\/work-contexts\/[^/]+$/.test(path));
+            /^\/v1\/work-contexts\/[^/]+$/.test(path) ||
+            path === '/v1/routines' ||
+            /^\/v1\/routines\/[^/]+$/.test(path));
     if (isRead) return 'read';
     return null;
 }
