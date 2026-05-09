@@ -14,15 +14,36 @@
 const NUMBERED_TOKEN_ENV_PATTERN = /^GTD_API_TOKEN_(.+)$/;
 const DEFAULT_ACCOUNT_LABEL = 'default';
 
+/**
+ * Coarse classification of `apiBase` so the model and operator can tell at a glance which
+ * environment a connected MCP server points at. Matches the URL table in the repo's CLAUDE.md.
+ * `'custom'` covers self-hosted, preview, or unrecognised hosts — the operator owns that case.
+ */
+export type GtdEnvironment = 'local' | 'staging' | 'production' | 'custom';
+
 export interface McpConfig {
     apiBase: string;
+    environment: GtdEnvironment;
     /** Map keyed by lowercase account label. `'default'` is reserved for `GTD_API_TOKEN`. */
     tokens: Map<string, string>;
 }
 
 export function loadConfig(): McpConfig {
     const apiBase = (process.env.GTD_API_BASE ?? 'http://localhost:4000').replace(/\/+$/, '');
-    return { apiBase, tokens: collectTokensFromEnv(process.env) };
+    return { apiBase, environment: classifyEnvironment(apiBase), tokens: collectTokensFromEnv(process.env) };
+}
+
+/**
+ * Maps a normalised `apiBase` URL to a coarse environment bucket. Exposed for tests and so
+ * downstream code (e.g. tools surfacing `environment` in responses) doesn't have to re-derive
+ * it. `loadConfig` strips trailing slashes before calling this — keep that contract in mind if
+ * you add a new bucket.
+ */
+export function classifyEnvironment(apiBase: string): GtdEnvironment {
+    if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(apiBase)) return 'local';
+    if (apiBase === 'https://api-staging.getting-things-done.app') return 'staging';
+    if (apiBase === 'https://api.getting-things-done.app') return 'production';
+    return 'custom';
 }
 
 /**

@@ -5,6 +5,7 @@ import { createApiClient } from './apiClient.js';
 import { loadConfig } from './config.js';
 import { registerBatchTools } from './tools/batch.js';
 import { registerItemTools } from './tools/items.js';
+import { registerMeTools } from './tools/me.js';
 import { registerPeopleTools } from './tools/people.js';
 import { registerReassignTools } from './tools/reassign.js';
 import { registerRoutineTools } from './tools/routines.js';
@@ -31,6 +32,7 @@ async function main(): Promise<void> {
     registerWorkContextTools(server, api);
     registerReassignTools(server, api);
     registerBatchTools(server, api);
+    registerMeTools(server, api);
 
     const transport = new StdioServerTransport();
     await server.connect(transport);

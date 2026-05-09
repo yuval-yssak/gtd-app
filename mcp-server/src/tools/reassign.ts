@@ -17,6 +17,7 @@ import { defineTool, idSchema, registerOne } from './types.js';
 interface MeResponse {
     userId: string;
     label: string;
+    email?: string;
 }
 
 const reassign = defineTool({

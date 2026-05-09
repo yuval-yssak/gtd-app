@@ -1,4 +1,4 @@
-import type { McpConfig } from './config.js';
+import type { GtdEnvironment, McpConfig } from './config.js';
 
 /**
  * Tiny fetch wrapper around the GTD /v1 surface. Adds the Authorization header for the
@@ -45,12 +45,21 @@ export interface RequestOptions {
 
 export interface ApiClient {
     request<T>(method: string, path: string, body?: unknown, query?: Record<string, string | number | undefined>, opts?: RequestOptions): Promise<T>;
+    /** Configured account labels in env-var insertion order — drives `gtd_list_accounts` iteration. */
+    listAccounts(): string[];
+    /** The classified environment derived from `apiBase` (echoed in `gtd_me` / `gtd_list_accounts` responses). */
+    environment(): GtdEnvironment;
+    /** The normalised `apiBase` URL — pairs with `environment()` so tool output is unambiguous. */
+    apiBase(): string;
 }
 
 const DEFAULT_ACCOUNT_LABEL = 'default';
 
 export function createApiClient(config: McpConfig): ApiClient {
     return {
+        listAccounts: () => [...config.tokens.keys()],
+        environment: () => config.environment,
+        apiBase: () => config.apiBase,
         async request(method, path, body, query, opts) {
             const account = opts?.account ?? DEFAULT_ACCOUNT_LABEL;
             const token = resolveToken(config, account);

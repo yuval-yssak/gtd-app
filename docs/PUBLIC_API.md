@@ -411,15 +411,15 @@ Content-Type: application/json
 
 ### `GET /v1/me` — caller identity
 
-Returns the userId behind the authenticated bearer token plus the token's human label. Any minted scope grants access — this exposes nothing beyond what `/v1/items` already implies about the caller.
+Returns the userId behind the authenticated bearer token, the token's human label, and the user's email. Any minted scope grants access — this exposes nothing beyond what `/v1/items` already implies about the caller.
 
 **Response**
 
 ```json
-{ "userId": "uuid-…", "label": "iOS Shortcut" }
+{ "userId": "uuid-…", "label": "iOS Shortcut", "email": "alice@example.com" }
 ```
 
-The primary consumer is the local MCP server, which uses this to translate an account-label slug → userId so the model never has to know raw Better Auth UUIDs (see "Multi-account workflows" below).
+`email` is `""` if the underlying user row has been deleted out from under a still-valid token (defensive — should not occur in practice). The primary consumer is the local MCP server, which uses this to translate an account-label slug → userId so the model never has to know raw Better Auth UUIDs (see "Multi-account workflows" below).
 
 | Status | Meaning |
 |---|---|

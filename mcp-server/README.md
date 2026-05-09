@@ -79,6 +79,24 @@ A single Claude session can drive multiple GTD accounts (e.g. personal + work) w
 - `GTD_API_TOKEN_<LABEL>` adds another account whose tools-side label is `<label>` (lowercased). `GTD_API_TOKEN_DEFAULT` is reserved.
 - The MCP rejects empty values; any unknown `account` argument surfaces as `GtdApiError(400, 'unknown_account')` with the configured-accounts list in the error body so the model can self-correct.
 
+### Knowing which accounts and environment are connected
+
+`gtd_list_accounts({})` enumerates every account configured in this MCP server (one row per `GTD_API_TOKEN` / `GTD_API_TOKEN_<LABEL>` env var) and echoes the server-wide environment. `gtd_me({ account })` answers the same question for a single account. Both responses include `environment` (`local` / `staging` / `production` / `custom`, derived from `GTD_API_BASE`) and `apiBase` so the model can disambiguate accounts when several `mcpServers` blocks (e.g. `gtd-local`, `gtd-staging`, `gtd-production`) are wired into the same Claude session.
+
+```jsonc
+// gtd_list_accounts({}) →
+{
+    "environment": "production",
+    "apiBase": "https://api.getting-things-done.app",
+    "accounts": [
+        { "account": "default", "userId": "uuid-…", "label": "personal",     "email": "alice@example.com"      },
+        { "account": "work",    "userId": "uuid-…", "label": "work-laptop",  "email": "alice@work.example.com" }
+    ]
+}
+```
+
+A revoked or otherwise broken token returns `{ account, error, code? }` for that row instead of failing the whole call, so a single dead token doesn't black out the rest.
+
 ### Worked example: move "Buy milk" from personal → work
 
 Mint two tokens in the GTD Settings UI on each account: a `reassign`-scoped token on personal (paste as `GTD_API_TOKEN`), and a `reassign.accept`-scoped token on work (paste as `GTD_API_TOKEN_WORK`). Then ask Claude:

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { collectTokensFromEnv, loadConfig } from '../config.js';
+import { classifyEnvironment, collectTokensFromEnv, loadConfig } from '../config.js';
 
 describe('loadConfig', () => {
     const origEnv = { ...process.env };
@@ -30,6 +30,49 @@ describe('loadConfig', () => {
         process.env.GTD_API_BASE = 'https://api.example.com//';
         process.env.GTD_API_TOKEN = 'gtd_t';
         expect(loadConfig().apiBase).toBe('https://api.example.com');
+    });
+
+    it('classifies the default localhost apiBase as the local environment', () => {
+        process.env.GTD_API_TOKEN = 'gtd_t';
+        expect(loadConfig().environment).toBe('local');
+    });
+
+    it('classifies the production URL as production and the staging URL as staging', () => {
+        process.env.GTD_API_TOKEN = 'gtd_t';
+        process.env.GTD_API_BASE = 'https://api.getting-things-done.app';
+        expect(loadConfig().environment).toBe('production');
+        process.env.GTD_API_BASE = 'https://api-staging.getting-things-done.app';
+        expect(loadConfig().environment).toBe('staging');
+    });
+
+    it('classifies an unrecognised host as custom', () => {
+        process.env.GTD_API_TOKEN = 'gtd_t';
+        process.env.GTD_API_BASE = 'https://api.example.com';
+        expect(loadConfig().environment).toBe('custom');
+    });
+});
+
+describe('classifyEnvironment', () => {
+    it('treats localhost variants (with/without port, http/https, 127.0.0.1) as local', () => {
+        expect(classifyEnvironment('http://localhost:4000')).toBe('local');
+        expect(classifyEnvironment('http://localhost')).toBe('local');
+        expect(classifyEnvironment('http://127.0.0.1:4000')).toBe('local');
+        expect(classifyEnvironment('https://localhost:8443')).toBe('local');
+    });
+
+    it('returns staging only for the canonical staging URL', () => {
+        expect(classifyEnvironment('https://api-staging.getting-things-done.app')).toBe('staging');
+        // Trailing slash is stripped by loadConfig before classify is called — we don't accept it here.
+        expect(classifyEnvironment('https://api-staging.getting-things-done.app/')).toBe('custom');
+    });
+
+    it('returns production only for the canonical production URL', () => {
+        expect(classifyEnvironment('https://api.getting-things-done.app')).toBe('production');
+    });
+
+    it('falls back to custom for unrecognised hosts', () => {
+        expect(classifyEnvironment('https://api.example.com')).toBe('custom');
+        expect(classifyEnvironment('https://gtd.mycompany.internal')).toBe('custom');
     });
 });
 

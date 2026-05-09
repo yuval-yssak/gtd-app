@@ -3,6 +3,7 @@
  * into the userId expected by /v1/reassign — so the model never has to know raw UUIDs. */
 /** biome-ignore-all lint/style/noNonNullAssertion: tests assert preconditions before using ! */
 import { Hono } from 'hono';
+import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
@@ -39,14 +40,32 @@ async function login(): Promise<string> {
 }
 
 describe('GET /v1/me', () => {
-    it('returns the userId and label of the authenticated caller', async () => {
+    it('returns the userId, label, and email of the authenticated caller', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 'work-laptop', ['items.read']);
         const res = await app.fetch(new Request('http://localhost:4000/v1/me', { headers: { Authorization: `Bearer ${plaintext}` } }));
         expect(res.status).toBe(200);
-        const body = (await res.json()) as { userId: string; label: string };
+        const body = (await res.json()) as { userId: string; label: string; email: string };
         expect(body.userId).toBe(userId);
         expect(body.label).toBe('work-laptop');
+        // Helpers' GOOGLE_PROFILE.email — the Better Auth user row Better Auth created on first sign-in.
+        expect(body.email).toBe('alice@example.com');
+    });
+
+    it('returns email:"" and 200 when the user row was deleted out from under a still-valid token', async () => {
+        // Defensive: the bearer middleware already validated the userId, but if the user row is
+        // gone (manual cleanup, account deletion mid-flight), /v1/me should still return a stable
+        // shape rather than 500.
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 'orphan', ['items.read']);
+        // Better Auth's mongodbAdapter keys `user._id` as ObjectId whose hex equals `userId`.
+        await db.collection('user').deleteOne({ _id: new ObjectId(userId) } as never);
+        const res = await app.fetch(new Request('http://localhost:4000/v1/me', { headers: { Authorization: `Bearer ${plaintext}` } }));
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { userId: string; label: string; email: string };
+        expect(body.userId).toBe(userId);
+        expect(body.label).toBe('orphan');
+        expect(body.email).toBe('');
     });
 
     it('returns 401 when no Authorization header is present', async () => {
