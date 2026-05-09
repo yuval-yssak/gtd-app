@@ -21,8 +21,8 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Single inbox item — user hasn't selected a destination yet. */
-export const SingleInboxItem: Story = {
+/** Single inbox item — wizard still shows the 1 of 1 counter and the Skip button. */
+export const SingleItem: Story = {
     args: { items: [sampleInboxItem] },
 };
 
@@ -37,51 +37,10 @@ export const MultipleItems: Story = {
     },
 };
 
-/** Next Action destination pre-selected — full form with people and contexts. */
-export const PreselectedNextAction: Story = {
-    args: {
-        items: [sampleInboxItem],
-        initialDestination: 'nextAction',
-    },
-};
-
-/** Calendar destination pre-selected — date/time form shown immediately. */
-export const PreselectedCalendar: Story = {
-    args: {
-        items: [sampleInboxItem],
-        initialDestination: 'calendar',
-    },
-};
-
-/** Waiting For destination pre-selected — person selector shown immediately. */
-export const PreselectedWaitingFor: Story = {
-    args: {
-        items: [sampleInboxItem],
-        initialDestination: 'waitingFor',
-    },
-};
-
-/** Done destination pre-selected — marks the item complete immediately. */
-export const PreselectedDone: Story = {
-    args: {
-        items: [sampleInboxItem],
-        initialDestination: 'done',
-    },
-};
-
-/** Trash destination pre-selected — discards the item. */
-export const PreselectedTrash: Story = {
-    args: {
-        items: [sampleInboxItem],
-        initialDestination: 'trash',
-    },
-};
-
 /** No people or work contexts in the system — form renders without those chips. */
 export const NoExtraMetadata: Story = {
     args: {
         items: [sampleInboxItem],
-        initialDestination: 'nextAction',
         people: [],
         workContexts: [],
     },

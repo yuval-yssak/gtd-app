@@ -1,63 +1,35 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
-import BoltIcon from '@mui/icons-material/Bolt';
-import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
-import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
-import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
-import Stack from '@mui/material/Stack';
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import type { IDBPDatabase } from 'idb';
-import { useState, useTransition } from 'react';
-import ReactMarkdown from 'react-markdown';
-import { CalendarFields } from '../../components/clarify/CalendarFields';
-import { NextActionFields } from '../../components/clarify/NextActionFields';
-import {
-    buildCalendarMeta,
-    buildNextActionMeta,
-    buildWaitingForMeta,
-    type CalendarFormState,
-    type Destination,
-    emptyCalendar,
-    emptyNextAction,
-    emptyWaitingFor,
-    type NextActionFormState,
-    type WaitingForFormState,
-} from '../../components/clarify/types';
-import { WaitingForFields } from '../../components/clarify/WaitingForFields';
-import { RoutineIndicator } from '../../components/RoutineIndicator';
+import type { EditableStatus } from '../../components/editItemDialogLogic';
+import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
+import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { clarifyToCalendar, clarifyToDone, clarifyToInbox, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, updateItem } from '../../db/itemMutations';
-import { useCalendarOptions } from '../../hooks/useCalendarOptions';
-import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
+import type { StoredItem } from '../../types/MyDB';
 import styles from './-item.$itemId.module.css';
 
-const VALID_DESTINATIONS = new Set<string>(['nextAction', 'calendar', 'waitingFor', 'done', 'trash']);
+const EDITABLE_STATUSES = new Set<EditableStatus>(['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe']);
+
+function isEditableStatus(value: unknown): value is EditableStatus {
+    return typeof value === 'string' && EDITABLE_STATUSES.has(value as EditableStatus);
+}
 
 export const Route = createFileRoute('/_authenticated/item/$itemId')({
-    // `dest` pre-selects a destination chip when navigating from the inbox action buttons.
-    // Unknown/missing values fall back to null so the user sees a clean unselected state.
-    validateSearch: (search) => ({
-        // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature (TS4111) requires bracket notation on Record<string, unknown>
-        dest: typeof search['dest'] === 'string' && VALID_DESTINATIONS.has(search['dest']) ? (search['dest'] as Destination) : null,
-    }),
+    // `status` is the canonical pre-selected chip param. `dest` is accepted as a backward-compat
+    // alias for one release — older inbox links and history entries still pass it.
+    validateSearch: (search): { status: EditableStatus | null } => {
+        // biome-ignore lint/complexity/useLiteralKeys: noPropertyAccessFromIndexSignature requires bracket notation
+        const raw = search['status'] ?? search['dest'];
+        return { status: isEditableStatus(raw) ? raw : null };
+    },
     component: ItemPage,
 });
 
-// ── Shared header ──────────────────────────────────────────────────────────────
-
-function PageHeader({ title, onBack }: { title: string; onBack: () => void }) {
+function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () => void; idForCopy?: string }) {
     return (
         <Box className={styles.header}>
             <IconButton onClick={onBack} size="small" aria-label="Go back">
@@ -65,28 +37,40 @@ function PageHeader({ title, onBack }: { title: string; onBack: () => void }) {
             </IconButton>
             <Typography
                 variant="h6"
+                className={styles.headerTitle}
                 sx={{
                     fontWeight: 600,
                 }}
             >
                 {title}
             </Typography>
+            {idForCopy && <CopyIdButton id={idForCopy} />}
         </Box>
     );
 }
 
-// ── Main dispatcher ────────────────────────────────────────────────────────────
+/**
+ * Picks the route to navigate back to after edit/cancel. Routes by the item's status at the time
+ * of render — the status the user came from is the most polite "back" target. After a save changes
+ * the status, the navigate fires before any local re-read, so this is captured at the right moment.
+ */
+function backRouteForStatus(status: StoredItem['status']): string {
+    if (status === 'nextAction') return '/next-actions';
+    if (status === 'calendar') return '/calendar';
+    if (status === 'waitingFor') return '/waiting-for';
+    if (status === 'somedayMaybe') return '/someday';
+    return '/inbox';
+}
 
 function ItemPage() {
     const { db } = Route.useRouteContext();
     const { itemId } = Route.useParams();
-    const { dest } = Route.useSearch();
+    const { status: initialStatus } = Route.useSearch();
     const { items, workContexts, people, refreshItems } = useAppData();
     const navigate = useNavigate();
 
     const item = items.find((i) => i._id === itemId) ?? null;
 
-    // Item not found: stale navigation (already processed in another tab, or invalid deep-link).
     if (!item) {
         return (
             <Box className={styles.page}>
@@ -107,28 +91,12 @@ function ItemPage() {
         );
     }
 
-    // TypeScript doesn't propagate narrowing into nested function declarations — pin to a const.
-    // Same pattern used in InboxBottomSheet for the same reason.
-    const resolvedItem = item;
+    const goBack = () => void navigate({ to: backRouteForStatus(item.status) });
 
-    // Navigate back to the list that corresponds to this item's status.
-    function goBack() {
-        if (resolvedItem.status === 'nextAction') {
-            void navigate({ to: '/next-actions' });
-        } else if (resolvedItem.status === 'calendar') {
-            void navigate({ to: '/calendar' });
-        } else if (resolvedItem.status === 'waitingFor') {
-            void navigate({ to: '/waiting-for' });
-        } else {
-            void navigate({ to: '/inbox' });
-        }
-    }
-
-    // Done/trash items should not be editable — guard before dispatching to edit forms.
     if (item.status === 'done' || item.status === 'trash') {
         return (
             <Box className={styles.page}>
-                <PageHeader title="Item" onBack={goBack} />
+                <PageHeader title="Item" onBack={goBack} idForCopy={item._id} />
                 <Typography
                     sx={{
                         color: 'text.secondary',
@@ -142,532 +110,28 @@ function ItemPage() {
         );
     }
 
-    if (item.status === 'inbox') {
-        return <InboxClarifyContent item={item} db={db} dest={dest} workContexts={workContexts} people={people} refreshItems={refreshItems} onBack={goBack} />;
-    }
-
-    if (item.status === 'nextAction') {
-        return <NextActionEditContent item={item} db={db} workContexts={workContexts} people={people} refreshItems={refreshItems} onBack={goBack} />;
-    }
-
-    return <SimpleEditContent item={item} db={db} refreshItems={refreshItems} onBack={goBack} />;
-}
-
-// ── Inbox: clarify flow ────────────────────────────────────────────────────────
-
-interface InboxClarifyProps {
-    item: StoredItem;
-    db: IDBPDatabase<MyDB>;
-    dest: Destination | null;
-    workContexts: StoredWorkContext[];
-    people: StoredPerson[];
-    refreshItems: () => Promise<void>;
-    onBack: () => void;
-}
-
-function InboxClarifyContent({ item, db, dest, workContexts, people, refreshItems, onBack }: InboxClarifyProps) {
-    // `dest` is captured once at mount — safe because TanStack Router unmounts this component
-    // on every navigation, so the search param can never change under an existing instance.
-    const [destination, setDestination] = useState<Destination | null>(dest);
-    const { options: calendarOptions } = useCalendarOptions();
-    const [nextActionForm, setNextActionForm] = useState<NextActionFormState>(emptyNextAction);
-    const [calendarForm, setCalendarForm] = useState<CalendarFormState>(emptyCalendar);
-    const [waitingForForm, setWaitingForForm] = useState<WaitingForFormState>(emptyWaitingFor);
-    const [isSubmitting, startSubmitting] = useTransition();
-
-    function isConfirmDisabled(): boolean {
-        if (!destination) {
-            return true;
-        }
-        if (destination === 'calendar' && !calendarForm.date) {
-            return true;
-        }
-        if (destination === 'waitingFor' && !waitingForForm.waitingForPersonId) {
-            return true;
-        }
-        return false;
-    }
-
-    function onConfirm() {
-        if (!destination || isSubmitting) {
-            return;
-        }
-        startSubmitting(async () => {
-            if (destination === 'trash') {
-                await clarifyToTrash(db, item);
-            } else if (destination === 'done') {
-                await clarifyToDone(db, item);
-            } else if (destination === 'nextAction') {
-                await clarifyToNextAction(db, item, buildNextActionMeta(nextActionForm));
-            } else if (destination === 'calendar') {
-                await clarifyToCalendar(db, item, buildCalendarMeta(calendarForm, calendarOptions));
-            } else if (destination === 'waitingFor') {
-                await clarifyToWaitingFor(db, item, buildWaitingForMeta(waitingForForm));
-            }
-            await refreshItems();
-            // Navigate only after refreshItems() resolves — a throw here propagates out of the
-            // transition and skips onBack(), so we don't silently dismiss the page on failure.
-            onBack();
-        });
-    }
+    // Re-read from IDB so a status-changing save lands the user on the correct destination —
+    // the closure-captured `items` array is the pre-save snapshot, not yet refreshed.
+    const onClose = async () => {
+        const fresh = await db.get('items', itemId);
+        void navigate({ to: backRouteForStatus(fresh?.status ?? item.status) });
+    };
 
     return (
         <Box className={styles.page}>
-            <PageHeader title="Clarify" onBack={onBack} />
+            <PageHeader title="Edit item" onBack={goBack} idForCopy={item._id} />
             <Paper variant="outlined" className={styles.card}>
-                <Typography
-                    variant="h6"
-                    sx={{
-                        fontWeight: 500,
-                        mb: 3,
-                    }}
-                >
-                    "{item.title}"
-                </Typography>
-
-                <Typography
-                    variant="caption"
-                    className={styles.sectionLabel}
-                    sx={{
-                        color: 'text.secondary',
-                        fontWeight: 600,
-                    }}
-                >
-                    What is it?
-                </Typography>
-                <Stack
-                    direction="row"
-                    sx={{
-                        flexWrap: 'wrap',
-                        gap: 1,
-                        mt: 1,
-                        mb: 3,
-                    }}
-                >
-                    <Chip
-                        icon={<DeleteOutlineIcon />}
-                        label="Trash"
-                        onClick={() => setDestination('trash')}
-                        color={destination === 'trash' ? 'error' : 'default'}
-                        variant={destination === 'trash' ? 'filled' : 'outlined'}
-                    />
-                    <Chip
-                        icon={<AssignmentTurnedInIcon />}
-                        label="Done < 2 min"
-                        onClick={() => setDestination('done')}
-                        color={destination === 'done' ? 'success' : 'default'}
-                        variant={destination === 'done' ? 'filled' : 'outlined'}
-                    />
-                    <Chip
-                        icon={<BoltIcon />}
-                        label="Next Action"
-                        onClick={() => setDestination('nextAction')}
-                        color={destination === 'nextAction' ? 'primary' : 'default'}
-                        variant={destination === 'nextAction' ? 'filled' : 'outlined'}
-                    />
-                    <Chip
-                        icon={<CalendarTodayIcon />}
-                        label="Calendar"
-                        onClick={() => setDestination('calendar')}
-                        color={destination === 'calendar' ? 'primary' : 'default'}
-                        variant={destination === 'calendar' ? 'filled' : 'outlined'}
-                    />
-                    <Chip
-                        icon={<HourglassEmptyIcon />}
-                        label="Waiting For"
-                        onClick={() => setDestination('waitingFor')}
-                        color={destination === 'waitingFor' ? 'primary' : 'default'}
-                        variant={destination === 'waitingFor' ? 'filled' : 'outlined'}
-                    />
-                </Stack>
-
-                {destination === 'nextAction' && (
-                    <Box className={styles.form}>
-                        <NextActionFields
-                            value={nextActionForm}
-                            onChange={(patch) => setNextActionForm((f) => ({ ...f, ...patch }))}
-                            workContexts={workContexts}
-                            people={people}
-                        />
-                    </Box>
-                )}
-                {destination === 'calendar' && (
-                    <Box className={styles.form}>
-                        <CalendarFields
-                            value={calendarForm}
-                            onChange={(patch) => setCalendarForm((f) => ({ ...f, ...patch }))}
-                            calendarOptions={calendarOptions}
-                        />
-                    </Box>
-                )}
-                {destination === 'waitingFor' && (
-                    <Box className={styles.form}>
-                        <WaitingForFields value={waitingForForm} onChange={(patch) => setWaitingForForm((f) => ({ ...f, ...patch }))} people={people} />
-                    </Box>
-                )}
-
-                <Box className={styles.actions}>
-                    <Button onClick={onBack}>Cancel</Button>
-                    <Button variant="contained" disabled={isConfirmDisabled() || isSubmitting} onClick={() => void onConfirm()}>
-                        Confirm
-                    </Button>
-                </Box>
-            </Paper>
-        </Box>
-    );
-}
-
-// ── Next action: full edit ─────────────────────────────────────────────────────
-
-type MoveDest = 'calendar' | 'waitingFor';
-
-interface NextActionEditProps {
-    item: StoredItem;
-    db: IDBPDatabase<MyDB>;
-    workContexts: StoredWorkContext[];
-    people: StoredPerson[];
-    refreshItems: () => Promise<void>;
-    onBack: () => void;
-}
-
-function NextActionEditContent({ item, db, workContexts, people, refreshItems, onBack }: NextActionEditProps) {
-    const { routines } = useAppData();
-    const { options: calendarOptions } = useCalendarOptions();
-    const [title, setTitle] = useState(item.title);
-    const [notes, setNotes] = useState(item.notes ?? '');
-    const [notesTab, setNotesTab] = useState<0 | 1>(0);
-    // Pre-populate from existing item so edits are incremental, not full rewrites.
-    const [naForm, setNaForm] = useState<NextActionFormState>({
-        ignoreBefore: item.ignoreBefore ?? '',
-        workContextIds: item.workContextIds ?? [],
-        peopleIds: item.peopleIds ?? [],
-        energy: item.energy ?? '',
-        time: item.time?.toString() ?? '',
-        urgent: item.urgent ?? false,
-        focus: item.focus ?? false,
-        expectedBy: item.expectedBy ?? '',
-    });
-    const [moveDest, setMoveDest] = useState<MoveDest | null>(null);
-    const [calForm, setCalForm] = useState<CalendarFormState>(emptyCalendar);
-    const [wfForm, setWfForm] = useState<WaitingForFormState>(emptyWaitingFor);
-    const [isSubmitting, startSubmitting] = useTransition();
-
-    function onSave() {
-        const trimmedTitle = title.trim();
-        if (!trimmedTitle || isSubmitting) {
-            return;
-        }
-        startSubmitting(async () => {
-            const trimmedNotes = notes.trim();
-            // Destructure out all mutable optional fields before re-applying from form state,
-            // so clearing a field (e.g. removing all contexts) actually removes it from the item.
-            const {
-                notes: _n,
-                workContextIds: _wc,
-                peopleIds: _pi,
-                energy: _e,
-                time: _t,
-                urgent: _u,
-                focus: _f,
-                expectedBy: _eb,
-                ignoreBefore: _ib,
-                ...rest
-            } = item;
-            const updated: StoredItem = {
-                ...rest,
-                title: trimmedTitle,
-                ...(trimmedNotes ? { notes: trimmedNotes } : {}),
-                ...(naForm.workContextIds.length ? { workContextIds: naForm.workContextIds } : {}),
-                ...(naForm.peopleIds.length ? { peopleIds: naForm.peopleIds } : {}),
-                ...(naForm.energy ? { energy: naForm.energy as EnergyLevel } : {}),
-                ...(naForm.time ? { time: Number(naForm.time) } : {}),
-                ...(naForm.urgent ? { urgent: true } : {}),
-                ...(naForm.focus ? { focus: true } : {}),
-                ...(naForm.expectedBy ? { expectedBy: naForm.expectedBy } : {}),
-                ...(naForm.ignoreBefore ? { ignoreBefore: naForm.ignoreBefore } : {}),
-            };
-            await updateItem(db, updated);
-            await refreshItems();
-            // Navigate only after refreshItems() resolves — a throw skips onBack(), so we don't
-            // silently dismiss the page on failure.
-            onBack();
-        });
-    }
-
-    function onMoveInstant(mutation: (db: IDBPDatabase<MyDB>, item: StoredItem) => Promise<StoredItem>) {
-        if (isSubmitting) {
-            return;
-        }
-        startSubmitting(async () => {
-            await mutation(db, item);
-            await refreshItems();
-            onBack();
-        });
-    }
-
-    function onConfirmCalendar() {
-        if (isSubmitting) {
-            return;
-        }
-        startSubmitting(async () => {
-            await clarifyToCalendar(db, item, buildCalendarMeta(calForm, calendarOptions));
-            await refreshItems();
-            onBack();
-        });
-    }
-
-    function onConfirmWaitingFor() {
-        if (isSubmitting) {
-            return;
-        }
-        startSubmitting(async () => {
-            await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
-            await refreshItems();
-            onBack();
-        });
-    }
-
-    return (
-        <Box className={styles.page}>
-            <PageHeader title="Edit next action" onBack={onBack} />
-            <Paper variant="outlined" className={styles.card}>
-                <Box className={styles.form}>
-                    <TextField label="Title" value={title} onChange={(e) => setTitle(e.target.value)} fullWidth required autoFocus />
-                    {item.routineId && (
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            <Typography
-                                variant="caption"
-                                sx={{
-                                    color: 'text.secondary',
-                                }}
-                            >
-                                Part of routine:
-                            </Typography>
-                            <RoutineIndicator routineId={item.routineId} routineTitle={routines.find((r) => r._id === item.routineId)?.title} />
-                        </Box>
-                    )}
-
-                    <div>
-                        <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} className={styles.tabs}>
-                            <Tab label="Edit" value={0} />
-                            <Tab label="Preview" value={1} />
-                        </Tabs>
-                        {notesTab === 0 ? (
-                            <TextField
-                                label="Notes (Markdown)"
-                                value={notes}
-                                onChange={(e) => setNotes(e.target.value)}
-                                fullWidth
-                                multiline
-                                rows={4}
-                                placeholder="Supports **bold**, _italic_, `code`, lists, etc."
-                            />
-                        ) : (
-                            <div className={styles.preview}>
-                                {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles.empty}>Nothing to preview.</span>}
-                            </div>
-                        )}
-                    </div>
-
-                    <Divider />
-
-                    <NextActionFields value={naForm} onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))} workContexts={workContexts} people={people} />
-
-                    <Divider />
-
-                    <Box className={styles.moveToSection}>
-                        <Typography
-                            variant="caption"
-                            className={styles.sectionLabel}
-                            sx={{
-                                color: 'text.secondary',
-                                fontWeight: 600,
-                            }}
-                        >
-                            Move to
-                        </Typography>
-                        <Stack
-                            direction="row"
-                            sx={{
-                                flexWrap: 'wrap',
-                                gap: 1,
-                                mt: 1,
-                            }}
-                        >
-                            <Chip
-                                icon={<MoveToInboxIcon />}
-                                label="Inbox"
-                                variant="outlined"
-                                onClick={() => void onMoveInstant(clarifyToInbox)}
-                                disabled={isSubmitting}
-                            />
-                            <Chip
-                                icon={<CalendarTodayIcon />}
-                                label="Calendar"
-                                variant={moveDest === 'calendar' ? 'filled' : 'outlined'}
-                                color={moveDest === 'calendar' ? 'primary' : 'default'}
-                                onClick={() => setMoveDest((prev) => (prev === 'calendar' ? null : 'calendar'))}
-                                disabled={isSubmitting}
-                            />
-                            <Chip
-                                icon={<HourglassEmptyIcon />}
-                                label="Waiting For"
-                                variant={moveDest === 'waitingFor' ? 'filled' : 'outlined'}
-                                color={moveDest === 'waitingFor' ? 'primary' : 'default'}
-                                onClick={() => setMoveDest((prev) => (prev === 'waitingFor' ? null : 'waitingFor'))}
-                                disabled={isSubmitting}
-                            />
-                            <Chip
-                                icon={<CheckCircleOutlineIcon />}
-                                label="Done"
-                                variant="outlined"
-                                color="success"
-                                onClick={() => void onMoveInstant(clarifyToDone)}
-                                disabled={isSubmitting}
-                            />
-                            <Chip
-                                icon={<DeleteOutlineIcon />}
-                                label="Trash"
-                                variant="outlined"
-                                color="error"
-                                onClick={() => void onMoveInstant(clarifyToTrash)}
-                                disabled={isSubmitting}
-                            />
-                        </Stack>
-
-                        {moveDest === 'calendar' && (
-                            <Box className={styles.subForm}>
-                                <CalendarFields
-                                    value={calForm}
-                                    onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))}
-                                    calendarOptions={calendarOptions}
-                                />
-                                <Stack
-                                    direction="row"
-                                    sx={{
-                                        gap: 1,
-                                        mt: 1.5,
-                                    }}
-                                >
-                                    <Button size="small" onClick={() => setMoveDest(null)}>
-                                        Cancel
-                                    </Button>
-                                    <Button size="small" variant="contained" disabled={!calForm.date || isSubmitting} onClick={() => void onConfirmCalendar()}>
-                                        Confirm move to Calendar
-                                    </Button>
-                                </Stack>
-                            </Box>
-                        )}
-
-                        {moveDest === 'waitingFor' && (
-                            <Box className={styles.subForm}>
-                                <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
-                                <Stack
-                                    direction="row"
-                                    sx={{
-                                        gap: 1,
-                                        mt: 1.5,
-                                    }}
-                                >
-                                    <Button size="small" onClick={() => setMoveDest(null)}>
-                                        Cancel
-                                    </Button>
-                                    <Button
-                                        size="small"
-                                        variant="contained"
-                                        disabled={!wfForm.waitingForPersonId || isSubmitting}
-                                        onClick={() => void onConfirmWaitingFor()}
-                                    >
-                                        Confirm move to Waiting For
-                                    </Button>
-                                </Stack>
-                            </Box>
-                        )}
-                    </Box>
-                </Box>
-
-                <Box className={styles.actions}>
-                    <Button onClick={onBack}>Cancel</Button>
-                    <Button variant="contained" disabled={!title.trim() || isSubmitting} onClick={() => void onSave()}>
-                        Save changes
-                    </Button>
-                </Box>
-            </Paper>
-        </Box>
-    );
-}
-
-// ── Calendar / Waiting For: simple title + notes edit ─────────────────────────
-
-interface SimpleEditProps {
-    item: StoredItem;
-    db: IDBPDatabase<MyDB>;
-    refreshItems: () => Promise<void>;
-    onBack: () => void;
-}
-
-function SimpleEditContent({ item, db, refreshItems, onBack }: SimpleEditProps) {
-    const [title, setTitle] = useState(item.title);
-    const [notes, setNotes] = useState(item.notes ?? '');
-    const [notesTab, setNotesTab] = useState<0 | 1>(0);
-    const [isSubmitting, startSubmitting] = useTransition();
-
-    const pageTitle = item.status === 'calendar' ? 'Edit calendar item' : 'Edit waiting for';
-
-    function onSave() {
-        const trimmedTitle = title.trim();
-        if (!trimmedTitle || isSubmitting) {
-            return;
-        }
-        startSubmitting(async () => {
-            const trimmedNotes = notes.trim();
-            // exactOptionalPropertyTypes: omit the key rather than assigning undefined
-            const { notes: _n, ...rest } = item;
-            const updated: StoredItem = trimmedNotes ? { ...rest, title: trimmedTitle, notes: trimmedNotes } : { ...rest, title: trimmedTitle };
-            await updateItem(db, updated);
-            await refreshItems();
-            // Navigate only after refreshItems() resolves — a throw skips onBack(), so we don't
-            // silently dismiss the page on failure.
-            onBack();
-        });
-    }
-
-    return (
-        <Box className={styles.page}>
-            <PageHeader title={pageTitle} onBack={onBack} />
-            <Paper variant="outlined" className={styles.card}>
-                <Box className={styles.form}>
-                    <TextField label="Title" value={title} onChange={(e) => setTitle(e.target.value)} fullWidth required autoFocus />
-
-                    <div>
-                        <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} className={styles.tabs}>
-                            <Tab label="Edit" value={0} />
-                            <Tab label="Preview" value={1} />
-                        </Tabs>
-                        {notesTab === 0 ? (
-                            <TextField
-                                label="Notes (Markdown)"
-                                value={notes}
-                                onChange={(e) => setNotes(e.target.value)}
-                                fullWidth
-                                multiline
-                                rows={6}
-                                placeholder="Supports **bold**, _italic_, `code`, lists, etc."
-                            />
-                        ) : (
-                            <div className={styles.preview}>
-                                {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles.empty}>Nothing to preview.</span>}
-                            </div>
-                        )}
-                    </div>
-                </Box>
-
-                <Box className={styles.actions}>
-                    <Button onClick={onBack}>Cancel</Button>
-                    <Button variant="contained" disabled={!title.trim() || isSubmitting} onClick={() => void onSave()}>
-                        Save
-                    </Button>
-                </Box>
+                <ItemEditorBody
+                    key={item._id}
+                    item={item}
+                    db={db}
+                    people={people}
+                    workContexts={workContexts}
+                    onClose={() => void onClose()}
+                    onSaved={refreshItems}
+                    chrome="page"
+                    {...(initialStatus ? { initialStatus } : {})}
+                />
             </Paper>
         </Box>
     );

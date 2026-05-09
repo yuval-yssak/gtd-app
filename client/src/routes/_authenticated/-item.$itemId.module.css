@@ -9,57 +9,11 @@
     margin-bottom: 1.5rem;
 }
 
+/* Title is the flexible center; copy-id button hugs the right edge */
+.headerTitle {
+    flex: 1;
+}
+
 .card {
     padding: 1.5rem;
-}
-
-.sectionLabel {
-    text-transform: uppercase;
-    letter-spacing: 0.0313rem;
-    display: block;
-}
-
-/* Destination-specific form fields */
-.form {
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    padding-top: 0.25rem;
-    margin-bottom: 0.5rem;
-}
-
-.actions {
-    display: flex;
-    gap: 0.5rem;
-    margin-top: 1.5rem;
-    justify-content: flex-end;
-}
-
-/* ── Edit form styles (non-inbox items) ────────────────── */
-
-.tabs {
-    margin-bottom: 0.5rem;
-}
-
-.preview {
-    min-height: 5rem;
-    padding: 0.25rem 0 0.5rem;
-}
-
-.empty {
-    color: var(--mui-palette-text-secondary, #888);
-    font-style: italic;
-    font-size: 0.875rem;
-}
-
-.moveToSection {
-    margin-top: 0.5rem;
-}
-
-/* Sub-form revealed when Calendar or Waiting For move chip is selected */
-.subForm {
-    margin-top: 0.75rem;
-    padding: 0.75rem;
-    border-radius: 0.25rem;
-    background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
 }

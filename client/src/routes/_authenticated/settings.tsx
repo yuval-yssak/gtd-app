@@ -116,7 +116,7 @@ function SettingsPage() {
             {/* Routine indicator style */}
             <RoutineIndicatorSection />
             {/* Inbox preferences */}
-            <InboxSection />
+            <ItemEditorSection />
             {/* Notifications section */}
             <NotificationsSection db={db} />
             {/* Personal API tokens */}
@@ -301,7 +301,7 @@ function CalendarHorizonSection() {
     );
 }
 
-function InboxSection() {
+function ItemEditorSection() {
     const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
 
     function onChange(newMode: InlineClarifyMode) {
@@ -322,7 +322,7 @@ function InboxSection() {
                         mb: 0.5,
                     }}
                 >
-                    Inbox
+                    Item editor
                 </Typography>
                 <Typography
                     variant="body2"
@@ -331,7 +331,7 @@ function InboxSection() {
                         mb: 2,
                     }}
                 >
-                    How you prefer to edit and clarify items — applies to the inbox and all other pages.
+                    How you prefer to edit and clarify items — applies to all list pages (inbox, next actions, calendar, waiting for, tickler, someday/maybe).
                 </Typography>
                 <RadioGroup value={clarifyMode} onChange={(e) => onChange(parseClarifyMode(e.target.value))}>
                     <FormControlLabel
@@ -363,7 +363,7 @@ function InboxSection() {
                                         color: 'text.secondary',
                                     }}
                                 >
-                                    The item row expands in place
+                                    The item row expands in place (mobile falls back to dialog)
                                 </Typography>
                             </Box>
                         }
@@ -380,7 +380,7 @@ function InboxSection() {
                                         color: 'text.secondary',
                                     }}
                                 >
-                                    A floating panel near the button
+                                    A floating panel near the clicked button (mobile falls back to dialog)
                                 </Typography>
                             </Box>
                         }
@@ -397,7 +397,7 @@ function InboxSection() {
                                         color: 'text.secondary',
                                     }}
                                 >
-                                    Moves immediately with no extra fields (Next Action only; Calendar and Waiting For always show a form)
+                                    Inbox-only: clicking the inbox "Next Action" chip moves immediately with no extra fields. Other lists fall back to Dialog.
                                 </Typography>
                             </Box>
                         }
@@ -414,7 +414,7 @@ function InboxSection() {
                                         color: 'text.secondary',
                                     }}
                                 >
-                                    Opens a dedicated page for clarifying the item
+                                    Opens a dedicated page for editing the item
                                 </Typography>
                             </Box>
                         }

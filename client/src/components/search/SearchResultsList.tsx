@@ -27,7 +27,7 @@ const renderItemSecondary = (item: StoredItem) => `Updated ${dayjs(item.updatedT
 function ResultRow({ item, showStatusChip }: { item: StoredItem; showStatusChip: boolean }) {
     return (
         <ListItem disablePadding>
-            <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ dest: null }} className={styles.rowLink}>
+            <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
                 <ListItemButton dense>
                     <ListItemText
                         primary={

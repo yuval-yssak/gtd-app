@@ -4,16 +4,12 @@ declare const styles: {
     readonly captureField: string;
     readonly captureNotes: string;
     readonly countChip: string;
-    readonly expandedForm: string;
-    readonly expandedFormActions: string;
     readonly item: string;
     readonly list: string;
     readonly listItemText: string;
     readonly notesEmpty: string;
     readonly notesPreview: string;
     readonly pageHeader: string;
-    readonly popoverActions: string;
-    readonly popoverContent: string;
     readonly revealLeft: string;
     readonly revealRight: string;
     readonly sheetHandle: string;

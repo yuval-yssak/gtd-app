@@ -4,12 +4,12 @@ import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import NoteAddIcon from '@mui/icons-material/NoteAdd';
 import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
-import Collapse from '@mui/material/Collapse';
 import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
@@ -19,7 +19,6 @@ import ListItemButton from '@mui/material/ListItemButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
-import Popover from '@mui/material/Popover';
 import Snackbar from '@mui/material/Snackbar';
 import SwipeableDrawer from '@mui/material/SwipeableDrawer';
 import { useTheme } from '@mui/material/styles';
@@ -29,43 +28,23 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useEffect, useRef, useState, useTransition } from 'react';
+import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AccountChip } from '../../components/AccountChip';
 import { ClarifyDialog } from '../../components/ClarifyDialog';
-import { CalendarFields } from '../../components/clarify/CalendarFields';
-import { NextActionFields } from '../../components/clarify/NextActionFields';
-import {
-    buildCalendarMeta,
-    buildNextActionMeta,
-    buildWaitingForMeta,
-    type CalendarFormState,
-    type Destination,
-    emptyCalendar,
-    emptyNextAction,
-    emptyWaitingFor,
-    type NextActionFormState,
-    type WaitingForFormState,
-} from '../../components/clarify/types';
-import { WaitingForFields } from '../../components/clarify/WaitingForFields';
-import { EditItemDialog } from '../../components/EditItemDialog';
+import type { EditableStatus } from '../../components/editItemDialogLogic';
+import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { clarifyToCalendar, clarifyToDone, clarifyToNextAction, clarifyToTrash, clarifyToWaitingFor, collectItem } from '../../db/itemMutations';
-import { useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
-import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-inbox.module.css';
 
 dayjs.extend(relativeTime);
-
-// Destinations that require a form (calendar needs a date, waitingFor needs a person).
-// In instant mode these fall back to dialog so required fields can be filled.
-type ActionableDest = 'nextAction' | 'calendar' | 'waitingFor';
 
 export const Route = createFileRoute('/_authenticated/inbox')({
     component: InboxPage,
@@ -78,11 +57,12 @@ interface InboxSwipeItemProps {
     // exactOptionalPropertyTypes requires explicit `| undefined` to allow passing `.find()?.title`
     routineTitle?: string | undefined;
     onTap: (item: StoredItem) => void;
+    onMore: (item: StoredItem) => void;
     onSwipeNextAction: (item: StoredItem) => void;
     onSwipeTrash: (item: StoredItem) => void;
 }
 
-function InboxSwipeItem({ item, routineTitle, onTap, onSwipeNextAction, onSwipeTrash }: InboxSwipeItemProps) {
+function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, onSwipeTrash }: InboxSwipeItemProps) {
     const { touchHandlers, translateX, wasDragRef } = useSwipeGesture({
         onSwipeRight: () => onSwipeNextAction(item),
         onSwipeLeft: () => onSwipeTrash(item),
@@ -94,18 +74,13 @@ function InboxSwipeItem({ item, routineTitle, onTap, onSwipeNextAction, onSwipeT
         if (wasDragRef.current) return;
         onTap(item);
     }
-    // Show the reveal as soon as the finger moves at all (> 0), not at the tap-suppression
-    // threshold (10px) — using 10px here caused a blank frame during snap-back.
     const showRight = translateX > 0;
     const showLeft = translateX < 0;
 
-    // Destructure to avoid spreading touchHandlers and then overriding onTouchEnd, which
-    // is fragile — a reorder of the spread would silently drop the override.
     const { onTouchStart, onTouchMove, onTouchEnd } = touchHandlers;
 
     return (
         <Box className={styles.swipeWrapper}>
-            {/* Reveal layer behind the row — colour and icon reflect direction */}
             {showRight && (
                 <Box className={styles.revealRight}>
                     <ArrowForwardIcon fontSize="small" />
@@ -135,9 +110,6 @@ function InboxSwipeItem({ item, routineTitle, onTap, onSwipeNextAction, onSwipeT
             <ListItem
                 disablePadding
                 className={styles.item}
-                // Transition only on release so dragging feels direct; animate snap-back.
-                // isCommitted is not needed here — React 19 batches both setTranslateX(0) and
-                // setCommittedDirection in the same render, so translateX === 0 is sufficient.
                 style={{
                     transform: `translateX(${translateX}px)`,
                     transition: translateX === 0 ? 'transform 0.2s ease' : 'none',
@@ -146,6 +118,21 @@ function InboxSwipeItem({ item, routineTitle, onTap, onSwipeNextAction, onSwipeT
                 onTouchMove={onTouchMove}
                 onTouchEnd={onTouchEnd}
                 onClick={handleClick}
+                secondaryAction={
+                    <Tooltip title="More actions">
+                        {/* onTouchEnd stops propagation so the drag handler doesn't see the tap as a swipe end */}
+                        <IconButton
+                            size="small"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onMore(item);
+                            }}
+                            data-testid="inboxItemMoreButton"
+                        >
+                            <MoreVertIcon fontSize="small" />
+                        </IconButton>
+                    </Tooltip>
+                }
             >
                 <ListItemText
                     primary={
@@ -178,8 +165,6 @@ interface InboxBottomSheetProps {
 function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalendar, onWaitingFor, onTrash }: InboxBottomSheetProps) {
     if (!item) return null;
 
-    // TypeScript doesn't preserve narrowing of outer variables inside nested function
-    // declarations, so pin the narrowed value to a const that closures can reference safely.
     const resolvedItem = item;
 
     function action(fn: (i: StoredItem) => void) {
@@ -188,8 +173,6 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
     }
 
     return (
-        // SwipeableDrawer lets users swipe the sheet down to dismiss — natural on mobile.
-        // onOpen is required by MUI's API but unused here because open state is driven externally.
         <SwipeableDrawer anchor="bottom" open={Boolean(item)} onClose={onClose} onOpen={() => {}}>
             <Box className={styles.sheetHandle} />
             <Typography
@@ -255,185 +238,25 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
 function InboxPage() {
     const { db } = Route.useRouteContext();
     const { account, items, workContexts, people, routines, refreshItems } = useAppData();
-    const { options: calendarOptions } = useCalendarOptions();
     const theme = useTheme();
-    // Hide inline buttons and switch to swipe+bottom-sheet on screens narrower than 900px
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-    const navigate = useNavigate();
+
+    // Inbox is the only page where 'instant' fires the no-fields nextAction shortcut.
+    const editor = useItemEditor({ db, people, workContexts, refreshItems, allowInstantNextAction: true, isMobile });
 
     const [draft, setDraft] = useState('');
     const [notes, setNotes] = useState('');
     const [notesOpen, setNotesOpen] = useState(false);
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
 
-    // Batch "Process Inbox" wizard
+    // Batch "Process Inbox" wizard — a separate UX from the unified single-item editor.
     const [batchClarifyOpen, setBatchClarifyOpen] = useState(false);
 
-    // Dialog mode: single-item ClarifyDialog with pre-selected destination
-    const [clarifyItem, setClarifyItem] = useState<StoredItem | null>(null);
-    const [clarifyDest, setClarifyDest] = useState<Destination | null>(null);
-
-    // Inline expand mode
-    const [expandedItemId, setExpandedItemId] = useState<string | null>(null);
-    const [expandedDest, setExpandedDest] = useState<ActionableDest | null>(null);
-
-    // Popover mode
-    const [popoverAnchor, setPopoverAnchor] = useState<HTMLElement | null>(null);
-    const [popoverItem, setPopoverItem] = useState<StoredItem | null>(null);
-    const [popoverDest, setPopoverDest] = useState<ActionableDest | null>(null);
-
-    // Instant mode toast
-    const [toastOpen, setToastOpen] = useState(false);
-    // useTransition gives us `isSubmittingInline` for free — React tracks pending state across
-    // the wrapped async work without manual setState toggling in finally blocks.
-    const [isSubmittingInline, startSubmittingInline] = useTransition();
-    // Ref still needed: useTransition does not dedupe successive startTransition calls, so a
-    // rapid double-swipe would queue two transitions. The ref short-circuits the second one.
-    const isSubmittingInlineRef = useRef(false);
-
-    // Shared form state for expand/popover modes
-    const [naForm, setNaForm] = useState<NextActionFormState>(emptyNextAction);
-    const [calForm, setCalForm] = useState<CalendarFormState>(emptyCalendar);
-    const [wfForm, setWfForm] = useState<WaitingForFormState>(emptyWaitingFor);
-
-    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
-
-    // Mobile bottom sheet
+    // Mobile bottom sheet — reachable via the per-row "more" button. Tap on the row body now
+    // opens the unified editor instead.
     const [bottomSheetItem, setBottomSheetItem] = useState<StoredItem | null>(null);
 
-    // Read preference from localStorage; update reactively when settings page changes it.
-    // The storage event normally fires only in other tabs, so settings.tsx dispatches it manually.
-    const [clarifyMode, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
-    useEffect(() => {
-        function onStorage(e: StorageEvent) {
-            if (e.key === CLARIFY_MODE_KEY) {
-                setClarifyMode(parseClarifyMode(e.newValue));
-            }
-        }
-        window.addEventListener('storage', onStorage);
-        return () => window.removeEventListener('storage', onStorage);
-    }, []);
-
     const inboxItems = items.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
-
-    function resetForms() {
-        setNaForm(emptyNextAction);
-        setCalForm(emptyCalendar);
-        setWfForm(emptyWaitingFor);
-    }
-
-    function closeInlineForm() {
-        setExpandedItemId(null);
-        setExpandedDest(null);
-        setPopoverAnchor(null);
-        setPopoverItem(null);
-        setPopoverDest(null);
-        resetForms();
-    }
-
-    function isInlineConfirmDisabled(dest: ActionableDest): boolean {
-        if (dest === 'calendar') return !calForm.date;
-        if (dest === 'waitingFor') return !wfForm.waitingForPersonId;
-        return false;
-    }
-
-    function onConfirmInlineForm(item: StoredItem, dest: ActionableDest) {
-        if (isSubmittingInlineRef.current) {
-            return;
-        }
-        isSubmittingInlineRef.current = true;
-        startSubmittingInline(async () => {
-            try {
-                if (dest === 'nextAction') {
-                    await clarifyToNextAction(db, item, buildNextActionMeta(naForm));
-                } else if (dest === 'calendar') {
-                    await clarifyToCalendar(db, item, buildCalendarMeta(calForm, calendarOptions));
-                } else if (dest === 'waitingFor') {
-                    await clarifyToWaitingFor(db, item, buildWaitingForMeta(wfForm));
-                }
-                await refreshItems();
-                closeInlineForm();
-            } finally {
-                isSubmittingInlineRef.current = false;
-            }
-        });
-    }
-
-    // Extracted to avoid duplication between desktop onInlineAction and mobile onInlineActionFromSheet.
-    // isSubmittingInlineRef guards against double-firing (e.g. rapid swipes before the first op resolves).
-    function instantNextAction(item: StoredItem) {
-        if (isSubmittingInlineRef.current) {
-            return;
-        }
-        isSubmittingInlineRef.current = true;
-        startSubmittingInline(async () => {
-            try {
-                await clarifyToNextAction(db, item, {});
-                await refreshItems();
-            } finally {
-                isSubmittingInlineRef.current = false;
-            }
-        });
-        setToastOpen(true);
-    }
-
-    function onInlineAction(e: React.MouseEvent<HTMLElement>, item: StoredItem, dest: ActionableDest) {
-        // instant mode is only truly instant for nextAction — calendar and waitingFor require
-        // mandatory fields (date, person), so they fall back to dialog even in instant mode.
-        if (clarifyMode === 'instant' && dest === 'nextAction') {
-            instantNextAction(item);
-            return;
-        }
-
-        if (clarifyMode === 'dialog' || (clarifyMode === 'instant' && dest !== 'nextAction')) {
-            setClarifyItem(item);
-            setClarifyDest(dest);
-            return;
-        }
-
-        if (clarifyMode === 'expand') {
-            // Toggle off if the same item+dest is already expanded
-            if (expandedItemId === item._id && expandedDest === dest) {
-                closeInlineForm();
-            } else {
-                resetForms();
-                setExpandedItemId(item._id);
-                setExpandedDest(dest);
-            }
-            return;
-        }
-
-        if (clarifyMode === 'popover') {
-            resetForms();
-            setPopoverAnchor(e.currentTarget);
-            setPopoverItem(item);
-            setPopoverDest(dest);
-            return;
-        }
-
-        if (clarifyMode === 'page') {
-            // Pass `dest` as a search param so the item page pre-selects the chip the user clicked.
-            // `_authenticated` is a pathless layout — TanStack Router registers the route as `/item/$itemId`.
-            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest } });
-        }
-    }
-
-    // Respects clarify mode for mobile swipe and bottom-sheet actions.
-    // expand/popover fall back to dialog — expand targets hidden rows and popover anchors
-    // to document.body nonsensically on touch.
-    function onInlineActionFromSheet(item: StoredItem, dest: ActionableDest) {
-        if (clarifyMode === 'instant' && dest === 'nextAction') {
-            instantNextAction(item);
-            return;
-        }
-        if (clarifyMode === 'page') {
-            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest } });
-            return;
-        }
-        // dialog, expand, popover all open ClarifyDialog on mobile
-        setClarifyItem(item);
-        setClarifyDest(dest);
-    }
 
     async function onCapture() {
         const title = draft.trim();
@@ -460,6 +283,10 @@ function InboxPage() {
     async function onTrash(item: StoredItem) {
         await clarifyToTrash(db, item);
         await refreshItems();
+    }
+
+    function openWithStatus(item: StoredItem, status: EditableStatus, anchor?: HTMLElement) {
+        editor.openEditor({ item, initialStatus: status, ...(anchor ? { anchor } : {}) });
     }
 
     return (
@@ -546,19 +373,19 @@ function InboxPage() {
                                 <InboxSwipeItem
                                     item={item}
                                     routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                    onTap={setBottomSheetItem}
-                                    onSwipeNextAction={(i) => onInlineActionFromSheet(i, 'nextAction')}
+                                    onTap={(i) => editor.openEditor({ item: i })}
+                                    onMore={setBottomSheetItem}
+                                    onSwipeNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
                                     onSwipeTrash={(i) => void onTrash(i)}
                                 />
                             ) : (
                                 <ListItem
                                     disablePadding
                                     className={styles.item}
-                                    // 6 icon buttons fit within the 220px padding-right set in inbox.module.css
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
                                             <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => setEditingItem(item)}>
+                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="inboxItemEditButton">
                                                     <EditIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
@@ -568,17 +395,17 @@ function InboxPage() {
                                                 </IconButton>
                                             </Tooltip>
                                             <Tooltip title="Next Action">
-                                                <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'nextAction')}>
+                                                <IconButton size="small" onClick={(e) => openWithStatus(item, 'nextAction', e.currentTarget)}>
                                                     <ArrowForwardIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
                                             <Tooltip title="Calendar">
-                                                <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'calendar')}>
+                                                <IconButton size="small" onClick={(e) => openWithStatus(item, 'calendar', e.currentTarget)}>
                                                     <CalendarTodayIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
                                             <Tooltip title="Waiting For">
-                                                <IconButton size="small" onClick={(e) => onInlineAction(e, item, 'waitingFor')}>
+                                                <IconButton size="small" onClick={(e) => openWithStatus(item, 'waitingFor', e.currentTarget)}>
                                                     <HourglassEmptyIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
@@ -590,111 +417,38 @@ function InboxPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemText
-                                        primary={
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                <span>{item.title}</span>
-                                                {item.routineId && (
-                                                    <RoutineIndicator
-                                                        routineId={item.routineId}
-                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                    />
-                                                )}
-                                                <AccountChip userId={item.userId} />
-                                            </Box>
-                                        }
-                                        secondary={dayjs(item.createdTs).fromNow()}
-                                        className={styles.listItemText}
-                                    />
+                                    <ListItemButton onClick={() => editor.openEditor({ item })} data-testid="inboxItemRow">
+                                        <ListItemText
+                                            primary={
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                    <span>{item.title}</span>
+                                                    {item.routineId && (
+                                                        <RoutineIndicator
+                                                            routineId={item.routineId}
+                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                        />
+                                                    )}
+                                                    <AccountChip userId={item.userId} />
+                                                </Box>
+                                            }
+                                            secondary={dayjs(item.createdTs).fromNow()}
+                                            className={styles.listItemText}
+                                        />
+                                    </ListItemButton>
                                 </ListItem>
                             )}
 
-                            {/* Inline expand mode: form appears below the item row */}
-                            {clarifyMode === 'expand' && expandedItemId === item._id && expandedDest && (
-                                <Collapse in>
-                                    <Box className={styles.expandedForm}>
-                                        {expandedDest === 'nextAction' && (
-                                            <NextActionFields
-                                                value={naForm}
-                                                onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))}
-                                                workContexts={workContexts}
-                                                people={people}
-                                            />
-                                        )}
-                                        {expandedDest === 'calendar' && (
-                                            <CalendarFields
-                                                value={calForm}
-                                                onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))}
-                                                calendarOptions={calendarOptions}
-                                            />
-                                        )}
-                                        {expandedDest === 'waitingFor' && (
-                                            <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
-                                        )}
-                                        <Box className={styles.expandedFormActions}>
-                                            <Button size="small" onClick={closeInlineForm}>
-                                                Cancel
-                                            </Button>
-                                            <Button
-                                                size="small"
-                                                variant="contained"
-                                                disabled={isInlineConfirmDisabled(expandedDest) || isSubmittingInline}
-                                                onClick={() => void onConfirmInlineForm(item, expandedDest)}
-                                            >
-                                                Confirm
-                                            </Button>
-                                        </Box>
-                                    </Box>
-                                </Collapse>
-                            )}
+                            {editor.renderExpandFor(item._id)}
 
                             {idx < inboxItems.length - 1 && <Divider />}
                         </Box>
                     ))}
                 </List>
             )}
-            {/* Popover mode: floating panel anchored to the clicked button */}
-            <Popover
-                open={Boolean(popoverAnchor)}
-                anchorEl={popoverAnchor}
-                onClose={closeInlineForm}
-                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-                transformOrigin={{ vertical: 'top', horizontal: 'right' }}
-            >
-                {popoverItem && popoverDest && (
-                    <Box className={styles.popoverContent}>
-                        {popoverDest === 'nextAction' && (
-                            <NextActionFields
-                                value={naForm}
-                                onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))}
-                                workContexts={workContexts}
-                                people={people}
-                            />
-                        )}
-                        {popoverDest === 'calendar' && (
-                            <CalendarFields value={calForm} onChange={(patch) => setCalForm((f) => ({ ...f, ...patch }))} calendarOptions={calendarOptions} />
-                        )}
-                        {popoverDest === 'waitingFor' && (
-                            <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
-                        )}
-                        <Box className={styles.popoverActions}>
-                            <Button size="small" onClick={closeInlineForm}>
-                                Cancel
-                            </Button>
-                            <Button
-                                size="small"
-                                variant="contained"
-                                disabled={isInlineConfirmDisabled(popoverDest) || isSubmittingInline}
-                                onClick={() => void onConfirmInlineForm(popoverItem, popoverDest)}
-                            >
-                                Confirm
-                            </Button>
-                        </Box>
-                    </Box>
-                )}
-            </Popover>
-            {/* Instant mode toast — prompts user to add details after the instant move */}
-            <Snackbar open={toastOpen} autoHideDuration={5000} onClose={() => setToastOpen(false)} message="Moved to Next Actions" />
+
+            {editor.renderGlobal()}
+            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
+
             {batchClarifyOpen && (
                 <ClarifyDialog
                     items={inboxItems}
@@ -705,39 +459,15 @@ function InboxPage() {
                     onItemProcessed={refreshItems}
                 />
             )}
-            {clarifyItem && (
-                <ClarifyDialog
-                    items={[clarifyItem]}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    onClose={() => {
-                        setClarifyItem(null);
-                        setClarifyDest(null);
-                    }}
-                    onItemProcessed={refreshItems}
-                    // exactOptionalPropertyTypes: omit the prop entirely rather than passing undefined
-                    {...(clarifyDest ? { initialDestination: clarifyDest } : {})}
-                />
-            )}
-            {editingItem && (
-                <EditItemDialog
-                    item={editingItem}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    onClose={() => setEditingItem(null)}
-                    onSaved={refreshItems}
-                />
-            )}
+
             <InboxBottomSheet
                 item={bottomSheetItem}
                 onClose={() => setBottomSheetItem(null)}
-                onEdit={(i) => setEditingItem(i)}
+                onEdit={(i) => editor.openEditor({ item: i })}
                 onDone={(i) => void onQuickDone(i)}
-                onNextAction={(i) => onInlineActionFromSheet(i, 'nextAction')}
-                onCalendar={(i) => onInlineActionFromSheet(i, 'calendar')}
-                onWaitingFor={(i) => onInlineActionFromSheet(i, 'waitingFor')}
+                onNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
+                onCalendar={(i) => editor.openEditor({ item: i, initialStatus: 'calendar' })}
+                onWaitingFor={(i) => editor.openEditor({ item: i, initialStatus: 'waitingFor' })}
                 onTrash={(i) => void onTrash(i)}
             />
         </Box>

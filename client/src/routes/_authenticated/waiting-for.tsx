@@ -8,17 +8,18 @@ import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
+import Snackbar from '@mui/material/Snackbar';
+import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
-import { EditItemDialog } from '../../components/EditItemDialog';
+import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
-import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-waiting-for.module.css';
 
@@ -29,8 +30,9 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
     const { items, people, routines, workContexts, refreshItems } = useAppData();
-    const navigate = useNavigate();
-    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
 
     const waitingItems = items.filter((item) => item.status === 'waitingFor').sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
 
@@ -47,16 +49,6 @@ function WaitingForPage() {
         await clarifyToDone(db, item);
         await refreshItems();
     }
-
-    // Read clarify mode at click time — mode changes require a settings navigation
-    // which remounts this component, so no reactive state needed.
-    const openEditorFor = (item: StoredItem) => {
-        if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
-            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
-        } else {
-            setEditingItem(item);
-        }
-    };
 
     const isOverdue = (item: StoredItem) => item.expectedBy !== undefined && item.expectedBy < dayjs().format('YYYY-MM-DD');
 
@@ -123,7 +115,7 @@ function WaitingForPage() {
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
                                             <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => openEditorFor(item)} data-testid="waitingForItemEditButton">
+                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="waitingForItemEditButton">
                                                     <EditIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
@@ -135,7 +127,7 @@ function WaitingForPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemButton onClick={() => openEditorFor(item)} className={styles.rowButton} data-testid="waitingForItemRow">
+                                    <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="waitingForItemRow">
                                         <ListItemText
                                             primary={
                                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -161,22 +153,15 @@ function WaitingForPage() {
                                         />
                                     </ListItemButton>
                                 </ListItem>
+                                {editor.renderExpandFor(item._id)}
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>
                         ))}
                     </List>
                 </Box>
             ))}
-            {editingItem && (
-                <EditItemDialog
-                    item={editingItem}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    onClose={() => setEditingItem(null)}
-                    onSaved={refreshItems}
-                />
-            )}
+            {editor.renderGlobal()}
+            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
         </Box>
     );
 }

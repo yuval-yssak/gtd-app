@@ -42,13 +42,16 @@ interface Props {
     workContexts: StoredWorkContext[];
     onClose: () => void;
     onItemProcessed: () => Promise<void>;
-    // Pre-selects a destination chip on open — used when opening for a single item from inline buttons
-    initialDestination?: Destination;
 }
 
-export function ClarifyDialog({ items, db, people, workContexts, onClose, onItemProcessed, initialDestination }: Props) {
+/**
+ * Wizard for the inbox "Process Inbox" gesture — walks through every inbox item with progress
+ * counter, Skip, and a terminal "Inbox clear!" screen. Single-item editing now flows through the
+ * unified ItemEditorBody (dialog/popover/expand/page chrome); this dialog is batch-only.
+ */
+export function ClarifyDialog({ items, db, people, workContexts, onClose, onItemProcessed }: Props) {
     const [index, setIndex] = useState(0);
-    const [destination, setDestination] = useState<Destination | null>(initialDestination ?? null);
+    const [destination, setDestination] = useState<Destination | null>(null);
     const { options: calendarOptions } = useCalendarOptions();
     const [nextActionForm, setNextActionForm] = useState<NextActionFormState>(emptyNextAction);
     const [calendarForm, setCalendarForm] = useState<CalendarFormState>(emptyCalendar);
@@ -57,8 +60,6 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
 
     const currentItem = items[index];
     const total = items.length;
-    // Single-item mode: opened from an inline button — hide progress counter and Skip
-    const isSingleItem = total === 1;
 
     function resetForms() {
         setDestination(null);
@@ -161,18 +162,15 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                 >
                     Clarify
                 </Typography>
-                {/* Counter only meaningful in batch mode */}
-                {!isSingleItem && (
-                    <Typography
-                        component="span"
-                        variant="caption"
-                        sx={{
-                            color: 'text.secondary',
-                        }}
-                    >
-                        {index + 1} of {total}
-                    </Typography>
-                )}
+                <Typography
+                    component="span"
+                    variant="caption"
+                    sx={{
+                        color: 'text.secondary',
+                    }}
+                >
+                    {index + 1} of {total}
+                </Typography>
             </DialogTitle>
             <DialogContent dividers>
                 <Typography
@@ -270,14 +268,11 @@ export function ClarifyDialog({ items, db, people, workContexts, onClose, onItem
                 )}
             </DialogContent>
             <DialogActions>
-                {/* Skip hidden in single-item mode — there is nothing else to process */}
-                {!isSingleItem && (
-                    <Button onClick={() => void onSkip()} color="inherit">
-                        Skip
-                    </Button>
-                )}
+                <Button onClick={() => void onSkip()} color="inherit">
+                    Skip
+                </Button>
                 <Button variant="contained" disabled={isConfirmDisabled()} onClick={() => void onConfirm()}>
-                    {isSingleItem ? 'Confirm' : `Confirm${index + 1 < total ? ' & next' : ' & finish'}`}
+                    Confirm{index + 1 < total ? ' & next' : ' & finish'}
                 </Button>
             </DialogActions>
         </Dialog>

@@ -7,17 +7,17 @@ import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
+import Snackbar from '@mui/material/Snackbar';
+import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
-import { EditItemDialog } from '../../components/EditItemDialog';
+import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
-import type { StoredItem } from '../../types/MyDB';
 import styles from './-calendar.module.css';
 
 export const Route = createFileRoute('/_authenticated/calendar')({
@@ -27,8 +27,9 @@ export const Route = createFileRoute('/_authenticated/calendar')({
 function CalendarPage() {
     const { db } = Route.useRouteContext();
     const { items, routines, people, workContexts, refreshItems } = useAppData();
-    const navigate = useNavigate();
-    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
 
     const calendarItems = items.filter((item) => item.status === 'calendar').sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''));
 
@@ -54,14 +55,6 @@ function CalendarPage() {
     }
 
     const isPast = (dateKey: string) => dateKey !== 'No date' && dayjs(dateKey).isBefore(dayjs(), 'day');
-
-    const openEditorFor = (item: StoredItem) => {
-        if (parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)) === 'page') {
-            void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } });
-        } else {
-            setEditingItem(item);
-        }
-    };
 
     if (calendarItems.length === 0) {
         return (
@@ -126,13 +119,13 @@ function CalendarPage() {
                                     className={styles.item}
                                     secondaryAction={
                                         <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => openEditorFor(item)} data-testid="calendarItemEditButton">
+                                            <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="calendarItemEditButton">
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
                                     }
                                 >
-                                    <ListItemButton onClick={() => openEditorFor(item)} className={styles.rowButton} data-testid="calendarItemRow">
+                                    <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="calendarItemRow">
                                         <Box className={styles.timeCol}>
                                             {item.timeStart && (
                                                 <Typography
@@ -164,22 +157,15 @@ function CalendarPage() {
                                         />
                                     </ListItemButton>
                                 </ListItem>
+                                {editor.renderExpandFor(item._id)}
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>
                         ))}
                     </List>
                 </Box>
             ))}
-            {editingItem && (
-                <EditItemDialog
-                    item={editingItem}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    onClose={() => setEditingItem(null)}
-                    onSaved={refreshItems}
-                />
-            )}
+            {editor.renderGlobal()}
+            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
         </Box>
     );
 }

@@ -8,13 +8,15 @@ import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
+import Snackbar from '@mui/material/Snackbar';
+import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
-import { EditItemDialog } from '../../components/EditItemDialog';
+import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updateItem } from '../../db/itemMutations';
@@ -28,7 +30,9 @@ export const Route = createFileRoute('/_authenticated/tickler')({
 function TicklerPage() {
     const { db } = Route.useRouteContext();
     const { items, routines, people, workContexts, refreshItems } = useAppData();
-    const [editingItem, setEditingItem] = useState<StoredItem | null>(null);
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
 
     const today = dayjs().format('YYYY-MM-DD');
     // ignoreBefore only applies to nextAction and waitingFor items — calendar items ignore it
@@ -121,7 +125,7 @@ function TicklerPage() {
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
                                             <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => setEditingItem(item)} data-testid="ticklerItemEditButton">
+                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="ticklerItemEditButton">
                                                     <EditIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
@@ -133,7 +137,7 @@ function TicklerPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemButton onClick={() => setEditingItem(item)} className={styles.rowButton} data-testid="ticklerItemRow">
+                                    <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="ticklerItemRow">
                                         <ListItemText
                                             primary={
                                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -152,22 +156,15 @@ function TicklerPage() {
                                         />
                                     </ListItemButton>
                                 </ListItem>
+                                {editor.renderExpandFor(item._id)}
                                 {idx < groupItems.length - 1 && <Divider />}
                             </Box>
                         ))}
                     </List>
                 </Box>
             ))}
-            {editingItem && (
-                <EditItemDialog
-                    item={editingItem}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    onClose={() => setEditingItem(null)}
-                    onSaved={refreshItems}
-                />
-            )}
+            {editor.renderGlobal()}
+            <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
         </Box>
     );
 }

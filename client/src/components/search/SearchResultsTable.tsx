@@ -126,7 +126,7 @@ export function SearchResultsTable({ items, visibleColumns, onVisibleColumnsChan
                             <TableRow
                                 key={item._id}
                                 hover
-                                onClick={() => void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { dest: null } })}
+                                onClick={() => void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { status: null } })}
                                 className={styles.row}
                             >
                                 {orderedColumns.map((col) => (

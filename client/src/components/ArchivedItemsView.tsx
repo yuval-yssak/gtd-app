@@ -121,7 +121,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                     return (
                         <Box key={item._id}>
                             <ListItem disablePadding>
-                                <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ dest: null }} className={styles.rowLink}>
+                                <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
                                     <ListItemButton dense>
                                         <ListItemText
                                             primary={

@@ -97,4 +97,30 @@ test.describe('List row click opens edit dialog', () => {
             await expect(dialog).toBeVisible();
         });
     });
+
+    // Inbox previously had no row-body click handler (only chip icons + bottom sheet on mobile).
+    // After unifying editors, desktop row click now opens the same dialog as everywhere else.
+    test('inbox: desktop row click opens dialog; chip icons do not bubble', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `ix-row-click-${dayjs().valueOf()}@example.com`, async (page) => {
+            await gtd.collect(page, 'IX row-click target');
+            await gtd.collect(page, 'IX chip-action target');
+
+            await page.goto('/inbox');
+            await page.waitForSelector('text=IX row-click target');
+
+            // Row body click — opens the unified editor as Dialog (the default mode).
+            await page.getByTestId('inboxItemRow').filter({ hasText: 'IX row-click target' }).click();
+            const dialog = page.getByRole('dialog', { name: 'Edit item' });
+            await expect(dialog).toBeVisible();
+            await dialog.getByRole('button', { name: 'Cancel' }).click();
+            await expect(dialog).toBeHidden();
+
+            // Clicking the per-row Trash icon must NOT open the dialog — it should trash directly.
+            const targetRow = page.getByTestId('inboxItemRow').filter({ hasText: 'IX chip-action target' });
+            const trashButton = targetRow.locator('..').getByRole('button', { name: 'Trash' });
+            await trashButton.click();
+            await expect(dialog).toBeHidden();
+            await expect(page.getByText('IX chip-action target')).toBeHidden();
+        });
+    });
 });
