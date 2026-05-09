@@ -82,6 +82,18 @@ const STATUS_CHIPS: StatusChipConfig[] = [
     { value: 'trash', label: 'Trash', icon: <DeleteOutlineIcon fontSize="small" />, color: 'error' },
 ];
 
+/**
+ * Surface the body exposes to a custom actions renderer. Wizards (batch Process Inbox) supply
+ * their own Skip / Save-and-next buttons that need to drive the body's save lifecycle without
+ * duplicating its 80-line cross-account / status-transition / routine-detach logic.
+ */
+export interface ItemEditorActionsApi {
+    triggerSave: () => void;
+    saveDisabled: boolean;
+    isSaving: boolean;
+    onClose: () => void;
+}
+
 export interface ItemEditorBodyProps {
     item: StoredItem;
     db: IDBPDatabase<MyDB>;
@@ -93,6 +105,8 @@ export interface ItemEditorBodyProps {
     initialStatus?: EditableStatus;
     /** Determines which actions container is rendered and visual padding. Dialog wrapper sets 'dialog'. */
     chrome: ItemEditorChrome;
+    /** Replaces the default Cancel/Save actions row. Wizards use this for Skip / Save-and-next. */
+    renderActions?: (api: ItemEditorActionsApi) => React.ReactNode;
 }
 
 function itemToCalendarForm(item: StoredItem): CalendarFormState {
@@ -125,7 +139,7 @@ function bodyClassFor(chrome: ItemEditorChrome): string {
  * Wrappers MUST set `key={item._id}` so React remounts the body when the editor opens on a
  * different item — otherwise local form state would seed from the wrong item.
  */
-export function ItemEditorBody({ item, db, people, workContexts, onClose, onSaved, initialStatus, chrome }: ItemEditorBodyProps) {
+export function ItemEditorBody({ item, db, people, workContexts, onClose, onSaved, initialStatus, chrome, renderActions }: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
     const { loggedInAccounts } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
@@ -441,7 +455,13 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
                 </Box>
             )}
 
-            {chrome === 'dialog' ? (
+            {renderActions ? (
+                chrome === 'dialog' ? (
+                    <DialogActions sx={{ px: 0 }}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose })}</DialogActions>
+                ) : (
+                    <Box className={styles.inlineActions}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose })}</Box>
+                )
+            ) : chrome === 'dialog' ? (
                 <DialogActions sx={{ px: 0 }}>
                     <Button onClick={onClose}>Cancel</Button>
                     <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()}>

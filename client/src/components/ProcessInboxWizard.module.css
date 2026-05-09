@@ -1,0 +1,78 @@
+.dialogTitle {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.headerRow {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.headerTextBlock {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.headerActions {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.completedContent {
+    text-align: center;
+    padding: 2.5rem 1.5rem;
+}
+
+.completedIcon {
+    font-size: 3.5rem;
+    color: var(--mui-palette-success-main, #2e7d32);
+    margin-bottom: 1rem;
+}
+
+.completedActions {
+    justify-content: center;
+    padding-bottom: 1.5rem;
+}
+
+.pageRoot {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 48rem;
+    margin: 0 auto;
+    padding: 1rem;
+}
+
+.pageBody {
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+    border-radius: 0.5rem;
+    padding: 1rem;
+    background: var(--mui-palette-background-paper, #fff);
+}
+
+.donePage {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    padding: 4rem 1.5rem;
+}
+
+.inFlightBody {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.inFlightActions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+}

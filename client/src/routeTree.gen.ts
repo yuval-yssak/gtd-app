@@ -22,6 +22,7 @@ import { Route as AuthenticatedSomedayRouteImport } from './routes/_authenticate
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedSearchRouteImport } from './routes/_authenticated/search'
 import { Route as AuthenticatedRoutinesRouteImport } from './routes/_authenticated/routines'
+import { Route as AuthenticatedProcessInboxRouteImport } from './routes/_authenticated/process-inbox'
 import { Route as AuthenticatedPeopleRouteImport } from './routes/_authenticated/people'
 import { Route as AuthenticatedNextActionsRouteImport } from './routes/_authenticated/next-actions'
 import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated/inbox'
@@ -95,6 +96,12 @@ const AuthenticatedRoutinesRoute = AuthenticatedRoutinesRouteImport.update({
   path: '/routines',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedProcessInboxRoute =
+  AuthenticatedProcessInboxRouteImport.update({
+    id: '/process-inbox',
+    path: '/process-inbox',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedPeopleRoute = AuthenticatedPeopleRouteImport.update({
   id: '/people',
   path: '/people',
@@ -135,6 +142,7 @@ export interface FileRoutesByFullPath {
   '/inbox': typeof AuthenticatedInboxRoute
   '/next-actions': typeof AuthenticatedNextActionsRoute
   '/people': typeof AuthenticatedPeopleRoute
+  '/process-inbox': typeof AuthenticatedProcessInboxRoute
   '/routines': typeof AuthenticatedRoutinesRoute
   '/search': typeof AuthenticatedSearchRoute
   '/settings': typeof AuthenticatedSettingsRoute
@@ -154,6 +162,7 @@ export interface FileRoutesByTo {
   '/inbox': typeof AuthenticatedInboxRoute
   '/next-actions': typeof AuthenticatedNextActionsRoute
   '/people': typeof AuthenticatedPeopleRoute
+  '/process-inbox': typeof AuthenticatedProcessInboxRoute
   '/routines': typeof AuthenticatedRoutinesRoute
   '/search': typeof AuthenticatedSearchRoute
   '/settings': typeof AuthenticatedSettingsRoute
@@ -176,6 +185,7 @@ export interface FileRoutesById {
   '/_authenticated/inbox': typeof AuthenticatedInboxRoute
   '/_authenticated/next-actions': typeof AuthenticatedNextActionsRoute
   '/_authenticated/people': typeof AuthenticatedPeopleRoute
+  '/_authenticated/process-inbox': typeof AuthenticatedProcessInboxRoute
   '/_authenticated/routines': typeof AuthenticatedRoutinesRoute
   '/_authenticated/search': typeof AuthenticatedSearchRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
@@ -199,6 +209,7 @@ export interface FileRouteTypes {
     | '/inbox'
     | '/next-actions'
     | '/people'
+    | '/process-inbox'
     | '/routines'
     | '/search'
     | '/settings'
@@ -218,6 +229,7 @@ export interface FileRouteTypes {
     | '/inbox'
     | '/next-actions'
     | '/people'
+    | '/process-inbox'
     | '/routines'
     | '/search'
     | '/settings'
@@ -239,6 +251,7 @@ export interface FileRouteTypes {
     | '/_authenticated/inbox'
     | '/_authenticated/next-actions'
     | '/_authenticated/people'
+    | '/_authenticated/process-inbox'
     | '/_authenticated/routines'
     | '/_authenticated/search'
     | '/_authenticated/settings'
@@ -352,6 +365,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRoutinesRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/process-inbox': {
+      id: '/_authenticated/process-inbox'
+      path: '/process-inbox'
+      fullPath: '/process-inbox'
+      preLoaderRoute: typeof AuthenticatedProcessInboxRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/people': {
       id: '/_authenticated/people'
       path: '/people'
@@ -403,6 +423,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedInboxRoute: typeof AuthenticatedInboxRoute
   AuthenticatedNextActionsRoute: typeof AuthenticatedNextActionsRoute
   AuthenticatedPeopleRoute: typeof AuthenticatedPeopleRoute
+  AuthenticatedProcessInboxRoute: typeof AuthenticatedProcessInboxRoute
   AuthenticatedRoutinesRoute: typeof AuthenticatedRoutinesRoute
   AuthenticatedSearchRoute: typeof AuthenticatedSearchRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
@@ -422,6 +443,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedInboxRoute: AuthenticatedInboxRoute,
   AuthenticatedNextActionsRoute: AuthenticatedNextActionsRoute,
   AuthenticatedPeopleRoute: AuthenticatedPeopleRoute,
+  AuthenticatedProcessInboxRoute: AuthenticatedProcessInboxRoute,
   AuthenticatedRoutinesRoute: AuthenticatedRoutinesRoute,
   AuthenticatedSearchRoute: AuthenticatedSearchRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,

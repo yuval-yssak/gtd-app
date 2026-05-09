@@ -28,19 +28,20 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AccountChip } from '../../components/AccountChip';
-import { ClarifyDialog } from '../../components/ClarifyDialog';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
+import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-inbox.module.css';
 
@@ -238,6 +239,7 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
 function InboxPage() {
     const { db } = Route.useRouteContext();
     const { account, items, workContexts, people, routines, refreshItems } = useAppData();
+    const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
 
@@ -249,8 +251,13 @@ function InboxPage() {
     const [notesOpen, setNotesOpen] = useState(false);
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
 
-    // Batch "Process Inbox" wizard — a separate UX from the unified single-item editor.
-    const [batchClarifyOpen, setBatchClarifyOpen] = useState(false);
+    // Batch "Process Inbox" wizard — same ItemEditorBody as single-item editing, just sequenced.
+    // Snapshot the items at the moment "Process Inbox" is clicked so saves that move items out
+    // of the inbox don't shrink the array mid-walk and skew the wizard's index. Trade-off: if
+    // another device updates the same item mid-wizard, the wizard edits the stale snapshot row
+    // and a save would clobber the remote update (last-write-wins). Acceptable — the alternative
+    // (live array) drops items from under the index and is strictly worse.
+    const [batchSnapshot, setBatchSnapshot] = useState<StoredItem[] | null>(null);
 
     // Mobile bottom sheet — reachable via the per-row "more" button. Tap on the row body now
     // opens the unified editor instead.
@@ -289,6 +296,20 @@ function InboxPage() {
         editor.openEditor({ item, initialStatus: status, ...(anchor ? { anchor } : {}) });
     }
 
+    function startProcessInbox() {
+        if (inboxItems.length === 0) {
+            return;
+        }
+        // page mode is the only chrome that needs route navigation; every other setting flows
+        // into the in-place dialog wizard (popover/expand/instant don't make sense for batch).
+        const chrome = batchChromeFor(parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
+        if (chrome === 'page') {
+            void navigate({ to: '/process-inbox' });
+            return;
+        }
+        setBatchSnapshot(inboxItems);
+    }
+
     return (
         <Box>
             <Box className={styles.pageHeader}>
@@ -301,7 +322,7 @@ function InboxPage() {
                     Inbox
                     {inboxItems.length > 0 && <Chip label={inboxItems.length} size="small" color="primary" className={styles.countChip} />}
                 </Typography>
-                <Button variant="outlined" size="small" disabled={inboxItems.length === 0} onClick={() => setBatchClarifyOpen(true)}>
+                <Button variant="outlined" size="small" disabled={inboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
                     Process Inbox ({inboxItems.length})
                 </Button>
             </Box>
@@ -449,13 +470,13 @@ function InboxPage() {
             {editor.renderGlobal()}
             <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
 
-            {batchClarifyOpen && (
-                <ClarifyDialog
-                    items={inboxItems}
+            {batchSnapshot && (
+                <ProcessInboxWizard
+                    items={batchSnapshot}
                     db={db}
                     people={people}
                     workContexts={workContexts}
-                    onClose={() => setBatchClarifyOpen(false)}
+                    onClose={() => setBatchSnapshot(null)}
                     onItemProcessed={refreshItems}
                 />
             )}
