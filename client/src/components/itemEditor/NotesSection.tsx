@@ -1,0 +1,133 @@
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import Box from '@mui/material/Box';
+import IconButton from '@mui/material/IconButton';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
+import TextField from '@mui/material/TextField';
+import Typography from '@mui/material/Typography';
+import { useId, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import { type ItemEditorChrome, notesAreEmpty } from '../editItemDialogLogic';
+import styles from './ItemEditorBody.module.css';
+
+interface NotesSectionProps {
+    notes: string;
+    onNotesChange: (next: string) => void;
+    chrome: ItemEditorChrome;
+}
+
+/**
+ * Notes editor section. Two surface variants:
+ * - Page mode: click-to-edit. Defaults to a Markdown preview when notes exist; clicking the
+ *   preview switches to a focused textarea; blurring with non-empty notes returns to preview.
+ *   Empty notes start in the editor so the affordance is obvious.
+ * - All other chromes (dialog/popover/expand): tabbed Edit/Preview, unchanged from the previous
+ *   behaviour. The page-mode redesign was scoped intentionally — the smaller surfaces are short
+ *   and edit-oriented and don't need the read-mostly default.
+ */
+export function NotesSection({ notes, onNotesChange, chrome }: NotesSectionProps) {
+    if (chrome === 'page') {
+        return <PageNotesSection notes={notes} onNotesChange={onNotesChange} />;
+    }
+    return <TabbedNotesSection notes={notes} onNotesChange={onNotesChange} />;
+}
+
+function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChange: (n: string) => void }) {
+    // Empty notes start in the editor so the user sees a clear writing surface; non-empty notes
+    // start in preview so the page reads like a document.
+    const [editing, setEditing] = useState(() => notesAreEmpty(notes));
+    // Auto-focus must only fire on the user's preview→edit transition, not the initial mount.
+    // Otherwise a freshly opened item with empty notes would yank focus to the textarea — the
+    // exact pattern we removed from the title input. The flag persists across re-renders via ref.
+    const focusOnNextEditMount = useRef(false);
+    // Per-instance id for the preview region's aria-labelledby — useId guarantees uniqueness if
+    // the section ever renders more than once in a tree (split pane, side-by-side comparison).
+    const labelId = useId();
+    const enterEdit = () => {
+        focusOnNextEditMount.current = true;
+        setEditing(true);
+    };
+
+    if (editing) {
+        // autoFocus prop is captured at mount; reset the flag synchronously after read so the next
+        // `editing` cycle (e.g. after blur→preview→click again) decides for itself.
+        const shouldFocus = focusOnNextEditMount.current;
+        focusOnNextEditMount.current = false;
+        return (
+            <Box>
+                <TextField
+                    label="Notes (Markdown)"
+                    value={notes}
+                    onChange={(e) => onNotesChange(e.target.value)}
+                    onBlur={() => {
+                        // Stay in editor when notes are still empty — the user can keep typing.
+                        if (!notesAreEmpty(notes)) {
+                            setEditing(false);
+                        }
+                    }}
+                    fullWidth
+                    multiline
+                    minRows={4}
+                    placeholder="Supports **bold**, _italic_, `code`, lists, etc."
+                    {...(shouldFocus ? { autoFocus: true } : {})}
+                />
+            </Box>
+        );
+    }
+
+    return (
+        <Box>
+            <Box className={styles.notesHeader}>
+                <Typography variant="caption" id={labelId} className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600, mb: 0 }}>
+                    Notes (Markdown)
+                </Typography>
+                <IconButton size="small" aria-label="Edit notes" onClick={enterEdit}>
+                    <EditOutlinedIcon fontSize="small" />
+                </IconButton>
+            </Box>
+            <Box
+                className={styles.previewClickable}
+                tabIndex={0}
+                role="region"
+                aria-labelledby={labelId}
+                data-testid="pageNotesPreview"
+                onClick={enterEdit}
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        enterEdit();
+                    }
+                }}
+            >
+                <ReactMarkdown>{notes}</ReactMarkdown>
+            </Box>
+        </Box>
+    );
+}
+
+function TabbedNotesSection({ notes, onNotesChange }: { notes: string; onNotesChange: (n: string) => void }) {
+    const [tab, setTab] = useState<0 | 1>(0);
+    return (
+        <Box>
+            <Tabs value={tab} onChange={(_, v) => setTab(v as 0 | 1)} className={styles.tabs}>
+                <Tab label="Edit" value={0} />
+                <Tab label="Preview" value={1} />
+            </Tabs>
+            {tab === 0 ? (
+                <TextField
+                    label="Notes (Markdown)"
+                    value={notes}
+                    onChange={(e) => onNotesChange(e.target.value)}
+                    fullWidth
+                    multiline
+                    rows={4}
+                    placeholder="Supports **bold**, _italic_, `code`, lists, etc."
+                />
+            ) : (
+                <Box className={styles.preview}>
+                    {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles.empty}>Nothing to preview.</span>}
+                </Box>
+            )}
+        </Box>
+    );
+}

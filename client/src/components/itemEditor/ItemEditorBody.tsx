@@ -11,14 +11,11 @@ import Chip from '@mui/material/Chip';
 import DialogActions from '@mui/material/DialogActions';
 import Divider from '@mui/material/Divider';
 import Stack from '@mui/material/Stack';
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useMemo, useState, useTransition } from 'react';
-import ReactMarkdown from 'react-markdown';
 import type { ReassignItemEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
@@ -53,17 +50,20 @@ import {
     buildEditPatch,
     decideSavePath,
     type EditableStatus,
+    type ItemEditorChrome,
     isSaveDisabled,
     mergeFormsIntoItem,
     normalizeTitleAndNotes,
     pickDefaultConfigForUser,
+    shouldAutoFocusTitle,
     shouldDetachFromRoutine,
     stripRoutineId,
 } from '../editItemDialogLogic';
 import styles from './ItemEditorBody.module.css';
+import { NotesSection } from './NotesSection';
 import { ReassignInFlightInline } from './ReassignInFlightInline';
 
-export type ItemEditorChrome = 'dialog' | 'popover' | 'expand' | 'page';
+export type { ItemEditorChrome } from '../editItemDialogLogic';
 
 interface StatusChipConfig {
     value: EditableStatus;
@@ -147,7 +147,6 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
 
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
-    const [notesTab, setNotesTab] = useState<0 | 1>(0);
     const [status, setStatus] = useState<EditableStatus>(initialStatus ?? item.status);
     const [ownerUserId, setOwnerUserId] = useState(item.userId);
     const [reassignError, setReassignError] = useState<string | null>(null);
@@ -323,11 +322,7 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
         );
     }
 
-    // autoFocus rules:
-    // - dialog/page: focus the title to start editing immediately.
-    // - expand/popover: only focus when the user explicitly chose a destination (initialStatus
-    //   provided via a chip click). Row-body-click expands shouldn't yank focus from the row.
-    const shouldAutoFocus = chrome === 'dialog' || chrome === 'page' || ((chrome === 'expand' || chrome === 'popover') && initialStatus !== undefined);
+    const shouldAutoFocus = shouldAutoFocusTitle(chrome, initialStatus);
 
     return (
         <Box className={bodyClassFor(chrome)}>
@@ -340,27 +335,7 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
                 {...(shouldAutoFocus ? { autoFocus: true } : {})}
             />
 
-            <Box>
-                <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} className={styles.tabs}>
-                    <Tab label="Edit" value={0} />
-                    <Tab label="Preview" value={1} />
-                </Tabs>
-                {notesTab === 0 ? (
-                    <TextField
-                        label="Notes (Markdown)"
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        fullWidth
-                        multiline
-                        rows={4}
-                        placeholder="Supports **bold**, _italic_, `code`, lists, etc."
-                    />
-                ) : (
-                    <Box className={styles.preview}>
-                        {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles.empty}>Nothing to preview.</span>}
-                    </Box>
-                )}
-            </Box>
+            <NotesSection notes={notes} onNotesChange={setNotes} chrome={chrome} />
 
             <Divider />
 

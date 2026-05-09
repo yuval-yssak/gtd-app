@@ -118,7 +118,7 @@ function ItemPage() {
     };
 
     return (
-        <Box className={styles.page}>
+        <Box className={styles.page} data-testid="itemPageWrapper">
             <PageHeader title="Edit item" onBack={goBack} idForCopy={item._id} />
             <Paper variant="outlined" className={styles.card}>
                 <ItemEditorBody

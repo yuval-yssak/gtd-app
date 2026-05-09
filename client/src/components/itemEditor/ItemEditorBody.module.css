@@ -46,6 +46,38 @@
     overflow-y: auto;
 }
 
+/* Clickable preview region in page mode — same shell as .preview, but signals editability with
+ * a text cursor and a subtle hover highlight. */
+.previewClickable {
+    composes: preview;
+    cursor: text;
+}
+
+.previewClickable:hover {
+    border-color: var(--mui-palette-action-active, rgba(0, 0, 0, 0.54));
+}
+
+.previewClickable:focus-visible {
+    outline: 0.125rem solid var(--mui-palette-primary-main, #1976d2);
+    outline-offset: 0.0625rem;
+}
+
+/* Page-mode section header — same uppercase-caption style as the Status section, but kept under
+ * its own class so renaming "STATUS" → "Notes" doesn't visually couple unrelated sections. */
+.sectionLabel {
+    text-transform: uppercase;
+    letter-spacing: 0.0313rem;
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+/* Header row for the page-mode notes section — aligns label with an inline Edit affordance. */
+.notesHeader {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
 .preview :global(p) {
     margin: 0 0 0.5em;
 }

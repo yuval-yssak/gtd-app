@@ -4,7 +4,10 @@ declare const styles: {
     readonly bodyPopover: string;
     readonly empty: string;
     readonly inlineActions: string;
+    readonly notesHeader: string;
     readonly preview: string;
+    readonly previewClickable: string;
+    readonly sectionLabel: string;
     readonly somedayEmpty: string;
     readonly statusChips: string;
     readonly statusLabel: string;

@@ -1,0 +1,3 @@
+- [Click-to-edit accessibility](feedback_click_to_edit_a11y.md) — Markdown previews wrapped in role="button" hide content from AT and trap link descendants; flag and propose splitting gesture from content.
+- [Page-mode editor autofocus competition](feedback_page_mode_autofocus.md) — Page chrome was changed to suppress title autofocus; watch for *other* fields (notes textarea) silently grabbing focus on mount and re-introducing the same complaint.
+- [Inverse-pair predicates](feedback_inverse_pair_predicates.md) — Reviewer-introduced helpers sometimes ship as two near-mirror predicates of one truth; prefer a single canonical predicate and invert at call site.

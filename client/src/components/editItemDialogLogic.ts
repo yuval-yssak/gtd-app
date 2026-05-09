@@ -8,6 +8,8 @@ import { buildCalendarMeta, type CalendarMeta } from './clarify/types';
 
 export type EditableStatus = 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash';
 
+export type ItemEditorChrome = 'dialog' | 'popover' | 'expand' | 'page';
+
 /** Drops routineId so a routine-generated calendar item can leave the routine's series without resurfacing. */
 export function stripRoutineId(item: StoredItem): StoredItem {
     // Cast is required because TypeScript does not remove the optional `routineId` field from the
@@ -348,4 +350,29 @@ export function mergeFormsIntoItem(
     }
     // inbox, somedayMaybe, done, trash — no extra fields beyond title/notes
     return item;
+}
+
+/**
+ * Whether the title input should auto-focus on mount for the given chrome/initialStatus.
+ * - dialog: yes — modal opened to be edited.
+ * - page: no — page mode is read-mostly; auto-focus pins the cursor at the end of long titles
+ *   and scrolls the start out of view.
+ * - expand/popover: yes only when the user explicitly chose a destination via a chip (initialStatus
+ *   set). Row-body-click expands shouldn't yank focus from the row.
+ */
+export function shouldAutoFocusTitle(chrome: ItemEditorChrome, initialStatus: EditableStatus | undefined): boolean {
+    if (chrome === 'dialog') {
+        return true;
+    }
+    if (chrome === 'page') {
+        return false;
+    }
+    return initialStatus !== undefined;
+}
+
+/** True when notes are blank or whitespace-only. The page-mode notes section uses this to decide
+ *  both the initial preview/editor state (start in editor when empty so the affordance is obvious)
+ *  and the blur behaviour (stay in editor when empty so the user can resume typing). */
+export function notesAreEmpty(notes: string): boolean {
+    return notes.trim().length === 0;
 }
