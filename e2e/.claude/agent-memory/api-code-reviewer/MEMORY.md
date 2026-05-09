@@ -1,1 +1,3 @@
 - [Legacy scope deprecation pattern](feedback_legacy_scope_deprecation_pattern.md) — Keep value in union + parse-allowlist; exclude from mint-allowlist; in-memory bridge in bearerMiddleware; never rewrite stored row.
+- [Reassign refactors silently expand GCal/webhook fan-out](project_reassign_refactor_gcal_fanout.md) — When persist*Move legs flow through applyAndPublishOperation, source-side delete now triggers GCal pushback + per-item cascades that recordOperation-only path didn't. Trace notifyChange both legs.
+- [Reassign cross-account GCal torn-state residual](project_reassign_gcal_torn_state_residual.md) — DB-side torn state now impossible via preValidateTargetSnapshot, but moveItemAcrossCalendars still mutates GCal before validation runs.

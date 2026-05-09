@@ -153,6 +153,34 @@ test.describe('Personal API tokens (settings)', () => {
         });
     });
 
+    test('mints a reassign.accept token and renders it as a scope chip on the row', async ({ browser }) => {
+        const email = `reassign-accept-${dayjs().valueOf()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            await page.goto(`${CLIENT_URL}/settings`);
+
+            await page.getByTestId('createTokenButton').click();
+            await page.getByTestId('tokenLabelInput').locator('input').fill('Recipient');
+            // Tick the new reassign.accept scope so the resulting token authorises another
+            // account's `reassign`-scoped token to push items into this account.
+            await page.getByTestId('scopeCheckbox-reassign.accept').locator('input').check();
+            await page.getByTestId('confirmCreateTokenButton').click();
+            await page.getByTestId('dismissRevealButton').click();
+
+            const row = page.getByTestId('tokenRow');
+            await expect(row).toContainText('Recipient');
+            // items.capture + items.read default scopes plus the new reassign.accept = 3 chips.
+            await expect(row.getByTestId('tokenScopeChip')).toHaveCount(3);
+            // Tightened from a substring `toContainText` to a literal-bounded chip filter so a
+            // future relabel can't sneak past — and so neither chip shadows the other (the
+            // substring "reassign" appears inside "reassign.accept", which made the old
+            // toContainText assertion satisfiable by either chip alone).
+            await expect(row.getByTestId('tokenScopeChip').filter({ hasText: /^reassign\.accept$/ })).toHaveCount(1);
+            await expect(row.getByTestId('tokenScopeChip').filter({ hasText: /^reassign$/ })).toHaveCount(0);
+        });
+    });
+
     test('reveal dialog cannot be dismissed by Escape or backdrop click', async ({ browser }) => {
         const email = `reveal-pin-${dayjs().valueOf()}@example.com`;
         await resetServerForEmails([email]);

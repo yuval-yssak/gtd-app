@@ -6,18 +6,11 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
-import type {
-    CalendarIntegrationInterface,
-    EntitySnapshot,
-    EntityType,
-    ItemInterface,
-    PersonInterface,
-    RoutineInterface,
-    WorkContextInterface,
-} from '../types/entities.js';
+import { validateOperation } from '../schemas/operations/index.js';
+import type { CalendarIntegrationInterface, EntityType, ItemInterface, PersonInterface, RoutineInterface, WorkContextInterface } from '../types/entities.js';
+import { applyAndPublishOperation, OperationValidationError } from './applyOperation.js';
 import { ensureTimeZone } from './calendarPushback.js';
 import { markdownToHtml } from './markdownHtml.js';
-import { recordOperation } from './operationHelpers.js';
 
 /** Optional GCal target — REQUIRED when reassigning a calendar-linked item across accounts. */
 export interface TargetCalendar {
@@ -84,10 +77,27 @@ export type ReassignProviderFactory = (integration: CalendarIntegrationInterface
 /** Discriminated outcome — keeps callers narrowly typed without throwing for control flow. */
 export type ReassignResult =
     | { ok: true; crossUserReferences?: { peopleIds?: string[]; workContextIds?: string[] } }
-    | { ok: false; status: 400 | 404 | 502; error: string };
+    | { ok: false; status: 400 | 404 | 502; error: string; code?: 'validation_failed' };
 
-/** Top-level entry point. Branches by entityType so each case stays at one level of abstraction. */
+/**
+ * Top-level entry point. Branches by entityType so each case stays at one level of abstraction.
+ * Catches `OperationValidationError` from the strict-mode apply pipeline and converts it to a
+ * 400 `validation_failed` so callers (the v1/reassign route, the in-app /sync/reassign route)
+ * can render a structured error without each having to re-implement the same try/catch.
+ */
 export async function reassignEntity(params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<ReassignResult> {
+    try {
+        return await dispatchByEntityType(params, buildProvider);
+    } catch (err) {
+        if (err instanceof OperationValidationError) {
+            return { ok: false, status: 400, error: err.failure.message, code: 'validation_failed' };
+        }
+        throw err;
+    }
+}
+
+/** Pure dispatcher — kept separate so reassignEntity can wrap the whole switch in one try/catch. */
+async function dispatchByEntityType(params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<ReassignResult> {
     switch (params.entityType) {
         case 'item':
             return reassignItem(params, buildProvider);
@@ -369,46 +379,88 @@ async function probeDeleteOnIntegration(
     return { ok: false, lastError };
 }
 
-/** Common path for both calendar-linked and plain items: delete from source, create under target, record both ops. */
+/**
+ * Pre-validates the create-leg snapshot BEFORE the source delete fires. Without this guard a
+ * malformed (or matrix-violating) snapshot would land us in a torn state — source deleted,
+ * target failed to create. We replay the same Zod check `applyAndPublishOperation` runs in
+ * strict mode and throw the same `OperationValidationError` the apply pipeline would, so the
+ * top-level catch in `reassignEntity` produces the same `validation_failed` 400 either way.
+ */
+function preValidateTargetSnapshot(raw: {
+    entityType: EntityType;
+    entityId: string;
+    snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface;
+}): void {
+    const validation = validateOperation({ ...raw, opType: 'create' });
+    if (!validation.ok) {
+        throw new OperationValidationError(validation);
+    }
+}
+
+/**
+ * Common path for both calendar-linked and plain items. Drives both the source delete and the
+ * target create through `applyAndPublishOperation` so SSE / web push / GCal pushback / webhook
+ * fan-out fire on BOTH user channels. Delete on fromUserId completes before the create on
+ * toUserId so a webhook subscriber on the target never observes a duplicate before the source
+ * has been cleared. `applyAndPublishOperation` handles the per-collection delete + replaceById
+ * via `applyEntityOp` — we no longer call the DAOs directly here.
+ *
+ * `suppressGCalPushback: true` on both legs because the calendar-linked path already drove the
+ * GCal create-on-target + delete-on-source inline via `moveItemAcrossCalendars`. Without this,
+ * `notifyChange` would re-push the create-leg snapshot to the target's GCal, producing a duplicate
+ * event. For non-calendar items the flag is a no-op (`maybePushToGCal` returns early when
+ * `calendarEventId` is absent and the matrix-allowed status forbids it). The routine path does NOT
+ * pass this flag — the routine cascade in `pushRoutineDeletion` is the desired source-side cleanup.
+ */
 async function persistItemMove(item: ItemInterface, params: ReassignParams): Promise<void> {
     const now = dayjs().toISOString();
+    const deviceId = params.deviceId ?? 'server';
     const newSnapshot: ItemInterface = { ...item, user: params.toUserId, updatedTs: now };
-    await itemsDAO.deleteByOwner(params.entityId, params.fromUserId);
-    await itemsDAO.replaceById(params.entityId, newSnapshot);
-    await recordOperation(params.fromUserId, {
-        entityType: 'item',
-        entityId: params.entityId,
-        snapshot: null,
-        opType: 'delete',
-        now,
-        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
-    });
-    await recordOperation(params.toUserId, {
-        entityType: 'item',
-        entityId: params.entityId,
-        snapshot: newSnapshot,
-        opType: 'create',
-        now,
-        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
-    });
+    // Pre-validate before the source delete so a torn move (deleted on source, failed on target)
+    // is impossible. Throws OperationValidationError → top-level catch maps to a 400.
+    preValidateTargetSnapshot({ entityType: 'item', entityId: params.entityId, snapshot: newSnapshot });
+    await applyAndPublishOperation(
+        params.fromUserId,
+        { entityType: 'item', entityId: params.entityId, snapshot: null, opType: 'delete' },
+        { deviceId, now, strict: true, suppressGCalPushback: true },
+    );
+    await applyAndPublishOperation(
+        params.toUserId,
+        { entityType: 'item', entityId: params.entityId, snapshot: newSnapshot, opType: 'create' },
+        { deviceId, now, strict: true, suppressGCalPushback: true },
+    );
 }
 
 // ── Routine ──────────────────────────────────────────────────────────────────
 
-const MAX_GENERATED_ITEMS_PER_REASSIGN = 500;
-
+/**
+ * Reassigns a routine across users.
+ *
+ * Source-side cleanup is performed by the cascade in `pushRoutineDeletion` (fired by the
+ * source-leg delete inside `persistRoutineMove`):
+ *   - every routine-generated calendar item under `fromUserId` is moved to `status: 'trash'`
+ *     (recoverable, not falsely marked done) — see `trashGeneratedCalendarItems`.
+ *   - the routine's GCal recurring master event is hard-deleted from the source account.
+ * Target-side: Bob receives the routine itself with calendar-link fields stripped (so he doesn't
+ * push to Alice's GCal) and starts generating fresh from his side. He does NOT inherit Alice's
+ * historical generated items — those are intentionally left as trash on the source side, and the
+ * routine generator will produce new instances under Bob from the next tick onward.
+ *
+ * `_buildProvider` is reserved for a future GCal master-series re-link.
+ */
 async function reassignRoutine(params: ReassignParams, _buildProvider: ReassignProviderFactory): Promise<ReassignResult> {
     const routine = await routinesDAO.findByOwnerAndId(params.entityId, params.fromUserId);
     if (!routine) {
         return { ok: false, status: 404, error: 'Routine not found under fromUserId' };
     }
-    // _buildProvider is reserved for a future GCal master-series re-link. Step 5 keeps the master
-    // event under the original account; only single calendar items move across accounts here.
+    // Count source-side calendar-status generated items BEFORE the cascade so the audit log
+    // reflects what was actually trashed (`trashGeneratedCalendarItems` only touches
+    // status='calendar' rows — done/trash rows are left as-is, by matrix design).
+    const cascadedCount = (await itemsDAO.findArray({ user: params.fromUserId, routineId: params.entityId, status: 'calendar' })).length;
     await persistRoutineMove(routine, params);
-    const movedCount = await reassignGeneratedItems(params);
-    if (movedCount >= MAX_GENERATED_ITEMS_PER_REASSIGN) {
-        console.warn(`[reassign] routine ${params.entityId} hit generated-items cap (${MAX_GENERATED_ITEMS_PER_REASSIGN}) — remaining items left under source`);
-    }
+    console.log(
+        `[reassign] cascaded routine source-cleanup | routineId=${params.entityId} fromUserId=${params.fromUserId} toUserId=${params.toUserId} cascadedItems=${cascadedCount} gcalEventId=${routine.calendarEventId ?? '(none)'}`,
+    );
     return { ok: true };
 }
 
@@ -420,29 +472,25 @@ async function reassignRoutine(params: ReassignParams, _buildProvider: ReassignP
  */
 async function persistRoutineMove(routine: RoutineInterface, params: ReassignParams): Promise<void> {
     const now = dayjs().toISOString();
+    const deviceId = params.deviceId ?? 'server';
     // Destructure to drop the keys entirely (rather than assigning undefined) to keep
     // exactOptionalPropertyTypes happy.
     const { calendarEventId: _ce, calendarIntegrationId: _ci, calendarSyncConfigId: _cs, ...routineWithoutCalLinks } = routine;
     const patched = applyRoutineEditPatch(routineWithoutCalLinks as RoutineInterface, params.editRoutinePatch);
     const newSnapshot: RoutineInterface = { ...patched, user: params.toUserId, updatedTs: now };
-    await routinesDAO.deleteByOwner(params.entityId, params.fromUserId);
-    await routinesDAO.replaceById(params.entityId, newSnapshot);
-    await recordOperation(params.fromUserId, {
-        entityType: 'routine',
-        entityId: params.entityId,
-        snapshot: null,
-        opType: 'delete',
-        now,
-        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
-    });
-    await recordOperation(params.toUserId, {
-        entityType: 'routine',
-        entityId: params.entityId,
-        snapshot: newSnapshot,
-        opType: 'create',
-        now,
-        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
-    });
+    preValidateTargetSnapshot({ entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot });
+    // Same source-delete-then-target-create discipline as persistItemMove — see that helper for
+    // the rationale on why each leg flows through applyAndPublishOperation rather than the DAO.
+    await applyAndPublishOperation(
+        params.fromUserId,
+        { entityType: 'routine', entityId: params.entityId, snapshot: null, opType: 'delete' },
+        { deviceId, now, strict: true },
+    );
+    await applyAndPublishOperation(
+        params.toUserId,
+        { entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot, opType: 'create' },
+        { deviceId, now, strict: true },
+    );
 }
 
 /**
@@ -478,21 +526,6 @@ function applyRoutineEditPatch(routine: RoutineInterface, patch: ReassignRoutine
     return next;
 }
 
-/** Moves every generated item belonging to the routine across to the target user. Returns the count moved. */
-async function reassignGeneratedItems(params: ReassignParams): Promise<number> {
-    const generated = await itemsDAO.findArray({ user: params.fromUserId, routineId: params.entityId }, { limit: MAX_GENERATED_ITEMS_PER_REASSIGN });
-    if (!generated.length) {
-        return 0;
-    }
-    for (const item of generated) {
-        if (!item._id) {
-            continue;
-        }
-        await persistItemMove(item, { ...params, entityId: item._id });
-    }
-    return generated.length;
-}
-
 // ── Person / WorkContext ─────────────────────────────────────────────────────
 
 async function reassignPerson(params: ReassignParams): Promise<ReassignResult> {
@@ -501,7 +534,7 @@ async function reassignPerson(params: ReassignParams): Promise<ReassignResult> {
         return { ok: false, status: 404, error: 'Person not found under fromUserId' };
     }
     const referencingItemIds = await findItemsReferencing(params.fromUserId, 'peopleIds', params.entityId);
-    await persistSimpleEntityMove<PersonInterface>(person, params, peopleDAO, 'person');
+    await persistSimpleEntityMove<PersonInterface>(person, params, 'person');
     return referencingItemIds.length ? { ok: true, crossUserReferences: { peopleIds: referencingItemIds } } : { ok: true };
 }
 
@@ -511,7 +544,7 @@ async function reassignWorkContext(params: ReassignParams): Promise<ReassignResu
         return { ok: false, status: 404, error: 'WorkContext not found under fromUserId' };
     }
     const referencingItemIds = await findItemsReferencing(params.fromUserId, 'workContextIds', params.entityId);
-    await persistSimpleEntityMove<WorkContextInterface>(workContext, params, workContextsDAO, 'workContext');
+    await persistSimpleEntityMove<WorkContextInterface>(workContext, params, 'workContext');
     return referencingItemIds.length ? { ok: true, crossUserReferences: { workContextIds: referencingItemIds } } : { ok: true };
 }
 
@@ -521,38 +554,28 @@ async function findItemsReferencing(userId: string, field: 'peopleIds' | 'workCo
     return items.map((i) => i._id).filter((id): id is string => Boolean(id));
 }
 
-// Generic DAO subset accepted by persistSimpleEntityMove — covers the three operations we need
-// without leaking AbstractDAO's full Mongo-typed surface into this helper module.
-interface SimpleEntityDAO<T extends EntitySnapshot> {
-    deleteByOwner(entityId: string, userId: string): Promise<void>;
-    replaceById(entityId: string, doc: T): Promise<void>;
-}
-
-/** Person + workContext share a pure delete-then-create-with-new-user path. */
+/**
+ * Person + workContext share a pure delete-then-create-with-new-user path. Both legs flow
+ * through applyAndPublishOperation so the persistence + log + fan-out runs through the same
+ * pipeline as every other write surface.
+ */
 async function persistSimpleEntityMove<T extends PersonInterface | WorkContextInterface>(
     entity: T,
     params: ReassignParams,
-    dao: SimpleEntityDAO<T>,
     entityType: 'person' | 'workContext',
 ): Promise<void> {
     const now = dayjs().toISOString();
+    const deviceId = params.deviceId ?? 'server';
     const newSnapshot: T = { ...entity, user: params.toUserId, updatedTs: now };
-    await dao.deleteByOwner(params.entityId, params.fromUserId);
-    await dao.replaceById(params.entityId, newSnapshot);
-    await recordOperation(params.fromUserId, {
-        entityType,
-        entityId: params.entityId,
-        snapshot: null,
-        opType: 'delete',
-        now,
-        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
-    });
-    await recordOperation(params.toUserId, {
-        entityType,
-        entityId: params.entityId,
-        snapshot: newSnapshot,
-        opType: 'create',
-        now,
-        ...(params.deviceId ? { deviceId: params.deviceId } : {}),
-    });
+    preValidateTargetSnapshot({ entityType, entityId: params.entityId, snapshot: newSnapshot });
+    await applyAndPublishOperation(
+        params.fromUserId,
+        { entityType, entityId: params.entityId, snapshot: null, opType: 'delete' },
+        { deviceId, now, strict: true },
+    );
+    await applyAndPublishOperation(
+        params.toUserId,
+        { entityType, entityId: params.entityId, snapshot: newSnapshot, opType: 'create' },
+        { deviceId, now, strict: true },
+    );
 }

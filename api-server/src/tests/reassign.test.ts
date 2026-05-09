@@ -236,12 +236,88 @@ describe('POST /sync/reassign', () => {
     });
 
     describe('routine', () => {
-        it('moves the routine and every generated item with it', async () => {
+        // Step 2 of the fan-out fix series: the routine reassign relies on the source-leg delete's
+        // pushRoutineDeletion cascade to (a) hard-delete the GCal recurring master event and
+        // (b) trash every status='calendar' generated item under fromUserId. We pin the cascade's
+        // visible side-effects here so a future refactor can't silently revert to the old "move
+        // generated items to the target" behavior (which would inherit broken state on Bob).
+        it('hard-deletes the source GCal master via pushRoutineDeletion and trashes source-side calendar items — cascade still fires', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            await calendarIntegrationsDAO.upsertEncrypted({
+                _id: 'int-a',
+                user: alice.userId,
+                provider: 'google',
+                accessToken: 'at-a',
+                refreshToken: 'rt-a',
+                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-a',
+                integrationId: 'int-a',
+                user: alice.userId,
+                calendarId: 'primary',
+                isDefault: true,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            const routine = makeRoutine(alice.userId, {
+                routineType: 'calendar',
+                calendarEventId: 'gcal-master-routine',
+                calendarIntegrationId: 'int-a',
+                calendarSyncConfigId: 'cfg-a',
+                calendarItemTemplate: { timeOfDay: '10:00', duration: 30 },
+            });
+            await routinesDAO.insertOne(routine);
+            const generated = makeItem(alice.userId, {
+                routineId: routine._id,
+                status: 'calendar',
+                timeStart: '2030-01-01T10:00:00Z',
+                timeEnd: '2030-01-01T10:30:00Z',
+            });
+            await itemsDAO.insertOne(generated);
+
+            const deleteRecurringEvent = vi.fn().mockResolvedValue(undefined);
+            const stubProvider = {
+                deleteRecurringEvent,
+                createEvent: vi.fn(),
+                updateEvent: vi.fn(),
+                deleteEvent: vi.fn(),
+                getCalendarTimeZone: vi.fn().mockResolvedValue('UTC'),
+            };
+            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'routine', entityId: routine._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            // Routine moved to Bob. Calendar links stripped on Bob's copy so he doesn't push to Alice's GCal.
+            const movedRoutine = await routinesDAO.findByOwnerAndId(routine._id, bob.userId);
+            expect(movedRoutine).not.toBeNull();
+            expect(movedRoutine?.calendarEventId).toBeUndefined();
+            expect(movedRoutine?.calendarIntegrationId).toBeUndefined();
+            // Cascade fired: GCal master hard-deleted, source calendar items trashed (poll briefly because notifyChange's
+            // pushback leg is fire-and-forget on the calendarPushback path).
+            const deadline = Date.now() + 1500;
+            while (Date.now() < deadline && deleteRecurringEvent.mock.calls.length === 0) {
+                await new Promise<void>((r) => setTimeout(r, 20));
+            }
+            expect(deleteRecurringEvent).toHaveBeenCalledWith('gcal-master-routine', 'primary');
+            const sourceItem = await itemsDAO.findByOwnerAndId(generated._id!, alice.userId);
+            expect(sourceItem?.status).toBe('trash');
+            buildSpy.mockRestore();
+        });
+
+        it('moves the routine and trashes source-side generated items via the cascade — Bob inherits no historical items', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
             const routine = makeRoutine(alice.userId);
             await routinesDAO.insertOne(routine);
-            // Two generated items: one calendar (status='calendar'), one done.
+            // Two generated items: one open calendar (cascade target), one already done.
             const item1 = makeItem(alice.userId, {
                 routineId: routine._id,
                 status: 'calendar',
@@ -257,11 +333,16 @@ describe('POST /sync/reassign', () => {
             expect(res.status).toBe(200);
             expect(await routinesDAO.findByOwnerAndId(routine._id, alice.userId)).toBeNull();
             expect(await routinesDAO.findByOwnerAndId(routine._id, bob.userId)).not.toBeNull();
-            // Both generated items moved with the routine.
-            expect(await itemsDAO.findByOwnerAndId(item1._id!, alice.userId)).toBeNull();
-            expect(await itemsDAO.findByOwnerAndId(item2._id!, alice.userId)).toBeNull();
-            expect(await itemsDAO.findByOwnerAndId(item1._id!, bob.userId)).not.toBeNull();
-            expect(await itemsDAO.findByOwnerAndId(item2._id!, bob.userId)).not.toBeNull();
+            // Cascade: open calendar items under Alice flip to 'trash' (recoverable, not 'done').
+            // The historical 'done' item is left as-is — `trashGeneratedCalendarItems` only touches
+            // status='calendar' rows, by design (matrix A8).
+            const aliceItem1 = await itemsDAO.findByOwnerAndId(item1._id!, alice.userId);
+            expect(aliceItem1?.status).toBe('trash');
+            const aliceItem2 = await itemsDAO.findByOwnerAndId(item2._id!, alice.userId);
+            expect(aliceItem2?.status).toBe('done');
+            // Bob inherits NO historical generated items — the routine starts fresh on his side.
+            expect(await itemsDAO.findByOwnerAndId(item1._id!, bob.userId)).toBeNull();
+            expect(await itemsDAO.findByOwnerAndId(item2._id!, bob.userId)).toBeNull();
         });
     });
 
@@ -391,6 +472,91 @@ describe('POST /sync/reassign', () => {
             const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
             expect(moved?.calendarEventId).toBe('gcal-evt-new');
             expect(moved?.calendarIntegrationId).toBe('int-b');
+            buildSpy.mockRestore();
+        });
+
+        // Regression: notifyChange's GCal pushback leg must NOT fire on either reassign leg —
+        // the create-on-target was already pushed inline (via createEvent above), and the source
+        // delete already nuked the event (via deleteEvent). Without the suppressGCalPushback knob
+        // threaded by persistItemMove, the create-leg fan-out would re-push the moved item to
+        // Bob's GCal via maybePushToGCal → pushExistingItemToGCal → provider.updateEvent —
+        // producing a duplicate write per cross-account move.
+        it('does NOT call provider.updateEvent during reassign — suppressGCalPushback prevents the redundant fan-out push', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            await calendarIntegrationsDAO.upsertEncrypted({
+                _id: 'int-a',
+                user: alice.userId,
+                provider: 'google',
+                accessToken: 'at-a',
+                refreshToken: 'rt-a',
+                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarIntegrationsDAO.upsertEncrypted({
+                _id: 'int-b',
+                user: bob.userId,
+                provider: 'google',
+                accessToken: 'at-b',
+                refreshToken: 'rt-b',
+                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-a',
+                integrationId: 'int-a',
+                user: alice.userId,
+                calendarId: 'primary',
+                isDefault: true,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            await calendarSyncConfigsDAO.insertOne({
+                _id: 'cfg-b',
+                integrationId: 'int-b',
+                user: bob.userId,
+                calendarId: 'primary',
+                isDefault: true,
+                enabled: true,
+                timeZone: 'UTC',
+                createdTs: dayjs().toISOString(),
+                updatedTs: dayjs().toISOString(),
+            });
+            const item = makeItem(alice.userId, {
+                status: 'calendar',
+                calendarEventId: 'gcal-evt-suppress',
+                calendarIntegrationId: 'int-a',
+                calendarSyncConfigId: 'cfg-a',
+                timeStart: '2030-01-01T10:00:00Z',
+                timeEnd: '2030-01-01T11:00:00Z',
+            });
+            await itemsDAO.insertOne(item);
+
+            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const deleteEvent = vi.fn().mockResolvedValue(undefined);
+            const updateEvent = vi.fn().mockResolvedValue(undefined);
+            const stubProvider = { createEvent, deleteEvent, updateEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
+            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, {
+                entityType: 'item',
+                entityId: item._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
+            });
+
+            expect(res.status).toBe(200);
+            // Inline GCal moves still fired (create on target, delete on source). The fan-out's
+            // would-be redundant updateEvent must NOT fire — that's the load-bearing assertion.
+            expect(createEvent).toHaveBeenCalledTimes(1);
+            expect(deleteEvent).toHaveBeenCalledTimes(1);
+            expect(updateEvent).not.toHaveBeenCalled();
             buildSpy.mockRestore();
         });
 
@@ -799,13 +965,15 @@ describe('POST /sync/reassign', () => {
             expect(moved?.notes).toBe('new notes');
         });
 
-        it('applies nextAction patch fields (workContextIds, peopleIds, energy, time, urgent, focus, expectedBy, ignoreBefore, waitingForPersonId)', async () => {
+        it('applies nextAction patch fields (workContextIds, peopleIds, energy, time, urgent, focus, expectedBy, ignoreBefore)', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
             const item = makeItem(alice.userId, { status: 'nextAction' });
             await itemsDAO.insertOne(item);
 
             const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            // `waitingForPersonId` is gated to status='waitingFor' by the status×field matrix —
+            // covered separately in the waitingFor edit-patch test below to keep this case clean.
             const res = await postReassign(cookie, {
                 entityType: 'item',
                 entityId: item._id,
@@ -820,7 +988,6 @@ describe('POST /sync/reassign', () => {
                     focus: true,
                     expectedBy: '2026-12-31',
                     ignoreBefore: '2026-12-01',
-                    waitingForPersonId: 'p-2',
                 },
             });
 
@@ -835,8 +1002,27 @@ describe('POST /sync/reassign', () => {
                 focus: true,
                 expectedBy: '2026-12-31',
                 ignoreBefore: '2026-12-01',
-                waitingForPersonId: 'p-2',
             });
+        });
+
+        it('applies waitingForPersonId on a waitingFor item (status×field matrix isolation)', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const item = makeItem(alice.userId, { status: 'waitingFor' });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, {
+                entityType: 'item',
+                entityId: item._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                editPatch: { waitingForPersonId: 'p-2' },
+            });
+
+            expect(res.status).toBe(200);
+            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(moved?.waitingForPersonId).toBe('p-2');
         });
 
         it('drops forged whitelist-violating fields (user, _id, updatedTs, routineId)', async () => {
@@ -970,7 +1156,9 @@ describe('POST /sync/reassign', () => {
         it('omitting editPatch leaves all editable fields unchanged', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
-            const item = makeItem(alice.userId, { title: 'kept', notes: 'also kept', urgent: true });
+            // `urgent` is a nextAction-status field — use status='nextAction' so the snapshot
+            // satisfies the status×field matrix that strict-mode validation enforces.
+            const item = makeItem(alice.userId, { status: 'nextAction', title: 'kept', notes: 'also kept', urgent: true });
             await itemsDAO.insertOne(item);
 
             const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
@@ -1042,11 +1230,14 @@ describe('POST /sync/reassign', () => {
             expect(moved?.updatedTs).not.toBe('1970-01-01T00:00:00Z');
         });
 
-        it('still moves generated items when editRoutinePatch is provided', async () => {
+        it('source-side generated items are not transplanted when editRoutinePatch is provided — Bob starts fresh', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
             const routine = makeRoutine(alice.userId);
             await routinesDAO.insertOne(routine);
+            // A generated `nextAction` item — outside the trash-on-cascade path (which only targets
+            // status='calendar'). With the cascade-only cleanup it must stay under Alice as-is, and
+            // Bob receives no transplanted history.
             const generated = makeItem(alice.userId, { routineId: routine._id, status: 'nextAction' });
             await itemsDAO.insertOne(generated);
 
@@ -1060,10 +1251,11 @@ describe('POST /sync/reassign', () => {
             });
 
             expect(res.status).toBe(200);
-            // Generated item moved with the routine and kept its routineId link.
-            expect(await itemsDAO.findByOwnerAndId(generated._id!, alice.userId)).toBeNull();
-            const movedGenerated = await itemsDAO.findByOwnerAndId(generated._id!, bob.userId);
-            expect(movedGenerated?.routineId).toBe(routine._id);
+            // Source-side generated next-action item remains under Alice (not in cascade scope).
+            const stillAlice = await itemsDAO.findByOwnerAndId(generated._id!, alice.userId);
+            expect(stillAlice?.status).toBe('nextAction');
+            // Bob has no historical generated items.
+            expect(await itemsDAO.findByOwnerAndId(generated._id!, bob.userId)).toBeNull();
         });
 
         it('startDate="" clears the routine startDate (empty-string convention)', async () => {

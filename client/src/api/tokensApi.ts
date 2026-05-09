@@ -18,6 +18,7 @@ export type ApiTokenScope =
     | 'contexts.read'
     | 'contexts.write'
     | 'reassign'
+    | 'reassign.accept'
     | 'webhooks.manage';
 
 /** Scopes the user can pick when minting a new token. Excludes the legacy `items.clarify`. */
@@ -32,6 +33,7 @@ export const MINTABLE_API_TOKEN_SCOPES: ApiTokenScope[] = [
     'contexts.read',
     'contexts.write',
     'reassign',
+    'reassign.accept',
     'webhooks.manage',
 ];
 export const DEFAULT_NEW_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];

@@ -1,0 +1,29 @@
+{
+    "compilerOptions": {
+        "target": "ES2023",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "outDir": "dist",
+        "rootDir": "src",
+        "strict": true,
+        "skipLibCheck": true,
+        "noUncheckedIndexedAccess": true,
+        "exactOptionalPropertyTypes": true,
+        "noPropertyAccessFromIndexSignature": true,
+        "noImplicitOverride": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noImplicitReturns": true,
+        "noFallthroughCasesInSwitch": true,
+        "useUnknownInCatchVariables": true,
+        "verbatimModuleSyntax": true,
+        "erasableSyntaxOnly": true,
+        "esModuleInterop": true,
+        "lib": ["ES2023"],
+        "types": ["node"]
+    },
+    "include": ["src/**/*.ts"],
+    // Tests are typechecked via `npm run typecheck` (`tsc --noEmit`) but not emitted to dist —
+    // shipping compiled tests would let Vitest discover both .ts and .js versions of every spec.
+    "exclude": ["node_modules", "dist", "src/tests"]
+}

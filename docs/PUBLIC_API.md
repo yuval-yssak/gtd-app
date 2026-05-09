@@ -77,7 +77,8 @@ Each token carries a `scopes` array — the capabilities it is permitted to exer
 | `people.write` | `POST /v1/people`, `PATCH /v1/people/:id`, `DELETE /v1/people/:id` |
 | `contexts.read` | `GET /v1/work-contexts`, `GET /v1/work-contexts/:id` |
 | `contexts.write` | `POST /v1/work-contexts`, `PATCH /v1/work-contexts/:id`, `DELETE /v1/work-contexts/:id` |
-| `reassign` | `POST /v1/reassign` (cross-account entity moves) |
+| `reassign` | `POST /v1/reassign` — moves entities OUT of this user to another. |
+| `reassign.accept` | Authorises another user's `reassign`-scoped token to move entities INTO this user. Sent in `X-Reassign-Recipient-Token`; never carried by the calling bearer. |
 | `webhooks.manage` | `POST /v1/webhooks`, `GET /v1/webhooks`, `DELETE /v1/webhooks/:id` |
 
 Default scopes when omitted: `['items.capture', 'items.read']` (capture-and-list — the minimum useful set for an inbox-only Raycast/iOS Shortcut style integration).
@@ -359,15 +360,22 @@ Routines are recurring task templates. They have a richer shape than items / peo
 
 ### `POST /v1/reassign` — move an entity to another user
 
-Moves an item / routine / person / workContext from the calling token's user (`fromUserId`) to a different user. **Requires the `reassign` scope.**
+Moves an item / routine / person / workContext from the calling token's user (`fromUserId`) to a different user. **Two-token consent gesture**: the caller's `reassign`-scoped token signs the request, AND the recipient's `reassign.accept`-scoped token rides along in `X-Reassign-Recipient-Token`. Both tokens must be live, distinct, and the recipient must belong to `toUserId`.
 
-**Request body**
+This is the bearer-token analog of `/sync/reassign`'s device-multi-session check. A stolen `reassign` token cannot dump items into an arbitrary account — the attacker would also need a live `reassign.accept` token from the destination user.
 
-```json
+**Request**
+
+```http
+POST /v1/reassign
+Authorization: Bearer <A-token>           # scope: reassign
+X-Reassign-Recipient-Token: <B-token>     # scope: reassign.accept; user === toUserId
+Content-Type: application/json
+
 {
     "entityType": "item",
     "entityId": "uuid-…",
-    "toUserId": "another-user-uuid",
+    "toUserId": "<B userId>",
     "editPatch": { "title": "Optional rename ride-along" }
 }
 ```
@@ -376,7 +384,7 @@ Moves an item / routine / person / workContext from the calling token's user (`f
 |---|---|---|
 | `entityType` | yes | `item`, `routine`, `person`, or `workContext`. |
 | `entityId` | yes | Target row, must belong to the calling user. |
-| `toUserId` | yes | Must differ from the calling user. |
+| `toUserId` | yes | Must differ from the calling user; must equal `X-Reassign-Recipient-Token`'s user. |
 | `editPatch` | no | Whitelisted edits applied atomically (item path); see `ReassignItemEditPatch` in `api-server/src/lib/reassignEntity.ts`. |
 | `editRoutinePatch` | no | Routine equivalent. |
 | `targetCalendar` | when item is calendar-linked | `{ integrationId, syncConfigId }` for the destination GCal. |
@@ -385,14 +393,38 @@ Moves an item / routine / person / workContext from the calling token's user (`f
 
 | Status | `code` | Meaning |
 |---|---|---|
-| `400` | `invalid_entityType` / `invalid_entityId` / `invalid_toUserId` / `same_user` | Body validation. |
-| `403` | `forbidden_scope` | Token lacks `reassign`. |
+| `400` | `invalid_entityType` / `invalid_entityId` / `invalid_toUserId` | Body validation. |
+| `400` | `same_user` | `toUserId` equals the calling token's user. |
+| `400` | `recipient_consent_required` | `X-Reassign-Recipient-Token` header is missing. |
+| `400` | `same_token` | Recipient header carries the same token row as the caller. |
+| `400` | `validation_failed` | The reassigned snapshot fails strict-mode Zod / status×field validation. The source row is preserved (no torn move). |
+| `401` | `invalid_recipient_token` | Recipient header value did not resolve to a live token. |
+| `403` | `forbidden_scope` | Caller token lacks `reassign`. |
+| `403` | `recipient_token_mismatch` | Recipient token's user does not equal `toUserId`. |
+| `403` | `recipient_scope_missing` | Recipient token lacks `reassign.accept`. |
 | `404` | `reassign_failed` | Entity not owned by the calling user, or routine-generated item (which cannot be reassigned). |
 | `502` | `reassign_failed` | GCal create-on-target failed; nothing was persisted. |
 
-**Security note.** Unlike `/sync/reassign` (which requires both userIds to have an active session on the calling device), `/v1/reassign` cannot validate that `toUserId` consents to receive the entity. The `reassign` scope is the only gate — mint these tokens carefully.
+**Fan-out parity.** A reassign now flows through `applyAndPublishOperation` for both legs — a delete on `fromUserId` and a create on `toUserId`. SSE, web push, GCal pushback, and webhook deliveries fire on BOTH user channels, so external integrations see cross-account moves with the same fidelity as any other write. Both ops carry `deviceId: api:<tokenId>` for audit attribution. Strict-mode validation runs ahead of the source delete, so an invalid snapshot can't leave a torn state.
 
-**Pipeline carry-over.** The reassign path uses the legacy `recordOperation` shortcut rather than `applyAndPublishOperation`, so SSE / web push / webhook fan-out does NOT fire on a `/v1/reassign` write. Other devices learn about the move on their next pull cycle. (This matches the in-app `/sync/reassign` behaviour.) The recorded ops do carry `deviceId: api:<tokenId>` for audit attribution.
+---
+
+### `GET /v1/me` — caller identity
+
+Returns the userId behind the authenticated bearer token plus the token's human label. Any minted scope grants access — this exposes nothing beyond what `/v1/items` already implies about the caller.
+
+**Response**
+
+```json
+{ "userId": "uuid-…", "label": "iOS Shortcut" }
+```
+
+The primary consumer is the local MCP server, which uses this to translate an account-label slug → userId so the model never has to know raw Better Auth UUIDs (see "Multi-account workflows" below).
+
+| Status | Meaning |
+|---|---|
+| `200` | Authenticated, identity returned. |
+| `401` | Missing / malformed / unknown / revoked token. |
 
 ---
 
@@ -514,58 +546,57 @@ Every public-API write is converted into the same `OperationInterface` snapshot 
 
 There is no second write path, no risk of the sync log diverging from REST writes, and no special-case purge logic. Public-API ops are subject to the same purge floor as device ops.
 
-## Local MCP server
+## Multi-account workflows
 
-A minimal Model Context Protocol server lives at `tools/mcp-gtd/` (planned). It exposes a small set of tools that wrap the v1 API one-to-one:
+A user with two GTD accounts (e.g. personal + work) can drive cross-account moves via two tokens carried in one request. The caller's `reassign` token does the move; the recipient's `reassign.accept` token authorises the receive. Both must be live and distinct.
 
-| MCP tool | Calls |
-|---|---|
-| `search_items({ query?, status?, limit? })` | `GET /v1/items` |
-| `get_item({ id })` | `GET /v1/items/:id` |
-| `create_inbox_item({ title, notes?, externalId? })` | `POST /v1/items` |
-| `clarify_inbox_item({ id, status?, energy?, ... })` | `PATCH /v1/items/:id` |
-| `complete_item({ id })` | `POST /v1/items/:id/complete` |
-| `bulk_import_inbox_items({ items, chunkSize? })` | `POST /v1/items/bulk` |
-| `list_people({ limit?, cursor? })` | `GET /v1/people` |
-| `list_work_contexts({ limit?, cursor? })` | `GET /v1/work-contexts` |
+**Direct curl**
 
-### Configuration
-
-The MCP server reads its config from environment variables:
-
-```
-GTD_API_BASE_URL=https://api.getting-things-done.app/v1
-GTD_API_TOKEN=gtd_…
+```bash
+# 1. Mint each side's token in its own Settings → Personal API tokens UI:
+#      Personal account: scope = reassign       → A_TOKEN
+#      Work account:     scope = reassign.accept → B_TOKEN
+# 2. Look up the work account's userId (you don't need to copy a UUID — the MCP path below
+#    resolves it automatically; this curl shows the underlying request shape).
+B_USER_ID=$(curl -sH "Authorization: Bearer $B_TOKEN" https://api.getting-things-done.app/v1/me | jq -r .userId)
+# 3. Move the item.
+curl -X POST https://api.getting-things-done.app/v1/reassign \
+    -H "Authorization: Bearer $A_TOKEN" \
+    -H "X-Reassign-Recipient-Token: $B_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d "{\"entityType\":\"item\",\"entityId\":\"...\",\"toUserId\":\"$B_USER_ID\"}"
 ```
 
-### Wiring into Claude Code
+**Local MCP equivalent** (the recommended path — no raw UUIDs in your shell history):
 
-Add to `~/.config/claude-code/mcp.json` (or your editor's MCP config):
-
-```json
+```jsonc
+// Claude Desktop / Claude Code config
 {
-    "mcpServers": {
-        "gtd": {
-            "command": "node",
-            "args": ["/absolute/path/to/tools/mcp-gtd/dist/index.js"],
-            "env": {
-                "GTD_API_BASE_URL": "http://localhost:4000/v1",
-                "GTD_API_TOKEN": "gtd_…"
-            }
-        }
+  "mcpServers": {
+    "gtd": {
+      "command": "node",
+      "args": ["/path/to/gtd/mcp-server/dist/index.js"],
+      "env": {
+        "GTD_API_BASE": "http://localhost:4000",
+        "GTD_API_TOKEN": "gtd_…",        // personal (default account, scope: reassign)
+        "GTD_API_TOKEN_WORK": "gtd_…"    // work    (account label "work", scope: reassign.accept)
+      }
     }
+  }
 }
 ```
 
-### Why these tools and not more
+The model then calls `gtd_reassign` with `fromAccount: "default", toAccount: "work", entityType: "item", entityId: "…"`. The MCP looks up the work account's userId via `GET /v1/me` on the recipient token, attaches both bearers, and posts to `/v1/reassign`.
 
-The MCP scope is deliberately read + capture + complete. Clarify (inbox → nextAction with energy/time/contexts) is *not* exposed because:
+## Local MCP server
 
-- An LLM mis-clarifying buries items in a backlog the user no longer scans.
-- Energy/time/context selection is value-laden; the user should make those calls.
-- The existing in-app clarify UI is faster than narrating field-by-field through chat.
+A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `gtd_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
 
-When clarify is added later, it should ship under a separate tool (`clarify_inbox_item`) and a separately-scoped token, so users can grant capture-only access without granting clarify.
+See [`mcp-server/README.md`](../mcp-server/README.md) for the build and Claude Desktop / Claude Code config snippet.
+
+### Why no item delete tool
+
+There is no `DELETE /v1/items/:id`, and `PATCH` rejects `{status: 'trash'}` — there is no `/v1` restore endpoint, so trashing through the public surface would create unrecoverable rows. The MCP server reflects this: trashing an item requires an explicit `gtd_batch` op (`{entityType:'item', opType:'delete', ...}`). Keeping destructive item ops behind the explicit batch tool is intentional safety for an LLM-driven surface.
 
 
 ## Implementation notes (for the API server)

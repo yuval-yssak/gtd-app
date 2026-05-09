@@ -46,7 +46,8 @@ const SCOPE_DESCRIPTIONS: Record<ApiTokenScope, string> = {
     'people.write': 'Create, update, and delete people',
     'contexts.read': 'List and read work contexts',
     'contexts.write': 'Create, update, and delete work contexts',
-    reassign: 'Reassign items / routines across accounts',
+    reassign: 'Move items / routines OUT of this account into another account',
+    'reassign.accept': 'Allow other accounts to move items / routines INTO this account',
     'webhooks.manage': 'Register and manage webhook subscriptions',
 };
 

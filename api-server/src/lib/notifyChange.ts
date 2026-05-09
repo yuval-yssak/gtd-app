@@ -12,6 +12,14 @@ export interface NotifyChangeOptions {
      * is a candidate for the push.
      */
     excludeDeviceId?: string | null;
+    /**
+     * Skip the GCal pushback leg. Set by callers that already managed the GCal side-effect inline —
+     * today only the cross-account calendar-item reassign, which calls `provider.createEvent` on
+     * the target and `provider.deleteEvent` on the source directly. Without this, `notifyChange`
+     * would re-push the moved item to GCal and produce a duplicate. SSE / web push / webhook
+     * fan-out still fire so external subscribers see the move on both user channels.
+     */
+    suppressGCalPushback?: boolean;
 }
 
 /**
@@ -34,13 +42,23 @@ export async function notifyChange(op: OperationInterface, opts: NotifyChangeOpt
     notifyUserViaSse(op.user, { type: 'update', ts: op.ts, sourceDeviceId: excludeDeviceId ?? undefined });
 
     // Web push — awaited so the request doesn't return before subscriptions have at least been
-    // contacted. Each delivery is itself best-effort under the hood.
-    await notifyViaWebPush(op.user, excludeDeviceId, [op], op.ts);
+    // contacted. Each delivery is itself best-effort under the hood. A transient throw from the
+    // subscription lookup must not abort the caller mid-pipeline (e.g. cross-account reassign,
+    // where step A's web-push throw used to leave step B unrun → torn state). Log + continue.
+    try {
+        await notifyViaWebPush(op.user, excludeDeviceId, [op], op.ts);
+    } catch (err) {
+        console.error('[notify-change] notifyViaWebPush failed; continuing', { opId: op._id, opType: op.opType, err });
+    }
 
     // GCal pushback — fire-and-forget. A flaky calendar provider must not block the request.
-    void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
-        console.error('[notify-change] gcal pushback failed', { opId: op._id, opType: op.opType, err });
-    });
+    // Suppressed when the caller has already managed the GCal side-effect inline (today: the
+    // cross-account calendar-item reassign in `lib/reassignEntity.ts`).
+    if (!opts.suppressGCalPushback) {
+        void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
+            console.error('[notify-change] gcal pushback failed', { opId: op._id, opType: op.opType, err });
+        });
+    }
 
     // Webhook fan-out — fire-and-forget. A Mongo blip enqueueing deliveries should not fail the
     // originating request; the worker will pick up rows on its next tick anyway.
@@ -67,16 +85,24 @@ export async function notifyChanges(ops: OperationInterface[], opts: NotifyChang
         notifyUserViaSse(userId, { type: 'update', ts: latestTs, sourceDeviceId: excludeDeviceId ?? undefined });
     }
 
-    // Web push: a single batch call keeps the per-device subscription lookup cheap.
+    // Web push: a single batch call keeps the per-device subscription lookup cheap. A transient
+    // throw must not abort the caller mid-pipeline — log + continue (mirrors `notifyChange`).
     if (userId) {
-        await notifyViaWebPush(userId, excludeDeviceId, ops, latestTs);
+        try {
+            await notifyViaWebPush(userId, excludeDeviceId, ops, latestTs);
+        } catch (err) {
+            const opIds = ops.map((op) => op._id);
+            console.error('[notify-change] notifyViaWebPush failed; continuing', { opIds, err });
+        }
     }
 
     // GCal + webhook fan-out per op (each leg is fire-and-forget).
     for (const op of ops) {
-        void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
-            console.error('[notify-change] gcal pushback failed', { opId: op._id, opType: op.opType, err });
-        });
+        if (!opts.suppressGCalPushback) {
+            void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
+                console.error('[notify-change] gcal pushback failed', { opId: op._id, opType: op.opType, err });
+            });
+        }
         void enqueueWebhookDeliveries(op).catch((err) => {
             console.error('[notify-change] webhook enqueue failed', { opId: op._id, opType: op.opType, err });
         });

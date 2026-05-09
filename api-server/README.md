@@ -130,14 +130,46 @@ src/
 
 External integrations and the local MCP server. All endpoints take `Authorization: Bearer gtd_<token>`. Full contract: [`docs/PUBLIC_API.md`](../docs/PUBLIC_API.md).
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/v1/items` | Create an inbox item. Idempotent: `externalId` (strict, sparse-unique) or 24h content-hash dedupe (best-effort). |
-| `GET` | `/v1/items` | List/search with `q`, `status`, `since`, opaque cursor pagination. |
-| `GET` | `/v1/items/:id` | Fetch one item. |
-| `POST` | `/v1/items/:id/complete` | Mark done. Idempotent on already-done items. |
+| Method | Path | Scope |
+|--------|------|-------|
+| `POST` | `/v1/items` | `items.capture` |
+| `POST` | `/v1/items/bulk` | `items.capture` |
+| `GET` | `/v1/items` | `items.read` |
+| `GET` | `/v1/items/:id` | `items.read` |
+| `PATCH` | `/v1/items/:id` | `items.write` |
+| `POST` | `/v1/items/:id/complete` | `items.write` |
+| `POST/GET/PATCH/DELETE` | `/v1/routines[…]` | `routines.read` / `routines.write` |
+| `POST` | `/v1/routines/:id/{pause,resume,split}` | `routines.write` |
+| `POST/GET/PATCH/DELETE` | `/v1/people[…]` | `people.read` / `people.write` |
+| `POST/GET/PATCH/DELETE` | `/v1/work-contexts[…]` | `contexts.read` / `contexts.write` |
+| `POST` | `/v1/reassign` | `reassign` (caller) + `reassign.accept` (recipient via `X-Reassign-Recipient-Token`) |
+| `POST` | `/v1/operations/batch` | every scope required by any op in the batch |
+| `POST/GET/DELETE` | `/v1/webhooks[…]` | `webhooks.manage` |
+| `GET` | `/v1/me` | any minted scope |
 
-Public-API mutations record an `OperationInterface` with `deviceId="api:<tokenId>"` and reuse the same SSE / web-push / GCal pushback pipeline as `/sync/push` — first-party clients see public-API writes live without any extra wiring.
+Public-API mutations record an `OperationInterface` with `deviceId="api:<tokenId>"` and reuse the same SSE / web-push / GCal pushback / webhook pipeline as `/sync/push` — first-party clients see public-API writes live without any extra wiring. `/v1/reassign` is the bearer-token analog of the in-app device-multi-session check: the caller's `reassign`-scoped token signs the request and the recipient's `reassign.accept`-scoped token rides along in `X-Reassign-Recipient-Token`. Without both, the route refuses.
+
+#### Local MCP server
+
+`mcp-server/` exposes the entire `/v1` surface as MCP tools (`gtd_capture`, `gtd_list_items`, `gtd_reassign`, …) for use from Claude Desktop / Claude Code. It supports multiple accounts in one session via numbered env vars:
+
+```jsonc
+{
+  "mcpServers": {
+    "gtd": {
+      "command": "node",
+      "args": ["/path/to/gtd/mcp-server/dist/index.js"],
+      "env": {
+        "GTD_API_BASE": "http://localhost:4000",
+        "GTD_API_TOKEN": "gtd_…",      // default account
+        "GTD_API_TOKEN_WORK": "gtd_…"  // addressable as account="work"
+      }
+    }
+  }
+}
+```
+
+See [`mcp-server/README.md`](../mcp-server/README.md) for tool inventory and the cross-account `gtd_reassign` worked example.
 
 ### Dev (non-production only)
 
@@ -242,28 +274,17 @@ The grace window can be shortened for dev/tests via `CALENDAR_AUTH_GRACE_MS` (mi
 
 ## Public API (`/v1/*`)
 
-A small bearer-token-authenticated REST surface for external integrations and the local MCP server (`tools/mcp-gtd/`). Distinct from `/sync/*`, which is the internal offline-first protocol.
-
-Full contract: [`docs/PUBLIC_API.md`](../docs/PUBLIC_API.md).
+A bearer-token-authenticated REST surface for external integrations and the local MCP server in `mcp-server/`. Distinct from `/sync/*`, which is the internal offline-first protocol used by the first-party client. The full contract — request/response shapes, scope matrix, the status×field rules for items, idempotency, and the cross-account reassign two-token gesture — lives in [`docs/PUBLIC_API.md`](../docs/PUBLIC_API.md). This section just highlights the design tenets that aren't re-stated there.
 
 ### Design tenets
 
-1. **Reuse the sync pipeline, don't bypass it.** Every public-API mutation builds an `OperationInterface` snapshot and calls the same `applyEntitySnapshotOp` + `notifyUserViaSse` + `notifyViaWebPush` + `maybePushToGCal` helpers as `/sync/push`. This means SSE notifies live clients, web push wakes closed clients, GCal pushback fires for calendar-linked items, and every other device pulls the change on its next sync — all for free.
+1. **Reuse the sync pipeline, don't bypass it.** Every public-API mutation flows through `applyAndPublishOperation` — the same shared pipeline that backs `/sync/push` — so validation, persistence, the operations log, and the SSE / web-push / GCal pushback / webhook fan-out all happen exactly once per write. `/v1/reassign` is now no exception: each move publishes a delete on the source user and a create on the target user, both fanning out, so external webhook subscribers see cross-account moves at parity with all other writes.
 2. **`deviceId="api:<tokenId>"`** distinguishes public-API ops from real-device ops in the operations log, without polluting the `deviceSyncState` per-device-cursor table. Stale-device purging continues to work normally.
-3. **Allowlist response projection.** `presentItem` returns a `Pick<>`-narrowed view of `ItemInterface` so internal sync-anchor fields (`contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`) cannot leak into the public schema even if a future field is added without thinking about it.
+3. **Allowlist response projection.** `presentItem` returns a `Pick<>`-narrowed view of `ItemInterface` so internal sync-anchor fields (`contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`) cannot leak into the public schema even if a future field is added without thinking about it. The same allowlist discipline applies to routines, people, and workContexts.
 
-### Idempotency
+### Token mint surface
 
-| Strategy | Trigger | Enforcement | Concurrent safety |
-|---|---|---|---|
-| `externalId` provided | caller supplies stable key | sparse-unique partial index `(user, externalId)` | strict — race-loser is recovered via E11000 catch + re-fetch in `resolveCreateItem` |
-| `externalId` omitted | content-hash window | 24h lookup against `(user, status, contentHash, createdTs)` | best-effort — no unique index, two simultaneous identical posts can produce two rows. Documented in `PUBLIC_API.md`. |
-
-### Token mint flow (today)
-
-There is no production-safe mint endpoint yet. Local development uses `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) which accepts a label, returns the plaintext exactly once, and stores only the sha256 hash. The plaintext is shown in the response body and never appears anywhere else.
-
-Production rollout — settings-page UI + `POST /account/tokens` + `GET`/`DELETE` for list+revoke — is tracked in [issue #19](https://github.com/yuval-yssak/gtd-app/issues/19).
+Tokens are minted from the **Settings → Personal API tokens** UI in the client, which calls `POST /account/tokens` (cookie-authed, per-user cap of 20 active tokens, plaintext returned exactly once). `GET /account/tokens` lists, `DELETE /account/tokens/:id` revokes — see `routes/tokens.ts`. The legacy `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) is the dev convenience shortcut and is intentionally absent from production deploys.
 
 ## Email (stub)
 

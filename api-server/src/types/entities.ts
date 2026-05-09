@@ -454,6 +454,12 @@ export interface WebhookDeliveryInterface {
  * action whose scope appears in its `scopes` array. Issuing tokens with the smallest possible
  * scope set is the right hygiene; e.g. a Raycast capture extension only needs `items.capture`.
  *
+ * **Reassign is a two-token gesture.** `reassign` lets a token move entities OUT of its user
+ * to another user; `reassign.accept` lets *another* token move entities INTO this user. The
+ * `/v1/reassign` route requires both — the calling token's `reassign` plus the recipient
+ * token's `reassign.accept` (sent in `X-Reassign-Recipient-Token`). This is the bearer-token
+ * analog of the device-multi-session check enforced by the in-app `/sync/reassign`.
+ *
  * `items.clarify` is the **legacy** scope: it appears on tokens minted before the Phase 2 scope
  * extension. Old tokens carrying it are auto-backfilled to `items.write` at auth time
  * (`bearerMiddleware.ts`), and the type stays in the union so reads from Mongo still narrow
@@ -472,6 +478,7 @@ export type ApiTokenScope =
     | 'contexts.read'
     | 'contexts.write'
     | 'reassign'
+    | 'reassign.accept'
     | 'webhooks.manage';
 
 /** Default scopes minted onto a token when the caller did not specify any. */
@@ -493,6 +500,7 @@ export const MINTABLE_API_TOKEN_SCOPES: ReadonlySet<ApiTokenScope> = new Set([
     'contexts.read',
     'contexts.write',
     'reassign',
+    'reassign.accept',
     'webhooks.manage',
 ]);
 

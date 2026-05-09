@@ -2,7 +2,15 @@
  * Same harness as `calendarApi.test.ts` — global fetch replaced per-test, then restored.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { type ApiTokenScope, createToken, listTokens, MINTABLE_API_TOKEN_SCOPES, revokeToken, TokensApiError } from '../api/tokensApi';
+import {
+    type ApiTokenScope,
+    createToken,
+    DEFAULT_NEW_TOKEN_SCOPES,
+    listTokens,
+    MINTABLE_API_TOKEN_SCOPES,
+    revokeToken,
+    TokensApiError,
+} from '../api/tokensApi';
 
 interface FetchCall {
     url: string;
@@ -136,6 +144,34 @@ describe('MINTABLE_API_TOKEN_SCOPES', () => {
     it('does not advertise the legacy items.clarify scope to the mint UI', () => {
         expect(MINTABLE_API_TOKEN_SCOPES).not.toContain<ApiTokenScope>('items.clarify');
         expect(MINTABLE_API_TOKEN_SCOPES.length).toBeGreaterThan(0);
+    });
+
+    // The cross-account reassign gesture is a two-token proof: the source-side token carries
+    // `reassign`, the destination-side carries `reassign.accept`. Both must be mintable from the
+    // settings UI so a user can configure each side without dropping into a CLI / dev tools.
+    it('exposes both reassign and reassign.accept so the UI can mint each side of the gesture', () => {
+        expect(MINTABLE_API_TOKEN_SCOPES).toContain<ApiTokenScope>('reassign');
+        expect(MINTABLE_API_TOKEN_SCOPES).toContain<ApiTokenScope>('reassign.accept');
+    });
+
+    // Regression pin from the post-review pass: `reassign` and `reassign.accept` are distinct entries,
+    // not aliases. A future refactor that collapses one into the other (or treats them as a Set with
+    // deduplicated semantics) would silently weaken the consent split that protects cross-account
+    // moves. Asserting the literal pair as an array catches that.
+    it('keeps reassign and reassign.accept as distinct entries — they are not aliases', () => {
+        const reassignEntries = MINTABLE_API_TOKEN_SCOPES.filter((s) => s === 'reassign' || s === 'reassign.accept');
+        expect(reassignEntries).toEqual(['reassign', 'reassign.accept']);
+    });
+});
+
+describe('DEFAULT_NEW_TOKEN_SCOPES', () => {
+    // The settings UI pre-checks DEFAULT_NEW_TOKEN_SCOPES on the new-token form. Cross-account
+    // scopes (reassign + reassign.accept) must NOT be pre-checked: they're explicit opt-ins that
+    // a user has to actively select. Pre-checking them by accident in a future refactor would
+    // weaken the explicit-opt-in security property protected by the recipient-consent gate.
+    it('does not pre-check reassign or reassign.accept on the create-token form — cross-account scopes must be explicit opt-in', () => {
+        expect(DEFAULT_NEW_TOKEN_SCOPES).not.toContain<ApiTokenScope>('reassign');
+        expect(DEFAULT_NEW_TOKEN_SCOPES).not.toContain<ApiTokenScope>('reassign.accept');
     });
 });
 

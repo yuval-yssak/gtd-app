@@ -20,6 +20,13 @@ export interface ApplyOptions {
     strict?: boolean;
     /** Override timestamp (used in tests / batch flows where every op shares one wall-clock). */
     now?: string;
+    /**
+     * Skip the GCal pushback leg of `notifyChange`. Passed by callers that already managed the
+     * GCal side-effect inline (e.g. cross-account calendar-item reassign, where create-on-target
+     * + delete-on-source are driven directly by `moveItemAcrossCalendars`). SSE / web push /
+     * webhook fan-out still fire — only `maybePushToGCal` is suppressed.
+     */
+    suppressGCalPushback?: boolean;
 }
 
 /**
@@ -96,7 +103,10 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
 
     // Step 6 — fan-out. Awaiting only the in-process synchronous legs (SSE + push); GCal +
     // webhooks are fire-and-forget under the hood.
-    const notifyOpts: NotifyChangeOptions = opts.deviceId.startsWith('api:') ? {} : { excludeDeviceId: opts.deviceId };
+    const notifyOpts: NotifyChangeOptions = {
+        ...(opts.deviceId.startsWith('api:') ? {} : { excludeDeviceId: opts.deviceId }),
+        ...(opts.suppressGCalPushback ? { suppressGCalPushback: true } : {}),
+    };
     await notifyChange(op, notifyOpts);
 
     return op;
@@ -164,7 +174,10 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
 
     await Promise.all([operationsDAO.insertMany(ops), ...ops.map((op) => applyEntityOp(userId, op))]);
 
-    const notifyOpts: NotifyChangeOptions = opts.deviceId.startsWith('api:') ? {} : { excludeDeviceId: opts.deviceId };
+    const notifyOpts: NotifyChangeOptions = {
+        ...(opts.deviceId.startsWith('api:') ? {} : { excludeDeviceId: opts.deviceId }),
+        ...(opts.suppressGCalPushback ? { suppressGCalPushback: true } : {}),
+    };
     await notifyChanges(ops, notifyOpts);
 
     return ops;
