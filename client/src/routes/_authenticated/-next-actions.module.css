@@ -28,7 +28,7 @@
     flex-wrap: wrap;
 }
 
-/* pr: 10 — widened to accommodate the extra edit button in secondaryAction */
+/* pr widened to accommodate copy-id + edit + done buttons in secondaryAction */
 .listItemText {
-    padding-right: 5rem;
+    padding-right: 7.5rem;
 }

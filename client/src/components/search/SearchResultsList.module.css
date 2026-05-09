@@ -8,6 +8,11 @@
     width: 100%;
 }
 
+/* Reserve room on the right for the secondaryAction copy-id button */
+.rowButton {
+    padding-right: 3rem;
+}
+
 .titleRow {
     display: flex;
     align-items: center;

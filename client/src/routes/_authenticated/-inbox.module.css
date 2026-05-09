@@ -5,7 +5,7 @@
 
 .item {
     padding: 0.5rem 1rem;
-    padding-right: 13.75rem;
+    padding-right: 16.25rem;
 }
 
 /* Removes the default outlined border so the capture field blends into its Paper container */
@@ -88,8 +88,8 @@
 }
 
 .listItemText {
-    /* pr leaves enough room for 6 icon buttons in secondaryAction */
-    padding-right: 14rem;
+    /* pr leaves enough room for 7 icon buttons in secondaryAction (copy-id + 6 actions) */
+    padding-right: 16.25rem;
 }
 
 /* On mobile only the swipe row + a single "more" button are visible — release the right padding */

@@ -12,6 +12,7 @@ import { groupByStatus, STATUS_LABELS } from '../../lib/itemSearch';
 import type { SearchView } from '../../lib/searchUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import { AccountChip } from '../AccountChip';
+import { CopyIdButton } from '../itemEditor/CopyIdButton';
 import styles from './SearchResultsList.module.css';
 import { StatusChip } from './StatusChip';
 
@@ -26,9 +27,9 @@ const renderItemSecondary = (item: StoredItem) => `Updated ${dayjs(item.updatedT
 
 function ResultRow({ item, showStatusChip }: { item: StoredItem; showStatusChip: boolean }) {
     return (
-        <ListItem disablePadding>
+        <ListItem disablePadding secondaryAction={<CopyIdButton id={item._id} testId="searchResultCopyIdButton" />}>
             <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
-                <ListItemButton dense>
+                <ListItemButton dense className={styles.rowButton}>
                     <ListItemText
                         primary={
                             <Box className={styles.titleRow}>

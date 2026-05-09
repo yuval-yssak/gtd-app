@@ -16,6 +16,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { AccountChip } from '../../components/AccountChip';
+import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -114,6 +115,7 @@ function WaitingForPage() {
                                     className={styles.item}
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
+                                            <CopyIdButton id={item._id} testId="waitingForItemCopyIdButton" />
                                             <Tooltip title="Edit">
                                                 <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="waitingForItemEditButton">
                                                     <EditIcon fontSize="small" />

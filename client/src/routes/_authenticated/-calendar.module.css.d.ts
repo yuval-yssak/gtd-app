@@ -1,4 +1,5 @@
 declare const styles: {
+    readonly actionButtons: string;
     readonly dateHeader: string;
     readonly item: string;
     readonly list: string;

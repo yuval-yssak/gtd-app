@@ -29,5 +29,10 @@
 }
 
 .listItemText {
-    padding-right: 3rem;
+    padding-right: 5.5rem;
+}
+
+.actionButtons {
+    display: flex;
+    gap: 0.25rem;
 }

@@ -15,6 +15,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { AccountChip } from '../../components/AccountChip';
+import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -118,11 +119,14 @@ function CalendarPage() {
                                     disablePadding
                                     className={styles.item}
                                     secondaryAction={
-                                        <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="calendarItemEditButton">
-                                                <EditIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
+                                        <Box className={styles.actionButtons}>
+                                            <CopyIdButton id={item._id} testId="calendarItemCopyIdButton" />
+                                            <Tooltip title="Edit">
+                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="calendarItemEditButton">
+                                                    <EditIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                        </Box>
                                     }
                                 >
                                     <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="calendarItemRow">

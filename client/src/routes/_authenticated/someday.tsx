@@ -21,6 +21,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 
 import { AccountChip } from '../../components/AccountChip';
+import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -95,6 +96,7 @@ function SomedayPage() {
                             className={styles.item}
                             secondaryAction={
                                 <Box className={styles.actionButtons}>
+                                    <CopyIdButton id={item._id} testId="somedayItemCopyIdButton" />
                                     <Tooltip title="Edit">
                                         <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="somedayItemEditButton">
                                             <EditIcon fontSize="small" />

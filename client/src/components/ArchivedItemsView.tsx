@@ -18,6 +18,7 @@ import { type ItemSortDir, type ItemSortKey, sortItems } from '../lib/itemSearch
 import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
 import styles from './ArchivedItemsView.module.css';
+import { CopyIdButton } from './itemEditor/CopyIdButton';
 import { RoutineIndicator } from './RoutineIndicator';
 
 dayjs.extend(relativeTime);
@@ -120,9 +121,9 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                     const verb = sortKey === 'updatedTs' ? 'Updated' : 'Created';
                     return (
                         <Box key={item._id}>
-                            <ListItem disablePadding>
+                            <ListItem disablePadding secondaryAction={<CopyIdButton id={item._id} testId="archivedItemCopyIdButton" />}>
                                 <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
-                                    <ListItemButton dense>
+                                    <ListItemButton dense className={styles.rowButton}>
                                         <ListItemText
                                             primary={
                                                 <Box className={styles.titleRow}>

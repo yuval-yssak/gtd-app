@@ -35,6 +35,7 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AccountChip } from '../../components/AccountChip';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
+import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
@@ -405,6 +406,7 @@ function InboxPage() {
                                     className={styles.item}
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
+                                            <CopyIdButton id={item._id} testId="inboxItemCopyIdButton" />
                                             <Tooltip title="Edit">
                                                 <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="inboxItemEditButton">
                                                     <EditIcon fontSize="small" />

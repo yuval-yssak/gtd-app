@@ -19,6 +19,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
+import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -184,6 +185,7 @@ function NextActionsPage() {
                                 className={styles.item}
                                 secondaryAction={
                                     <Box className={styles.actionButtons}>
+                                        <CopyIdButton id={item._id} testId="nextActionItemCopyIdButton" />
                                         <Tooltip title="Edit">
                                             <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="nextActionItemEditButton">
                                                 <EditIcon fontSize="small" />
