@@ -12,7 +12,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-item.$itemId.module.css';
 
-const EDITABLE_STATUSES = new Set<EditableStatus>(['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe']);
+const EDITABLE_STATUSES = new Set<EditableStatus>(['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done', 'trash']);
 
 function isEditableStatus(value: unknown): value is EditableStatus {
     return typeof value === 'string' && EDITABLE_STATUSES.has(value as EditableStatus);
@@ -50,15 +50,18 @@ function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () =>
 }
 
 /**
- * Picks the route to navigate back to after edit/cancel. Routes by the item's status at the time
- * of render — the status the user came from is the most polite "back" target. After a save changes
- * the status, the navigate fires before any local re-read, so this is captured at the right moment.
+ * Picks the route to navigate back to after edit/cancel. `goBack` (toolbar back-arrow) passes the
+ * item's render-time status — the bucket the user came from is the most polite back target.
+ * `onClose` (post-save) re-reads from IDB first and passes the post-save status, so a status-changing
+ * save lands on the correct destination bucket.
  */
 function backRouteForStatus(status: StoredItem['status']): string {
     if (status === 'nextAction') return '/next-actions';
     if (status === 'calendar') return '/calendar';
     if (status === 'waitingFor') return '/waiting-for';
     if (status === 'somedayMaybe') return '/someday';
+    if (status === 'done') return '/done';
+    if (status === 'trash') return '/trash';
     return '/inbox';
 }
 
@@ -92,23 +95,6 @@ function ItemPage() {
     }
 
     const goBack = () => void navigate({ to: backRouteForStatus(item.status) });
-
-    if (item.status === 'done' || item.status === 'trash') {
-        return (
-            <Box className={styles.page}>
-                <PageHeader title="Item" onBack={goBack} idForCopy={item._id} />
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        mt: 4,
-                        textAlign: 'center',
-                    }}
-                >
-                    This item has already been processed.
-                </Typography>
-            </Box>
-        );
-    }
 
     // Re-read from IDB so a status-changing save lands the user on the correct destination —
     // the closure-captured `items` array is the pre-save snapshot, not yet refreshed.
