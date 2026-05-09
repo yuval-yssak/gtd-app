@@ -32,7 +32,22 @@ Pick the smallest scope set you need — see [`docs/PUBLIC_API.md`](../docs/PUBL
 
 ### 3. Wire into your MCP client
 
-#### Claude Desktop / Claude Code
+#### Claude Code (CLI)
+
+The fastest way is the `claude mcp add` command — it writes the config for you:
+
+```bash
+claude mcp add gtd \
+    --env GTD_API_BASE=http://localhost:4000 \
+    --env GTD_API_TOKEN=gtd_... \
+    -- node /Users/yuvalyssak/gtd/mcp-server/dist/index.js
+```
+
+Add `--scope user` to register the server globally for your user (default scope is the current project). Verify with `claude mcp list`; remove with `claude mcp remove gtd`.
+
+For staging or production, swap `GTD_API_BASE` to `https://api-staging.getting-things-done.app` or `https://api.getting-things-done.app`.
+
+#### Claude Desktop / manual config
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop) or your `claude_code_config` MCP block:
 
@@ -50,8 +65,6 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude
     }
 }
 ```
-
-For staging or production, swap `GTD_API_BASE` to `https://api-staging.getting-things-done.app` or `https://api.getting-things-done.app`.
 
 Restart your MCP client after editing the config. The tools should appear under the `gtd` server.
 
