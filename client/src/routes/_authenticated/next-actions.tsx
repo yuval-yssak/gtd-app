@@ -86,23 +86,23 @@ function NextActionsPage() {
         .filter((item) => item.status === 'nextAction')
         .filter((item) => matchesFilters(item, { energy: energyFilter, maxMinutes: timeFilter, workContextId: contextFilter }))
         .sort((a, b) => {
-            // 1) focus first (true before false / undefined), then 2) expectedBy descending; items
-            // without an expectedBy fall to the bottom of their focus group regardless of date order.
+            // Four-tier sort: focused-with-date (expectedBy asc), focused-no-date, other-with-date
+            // (expectedBy asc), other-no-date. Focus is the primary partition, presence of an
+            // expectedBy is the secondary partition within each focus group.
             const af = a.focus === true;
             const bf = b.focus === true;
             if (af !== bf) {
                 return af ? -1 : 1;
             }
-            if (!a.expectedBy && !b.expectedBy) {
+            const aHas = Boolean(a.expectedBy);
+            const bHas = Boolean(b.expectedBy);
+            if (aHas !== bHas) {
+                return aHas ? -1 : 1;
+            }
+            if (!aHas) {
                 return 0;
             }
-            if (!a.expectedBy) {
-                return 1;
-            }
-            if (!b.expectedBy) {
-                return -1;
-            }
-            return b.expectedBy.localeCompare(a.expectedBy);
+            return (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '');
         });
 
     async function onDone(item: StoredItem) {
