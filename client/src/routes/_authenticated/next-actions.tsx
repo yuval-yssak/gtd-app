@@ -86,10 +86,23 @@ function NextActionsPage() {
         .filter((item) => item.status === 'nextAction')
         .filter((item) => matchesFilters(item, { energy: energyFilter, maxMinutes: timeFilter, workContextId: contextFilter }))
         .sort((a, b) => {
-            // Urgent items first, then by expectedBy ascending (empty strings sort last)
-            if (a.urgent && !b.urgent) return -1;
-            if (!a.urgent && b.urgent) return 1;
-            return (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '');
+            // 1) focus first (true before false / undefined), then 2) expectedBy descending; items
+            // without an expectedBy fall to the bottom of their focus group regardless of date order.
+            const af = a.focus === true;
+            const bf = b.focus === true;
+            if (af !== bf) {
+                return af ? -1 : 1;
+            }
+            if (!a.expectedBy && !b.expectedBy) {
+                return 0;
+            }
+            if (!a.expectedBy) {
+                return 1;
+            }
+            if (!b.expectedBy) {
+                return -1;
+            }
+            return b.expectedBy.localeCompare(a.expectedBy);
         });
 
     async function onDone(item: StoredItem) {

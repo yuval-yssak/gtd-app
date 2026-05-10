@@ -40,8 +40,11 @@ test.describe('Item page mode — done & trash items', () => {
             await page.getByRole('button', { name: 'Next Action' }).click();
             await page.getByRole('button', { name: 'Save changes' }).click();
 
-            // Save lands the user on /next-actions because the new status is nextAction.
-            await expect(page).toHaveURL(/\/next-actions$/);
+            // Save returns to the source bucket (/done) — the new status lives in next-actions,
+            // but post-save navigation always honors where the user came from.
+            await expect(page).toHaveURL(/\/done$/);
+            // Confirm the restore persisted by visiting the destination bucket directly.
+            await page.goto('/next-actions');
             await expect(page.getByText('Restore me')).toBeVisible();
         });
     });

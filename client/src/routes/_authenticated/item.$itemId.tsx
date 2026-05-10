@@ -50,10 +50,8 @@ function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () =>
 }
 
 /**
- * Picks the route to navigate back to after edit/cancel. `goBack` (toolbar back-arrow) passes the
- * item's render-time status — the bucket the user came from is the most polite back target.
- * `onClose` (post-save) re-reads from IDB first and passes the post-save status, so a status-changing
- * save lands on the correct destination bucket.
+ * Picks the route to navigate back to after edit/cancel. Always uses the item's render-time
+ * status — the user expects to return to the bucket they came from, not the post-save destination.
  */
 function backRouteForStatus(status: StoredItem['status']): string {
     if (status === 'nextAction') return '/next-actions';
@@ -96,13 +94,6 @@ function ItemPage() {
 
     const goBack = () => void navigate({ to: backRouteForStatus(item.status) });
 
-    // Re-read from IDB so a status-changing save lands the user on the correct destination —
-    // the closure-captured `items` array is the pre-save snapshot, not yet refreshed.
-    const onClose = async () => {
-        const fresh = await db.get('items', itemId);
-        void navigate({ to: backRouteForStatus(fresh?.status ?? item.status) });
-    };
-
     return (
         <Box className={styles.page} data-testid="itemPageWrapper">
             <PageHeader title="Edit item" onBack={goBack} idForCopy={item._id} />
@@ -113,7 +104,7 @@ function ItemPage() {
                     db={db}
                     people={people}
                     workContexts={workContexts}
-                    onClose={() => void onClose()}
+                    onClose={goBack}
                     onSaved={refreshItems}
                     chrome="page"
                     {...(initialStatus ? { initialStatus } : {})}

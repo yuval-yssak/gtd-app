@@ -1,3 +1,4 @@
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
@@ -19,6 +20,8 @@ import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { clarifyToDone } from '../../db/itemMutations';
+import type { StoredItem } from '../../types/MyDB';
 import styles from './-calendar.module.css';
 
 export const Route = createFileRoute('/_authenticated/calendar')({
@@ -56,6 +59,11 @@ function CalendarPage() {
     }
 
     const isPast = (dateKey: string) => dateKey !== 'No date' && dayjs(dateKey).isBefore(dayjs(), 'day');
+
+    async function onDone(item: StoredItem) {
+        await clarifyToDone(db, item);
+        await refreshItems();
+    }
 
     if (calendarItems.length === 0) {
         return (
@@ -124,6 +132,16 @@ function CalendarPage() {
                                             <Tooltip title="Edit">
                                                 <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="calendarItemEditButton">
                                                     <EditIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Mark done">
+                                                <IconButton
+                                                    size="small"
+                                                    color="success"
+                                                    onClick={() => void onDone(item)}
+                                                    data-testid="calendarItemMarkDoneButton"
+                                                >
+                                                    <CheckCircleOutlineIcon />
                                                 </IconButton>
                                             </Tooltip>
                                         </Box>
