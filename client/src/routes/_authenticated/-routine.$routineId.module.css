@@ -1,0 +1,19 @@
+.page {
+    max-width: 56rem;
+}
+
+.header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+/* Title is the flexible center; copy-id button hugs the right edge */
+.headerTitle {
+    flex: 1;
+}
+
+.card {
+    padding: 1.5rem;
+}

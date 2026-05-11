@@ -15,13 +15,17 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
+import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
+import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
-import { RoutineDialog } from '../../components/routines/RoutineDialog';
+import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
+import { useRoutineEditor } from '../../components/routineEditor/useRoutineEditor';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
 import { formatCalendarRrule, formatRrule } from '../../lib/rruleUtils';
@@ -35,7 +39,17 @@ export const Route = createFileRoute('/_authenticated/routines')({
 function RoutinesPage() {
     const { db } = Route.useRouteContext();
     const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh } = useAppData();
-    const [dialogRoutine, setDialogRoutine] = useState<StoredRoutine | 'new' | null>(null);
+    const theme = useTheme();
+    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const editor = useRoutineEditor({
+        db,
+        userId: account?.id ?? '',
+        people,
+        workContexts,
+        refreshRoutines,
+        refreshItems,
+        isMobile,
+    });
     const [routineToDelete, setRoutineToDelete] = useState<StoredRoutine | null>(null);
     const [routineToPause, setRoutineToPause] = useState<StoredRoutine | null>(null);
 
@@ -67,13 +81,12 @@ function RoutinesPage() {
         await syncAndRefresh();
     }
 
-    async function onSaved() {
-        await refreshRoutines();
-        await refreshItems();
-    }
-
     function routineLabel(routine: StoredRoutine): string {
         return routine.routineType === 'calendar' ? formatCalendarRrule(routine) : formatRrule(routine.rrule);
+    }
+
+    function onRowClick(routine: StoredRoutine, e: React.MouseEvent<HTMLElement>) {
+        editor.openEditor({ routine, anchor: e.currentTarget });
     }
 
     return (
@@ -89,7 +102,7 @@ function RoutinesPage() {
                     {routines.length > 0 && <Chip label={routines.length} size="small" className={styles.countChip} />}
                 </Typography>
                 <Tooltip title="Create routine">
-                    <IconButton onClick={() => setDialogRoutine('new')}>
+                    <IconButton onClick={() => editor.openEditor({})} data-testid="newRoutineButton">
                         <AddIcon />
                     </IconButton>
                 </Tooltip>
@@ -113,66 +126,76 @@ function RoutinesPage() {
                                 className={styles.item}
                                 secondaryAction={
                                     <Box sx={{ display: 'flex', gap: 0.5 }}>
+                                        <CopyIdButton id={routine._id} testId="routineRowCopyIdButton" />
                                         {routine.active ? (
                                             <Tooltip title="Pause">
-                                                <IconButton size="small" onClick={() => setRoutineToPause(routine)}>
+                                                <IconButton size="small" onClick={() => setRoutineToPause(routine)} data-testid="routineRowPauseButton">
                                                     <PauseIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
                                         ) : (
                                             <Tooltip title="Resume — opens editor to set a new start date">
-                                                <IconButton size="small" color="success" onClick={() => setDialogRoutine(routine)}>
+                                                {/* No anchor passed: popover mode is too wide to attach to a 24px icon, so
+                                                    icon-button gestures fall through to dialog while row-body clicks still anchor. */}
+                                                <IconButton
+                                                    size="small"
+                                                    color="success"
+                                                    onClick={() => editor.openEditor({ routine })}
+                                                    data-testid="routineRowResumeButton"
+                                                >
                                                     <PlayArrowIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
                                         )}
                                         <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => setDialogRoutine(routine)}>
+                                            <IconButton size="small" onClick={() => editor.openEditor({ routine })} data-testid="routineRowEditButton">
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
                                         <Tooltip title="Delete">
-                                            <IconButton size="small" color="error" onClick={() => setRoutineToDelete(routine)}>
+                                            <IconButton
+                                                size="small"
+                                                color="error"
+                                                onClick={() => setRoutineToDelete(routine)}
+                                                data-testid="routineRowDeleteButton"
+                                            >
                                                 <DeleteOutlineIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
                                     </Box>
                                 }
                             >
-                                <ListItemText
-                                    primary={
-                                        <Box className={styles.titleRow}>
-                                            {routine.title}
-                                            <Chip
-                                                label={routine.routineType === 'calendar' ? 'Calendar' : 'Next Action'}
-                                                size="small"
-                                                variant="outlined"
-                                                color={routine.routineType === 'calendar' ? 'info' : 'default'}
-                                            />
-                                            <Chip label={routine.active ? 'Active' : 'Paused'} size="small" color={routine.active ? 'success' : 'default'} />
-                                            <AccountChip userId={routine.userId} />
-                                        </Box>
-                                    }
-                                    secondary={routineLabel(routine)}
-                                    className={styles.listItemText}
-                                />
+                                <ListItemButton onClick={(e) => onRowClick(routine, e)} data-testid="routineRow">
+                                    <ListItemText
+                                        primary={
+                                            <Box className={styles.titleRow}>
+                                                {routine.title}
+                                                <Chip
+                                                    label={routine.routineType === 'calendar' ? 'Calendar' : 'Next Action'}
+                                                    size="small"
+                                                    variant="outlined"
+                                                    color={routine.routineType === 'calendar' ? 'info' : 'default'}
+                                                />
+                                                <Chip
+                                                    label={routine.active ? 'Active' : 'Paused'}
+                                                    size="small"
+                                                    color={routine.active ? 'success' : 'default'}
+                                                />
+                                                <AccountChip userId={routine.userId} />
+                                            </Box>
+                                        }
+                                        secondary={routineLabel(routine)}
+                                        className={styles.listItemText}
+                                    />
+                                </ListItemButton>
                             </ListItem>
+                            {editor.renderExpandFor(routine._id)}
                             {idx < routines.length - 1 && <Divider />}
                         </Box>
                     ))}
                 </List>
             )}
-            {dialogRoutine !== null && account !== null && (
-                <RoutineDialog
-                    db={db}
-                    userId={account.id}
-                    workContexts={workContexts}
-                    people={people}
-                    routine={dialogRoutine === 'new' ? undefined : dialogRoutine}
-                    onClose={() => setDialogRoutine(null)}
-                    onSaved={onSaved}
-                />
-            )}
+            {editor.renderGlobal()}
             <Dialog open={routineToDelete !== null} onClose={() => setRoutineToDelete(null)} maxWidth="sm" fullWidth>
                 <DialogTitle>Delete routine?</DialogTitle>
                 <DialogContent>

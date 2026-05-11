@@ -28,6 +28,7 @@ import { Route as AuthenticatedNextActionsRouteImport } from './routes/_authenti
 import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated/inbox'
 import { Route as AuthenticatedDoneRouteImport } from './routes/_authenticated/done'
 import { Route as AuthenticatedCalendarRouteImport } from './routes/_authenticated/calendar'
+import { Route as AuthenticatedRoutineRoutineIdRouteImport } from './routes/_authenticated/routine.$routineId'
 import { Route as AuthenticatedItemItemIdRouteImport } from './routes/_authenticated/item.$itemId'
 
 const LoginRoute = LoginRouteImport.update({
@@ -128,6 +129,12 @@ const AuthenticatedCalendarRoute = AuthenticatedCalendarRouteImport.update({
   path: '/calendar',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedRoutineRoutineIdRoute =
+  AuthenticatedRoutineRoutineIdRouteImport.update({
+    id: '/routine/$routineId',
+    path: '/routine/$routineId',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedItemItemIdRoute = AuthenticatedItemItemIdRouteImport.update({
   id: '/item/$itemId',
   path: '/item/$itemId',
@@ -154,6 +161,7 @@ export interface FileRoutesByFullPath {
   '/work-contexts': typeof AuthenticatedWorkContextsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/item/$itemId': typeof AuthenticatedItemItemIdRoute
+  '/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -175,6 +183,7 @@ export interface FileRoutesByTo {
   '/auth/callback': typeof AuthCallbackRoute
   '/': typeof AuthenticatedIndexRoute
   '/item/$itemId': typeof AuthenticatedItemItemIdRoute
+  '/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -198,6 +207,7 @@ export interface FileRoutesById {
   '/auth/callback': typeof AuthCallbackRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/item/$itemId': typeof AuthenticatedItemItemIdRoute
+  '/_authenticated/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -221,6 +231,7 @@ export interface FileRouteTypes {
     | '/work-contexts'
     | '/auth/callback'
     | '/item/$itemId'
+    | '/routine/$routineId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -242,6 +253,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/'
     | '/item/$itemId'
+    | '/routine/$routineId'
   id:
     | '__root__'
     | '/_authenticated'
@@ -264,6 +276,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/_authenticated/'
     | '/_authenticated/item/$itemId'
+    | '/_authenticated/routine/$routineId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -407,6 +420,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedCalendarRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/routine/$routineId': {
+      id: '/_authenticated/routine/$routineId'
+      path: '/routine/$routineId'
+      fullPath: '/routine/$routineId'
+      preLoaderRoute: typeof AuthenticatedRoutineRoutineIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/item/$itemId': {
       id: '/_authenticated/item/$itemId'
       path: '/item/$itemId'
@@ -435,6 +455,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedWorkContextsRoute: typeof AuthenticatedWorkContextsRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedItemItemIdRoute: typeof AuthenticatedItemItemIdRoute
+  AuthenticatedRoutineRoutineIdRoute: typeof AuthenticatedRoutineRoutineIdRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
@@ -455,6 +476,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedWorkContextsRoute: AuthenticatedWorkContextsRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedItemItemIdRoute: AuthenticatedItemItemIdRoute,
+  AuthenticatedRoutineRoutineIdRoute: AuthenticatedRoutineRoutineIdRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

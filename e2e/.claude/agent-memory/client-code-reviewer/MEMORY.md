@@ -1,0 +1,3 @@
+- [List-row padding regressions when adding secondary-action icons](feedback_list_row_padding_on_icon_add.md) — Adding an icon to a `<ListItem secondaryAction>` rarely comes with a matching `.listItemText { padding-right }` bump; check explicitly.
+- [Multi-chrome editor refactor pattern](project_multi_chrome_editor_pattern.md) — Items and routines both use Body+Expand+Popover+Dialog+useEditor+page-route; future entity editors will follow this shape.
+- [`window.history.back()` is unsafe for direct-navigation pages](feedback_history_back_unsafe_for_deep_links.md) — Page-mode routes should use `navigate({ to: '/<canonical-list>' })` rather than `window.history.back()`, which exits the app on direct deep-link entry.
