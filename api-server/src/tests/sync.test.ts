@@ -83,9 +83,10 @@ async function push(sessionCookie: string, deviceId: string, ops: ReturnType<typ
     return authenticatedRequest(app, { method: 'POST', path: '/sync/push', sessionCookie, body: { deviceId, ops } });
 }
 
-async function pull(sessionCookie: string, opts: { since?: string; deviceId?: string } = {}) {
+async function pull(sessionCookie: string, opts: { since?: string; ackedTs?: string; deviceId?: string } = {}) {
     const params = new URLSearchParams();
     if (opts.since !== undefined) params.set('since', opts.since);
+    if (opts.ackedTs !== undefined) params.set('ackedTs', opts.ackedTs);
     if (opts.deviceId !== undefined) params.set('deviceId', opts.deviceId);
     const query = params.toString() ? `?${params}` : '';
     return authenticatedRequest(app, { method: 'GET', path: `/sync/pull${query}`, sessionCookie });
@@ -317,15 +318,17 @@ describe('GET /sync/pull', () => {
         expect(ops[0]!.entityId).toBe(id2);
     });
 
-    it('pull with deviceId updates deviceSyncState lastSyncedTs (composite per-user _id)', async () => {
+    it('pull with deviceId updates deviceSyncState lastSyncedTs to ackedTs (composite per-user _id)', async () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
 
-        const res = await pull(cookie, { deviceId: 'dev-2' });
-        const { serverTs } = (await res.json()) as { serverTs: string };
+        // Explicit-ack protocol: server records `ackedTs` (what the client has durably persisted),
+        // not the response's `serverTs`. Client typically passes `ackedTs === since === IDB cursor`.
+        const ackedTs = '2025-01-15T00:00:00.000Z';
+        await pull(cookie, { since: ackedTs, ackedTs, deviceId: 'dev-2' });
 
         const state = await db.collection('deviceSyncState').findOne({ _id: `dev-2::${userId}` });
-        expect(state?.lastSyncedTs).toBe(serverTs);
+        expect(state?.lastSyncedTs).toBe(ackedTs);
         expect(state?.deviceId).toBe('dev-2');
         expect(state?.user).toBe(userId);
     });
@@ -526,6 +529,31 @@ describe('GET /sync/bootstrap', () => {
         expect(res.status).toBe(401);
     });
 
+    it('registers the device in deviceSyncState when ?deviceId= is present', async () => {
+        // Bootstrap delivers a full snapshot ≤ serverTs, so writing lastSyncedTs := serverTs is
+        // honest — the client provably has everything by the time fetchBootstrap resolves. We need
+        // the row to exist immediately so a sibling device's pull cannot drop the purge floor
+        // through the missing row before this device's first incremental pull runs.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot', sessionCookie: cookie });
+        const { serverTs } = (await res.json()) as { serverTs: string };
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
+        expect(state?.lastSyncedTs).toBe(serverTs);
+        expect(state?.deviceId).toBe('dev-boot');
+        expect(state?.user).toBe(userId);
+        expect(state?.lastSeenTs).toBe(dayjs(0).toISOString());
+    });
+
+    it('does NOT register a device when ?deviceId= is absent (back-compat for old clients)', async () => {
+        const cookie = await loginAsAlice();
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap', sessionCookie: cookie });
+        expect(res.status).toBe(200);
+        expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
+    });
+
     it('round-trips routine.startDate through push + bootstrap', async () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
@@ -555,35 +583,97 @@ describe('GET /sync/bootstrap', () => {
 // ─── Purge logic ─────────────────────────────────────────────────────────────
 
 describe('Purge logic', () => {
-    it('happy path: ops older than min(lastSyncedTs) across all devices are deleted after pull', async () => {
+    it('lost-response retry: ops are NOT purged before the client acknowledges them (explicit-ack)', async () => {
+        // Reproduces the LinkedIn inbox bug: pre-fix, /sync/pull recorded lastSyncedTs := serverTs
+        // before returning. If the response was lost or partially applied, the server thought the
+        // device had acked ops it never persisted, and purge deleted them from the log. The next
+        // pull returned zero rows and the item was invisible forever.
+        // Under explicit-ack the server records lastSyncedTs := ackedTs. As long as the client's
+        // IDB cursor hasn't advanced, ackedTs stays at the prior value and the op survives.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, dayjs().toISOString()))]);
+        await tick();
+
+        // First pull: client sends since=epoch AND ackedTs=epoch. Server records lastSyncedTs=epoch.
+        const first = await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' });
+        const firstBody = (await first.json()) as { ops: unknown[] };
+        expect(firstBody.ops).toHaveLength(1);
+        const recorded = await db.collection('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
+        expect(recorded?.lastSyncedTs).toBe(dayjs(0).toISOString());
+
+        // Simulate lost response: client retries with the SAME since AND ackedTs (its IDB cursor
+        // never advanced). The op is still in the log because the recorded floor is still epoch:
+        // purgeOldOperations computes min(lastSyncedTs) = epoch and deleteOlderThan only removes
+        // ops with ts <= epoch — the op's ts is dayjs() (well past epoch), so no purge timing
+        // can affect this assertion. Pre-fix the floor would have advanced to the op's ts and the
+        // retry would return zero rows.
+        const retry = await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' });
+        const retryBody = (await retry.json()) as { ops: unknown[] };
+        expect(retryBody.ops).toHaveLength(1);
+    });
+
+    it('old client without ackedTs falls back to recording `since`, never `serverTs`', async () => {
+        // Backwards-compat path: a client that pre-dates the ackedTs rollout. Server must fall
+        // back to writing lastSyncedTs := since — strictly safer than the pre-fix `serverTs` write
+        // (which was the bug). On server-only rollout, old clients are immediately protected.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, dayjs().toISOString()))]);
+        await tick();
+
+        // Old client: only `since`, no `ackedTs`.
+        const res = await pull(cookie, { since: dayjs(0).toISOString(), deviceId: 'dev-1' });
+        const body = (await res.json()) as { ops: unknown[] };
+        expect(body.ops).toHaveLength(1);
+
+        const recorded = await db.collection('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
+        expect(recorded?.lastSyncedTs).toBe(dayjs(0).toISOString());
+    });
+
+    it('happy path: ops older than min(lastSyncedTs) across all devices are deleted after two-pull ack', async () => {
         const cookie = await loginAsAlice();
         const entityId = crypto.randomUUID();
 
         // dev-1 pushes an op — server records it with ts = T
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
-
-        // Guarantee S1 > T so the op falls below the purge floor after both devices pull
         await tick();
 
-        // dev-1 pulls → lastSyncedTs(dev-1) = S1
-        await pull(cookie, { deviceId: 'dev-1' });
+        // Under explicit-ack each device needs two pulls to advance its purge floor past an op:
+        //   1) First pull returns the op; server records lastSyncedTs := ackedTs (still epoch).
+        //   2) Second pull sends ackedTs = first.serverTs; server advances lastSyncedTs to op.ts.
+        const dev1First = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' })).json()) as {
+            serverTs: string;
+        };
+        await tick();
+        await pull(cookie, { since: dev1First.serverTs, ackedTs: dev1First.serverTs, deviceId: 'dev-1' });
         await tick();
 
-        // dev-2 pulls → lastSyncedTs(dev-2) = S2 > S1 → triggers purge; floor = min(S1,S2) = S1
-        await pull(cookie, { deviceId: 'dev-2' });
+        const dev2First = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-2' })).json()) as {
+            serverTs: string;
+        };
+        await tick();
+        await pull(cookie, { since: dev2First.serverTs, ackedTs: dev2First.serverTs, deviceId: 'dev-2' });
 
         // Purge is fire-and-forget — poll until it converges instead of guessing a fixed delay.
         await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
     });
 
-    it('single device: push then pull deletes all older ops', async () => {
+    it('single device: push then two pulls deletes all older ops (ackedTs advances floor)', async () => {
         const cookie = await loginAsAlice();
         const entityId = crypto.randomUUID();
 
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
-        await pull(cookie, { deviceId: 'dev-1' });
+        // First pull receives the op but records ackedTs=epoch (client hasn't committed yet).
+        const first = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' })).json()) as {
+            serverTs: string;
+        };
+        // Second pull acknowledges the previous response — server advances lastSyncedTs.
+        await pull(cookie, { since: first.serverTs, ackedTs: first.serverTs, deviceId: 'dev-1' });
 
         await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
@@ -667,7 +757,12 @@ describe('Stale device cleanup', () => {
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
-        await pull(cookie, { deviceId: 'dev-active' });
+        // Two-pull ack pattern (explicit-ack protocol): first pull receives the op, second pull
+        // confirms it so the device's lastSyncedTs advances past op.ts and the purge can fire.
+        const first = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-active' })).json()) as {
+            serverTs: string;
+        };
+        await pull(cookie, { since: first.serverTs, ackedTs: first.serverTs, deviceId: 'dev-active' });
 
         // Purge runs in two phases: first the abandoned device row is removed, then the now-
         // unblocked operations purge fires. Wait for the second phase since it's the slower one.
@@ -758,8 +853,8 @@ describe('Multi-device round-trip', () => {
         await tick();
 
         // Device-2 pulls — should receive the create op
-        const pullRes1 = await pull(dev2Cookie, { since: dayjs(0).toISOString(), deviceId: 'dev-2' });
-        const { ops: opsForDev2 } = (await pullRes1.json()) as { ops: { entityId: string; opType: string }[] };
+        const pullRes1 = await pull(dev2Cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-2' });
+        const { ops: opsForDev2, serverTs: dev2ServerTs1 } = (await pullRes1.json()) as { ops: { entityId: string; opType: string }[]; serverTs: string };
         expect(opsForDev2).toHaveLength(1);
         expect(opsForDev2[0]!.entityId).toBe(itemId);
         expect(opsForDev2[0]!.opType).toBe('create');
@@ -770,10 +865,11 @@ describe('Multi-device round-trip', () => {
         await push(dev2Cookie, 'dev-2', [makeClientOp('item', itemId, 'update', makeItemSnapshot(itemId, updateTs, { title: 'Updated by dev-2' }))]);
         await tick();
 
-        // Device-1 pulls — should receive the update op
+        // Device-1 pulls — should receive the update op. Explicit-ack: dev-1 acknowledges epoch
+        // (it has nothing committed yet) and asks for ops > createOp.ts.
         const dev1LastOp = await db.collection('operations').findOne({ entityId: itemId, opType: 'create' });
-        const pullRes2 = await pull(dev1Cookie, { since: dev1LastOp!.ts as string, deviceId: 'dev-1' });
-        const { ops: opsForDev1 } = (await pullRes2.json()) as { ops: { entityId: string; opType: string }[] };
+        const pullRes2 = await pull(dev1Cookie, { since: dev1LastOp!.ts as string, ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' });
+        const { ops: opsForDev1, serverTs: dev1ServerTs1 } = (await pullRes2.json()) as { ops: { entityId: string; opType: string }[]; serverTs: string };
         expect(opsForDev1).toHaveLength(1);
         expect(opsForDev1[0]!.opType).toBe('update');
 
@@ -781,11 +877,15 @@ describe('Multi-device round-trip', () => {
         const item = await db.collection('items').findOne({ _id: itemId });
         expect(item?.title).toBe('Updated by dev-2');
 
-        // dev-2's lastSyncedTs is still anchored before the update op (it was set during
-        // dev-2's first pull, before pushing the update). Pull again so dev-2's cursor
-        // advances past the update op — otherwise min(lastSyncedTs) never reaches it.
+        // For purge to fire, each device's lastSyncedTs (= recorded ackedTs) must reach updateOp.ts.
+        // Each device needs a follow-up pull whose ackedTs equals the previous response's serverTs.
         await tick();
-        await pull(dev2Cookie, { deviceId: 'dev-2' });
+        await pull(dev1Cookie, { since: dev1ServerTs1, ackedTs: dev1ServerTs1, deviceId: 'dev-1' });
+        // dev-2 hasn't yet acked the create op it received in pullRes1 — and now the update is also
+        // visible in its query window. Two follow-up pulls bring dev-2's floor up to updateOp.ts:
+        // first ackedTs=createOp.ts (its first response's serverTs), then ackedTs=updateOp.ts.
+        const dev2Second = (await (await pull(dev2Cookie, { since: dev2ServerTs1, ackedTs: dev2ServerTs1, deviceId: 'dev-2' })).json()) as { serverTs: string };
+        await pull(dev2Cookie, { since: dev2Second.serverTs, ackedTs: dev2Second.serverTs, deviceId: 'dev-2' });
 
         // Both devices have now pulled past all ops → purge fires → operations collection empty
         await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);

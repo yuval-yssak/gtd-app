@@ -543,6 +543,56 @@ describe('pullFromServer — item ops', () => {
         const cursorB = await db.get('syncCursors', 'user-b');
         expect(cursorB?.lastSyncedTs).toBe(sharedTs);
     });
+
+    // Documents the invariant from the explicit-ack protocol (plans/write-up-a-plan-zesty-pebble.md):
+    // the IDB cursor doubles as both `since` (what ops to fetch) and `ackedTs` (what the device has
+    // durably committed). Together they prevent the server from purging ops the client never wrote.
+    it('passes the IDB cursor as both since and ackedTs (explicit-ack protocol)', async () => {
+        const cursor = '2026-01-15T00:00:00.000Z';
+        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: cursor });
+
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: cursor });
+
+        await pullFromServer(db, USER_ID);
+
+        // (since, ackedTs, deviceId) — both equal the current IDB cursor in steady state.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledWith(cursor, cursor, expect.any(String));
+    });
+
+    it('lost-response replay: a retry after a failed pull re-sends the same ackedTs (cursor never advanced)', async () => {
+        // Pre-fix: the server would have set lastSyncedTs := serverTs on the first call, purged
+        // the op, and the retry would return zero rows. Under explicit-ack the client keeps sending
+        // ackedTs = its IDB cursor; the floor never advances past unacknowledged ops.
+        const initialCursor = '1970-01-01T00:00:00.000Z';
+        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: initialCursor });
+
+        // First call: server returns ops but applyServerOp throws — cursor stays at epoch.
+        const op = { entityType: 'item' as const, entityId: 'lost-item', opType: 'create' as const, snapshot: serverItem('lost-item') };
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: '2026-02-01T00:00:00.000Z' });
+        // Force the first items-store put to fail so setLastSyncedTs never runs. The default
+        // implementation delegates back to the real db.put so the second call (the retry) and
+        // the cursor write inside setLastSyncedTs both succeed.
+        const originalPut = db.put.bind(db);
+        const passthrough = ((store: string, value: unknown, key?: IDBValidKey) => originalPut(store as never, value as never, key as never)) as typeof db.put;
+        vi.spyOn(db, 'put')
+            .mockImplementationOnce(((store: string, value: unknown, key?: IDBValidKey) => {
+                if (store === 'items') return Promise.reject(new Error('IDB transaction aborted'));
+                return originalPut(store as never, value as never, key as never);
+            }) as typeof db.put)
+            .mockImplementation(passthrough);
+
+        await expect(pullFromServer(db, USER_ID)).rejects.toThrow('IDB transaction aborted');
+
+        const cursorAfterFailure = await db.get('syncCursors', USER_ID);
+        expect(cursorAfterFailure?.lastSyncedTs).toBe(initialCursor);
+
+        // Retry: the same op is still in the server's log; the client sends ackedTs=epoch again.
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: '2026-02-01T00:00:00.000Z' });
+        await pullFromServer(db, USER_ID);
+
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(initialCursor, initialCursor, expect.any(String));
+        expect(await db.get('items', 'lost-item')).toBeDefined();
+    });
 });
 
 describe('pullFromServer — routine/person/workContext ops', () => {

@@ -83,6 +83,10 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     // incremental pull from that point forward without replaying any ops.
     .get('/bootstrap', authenticateRequest, async (c) => {
         const { user } = c.get('session');
+        const deviceId = c.req.query('deviceId');
+        // One serverTs for both the response body and the deviceSyncState row, so the recorded
+        // floor exactly matches what the client claims it has after consuming this response.
+        const serverTs = dayjs().toISOString();
 
         const [items, routines, people, workContexts] = await Promise.all([
             itemsDAO.findArray({ user: user.id }),
@@ -91,7 +95,21 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             workContextsDAO.findArray({ user: user.id }),
         ]);
 
-        return c.json({ items, routines, people, workContexts, serverTs: dayjs().toISOString() });
+        // Register the device as soon as we've decided what's in the response. Bootstrap delivers
+        // a full snapshot — by the time `fetchBootstrap` resolves on the client, IndexedDB will
+        // hold everything ≤ serverTs, so writing `lastSyncedTs: serverTs` is honest. We await
+        // the upsert so a sibling device that pulls before this device's first incremental pull
+        // can't drop the purge floor through the missing row (its pull would have computed
+        // `min(lastSyncedTs)` excluding this device, potentially deleting ops this device needs).
+        if (deviceId) {
+            await deviceSyncStateDAO.updateOne(
+                { _id: deviceSyncStateId(deviceId, user.id) },
+                { $set: { lastSyncedTs: serverTs, deviceId, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
+                { upsert: true },
+            );
+        }
+
+        return c.json({ items, routines, people, workContexts, serverTs });
     })
 
     // ---------------------------------------------------------------------------
@@ -177,16 +195,21 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     .get('/pull', authenticateRequest, async (c) => {
         const { user } = c.get('session');
         const since = c.req.query('since') ?? dayjs(0).toISOString();
+        // Explicit acknowledgement: the highest ts the client has *durably persisted to IndexedDB*.
+        // Distinct from `since` (which ops to fetch) so that a lost or partially-applied pull
+        // response cannot advance the purge floor past ops the client never committed. Old clients
+        // that don't send `ackedTs` fall back to `since` — strictly safer than the previous
+        // `serverTs`, since `since` is what those clients claimed they had before this fetch.
+        const ackedTs = c.req.query('ackedTs');
         const deviceId = c.req.query('deviceId');
 
         const ops = await operationsDAO.findArray({ user: user.id, ts: { $gt: since } }, { sort: { ts: 1 } });
 
-        // Advance the cursor to exactly the last returned op's ts, or keep it at `since`
-        // when nothing is returned. Using dayjs() here would race with concurrent pushes:
-        // a push could commit ops with ts < dayjs() that the query above didn't see,
-        // causing the client to advance its cursor past ops it never received.
-        // Known limitation: if another push commits ops at exactly `lastOp.ts` after this
-        // query ran, the next pull ($gt: lastOp.ts) will miss them. Acceptable for the
+        // The response's `serverTs` marks the high-water mark of *what we just returned* — the
+        // client uses it as the next pull's `since`. It is NOT the purge floor. The purge floor
+        // lives in `deviceSyncState.lastSyncedTs`, which is now driven by `ackedTs` (below).
+        // Known limitation on `serverTs`: if another push commits ops at exactly `lastOp.ts` after
+        // this query ran, the next pull ($gt: lastOp.ts) will miss them. Acceptable for the
         // low-throughput GTD use case; a monotonic sequence would eliminate the gap.
         const lastOp = ops.at(-1);
         const serverTs = lastOp ? lastOp.ts : since;
@@ -194,9 +217,13 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         if (deviceId) {
             // Track per-(device, user) pull cursor so old operations can eventually be purged.
             // Composite _id keeps each user's cursor independent — see DeviceSyncStateInterface.
+            // We record `ackedTs` (what the client claims it has) rather than `serverTs` (what
+            // we're about to return). Pre-fix this wrote `serverTs` and a lost/partial response
+            // could cause the next purge to delete ops the client never received — the LinkedIn
+            // inbox bug. See plans/write-up-a-plan-zesty-pebble.md.
             await deviceSyncStateDAO.updateOne(
                 { _id: deviceSyncStateId(deviceId, user.id) },
-                { $set: { lastSyncedTs: serverTs, deviceId, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
+                { $set: { lastSyncedTs: ackedTs ?? since, deviceId, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
                 { upsert: true },
             );
 

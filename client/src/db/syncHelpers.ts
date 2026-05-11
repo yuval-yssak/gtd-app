@@ -396,11 +396,16 @@ export function pullFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string):
 async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     await assertActiveSessionMatches(db, userId, 'doPull');
     const deviceId = await getOrCreateDeviceId(db);
-    const since = await getLastSyncedTs(db, userId);
-    const { ops, serverTs } = await fetchSyncOps(since, deviceId);
+    // The IDB cursor doubles as `since` (what ops to fetch) AND `ackedTs` (what we've durably
+    // persisted). They're equal in steady state — they only diverge after a partial-apply failure
+    // where setLastSyncedTs ran but applyServerOp didn't (a state we don't reach today; this
+    // protocol makes the contract explicit so we can split them later if needed). Crucially we
+    // never advance the server's purge floor past what we've actually written to IDB.
+    const cursor = await getLastSyncedTs(db, userId);
+    const { ops, serverTs } = await fetchSyncOps(cursor, cursor, deviceId);
 
     console.log(
-        `[debug-gcal-sync][client] doPull | userId=${userId} since=${since} serverTs=${serverTs} opCount=${ops.length}`,
+        `[debug-gcal-sync][client] doPull | userId=${userId} since=${cursor} serverTs=${serverTs} opCount=${ops.length}`,
         ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}@${(op.snapshot as { updatedTs?: string } | null)?.updatedTs ?? 'n/a'}`),
     );
 

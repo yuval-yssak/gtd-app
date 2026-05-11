@@ -44,7 +44,10 @@ export async function pushSyncOps(deviceId: string, ops: SyncOperation[]): Promi
 }
 
 export async function fetchBootstrap(deviceId: string): Promise<BootstrapPayload> {
-    const res = await fetch(`${API_SERVER}/sync/bootstrap`, {
+    // Sending deviceId in the query string lets the server register a deviceSyncState row at
+    // bootstrap time, so its purge floor is established before any sibling device pulls. Without
+    // it the floor could drop below ops this device still needs (sync race).
+    const res = await fetch(`${API_SERVER}/sync/bootstrap?deviceId=${encodeURIComponent(deviceId)}`, {
         credentials: 'include',
         headers: { [DEVICE_ID_HEADER]: deviceId },
     });
@@ -52,8 +55,13 @@ export async function fetchBootstrap(deviceId: string): Promise<BootstrapPayload
     return res.json() as Promise<BootstrapPayload>;
 }
 
-export async function fetchSyncOps(since: string, deviceId: string): Promise<PullPayload> {
-    const res = await fetch(`${API_SERVER}/sync/pull?since=${encodeURIComponent(since)}&deviceId=${encodeURIComponent(deviceId)}`, {
+// `ackedTs` is the highest ts the caller has *durably persisted to IndexedDB*. The server records
+// it as the device's purge floor (lastSyncedTs) — distinct from `since` so that a lost or partial
+// response never advances the floor past ops the client never committed. In steady state callers
+// pass `ackedTs === since`; they diverge only after a partial-apply recovery scenario.
+export async function fetchSyncOps(since: string, ackedTs: string, deviceId: string): Promise<PullPayload> {
+    const url = `${API_SERVER}/sync/pull?since=${encodeURIComponent(since)}&ackedTs=${encodeURIComponent(ackedTs)}&deviceId=${encodeURIComponent(deviceId)}`;
+    const res = await fetch(url, {
         credentials: 'include',
         headers: { [DEVICE_ID_HEADER]: deviceId },
     });
