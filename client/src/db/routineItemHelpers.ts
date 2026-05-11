@@ -395,15 +395,25 @@ export async function hardDeletePastItems(db: IDBPDatabase<MyDB>, items: StoredI
 }
 
 /**
- * Boot-tick: for every active nextAction routine whose startDate has arrived and which has no
- * open (non-done/non-trash) item, materialize the first item. Runs on app boot and after each
- * sync pull so a future-startDate routine produces its first item exactly when the startDate
- * crosses today, regardless of whether the user has the app open.
+ * Boot-tick: for every active nextAction routine that has no open (non-done/non-trash) item,
+ * materialize the first item. Runs on app boot and after each sync pull.
+ *
+ * Coverage map:
+ *   - In-app routine create (`RoutineDialog` → `createRoutine` + `createFirstRoutineItem`):
+ *     the client already produces an item directly; this tick is a no-op.
+ *   - Public-API routine create (`POST /v1/routines`): the server materializes the first item
+ *     server-side; this tick is a no-op once that op syncs in.
+ *   - Pre-server-bootstrap routines, future-startDate routines whose dates have arrived since
+ *     last boot, and any routine whose first-item generation failed: this tick is the backstop.
+ *
+ * Delegates to `createFirstRoutineItem` so the anchor semantics match the server exactly
+ * (`includeAnchor=true`, anchored at `max(today, startDate)`). The earlier implementation skipped
+ * future-startDate routines and used `startDate - 1 day` with `createNextRoutineItem`
+ * (`includeAnchor=false`), which produced wrong dates on weekly rules with mismatched BYDAY.
  *
  * Preserves the "at most one open item" invariant by skipping routines that already have one.
  */
 export async function materializePendingNextActionRoutines(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
-    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
     const routines = await db.getAllFromIndex('routines', 'userId', userId);
     const allItems = await db.getAllFromIndex('items', 'userId', userId);
 
@@ -414,18 +424,11 @@ export async function materializePendingNextActionRoutines(db: IDBPDatabase<MyDB
         if (routine.routineType !== 'nextAction') {
             continue;
         }
-        // Only materialize when startDate is set and has arrived. Legacy routines without startDate
-        // are already handled by the existing disposal-driven generation.
-        if (!routine.startDate || routine.startDate > todayStr) {
-            continue;
-        }
         const hasOpen = allItems.some((i) => i.routineId === routine._id && i.status !== 'done' && i.status !== 'trash');
         if (hasOpen) {
             continue;
         }
-        // refDate = startDate - 1 day (UTC) so computeNextOccurrence returns the first occurrence ON the startDate.
-        const refDate = dayjs.utc(routine.startDate).subtract(1, 'day').toDate();
-        await createNextRoutineItem(db, userId, routine, refDate);
+        await createFirstRoutineItem(db, userId, routine);
     }
 }
 

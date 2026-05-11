@@ -1,0 +1,4 @@
+- [PATCH /v1/items vs POST /complete asymmetry](feedback_patch_done_advancement.md) — PATCH to terminal statuses (done/trash) is easy to miss for side effects that the dedicated POST shortcut handles
+- [Local-vs-UTC test flakiness pattern](feedback_local_vs_utc_test_flakiness.md) — Tests asserting "today" with dayjs.utc() but production using dayjs() local can flake near midnight on non-UTC machines
+- [as never on Mongo Filter casts](feedback_as_never_unjustified.md) — `as never` is often pasted onto Mongo filters but is unjustified when `Filter<S>` already accepts the operators
+- [Bootstrap responses must reflect post-hook state](feedback_response_reflects_persisted_state.md) — POST/PATCH that fire post-write hooks may flip state before responding; always re-read or pre-validate so the response matches what's persisted

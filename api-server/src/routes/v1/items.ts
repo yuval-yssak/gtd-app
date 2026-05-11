@@ -6,7 +6,9 @@ import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddl
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
+import routinesDAO from '../../dataAccess/routinesDAO.js';
 import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
+import { advanceRoutineAfterDisposal } from '../../lib/routineItemGeneration.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
 import { type ItemInterface, ItemStatus } from '../../types/entities.js';
 import { presentItem } from './projections/item.js';
@@ -401,7 +403,30 @@ async function completeItem({ userId, tokenId, itemId }: CompleteContext): Promi
     const now = dayjs().toISOString();
     const updated: ItemInterface = sanitizeForStatus({ ...existing, status: 'done', updatedTs: now });
     await applyAndPublishOperation(userId, { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated }, { deviceId: `api:${tokenId}`, now });
+    // If the item belonged to an active nextAction routine, advance the series by generating the
+    // next occurrence's item. Mirrors the client-side `maybeCreateNextRoutineItem` so completing
+    // a routine-linked item via the public API doesn't leave the series stranded. The helper is
+    // a no-op for non-routine / non-nextAction / inactive routines and swallows its own errors.
+    await maybeAdvanceRoutineForItem(existing, { userId, tokenId });
     return { ok: true, item: updated, alreadyDone: false };
+}
+
+/**
+ * If the freshly-disposed item is tied to a nextAction routine, run the server-side generator to
+ * produce the next occurrence. Resolves the routine snapshot via the DAO (the item only carries
+ * the routineId, not the routine itself) and hands off to `advanceRoutineAfterDisposal`.
+ * Errors inside the generator are already logged + swallowed there — `await` is still used so the
+ * fan-out has settled before the request returns.
+ */
+async function maybeAdvanceRoutineForItem(item: ItemInterface, ctx: { userId: string; tokenId: string }): Promise<void> {
+    if (!item.routineId) {
+        return;
+    }
+    const routine = await routinesDAO.findByOwnerAndId(item.routineId, ctx.userId);
+    if (!routine || !routine.active) {
+        return;
+    }
+    await advanceRoutineAfterDisposal({ userId: ctx.userId, tokenId: ctx.tokenId }, routine, dayjs().toDate());
 }
 
 // ── PATCH /v1/items/:id (full-surface update) ──────────────────────────────────────────────
@@ -476,6 +501,12 @@ async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promis
     // way back is the in-app UI (no /v1 restore endpoint exists today), so silently letting
     // callers PATCH `{status: 'trash'}` would create unrecoverable rows for headless integrations.
     // Mirrors the same intent that gates trash out of POST /v1/items/:id/complete.
+    //
+    // Note on routine advancement: because no public-API trash transition exists, there is no
+    // server-side `advanceRoutineAfterDisposal` call for trashes. The only way an item reaches
+    // `trash` server-side is via `/v1/operations/batch` (replay of a client-originated trash op),
+    // and triggering routine advancement on replay would double-create a tail item — the client
+    // already ran its own `maybeCreateNextRoutineItem` when it staged the trash op locally.
     if (raw['status'] === 'trash') {
         return {
             ok: false,
@@ -520,6 +551,13 @@ async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promis
             };
         }
         throw err;
+    }
+    // PATCH→done parity with POST /complete: when a routine-linked item is patched to `done` (and
+    // wasn't already done), advance the series. Skipped on already-done items so a re-PATCH from
+    // done→done doesn't duplicate the tail. Trash transitions are blocked above, so the only
+    // disposal a PATCH can produce is `done`.
+    if (updated.status === 'done' && existing.status !== 'done') {
+        await maybeAdvanceRoutineForItem(existing, { userId, tokenId });
     }
     return { ok: true, item: updated };
 }

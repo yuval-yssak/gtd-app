@@ -4,6 +4,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import type { ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { applyAndPublishOperation, applyAndPublishOperations, type RawOperation } from './applyOperation.js';
+import { ensureFirstRoutineItem } from './routineItemGeneration.js';
 import { addUntilToRrule } from './routineSplitUtils.js';
 
 /**
@@ -60,7 +61,12 @@ export async function resumeRoutine(ctx: CompositeContext, routineId: string): P
     }
     const now = dayjs().toISOString();
     const tomorrow = dayjs().startOf('day').add(1, 'day').format('YYYY-MM-DD');
-    return updateRoutine(ctx, routine, { active: true, startDate: tomorrow }, now);
+    const result = await updateRoutine(ctx, routine, { active: true, startDate: tomorrow }, now);
+    // Materialize the first nextAction item against the resumed routine. Pause has already
+    // trashed any future-dated open items, so without this the resumed series produces nothing
+    // until a manual intervention. No-op for calendar routines and errors are swallowed inside.
+    await ensureFirstRoutineItem(ctx, result.routine);
+    return result;
 }
 
 export interface SplitParams {

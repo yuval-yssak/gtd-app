@@ -143,7 +143,12 @@ test.describe('routines', () => {
         });
     });
 
-    test('create nextAction routine with future startDate: no item until boot-tick after startDate arrives', async ({ browser }) => {
+    test('create nextAction routine with future startDate: boot-tick materializes a tickler-hidden item', async ({ browser }) => {
+        // Server-side bootstrap generates the first item on routine create, and the client's boot
+        // tick now also materializes future-startDate routines (anchor at max(today, startDate),
+        // includeAnchor=true). The previous "skip until startDate arrives" behaviour was a bug —
+        // future-startDate routines went unbacked until the startDate crossed today AND the user
+        // opened the app. The item is hidden until due via `ignoreBefore = expectedBy` (tickler).
         await withOneLoggedInDevice(browser, `routine-future-start-${dayjs().valueOf()}@example.com`, async (page) => {
             const futureStart = dayjs().add(7, 'day').format('YYYY-MM-DD');
             const routine = await gtd.createRoutine(page, {
@@ -154,17 +159,13 @@ test.describe('routines', () => {
                 active: true,
                 startDate: futureStart,
             });
-            // materializePending with future startDate should NOT generate anything.
             await gtd.materializePendingNextActionRoutines(page);
             const openItems = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status !== 'done' && i.status !== 'trash');
-            expect(openItems).toHaveLength(0);
-
-            // Simulate startDate arriving by updating the routine's startDate to yesterday.
-            const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
-            await gtd.updateRoutine(page, { ...routine, startDate: yesterday });
-            await gtd.materializePendingNextActionRoutines(page);
-            const afterItems = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status !== 'done' && i.status !== 'trash');
-            expect(afterItems.length).toBeGreaterThan(0);
+            expect(openItems).toHaveLength(1);
+            const [item] = openItems;
+            if (!item) throw new Error('expected one open item');
+            expect(item.expectedBy).toBe(futureStart);
+            expect(item.ignoreBefore).toBe(futureStart);
         });
     });
 

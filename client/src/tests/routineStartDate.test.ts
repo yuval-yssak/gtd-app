@@ -207,7 +207,11 @@ describe('materializePendingNextActionRoutines', () => {
         expect(items[0]?.routineId).toBe('mat-1');
     });
 
-    it('skips routines with a future startDate', async () => {
+    it('materializes future-startDate routines with expectedBy === startDate', async () => {
+        // Behaviour changed in tandem with server-side bootstrap: the boot tick now mirrors
+        // `createFirstRoutineItem` (anchor at max(today, startDate), includeAnchor=true) so a
+        // future-startDate routine gets its item up front and is hidden until due via the
+        // tickler `ignoreBefore = expectedBy`. Previously this case was skipped.
         const future = dayjs().add(7, 'day').format('YYYY-MM-DD');
         const routine = buildRoutine({ _id: 'mat-2', startDate: future });
         await db.put('routines', routine);
@@ -215,7 +219,12 @@ describe('materializePendingNextActionRoutines', () => {
         await materializePendingNextActionRoutines(db, USER_ID);
 
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
-        expect(items).toHaveLength(0);
+        expect(items).toHaveLength(1);
+        const [item] = items;
+        if (!item) throw new Error('expected one item');
+        expect(item.routineId).toBe('mat-2');
+        expect(item.expectedBy).toBe(future);
+        expect(item.ignoreBefore).toBe(future);
     });
 
     it('skips paused routines', async () => {
@@ -266,13 +275,22 @@ describe('materializePendingNextActionRoutines', () => {
         expect(items).toHaveLength(0);
     });
 
-    it('skips routines without a startDate (legacy behavior unchanged)', async () => {
+    it('materializes routines without a startDate (anchors at today)', async () => {
+        // Behaviour changed in tandem with server-side bootstrap: pre-fix, this case relied on
+        // disposal-driven generation, but a routine with no items had nothing to dispose, so a
+        // startDate-less routine could sit empty forever. Both client and server now anchor at
+        // today when startDate is missing, so the boot tick correctly produces an item.
         const routine = buildRoutine({ _id: 'mat-6' });
         await db.put('routines', routine);
 
         await materializePendingNextActionRoutines(db, USER_ID);
 
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
-        expect(items).toHaveLength(0);
+        expect(items).toHaveLength(1);
+        const [item] = items;
+        if (!item) throw new Error('expected one item');
+        expect(item.routineId).toBe('mat-6');
+        const today = dayjs().format('YYYY-MM-DD');
+        expect(item.expectedBy).toBe(today);
     });
 });
