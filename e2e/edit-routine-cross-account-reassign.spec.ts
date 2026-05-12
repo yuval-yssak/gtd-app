@@ -3,9 +3,11 @@ import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
-// E2e for cross-account "edit + move" of a routine + its generated items. Mirrors the item spec —
-// the server's reassignRoutine path applies the editRoutinePatch (title/rrule/template/etc.) to
-// the persisted routine snapshot and reassignGeneratedItems moves every generated item with it.
+// E2e for cross-account "edit + move" of a routine. The server's reassignRoutine path applies the
+// editRoutinePatch (title/rrule/template/etc.) to the persisted routine snapshot. Generated items
+// are NOT transplanted — the source-leg delete's pushRoutineDeletion cascade trashes status='calendar'
+// rows on the source account, and Bob's copy starts fresh from the next tick. We pin both halves
+// here so a future refactor that re-introduces the transplant path fails loudly.
 
 const DEV_SEED_ENTITY_URL = 'http://localhost:4000/dev/reassign/seed-entity';
 const DEV_FIND_ENTITY_URL = 'http://localhost:4000/dev/reassign/find-entity';
@@ -89,14 +91,16 @@ async function fetchServerItem(entityId: string): Promise<ServerItem | null> {
 test.describe('RoutineDialog cross-account reassign — atomic edit + move', () => {
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
-    test('routine + generated items move together; title/rrule edits ride along; routineId link survives', async ({ browser }) => {
+    test('routine moves + title/rrule edits ride along; source-side generated items stay under fromUser', async ({ browser }) => {
         const stamp = dayjs().valueOf();
         const emailA = `routine-edit-a-${stamp}@example.com`;
         const emailB = `routine-edit-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const routineId = await seedRoutineOnServer(active.userId, { title: 'Daily standup', rrule: 'FREQ=WEEKLY;BYDAY=MO' });
-            // Two generated items so reassignGeneratedItems has something to move.
+            // Two generated items so we can prove the cascade leaves non-calendar rows alone and
+            // the transplant-to-target path is gone (item1 nextAction, item2 done — neither is
+            // status='calendar' so the cascade's trash-the-calendars sweep doesn't touch them).
             const item1 = await seedItemOnServer(active.userId, 'Standup gen 1', { routineId });
             const item2 = await seedItemOnServer(active.userId, 'Standup gen 2', { routineId, status: 'done' });
             await page.goto(INBOX_URL);
@@ -121,13 +125,14 @@ test.describe('RoutineDialog cross-account reassign — atomic edit + move', () 
             expect(movedRoutine?.rrule).toBe('FREQ=DAILY;INTERVAL=1');
             expect(movedRoutine?.template).toEqual({ energy: 'high', urgent: true });
 
-            // Generated items follow with their routineId link intact.
-            const movedItem1 = await fetchServerItem(item1);
-            const movedItem2 = await fetchServerItem(item2);
-            expect(movedItem1?.user).toBe(secondary.userId);
-            expect(movedItem1?.routineId).toBe(routineId);
-            expect(movedItem2?.user).toBe(secondary.userId);
-            expect(movedItem2?.routineId).toBe(routineId);
+            // Generated items stay under fromUser with their routineId link intact — Bob starts fresh,
+            // Alice keeps the history. The cascade only trashes status='calendar' rows.
+            const sourceItem1 = await fetchServerItem(item1);
+            const sourceItem2 = await fetchServerItem(item2);
+            expect(sourceItem1?.user).toBe(active.userId);
+            expect(sourceItem1?.routineId).toBe(routineId);
+            expect(sourceItem2?.user).toBe(active.userId);
+            expect(sourceItem2?.routineId).toBe(routineId);
         });
     });
 

@@ -125,6 +125,10 @@ test.describe('Routine editor — chrome modes', () => {
 });
 
 test.describe('Routine editor — copy ID button on rows', () => {
+    // Chromium rejects navigator.clipboard.writeText without an explicit grant — without it the
+    // CopyIdButton falls into the failure branch and shows "Could not copy…" instead of "Copied: …".
+    test.use({ permissions: ['clipboard-read', 'clipboard-write'] });
+
     test('each row exposes a copy-id button', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `routine-copy-id-${dayjs().valueOf()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {

@@ -74,6 +74,9 @@ test.describe("sign-out wipes the previous user's IDB rows", () => {
         const email = `signout-wipe-${dayjs().valueOf()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {
             await page.goto(`${CLIENT_URL}/inbox`);
+            // mountDevTools runs after an async openAppDB in main.tsx — page.goto resolves on the
+            // `load` event and can race the harness mount, leaving window.__gtd briefly undefined.
+            await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
             const userId = await readActiveAccountId(page);
 
             // Seed entities under this user via the dev harness so we have something to wipe.
