@@ -163,11 +163,13 @@ async function pushRoutineInstanceOverride(
                 ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
                 description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
                 colorId: isDone ? DONE_COLOR_ID : null,
-                // allDay/attendees are the two local-writable GCal-coupled fields beyond RSVP; the
-                // snapshot owns the source of truth and the provider emits {date} vs {dateTime}
-                // and the attendee array accordingly.
+                // allDay drives {date} vs {dateTime} serialization. attendees is intentionally NOT
+                // forwarded on routine-instance overrides — GCal interprets a non-null attendees on
+                // an instance patch as a per-instance override that severs inheritance from the
+                // master's attendee list. Single-event paths (pushExistingItemToGCal) push attendees
+                // normally; routine-master paths (createRecurringEvent/updateRecurringEvent) own the
+                // attendee list for the whole series.
                 ...(snapshot.allDay !== undefined ? { allDay: snapshot.allDay } : {}),
-                ...(snapshot.attendees !== undefined ? { attendees: snapshot.attendees } : {}),
             },
             config.calendarId,
             timeZone,

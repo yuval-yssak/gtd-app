@@ -8028,12 +8028,15 @@ function spyOnGCalEventsApi() {
     // Each google.calendar() call returns a fresh Resource$Events; the methods we care about
     // live on its shared prototype. Patching the prototype affects every future instance.
     const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
-    type ApiCall = (params: unknown) => Promise<{ data: { id?: string } }>;
+    type ApiCall = (params: unknown) => Promise<{ data: { id?: string; items?: Array<{ id?: string; originalStartTime?: { dateTime?: string; date?: string } }> } }>;
     const insertSpy = vi.spyOn(eventsProto, 'insert' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
     const patchSpy = vi.spyOn(eventsProto, 'patch' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
+    // routine-instance overrides hit cal.events.instances first to resolve the master+date → instance id.
+    const instancesSpy = vi.spyOn(eventsProto, 'instances' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
     insertSpy.mockResolvedValue({ data: { id: 'mocked-id' } });
     patchSpy.mockResolvedValue({ data: {} });
-    return { insertSpy, patchSpy };
+    instancesSpy.mockImplementation(async () => ({ data: { items: [{ id: 'mocked-instance-id', originalStartTime: { date: dayjs().add(1, 'day').format('YYYY-MM-DD') } }] } }));
+    return { insertSpy, patchSpy, instancesSpy };
 }
 
 function getInsertRequestBody(spy: ReturnType<typeof spyOnGCalEventsApi>['insertSpy']) {
@@ -8219,5 +8222,65 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
 
         const params = getPatchRequestBody(patchSpy);
         expect(params.sendUpdates).toBe('none');
+    });
+
+    it('routine-instance override omits attendees (GCal interprets non-null attendees on instance patch as inheritance-severing override)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            _id: 'routine-with-attendees-master',
+            calendarEventId: 'gcal-master-attendees',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        // Routine-generated instance carries attendees in its snapshot (echoed from the master at parse time).
+        const occurrenceTs = dayjs().add(1, 'day').toISOString();
+        const item = makeItem(userId, {
+            _id: 'item-routine-instance-attendees',
+            routineId: routine._id,
+            timeStart: occurrenceTs,
+            timeEnd: dayjs(occurrenceTs).add(30, 'minute').toISOString(),
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            attendees: [{ email: 'master-attendee@example.com', responseStatus: 'accepted' }],
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id ?? '', snapshot: item }), mockBuildProvider());
+
+        const params = getPatchRequestBody(patchSpy);
+        // attendees must NOT appear in the patch body — forwarding would create a per-instance override.
+        expect(params.requestBody).not.toHaveProperty('attendees');
+    });
+
+    it('all-day item done-marker push emits { date } start/end (not { dateTime })', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-allday-done',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            allDay: true,
+            timeStart: '2026-05-27',
+            timeEnd: '2026-05-28',
+            status: 'done',
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id ?? '', snapshot: item }), mockBuildProvider());
+
+        const params = getPatchRequestBody(patchSpy);
+        expect(params.requestBody?.start).toEqual({ date: '2026-05-27' });
+        expect(params.requestBody?.end).toEqual({ date: '2026-05-28' });
     });
 });
