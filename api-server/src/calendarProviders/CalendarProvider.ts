@@ -83,24 +83,45 @@ export interface CalendarProvider {
     watchEvents(calendarId: string, webhookUrl: string, channelId: string): Promise<{ resourceId: string; expiration: string }>;
     /** Stops a previously registered push notification channel. */
     stopWatch(channelId: string, resourceId: string): Promise<void>;
-    /** Creates a single (non-recurring) event. Returns the event ID.
-     * When `options.id` is provided, GCal uses it as the event's id; on duplicate (409), the caller treats it as already-linked. */
+    /**
+     * Creates a single (non-recurring) event. Returns the event ID.
+     * When `options.id` is provided, GCal uses it as the event's id; on duplicate (409), the caller treats it as already-linked.
+     * When `event.allDay` is true, `timeStart`/`timeEnd` are `YYYY-MM-DD` strings and the provider
+     * emits `{ date }` (no `timeZone`); GCal preserves its exclusive-end convention as-is.
+     * When `event.attendees` is provided, the full array is sent verbatim — this is the second
+     * local-write exception to the GCal-owned policy, alongside RSVP.
+     * `options.sendUpdates`: defaults to `'none'` when unspecified, preserving silent-create
+     * behavior for paths that don't yet forward the user's SendUpdatesDialog choice.
+     */
     createEvent(
         calendarId: string,
-        event: { title: string; timeStart: string; timeEnd: string; description?: string },
+        event: { title: string; timeStart: string; timeEnd: string; description?: string; allDay?: boolean; attendees?: GCalAttendee[] },
         timeZone: string,
-        options?: { id?: string },
+        options?: { id?: string; sendUpdates?: 'all' | 'none' },
     ): Promise<string>;
     /**
      * Updates fields on an existing single event. `colorId` semantics: `undefined` leaves the
      * existing colorId untouched; `null` clears it (resets to the calendar's default color);
      * a string sets it to that palette ID.
+     * When `updates.allDay` is true, any provided `timeStart`/`timeEnd` strings are emitted as
+     * `{ date }` (no `timeZone`); otherwise as `{ dateTime, timeZone }`.
+     * When `updates.attendees` is provided, the full array is sent verbatim.
+     * `options.sendUpdates`: defaults to `'none'`.
      */
     updateEvent(
         calendarId: string,
         eventId: string,
-        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string; colorId?: string | null },
+        updates: {
+            title?: string;
+            timeStart?: string;
+            timeEnd?: string;
+            description?: string;
+            colorId?: string | null;
+            allDay?: boolean;
+            attendees?: GCalAttendee[];
+        },
         timeZone: string,
+        options?: { sendUpdates?: 'all' | 'none' },
     ): Promise<void>;
     /**
      * Overrides a single instance of a recurring event series. The original instance is located
@@ -110,13 +131,23 @@ export interface CalendarProvider {
      * Used for matrix cases A2/A3 (per-instance time/title/notes edit on a routine-managed series)
      * and A8 (routine-generated item marked done — apply title marker + sage colorId).
      * `colorId` semantics match `updateEvent`: `undefined` leaves it untouched, `null` clears it.
+     * `allDay`/`attendees`/`options.sendUpdates` semantics also match `updateEvent`.
      */
     updateRecurringInstance(
         masterEventId: string,
         originalDate: string,
-        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string; colorId?: string | null },
+        updates: {
+            title?: string;
+            timeStart?: string;
+            timeEnd?: string;
+            description?: string;
+            colorId?: string | null;
+            allDay?: boolean;
+            attendees?: GCalAttendee[];
+        },
         calendarId: string,
         timeZone: string,
+        options?: { sendUpdates?: 'all' | 'none' },
     ): Promise<void>;
     /**
      * Cancels a single instance of a recurring event series without affecting other occurrences.

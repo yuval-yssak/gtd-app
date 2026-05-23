@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildDateTime, buildDeterministicGCalId, endDateTime, isDuplicateIdError, seriesStartDate } from '../calendarProviders/GoogleCalendarProvider.js';
+import {
+    buildDate,
+    buildDateTime,
+    buildDeterministicGCalId,
+    endDate,
+    endDateTime,
+    isDuplicateIdError,
+    seriesStartDate,
+} from '../calendarProviders/GoogleCalendarProvider.js';
 import type { RoutineInterface } from '../types/entities.js';
 
 function makeRoutine(rrule: string, createdTs: string): RoutineInterface {
@@ -48,6 +56,24 @@ describe('buildDateTime', () => {
 
     it('accepts 00:00 (midnight)', () => {
         expect(buildDateTime('2026-04-11', '00:00', 'UTC')).toEqual({ dateTime: '2026-04-11T00:00:00', timeZone: 'UTC' });
+    });
+});
+
+describe('buildDate', () => {
+    it('wraps a YYYY-MM-DD string in { date } with no timeZone', () => {
+        // All-day events use GCal's `{ date }` shape — no timeZone — and GCal treats the string
+        // as the calendar owner's local date. Critical that we don't accidentally add a tz.
+        expect(buildDate('2026-05-27')).toEqual({ date: '2026-05-27' });
+    });
+});
+
+describe('endDate', () => {
+    it('defaults to start + 1 day (single-day all-day event)', () => {
+        expect(endDate('2026-05-27')).toEqual({ date: '2026-05-28' });
+    });
+
+    it('respects an explicit durationDays for multi-day all-day events', () => {
+        expect(endDate('2026-06-01', 3)).toEqual({ date: '2026-06-04' });
     });
 });
 

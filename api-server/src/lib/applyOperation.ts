@@ -11,6 +11,12 @@ export interface RawOperation {
     entityId: string;
     opType: OpType;
     snapshot: EntitySnapshot | null;
+    /**
+     * Optional GCal sidecar carrying the user's SendUpdatesDialog choice. Forwarded onto the
+     * persisted op so `maybePushToGCal` can pass `sendUpdates` through to the provider call.
+     * Absent → pushback defaults to `'none'`.
+     */
+    gcalMeta?: { sendUpdates: 'all' | 'none' };
 }
 
 export interface ApplyOptions {
@@ -89,6 +95,7 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
         entityId: raw.entityId,
         opType: raw.opType,
         snapshot: raw.snapshot ? ({ ...raw.snapshot, user: userId } as EntitySnapshot) : null,
+        ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
     };
 
     // Step 3 — routine-delete snapshot hydration. Mutates op.snapshot in place.
@@ -167,6 +174,7 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
         entityId: raw.entityId,
         opType: raw.opType,
         snapshot: raw.snapshot ? ({ ...raw.snapshot, user: userId } as EntitySnapshot) : null,
+        ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
     }));
 
     // Hydrate routine-delete snapshots before the apply Promise.all races against the deletion.

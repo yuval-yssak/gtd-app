@@ -25,6 +25,11 @@ interface ClientOp {
     opType: OpType;
     queuedAt: string;
     snapshot: (Record<string, unknown> & { userId?: string }) | null;
+    /**
+     * Sidecar populated by the client's SendUpdatesDialog choice on calendar-item edits. Carried
+     * verbatim onto the persisted operation so GCal pushback can forward it to provider calls.
+     */
+    gcalMeta?: { sendUpdates: 'all' | 'none' };
 }
 
 const STALE_DEVICE_DAYS = 90;
@@ -151,10 +156,18 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // Strip client-side `userId` and let `applyAndPublishOperations` stamp the
         // server-authoritative `user`. The misroute guard above already ensured no snapshot tags
         // disagree with the active session; we still re-stamp inside the pipeline as a defense.
+        // gcalMeta rides along untouched — the pipeline forwards it onto the persisted op so
+        // `maybePushToGCal` can read sendUpdates and thread it into the provider call.
         const rawOps: RawOperation[] = ops.map((op) => {
             const { userId: _stripped, ...snapshotFields } = op.snapshot ?? {};
             const snapshot = op.snapshot ? ({ ...snapshotFields, user: user.id } as EntitySnapshot) : null;
-            return { entityType: op.entityType, entityId: op.entityId, opType: op.opType, snapshot };
+            return {
+                entityType: op.entityType,
+                entityId: op.entityId,
+                opType: op.opType,
+                snapshot,
+                ...(op.gcalMeta ? { gcalMeta: op.gcalMeta } : {}),
+            };
         });
 
         // Strict-mode validation: a malformed op aborts the entire batch with a structured 400.

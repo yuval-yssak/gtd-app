@@ -65,14 +65,17 @@ interface CalendarLink {
 /**
  * Inspects a server operation and pushes calendar-relevant changes back to Google Calendar.
  * Called fire-and-forget from the sync push handler — errors are logged, not thrown to the caller.
+ * Picks up `op.gcalMeta.sendUpdates` (populated by the client's SendUpdatesDialog choice) and
+ * threads it through to the provider call; absent → defaults to `'none'`.
  */
 export async function maybePushToGCal(op: OperationInterface, buildProvider: ProviderFactory): Promise<void> {
     // OperationInterface.snapshot is a union of all entity types — TypeScript cannot narrow it
     // via entityType since it's not a discriminated union. The casts below are safe because
     // the entityType check guarantees the snapshot shape.
     console.log(`[gcal-pushback] op=${op.opType} entityType=${op.entityType} entityId=${op.entityId} opId=${op._id} ts=${op.ts}`);
+    const sendUpdates = op.gcalMeta?.sendUpdates ?? 'none';
     if (op.entityType === 'item' && op.snapshot) {
-        await handleItemPush(op.snapshot as ItemInterface, op.user, buildProvider);
+        await handleItemPush(op.snapshot as ItemInterface, op.user, buildProvider, sendUpdates);
         return;
     }
     if (op.entityType === 'routine' && op.snapshot) {
@@ -82,7 +85,7 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
 
 // ── Item push-back ───────────────────────────────────────────────────────────
 
-async function handleItemPush(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function handleItemPush(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory, sendUpdates: 'all' | 'none'): Promise<void> {
     // This entity was unlinked by disconnect-with-keep and will be relinked by the next inbound
     // pull (strong-key restore via lastKnownCalendarEventId). Don't create a duplicate by pushing now.
     if (snapshot.lastKnownCalendarEventId) {
@@ -92,7 +95,7 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
         return;
     }
     if (snapshot.calendarEventId) {
-        await pushExistingItemToGCal(snapshot, userId, buildProvider);
+        await pushExistingItemToGCal(snapshot, userId, buildProvider, sendUpdates);
         return;
     }
     // Routine-generated instance trashed locally → cancel that single GCal occurrence.
@@ -109,11 +112,11 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
     // override on that master (matrix A2/A3); marking done applies the ✓-prefix + sage colorId
     // to that instance (matrix A8); reopen clears both back to the master's defaults.
     if (snapshot.routineId && (snapshot.status === 'calendar' || snapshot.status === 'done')) {
-        await pushRoutineInstanceOverride(snapshot, userId, buildProvider);
+        await pushRoutineInstanceOverride(snapshot, userId, buildProvider, sendUpdates);
         return;
     }
     if (snapshot.status === 'calendar') {
-        await pushNewItemToGCal(snapshot, userId, buildProvider);
+        await pushNewItemToGCal(snapshot, userId, buildProvider, sendUpdates);
     }
 }
 
@@ -125,7 +128,12 @@ async function handleItemPush(snapshot: ItemInterface, userId: string, buildProv
  * clears both: clean title + colorId: null reverts the instance to the master's defaults.
  * No-ops gracefully when the routine isn't linked to GCal yet.
  */
-async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function pushRoutineInstanceOverride(
+    snapshot: ItemInterface,
+    userId: string,
+    buildProvider: ProviderFactory,
+    sendUpdates: 'all' | 'none',
+): Promise<void> {
     if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
         return;
     }
@@ -155,9 +163,15 @@ async function pushRoutineInstanceOverride(snapshot: ItemInterface, userId: stri
                 ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
                 description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
                 colorId: isDone ? DONE_COLOR_ID : null,
+                // allDay/attendees are the two local-writable GCal-coupled fields beyond RSVP; the
+                // snapshot owns the source of truth and the provider emits {date} vs {dateTime}
+                // and the attendee array accordingly.
+                ...(snapshot.allDay !== undefined ? { allDay: snapshot.allDay } : {}),
+                ...(snapshot.attendees !== undefined ? { attendees: snapshot.attendees } : {}),
             },
             config.calendarId,
             timeZone,
+            { sendUpdates },
         ),
     );
     await stampItemLastPushed(userId, snapshot._id);
@@ -217,7 +231,7 @@ function resolveOriginalDate(routine: RoutineInterface, snapshot: ItemInterface)
 }
 
 /** Pushes edits or deletion of an existing calendar-linked item back to Google Calendar. */
-async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory, sendUpdates: 'all' | 'none'): Promise<void> {
     const eventId = snapshot.calendarEventId;
     const itemId = snapshot._id;
     if (!eventId || !itemId) {
@@ -255,8 +269,13 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
                     ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
                     description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
                     colorId: DONE_COLOR_ID,
+                    // allDay/attendees forwarded so the done-marker patch preserves them and
+                    // GCal interprets timeStart/timeEnd correctly when the item is all-day.
+                    ...(snapshot.allDay !== undefined ? { allDay: snapshot.allDay } : {}),
+                    ...(snapshot.attendees !== undefined ? { attendees: snapshot.attendees } : {}),
                 },
                 timeZone,
+                { sendUpdates },
             ),
         );
         const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
@@ -277,8 +296,13 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
                 ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
                 description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
                 colorId: null,
+                // allDay drives {date} vs {dateTime} serialization in the provider; attendees is the
+                // pushable local-write into the otherwise GCal-owned set.
+                ...(snapshot.allDay !== undefined ? { allDay: snapshot.allDay } : {}),
+                ...(snapshot.attendees !== undefined ? { attendees: snapshot.attendees } : {}),
             },
             timeZone,
+            { sendUpdates },
         ),
     );
     const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
@@ -293,7 +317,7 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
 export type PushOutcome = { status: 'created' | 'already-linked' | 'skipped'; eventId?: string; recordedOp?: OperationInterface };
 
 /** Creates a new Google Calendar event for an app-created calendar item. */
-async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory, sendUpdates: 'all' | 'none'): Promise<void> {
     if (!snapshot._id) {
         return;
     }
@@ -305,7 +329,7 @@ async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildP
     if (!ctx) {
         return;
     }
-    await pushItemToGCalWithContext(snapshot, ctx, userId);
+    await pushItemToGCalWithContext(snapshot, ctx, userId, { sendUpdates });
 }
 
 /**
@@ -313,8 +337,15 @@ async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildP
  * `Sync now` backfill path which already has the integration/config/provider in scope and wants
  * to operate on items that don't yet carry a `calendarIntegrationId`. Idempotent: a deterministic
  * id is sent to GCal, and a 409 response is treated as already-linked (we re-use the same id).
+ * `options.sendUpdates`: defaults to `'none'`; the backfill path leaves this as default since it
+ * mints fresh events, while the live edit path threads the SendUpdatesDialog choice through.
  */
-export async function pushItemToGCalWithContext(snapshot: ItemInterface, ctx: PushContext, userId: string): Promise<PushOutcome> {
+export async function pushItemToGCalWithContext(
+    snapshot: ItemInterface,
+    ctx: PushContext,
+    userId: string,
+    options?: { sendUpdates?: 'all' | 'none' },
+): Promise<PushOutcome> {
     if (!snapshot.timeStart || !snapshot.timeEnd || !snapshot._id) {
         return { status: 'skipped' };
     }
@@ -352,6 +383,7 @@ export async function pushItemToGCalWithContext(snapshot: ItemInterface, ctx: Pu
         // of creating a second event.
         const deterministicId = buildDeterministicGCalId(snapshot._id, integration._id);
         console.log(`[gcal-pushback] creating new GCal event | itemId=${snapshot._id} title=${snapshot.title} gcalId=${deterministicId}`);
+        const sendUpdates = options?.sendUpdates ?? 'none';
         const calendarEventId = await createOr409Relink(integration._id, deterministicId, () =>
             provider.createEvent(
                 config.calendarId,
@@ -360,9 +392,13 @@ export async function pushItemToGCalWithContext(snapshot: ItemInterface, ctx: Pu
                     timeStart,
                     timeEnd,
                     ...(snapshot.notes !== undefined ? { description: markdownToHtml(snapshot.notes) } : {}),
+                    // allDay drives the provider's {date} vs {dateTime} serialization. Attendees is
+                    // the second local-write into the GCal-owned set (alongside RSVP) — sent verbatim.
+                    ...(snapshot.allDay !== undefined ? { allDay: snapshot.allDay } : {}),
+                    ...(snapshot.attendees !== undefined ? { attendees: snapshot.attendees } : {}),
                 },
                 timeZone,
-                { id: deterministicId },
+                { id: deterministicId, sendUpdates },
             ),
         );
 

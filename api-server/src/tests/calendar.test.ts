@@ -8018,3 +8018,206 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         expect(allForRoutine.length).toBeLessThanOrEqual(2);
     });
 });
+
+// ─── Phase 2: outbound push for all-day + attendees + sendUpdates ─────────────
+
+// Spy on the googleapis events resource via its shared prototype so all `google.calendar()`
+// instances (one is created per provider call) route through the same mock. Returns the
+// freshly-installed spies; vi.restoreAllMocks in beforeEach clears them between tests.
+function spyOnGCalEventsApi() {
+    // Each google.calendar() call returns a fresh Resource$Events; the methods we care about
+    // live on its shared prototype. Patching the prototype affects every future instance.
+    const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
+    type ApiCall = (params: unknown) => Promise<{ data: { id?: string } }>;
+    const insertSpy = vi.spyOn(eventsProto, 'insert' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
+    const patchSpy = vi.spyOn(eventsProto, 'patch' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
+    insertSpy.mockResolvedValue({ data: { id: 'mocked-id' } });
+    patchSpy.mockResolvedValue({ data: {} });
+    return { insertSpy, patchSpy };
+}
+
+function getInsertRequestBody(spy: ReturnType<typeof spyOnGCalEventsApi>['insertSpy']) {
+    expect(spy).toHaveBeenCalledOnce();
+    const [args] = spy.mock.calls;
+    if (!args) throw new Error('expected one insert call');
+    const [params] = args;
+    if (!params || typeof params !== 'object') throw new Error('expected insert params object');
+    return params as { requestBody?: Record<string, unknown>; sendUpdates?: string };
+}
+
+function getPatchRequestBody(spy: ReturnType<typeof spyOnGCalEventsApi>['patchSpy']) {
+    expect(spy).toHaveBeenCalledOnce();
+    const [args] = spy.mock.calls;
+    if (!args) throw new Error('expected one patch call');
+    const [params] = args;
+    if (!params || typeof params !== 'object') throw new Error('expected patch params object');
+    return params as { requestBody?: Record<string, unknown>; sendUpdates?: string };
+}
+
+describe('calendar push-back — all-day items (outbound)', () => {
+    it('createEvent for an all-day item emits { date } start/end with no timeZone', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // All-day item: timeStart/timeEnd are YYYY-MM-DD strings (GCal's exclusive-end convention).
+        const item = makeItem(userId, {
+            allDay: true,
+            timeStart: '2026-05-27',
+            timeEnd: '2026-05-28',
+        });
+        await itemsDAO.insertOne(item);
+
+        const { insertSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        const params = getInsertRequestBody(insertSpy);
+        expect(params.requestBody?.start).toEqual({ date: '2026-05-27' });
+        expect(params.requestBody?.end).toEqual({ date: '2026-05-28' });
+        // No timeZone field at all on the start/end objects — GCal must treat them as owner-local.
+        expect(params.requestBody?.start).not.toHaveProperty('timeZone');
+        expect(params.requestBody?.end).not.toHaveProperty('timeZone');
+    });
+
+    it('updateEvent for an all-day item emits { date } start/end (no timeZone)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-allday-update',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            allDay: true,
+            timeStart: '2026-05-27',
+            timeEnd: '2026-05-28',
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        const params = getPatchRequestBody(patchSpy);
+        expect(params.requestBody?.start).toEqual({ date: '2026-05-27' });
+        expect(params.requestBody?.end).toEqual({ date: '2026-05-28' });
+    });
+
+    it('createRecurringEvent for an all-day template emits { date } start/end and the routine rrule', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // All-day calendar routine: template { allDay: true } with no timeOfDay/duration.
+        const routine = makeRoutine(userId, {
+            _id: 'routine-allday',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            startDate: '2026-05-25',
+            calendarItemTemplate: { allDay: true },
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        const { insertSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        const params = getInsertRequestBody(insertSpy);
+        // start.date = the rrule-anchored series start (Monday 2026-05-25). end = start + 1 day.
+        expect(params.requestBody?.start).toEqual({ date: '2026-05-25' });
+        expect(params.requestBody?.end).toEqual({ date: '2026-05-26' });
+        expect(params.requestBody?.recurrence).toEqual(['RRULE:FREQ=WEEKLY;BYDAY=MO']);
+    });
+});
+
+describe('calendar push-back — attendees + sendUpdates threading', () => {
+    it('updateEvent forwards the full attendees array verbatim in requestBody', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const attendees = [
+            { email: 'alice@example.com', responseStatus: 'accepted' as const },
+            { email: 'bob@example.com', responseStatus: 'needsAction' as const, displayName: 'Bob' },
+        ];
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-with-attendees',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            attendees,
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        const params = getPatchRequestBody(patchSpy);
+        expect(params.requestBody?.attendees).toEqual(attendees);
+    });
+
+    it("op gcalMeta.sendUpdates='all' propagates to events.patch sendUpdates param", async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-send-all',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(
+            makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item, gcalMeta: { sendUpdates: 'all' } }),
+            mockBuildProvider(),
+        );
+
+        const params = getPatchRequestBody(patchSpy);
+        expect(params.sendUpdates).toBe('all');
+    });
+
+    it("op gcalMeta.sendUpdates='all' propagates to events.insert sendUpdates param on create", async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId); // no calendarEventId yet → create path
+        await itemsDAO.insertOne(item);
+
+        const { insertSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(
+            makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item, gcalMeta: { sendUpdates: 'all' } }),
+            mockBuildProvider(),
+        );
+
+        const params = getInsertRequestBody(insertSpy);
+        expect(params.sendUpdates).toBe('all');
+    });
+
+    it("absent gcalMeta defaults sendUpdates to 'none' on events.patch (silent edit)", async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            calendarEventId: 'gcal-silent',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy } = spyOnGCalEventsApi();
+
+        // No gcalMeta on the op → default path.
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        const params = getPatchRequestBody(patchSpy);
+        expect(params.sendUpdates).toBe('none');
+    });
+});

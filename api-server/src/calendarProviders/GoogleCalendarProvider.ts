@@ -38,6 +38,45 @@ export function endDateTime(dateStr: string, timeOfDay: string, durationMinutes:
 }
 
 /**
+ * Builds a date-only object for the Google Calendar API (all-day event). No timeZone — GCal
+ * treats it as the calendar owner's local date.
+ */
+export function buildDate(dateStr: string): { date: string } {
+    return { date: dateStr };
+}
+
+/**
+ * Computes the exclusive end-date for an all-day event. GCal stores Wednesday all-day as
+ * `end = Thursday`, so a single-day event has `durationDays = 1`.
+ */
+export function endDate(startDateStr: string, durationDays = 1): { date: string } {
+    return { date: dayjs(startDateStr).add(durationDays, 'day').format('YYYY-MM-DD') };
+}
+
+/**
+ * Builds the `start`/`end` pair for a recurring series request body. All-day series emit
+ * `{ date }` with no timeZone (the calendar owner's local date); timed series emit
+ * `{ dateTime, timeZone }` via the existing build/endDateTime helpers. Throws if a timed
+ * template is missing the required `timeOfDay`+`duration` fields — the all-day branch allows
+ * both to be absent. Centralizes the validation so callers don't repeat it.
+ */
+function buildRecurringSeriesTiming(
+    template: NonNullable<RoutineInterface['calendarItemTemplate']>,
+    startDate: string,
+    timeZone: string,
+    routineId: string,
+): { start: { dateTime: string; timeZone: string } | { date: string }; end: { dateTime: string; timeZone: string } | { date: string } } {
+    if (template.allDay === true) {
+        return { start: buildDate(startDate), end: endDate(startDate) };
+    }
+    const { timeOfDay, duration } = template;
+    if (timeOfDay === undefined || duration === undefined) {
+        throw new Error(`Routine ${routineId} calendarItemTemplate missing timeOfDay/duration for a timed routine`);
+    }
+    return { start: buildDateTime(startDate, timeOfDay, timeZone), end: endDateTime(startDate, timeOfDay, duration, timeZone) };
+}
+
+/**
  * Returns the first rrule-matching date (YYYY-MM-DD) on or after the routine's createdTs.
  * Google Calendar treats DTSTART as an explicit first occurrence — if it doesn't match the
  * RRULE's BYDAY/BYMONTHDAY constraints, GCal emits a phantom occurrence on DTSTART in addition
@@ -341,11 +380,6 @@ export class GoogleCalendarProvider implements CalendarProvider {
         if (!template) {
             throw new Error(`Routine ${routine._id} has no calendarItemTemplate`);
         }
-        const { timeOfDay, duration } = template;
-        if (timeOfDay === undefined || duration === undefined) {
-            throw new Error(`Routine ${routine._id} calendarItemTemplate missing timeOfDay/duration (all-day routines not yet supported on this path)`);
-        }
-
         const startDate = seriesStartDate(routine);
         // GCal recurrence uses RRULE: prefix — the stored rrule omits it.
         const recurrence = [`RRULE:${routine.rrule}`];
@@ -354,8 +388,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         // second series. Without it, Google generates a fresh id per call.
         const requestBody = {
             summary: routine.title,
-            start: buildDateTime(startDate, timeOfDay, timeZone),
-            end: endDateTime(startDate, timeOfDay, duration, timeZone),
+            ...buildRecurringSeriesTiming(template, startDate, timeZone, routine._id),
             recurrence,
             ...(routine.template.notes !== undefined ? { description: markdownToHtml(routine.template.notes) } : {}),
             ...(options?.id ? { id: options.id } : {}),
@@ -376,19 +409,13 @@ export class GoogleCalendarProvider implements CalendarProvider {
         if (!template) {
             throw new Error(`Routine ${routine._id} has no calendarItemTemplate`);
         }
-        const { timeOfDay, duration } = template;
-        if (timeOfDay === undefined || duration === undefined) {
-            throw new Error(`Routine ${routine._id} calendarItemTemplate missing timeOfDay/duration (all-day routines not yet supported on this path)`);
-        }
-
         const startDate = seriesStartDate(routine);
         await cal.events.update({
             calendarId,
             eventId,
             requestBody: {
                 summary: routine.title,
-                start: buildDateTime(startDate, timeOfDay, timeZone),
-                end: endDateTime(startDate, timeOfDay, duration, timeZone),
+                ...buildRecurringSeriesTiming(template, startDate, timeZone, routine._id),
                 recurrence: [`RRULE:${routine.rrule}`],
                 // events.update is a full replace — always send description to avoid leaving stale values.
                 description: routine.template.notes ? markdownToHtml(routine.template.notes) : '',
@@ -512,21 +539,30 @@ export class GoogleCalendarProvider implements CalendarProvider {
 
     async createEvent(
         calendarId: string,
-        event: { title: string; timeStart: string; timeEnd: string; description?: string },
+        event: { title: string; timeStart: string; timeEnd: string; description?: string; allDay?: boolean; attendees?: GCalAttendee[] },
         timeZone: string,
-        options?: { id?: string },
+        options?: { id?: string; sendUpdates?: 'all' | 'none' },
     ): Promise<string> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const allDay = event.allDay === true;
+        // All-day requests use `{ date }` with no timeZone; timed requests use `{ dateTime, timeZone }`.
+        // GCal stores all-day end as exclusive (Wed all-day → end = Thu) — we pass through whatever
+        // the caller computed without converting.
+        const startObj = allDay ? buildDate(event.timeStart) : { dateTime: event.timeStart, timeZone };
+        const endObj = allDay ? buildDate(event.timeEnd) : { dateTime: event.timeEnd, timeZone };
         // Caller may supply a deterministic id so retries collide on 409 instead of creating a
         // second event. Without it, Google generates a fresh id per call.
         const requestBody = {
             summary: event.title,
-            start: { dateTime: event.timeStart, timeZone },
-            end: { dateTime: event.timeEnd, timeZone },
+            start: startObj,
+            end: endObj,
             ...(event.description !== undefined ? { description: event.description } : {}),
+            ...(event.attendees !== undefined ? { attendees: event.attendees } : {}),
             ...(options?.id ? { id: options.id } : {}),
         };
-        const response = await cal.events.insert({ calendarId, requestBody });
+        // sendUpdates defaults to 'none' to preserve the historical silent-create behavior. Callers
+        // that want attendees to receive an invite must opt in explicitly.
+        const response = await cal.events.insert({ calendarId, requestBody, sendUpdates: options?.sendUpdates ?? 'none' });
         const eventId = response.data.id;
         if (!eventId) {
             throw new Error('Google Calendar did not return an event ID');
@@ -537,10 +573,20 @@ export class GoogleCalendarProvider implements CalendarProvider {
     async updateEvent(
         calendarId: string,
         eventId: string,
-        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string; colorId?: string | null },
+        updates: {
+            title?: string;
+            timeStart?: string;
+            timeEnd?: string;
+            description?: string;
+            colorId?: string | null;
+            allDay?: boolean;
+            attendees?: GCalAttendee[];
+        },
         timeZone: string,
+        options?: { sendUpdates?: 'all' | 'none' },
     ): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const allDay = updates.allDay === true;
         // Use patch (not update) so only the provided fields are modified — update would clear omitted fields.
         // `colorId: null` is forwarded as-is so Google clears the override and the event reverts to the
         // calendar's default color; `undefined` skips the field entirely.
@@ -549,11 +595,15 @@ export class GoogleCalendarProvider implements CalendarProvider {
             eventId,
             requestBody: {
                 ...(updates.title !== undefined ? { summary: updates.title } : {}),
-                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
-                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
+                ...(updates.timeStart !== undefined ? { start: allDay ? buildDate(updates.timeStart) : { dateTime: updates.timeStart, timeZone } } : {}),
+                ...(updates.timeEnd !== undefined ? { end: allDay ? buildDate(updates.timeEnd) : { dateTime: updates.timeEnd, timeZone } } : {}),
                 ...(updates.description !== undefined ? { description: updates.description } : {}),
                 ...(updates.colorId !== undefined ? { colorId: updates.colorId } : {}),
+                ...(updates.attendees !== undefined ? { attendees: updates.attendees } : {}),
             },
+            // Default 'none' preserves current silent-edit behavior for code paths that don't yet
+            // forward the user's SendUpdatesDialog choice.
+            sendUpdates: options?.sendUpdates ?? 'none',
         });
     }
 
@@ -565,25 +615,39 @@ export class GoogleCalendarProvider implements CalendarProvider {
     async updateRecurringInstance(
         masterEventId: string,
         originalDate: string,
-        updates: { title?: string; timeStart?: string; timeEnd?: string; description?: string; colorId?: string | null },
+        updates: {
+            title?: string;
+            timeStart?: string;
+            timeEnd?: string;
+            description?: string;
+            colorId?: string | null;
+            allDay?: boolean;
+            attendees?: GCalAttendee[];
+        },
         calendarId: string,
         timeZone: string,
+        options?: { sendUpdates?: 'all' | 'none' },
     ): Promise<void> {
         const instanceId = await this.findInstanceId(masterEventId, originalDate, calendarId, 'updateRecurringInstance');
         if (!instanceId) {
             return;
         }
         const cal = google.calendar({ version: 'v3', auth: this.auth });
+        const allDay = updates.allDay === true;
         await cal.events.patch({
             calendarId,
             eventId: instanceId,
             requestBody: {
                 ...(updates.title !== undefined ? { summary: updates.title } : {}),
-                ...(updates.timeStart !== undefined ? { start: { dateTime: updates.timeStart, timeZone } } : {}),
-                ...(updates.timeEnd !== undefined ? { end: { dateTime: updates.timeEnd, timeZone } } : {}),
+                ...(updates.timeStart !== undefined ? { start: allDay ? buildDate(updates.timeStart) : { dateTime: updates.timeStart, timeZone } } : {}),
+                ...(updates.timeEnd !== undefined ? { end: allDay ? buildDate(updates.timeEnd) : { dateTime: updates.timeEnd, timeZone } } : {}),
                 ...(updates.description !== undefined ? { description: updates.description } : {}),
                 ...(updates.colorId !== undefined ? { colorId: updates.colorId } : {}),
+                ...(updates.attendees !== undefined ? { attendees: updates.attendees } : {}),
             },
+            // cal.events.patch accepts sendUpdates the same as update; default 'none' preserves the
+            // historical silent-override behavior for code paths that don't yet forward a choice.
+            sendUpdates: options?.sendUpdates ?? 'none',
         });
     }
 
