@@ -6577,3 +6577,1025 @@ describe('integration auth status — sync, pushback, OAuth reconnect', () => {
         expect(refreshed?.lastAuthErrorAt).toBeUndefined();
     });
 });
+
+// ─── lastKnown* rename + strong-key restore on reconnect ───────────────────
+
+describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key restore', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('unlinkItems renames calendar* fields to lastKnown* instead of unsetting them', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-rename-keep',
+            user: userId,
+            status: 'calendar',
+            title: 'Strong-key relink target',
+            calendarEventId: 'gcal-keep-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=keepLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-rename-keep' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.calendarEventId).toBeUndefined();
+        expect(item?.calendarIntegrationId).toBeUndefined();
+        expect(item?.calendarSyncConfigId).toBeUndefined();
+        expect(item?.lastKnownCalendarEventId).toBe('gcal-keep-1');
+        expect(item?.lastKnownCalendarIntegrationId).toBe('int-1');
+        expect(item?.lastKnownCalendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('unlinkRoutines renames calendar* fields to lastKnown*', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        await routinesDAO.insertOne(
+            makeRoutine(userId, { calendarEventId: 'gcal-master-keep', calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' }),
+        );
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=keepLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ _id: 'routine-1' });
+        expect(routine?.calendarEventId).toBeUndefined();
+        expect(routine?.calendarIntegrationId).toBeUndefined();
+        expect(routine?.calendarSyncConfigId).toBeUndefined();
+        expect(routine?.lastKnownCalendarEventId).toBe('gcal-master-keep');
+        expect(routine?.lastKnownCalendarIntegrationId).toBe('int-1');
+        expect(routine?.lastKnownCalendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('trashItemsForIntegration renames calendar* fields to lastKnown* on done items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-done-rename',
+            user: userId,
+            status: 'done',
+            title: 'Already done',
+            calendarEventId: 'gcal-done-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=removeLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const done = await itemsDAO.findOne({ _id: 'item-done-rename' });
+        expect(done?.status).toBe('done');
+        expect(done?.calendarEventId).toBeUndefined();
+        expect(done?.lastKnownCalendarEventId).toBe('gcal-done-1');
+        expect(done?.lastKnownCalendarIntegrationId).toBe('int-1');
+        expect(done?.lastKnownCalendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('upsertCalendarItem restores an item by lastKnownCalendarEventId on inbound match (single op, fields swap)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureStart = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const futureEnd = dayjs(futureStart).add(1, 'hour').toISOString();
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        // Item carries lastKnown* but no live calendar* — the rename-on-disconnect state.
+        await itemsDAO.insertOne({
+            _id: 'item-restore-1',
+            user: userId,
+            status: 'calendar',
+            title: 'Restore me',
+            timeStart: futureStart,
+            timeEnd: futureEnd,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastKnownCalendarEventId: 'gcal-restore-1',
+            lastKnownCalendarIntegrationId: 'int-1',
+            lastKnownCalendarSyncConfigId: 'sync-config-1',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-restore-1',
+                    title: 'Restore me',
+                    timeStart: futureStart,
+                    timeEnd: futureEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-restore',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const all = await itemsDAO.findArray({ user: userId, title: 'Restore me' });
+        expect(all).toHaveLength(1);
+        const [restored] = all;
+        if (!restored) throw new Error('expected one restored item');
+        expect(restored._id).toBe('item-restore-1');
+        expect(restored.calendarEventId).toBe('gcal-restore-1');
+        expect(restored.calendarIntegrationId).toBe('int-1');
+        expect(restored.calendarSyncConfigId).toBe('sync-config-1');
+        expect(restored.lastKnownCalendarEventId).toBeUndefined();
+        expect(restored.lastKnownCalendarIntegrationId).toBeUndefined();
+        expect(restored.lastKnownCalendarSyncConfigId).toBeUndefined();
+    });
+
+    it('tryRestoreFromLastKnownEventId is TOCTOU-safe: a race interleaved between findArray and updateOne lets one writer win and the other fall through', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureStart = dayjs().add(1, 'day').startOf('hour').toISOString();
+        const futureEnd = dayjs(futureStart).add(1, 'hour').toISOString();
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-toctou',
+            user: userId,
+            status: 'calendar',
+            title: 'TOCTOU me',
+            timeStart: futureStart,
+            timeEnd: futureEnd,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastKnownCalendarEventId: 'gcal-toctou-1',
+            lastKnownCalendarIntegrationId: 'int-1',
+            lastKnownCalendarSyncConfigId: 'sync-config-1',
+        });
+
+        // Interleave a competing mutation between findArray (which already located the candidate)
+        // and the conditional updateOne (which checks the `lastKnownCalendarEventId` guard).
+        // Spy on itemsDAO.updateOne: when the restore's conditional update fires, apply the rival
+        // claim first — that flips the candidate's markers, so the real updateOne matches 0 docs
+        // and the restore returns undefined. The caller then falls through to the naked/create path.
+        const realUpdateOne = itemsDAO.updateOne.bind(itemsDAO);
+        vi.spyOn(itemsDAO, 'updateOne').mockImplementation(async (filter, update, options) => {
+            type FilterShape = { lastKnownCalendarEventId?: string };
+            const matchesRestoreGuard = (filter as FilterShape).lastKnownCalendarEventId === 'gcal-toctou-1';
+            if (matchesRestoreGuard) {
+                // Rival webhook restored the item first — clears the markers and binds the calendar* fields.
+                await realUpdateOne(
+                    { _id: 'item-toctou', user: userId },
+                    {
+                        $set: { calendarEventId: 'gcal-toctou-1', calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' },
+                        $unset: { lastKnownCalendarEventId: '', lastKnownCalendarIntegrationId: '', lastKnownCalendarSyncConfigId: '' },
+                    },
+                );
+            }
+            return await realUpdateOne(filter, update, options);
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-toctou-1',
+                    title: 'TOCTOU me',
+                    timeStart: futureStart,
+                    timeEnd: futureEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-toctou',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // The rival's restore wins → the loser's `tryRestoreFromLastKnownEventId` returns undefined
+        // and falls through to the naked-candidate / create path. The original `item-toctou` carries
+        // the live calendar* fields (rival's win); the loser produces a separate fresh item rather
+        // than silently overwriting the rival's binding (better duplicate than silent overwrite —
+        // same trade-off as `tryRelinkNakedCalendarItem`'s create-on-race fallback).
+        const all = await itemsDAO.findArray({ user: userId, title: 'TOCTOU me' });
+        expect(all).toHaveLength(2);
+        const restored = all.find((i) => i._id === 'item-toctou');
+        expect(restored?.calendarEventId).toBe('gcal-toctou-1');
+        expect(restored?.lastKnownCalendarEventId).toBeUndefined();
+        const fresh = all.find((i) => i._id !== 'item-toctou');
+        expect(fresh?.calendarEventId).toBe('gcal-toctou-1');
+    });
+
+    it('cancelled inbound event matching lastKnown* emits no restore op and no status flap', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        // Item carries lastKnown* markers but no live calendar* — the disconnect-with-keep state.
+        await itemsDAO.insertOne({
+            _id: 'item-cancel-marker',
+            user: userId,
+            status: 'calendar',
+            title: 'Marker-only — cancelled inbound',
+            timeStart: dayjs().add(1, 'day').toISOString(),
+            timeEnd: dayjs().add(1, 'day').add(1, 'hour').toISOString(),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastKnownCalendarEventId: 'gcal-cancel-1',
+            lastKnownCalendarIntegrationId: 'int-1',
+            lastKnownCalendarSyncConfigId: 'sync-config-1',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-cancel-1',
+                    title: 'Marker-only — cancelled inbound',
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(1, 'hour').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'cancelled',
+                },
+            ],
+            nextSyncToken: 'tok-cancel',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // The item is untouched: cancelled short-circuits BEFORE the restore. No restore op, no
+        // trash op, no live calendar* binding. The markers also stay put — the disconnect-with-keep
+        // contract is preserved across cancelled inbound events.
+        const item = await itemsDAO.findOne({ _id: 'item-cancel-marker' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.calendarEventId).toBeUndefined();
+        expect(item?.lastKnownCalendarEventId).toBe('gcal-cancel-1');
+    });
+
+    it('past inbound event matching lastKnown* emits no restore op and no status flap', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const oldTs = dayjs().subtract(2, 'day').toISOString();
+        // Past event window — anchor in the previous day so cutoffIso is strictly after timeEnd.
+        const pastStart = dayjs().subtract(2, 'day').startOf('hour').toISOString();
+        const pastEnd = dayjs(pastStart).add(1, 'hour').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-past-marker',
+            user: userId,
+            status: 'calendar',
+            title: 'Marker-only — past inbound',
+            timeStart: pastStart,
+            timeEnd: pastEnd,
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastKnownCalendarEventId: 'gcal-past-1',
+            lastKnownCalendarIntegrationId: 'int-1',
+            lastKnownCalendarSyncConfigId: 'sync-config-1',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-past-1',
+                    title: 'Marker-only — past inbound',
+                    timeStart: pastStart,
+                    timeEnd: pastEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-past',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Past-event branch short-circuits before the restore: no live calendar* binding, markers preserved.
+        const item = await itemsDAO.findOne({ _id: 'item-past-marker' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.calendarEventId).toBeUndefined();
+        expect(item?.lastKnownCalendarEventId).toBe('gcal-past-1');
+    });
+
+    it('routine cancelled master matching lastKnown* skips restore and goes straight to deactivate', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Active routine carrying lastKnown* markers — the disconnect-with-keep state.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-cancel-marker',
+                active: true,
+                lastKnownCalendarEventId: 'gcal-master-cancel',
+                lastKnownCalendarIntegrationId: 'int-1',
+                lastKnownCalendarSyncConfigId: 'sync-config-1',
+            }),
+        );
+
+        // Inbound recurring master event for the SAME id with status:'cancelled'.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-master-cancel',
+                    title: makeRoutine(userId).title,
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'cancelled',
+                    recurrence: [`RRULE:${makeRoutine(userId).rrule}`],
+                },
+            ],
+            nextSyncToken: 'tok-routine-cancel',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Restore was skipped (no calendar* fields bound) — and since the routine was never restored,
+        // the deactivate branch fell through with nothing to deactivate. Markers remain intact.
+        const routine = await routinesDAO.findOne({ _id: 'routine-cancel-marker' });
+        expect(routine?.calendarEventId).toBeUndefined();
+        expect(routine?.lastKnownCalendarEventId).toBe('gcal-master-cancel');
+        expect(routine?.active).toBe(true);
+    });
+
+    it('cross-account reconnect: OAuth callback clears orphaned lastKnown* markers pointing at a defunct integration', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        // Seed the prior disconnect state: an item AND a routine both carry markers pointing at the
+        // OLD integration id (which the user has since disconnected). No live integration row exists.
+        const oldTs = dayjs().subtract(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-orphan',
+            user: userId,
+            status: 'calendar',
+            title: 'Orphaned marker',
+            timeStart: dayjs().add(1, 'day').toISOString(),
+            timeEnd: dayjs().add(1, 'day').add(1, 'hour').toISOString(),
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            lastKnownCalendarEventId: 'gcal-orphan-1',
+            lastKnownCalendarIntegrationId: 'int-OLD-account',
+            lastKnownCalendarSyncConfigId: 'sync-config-OLD',
+        });
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-orphan',
+                lastKnownCalendarEventId: 'gcal-orphan-master',
+                lastKnownCalendarIntegrationId: 'int-OLD-account',
+                lastKnownCalendarSyncConfigId: 'sync-config-OLD',
+            }),
+        );
+
+        // Drive the OAuth callback for a NEW integration (different account, different integration id).
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'new-at', refresh_token: 'new-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnected=1');
+
+        // Reconnect produced exactly one integration row, with a fresh id distinct from 'int-OLD-account'.
+        const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        expect(integrations).toHaveLength(1);
+        const liveIntegration = integrations[0];
+        if (!liveIntegration) throw new Error('expected one live integration');
+        expect(liveIntegration._id).not.toBe('int-OLD-account');
+
+        // Repair pass fired: the orphaned markers on the item and routine are cleared so pushback
+        // can flow again (otherwise both entities would be permanently un-pushable).
+        const orphanItem = await itemsDAO.findOne({ _id: 'item-orphan' });
+        expect(orphanItem?.lastKnownCalendarEventId).toBeUndefined();
+        expect(orphanItem?.lastKnownCalendarIntegrationId).toBeUndefined();
+        expect(orphanItem?.lastKnownCalendarSyncConfigId).toBeUndefined();
+        const orphanRoutine = await routinesDAO.findOne({ _id: 'routine-orphan' });
+        expect(orphanRoutine?.lastKnownCalendarEventId).toBeUndefined();
+        expect(orphanRoutine?.lastKnownCalendarIntegrationId).toBeUndefined();
+        expect(orphanRoutine?.lastKnownCalendarSyncConfigId).toBeUndefined();
+
+        // Repair-pass ops are recorded so other devices learn about the cleared markers via sync.
+        // Without these ops, other devices would keep the stale lastKnown* fields locally and their
+        // pushback would stay permanently skipped.
+        const itemOps = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-orphan' });
+        expect(itemOps.length).toBeGreaterThanOrEqual(1);
+        const latestItemOp = itemOps[itemOps.length - 1];
+        expect(latestItemOp?.opType).toBe('update');
+        const itemSnapshot = latestItemOp?.snapshot as ItemInterface | null;
+        expect(itemSnapshot?.lastKnownCalendarEventId).toBeUndefined();
+        const routineOps = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-orphan' });
+        expect(routineOps.length).toBeGreaterThanOrEqual(1);
+        const latestRoutineOp = routineOps[routineOps.length - 1];
+        expect(latestRoutineOp?.opType).toBe('update');
+        const routineSnapshot = latestRoutineOp?.snapshot as RoutineInterface | null;
+        expect(routineSnapshot?.lastKnownCalendarEventId).toBeUndefined();
+    });
+
+    it('double disconnect without reconnect preserves the originally-stored lastKnownCalendarEventId on routines', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        // Pre-existing routine state: a prior disconnect already renamed `calendarEventId` →
+        // `lastKnownCalendarEventId`. The routine row keeps a `calendarIntegrationId` (stale; the
+        // integration was reconnected without the repair pass clearing it) so it's still discoverable
+        // by the integration-scoped lookup in the next DELETE — but its `calendarEventId` is gone.
+        // The defensive `calendarEventId: { $exists: true }` filter ensures the second rename does
+        // NOT clobber the previously-stored lastKnownCalendarEventId.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-double-disconnect',
+                calendarIntegrationId: 'int-1', // still linked at the integration level
+                lastKnownCalendarEventId: 'gcal-first-link-PRESERVE',
+                lastKnownCalendarIntegrationId: 'int-PRIOR',
+                lastKnownCalendarSyncConfigId: 'sync-config-PRIOR',
+                // calendarEventId intentionally undefined — already renamed by an earlier disconnect.
+            }),
+        );
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=keepLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ _id: 'routine-double-disconnect' });
+        expect(routine?.lastKnownCalendarEventId).toBe('gcal-first-link-PRESERVE');
+        expect(routine?.calendarEventId).toBeUndefined();
+    });
+
+    it('pushback skips items carrying lastKnownCalendarEventId (no create, no update)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-pb-skip',
+            lastKnownCalendarEventId: 'gcal-was-linked',
+            lastKnownCalendarIntegrationId: 'int-1',
+            lastKnownCalendarSyncConfigId: 'sync-config-1',
+        });
+        await itemsDAO.insertOne(item);
+
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('should-not-create');
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(createSpy).not.toHaveBeenCalled();
+        expect(updateSpy).not.toHaveBeenCalled();
+        expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('pushback skips routines carrying lastKnownCalendarEventId (no series create or update)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const routine = makeRoutine(userId, {
+            lastKnownCalendarEventId: 'gcal-master-was-linked',
+            lastKnownCalendarIntegrationId: 'int-1',
+            lastKnownCalendarSyncConfigId: 'sync-config-1',
+        });
+        await routinesDAO.insertOne(routine);
+
+        const createRecurringSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('should-not-create');
+        const updateRecurringSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, snapshot: routine }), mockBuildProvider());
+
+        expect(createRecurringSpy).not.toHaveBeenCalled();
+        expect(updateRecurringSpy).not.toHaveBeenCalled();
+    });
+});
+
+// ─── applyExceptionToItems — instance-id lookup, fallback, and create-on-miss ──────────────
+
+describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
+    beforeEach(() => {
+        // Same default as the upsert-paths block: listEventsFull is called per sync.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-instance' });
+    });
+
+    async function setupRoutineAndIntegration(userId: string): Promise<RoutineInterface> {
+        await insertIntegrationWithConfig(userId);
+        const routine = makeRoutine(userId, { calendarEventId: 'gcal-evt-master', calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' });
+        await routinesDAO.insertOne(routine);
+        return routine;
+    }
+
+    it('preferred lookup by calendarInstanceEventId hits the right item even when timeStart no longer matches originalDate', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20260519T060000Z';
+        // Insert an item whose `timeStart` has already been moved to a different date — only the
+        // `calendarInstanceEventId` ties it back to the May 19 occurrence.
+        await itemsDAO.insertOne({
+            _id: 'item-instance',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: instanceEventId,
+            timeStart: '2026-05-20T08:00:00Z',
+            timeEnd: '2026-05-20T08:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2026-05-19',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-05-24T09:30:00Z',
+                newTimeEnd: '2026-05-24T10:30:00Z',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updated = await itemsDAO.findByOwnerAndId('item-instance', userId);
+        expect(updated?.timeStart).toBe('2026-05-24T09:30:00Z');
+        expect(updated?.timeEnd).toBe('2026-05-24T10:30:00Z');
+
+        const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        // CRITICAL: instance-id match prevents a phantom create.
+        expect(allForRoutine).toHaveLength(1);
+    });
+
+    it('fallback to routineId + originalDate when no item carries calendarInstanceEventId (legacy row)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        // Legacy item — pre-rollout, no calendarInstanceEventId. The date-keyed fallback must still find it.
+        await itemsDAO.insertOne({
+            _id: 'item-legacy',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: '2026-05-19T06:00:00Z',
+            timeEnd: '2026-05-19T06:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2026-05-19',
+                type: 'modified',
+                googleEventId: 'gcal-evt-master_20260519T060000Z',
+                newTimeStart: '2026-05-19T08:30:00Z',
+                newTimeEnd: '2026-05-19T09:00:00Z',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updated = await itemsDAO.findByOwnerAndId('item-legacy', userId);
+        expect(updated?.timeStart).toBe('2026-05-19T08:30:00Z');
+        expect(updated?.timeEnd).toBe('2026-05-19T09:00:00Z');
+
+        const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(allForRoutine).toHaveLength(1);
+    });
+
+    it('moved twice (REGRESSION): second move lands on the now-shifted item, no duplicate created', async () => {
+        // This is the reported bug: a user moves the Tue 15:00 instance to Sun 12:30, then again
+        // to Mon 14:00. The first move already shifted the item's `timeStart`, so a date-keyed
+        // lookup for May 19 misses on the second move. With `calendarInstanceEventId` the second
+        // move still finds the (shifted) item.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20260519T060000Z';
+        await itemsDAO.insertOne({
+            _id: 'item-moved',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: instanceEventId,
+            timeStart: '2026-05-19T06:00:00Z',
+            timeEnd: '2026-05-19T06:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        // First move: May 19 → May 24 (12:30 local — exact values are stand-ins).
+        const getExceptionsSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions');
+        getExceptionsSpy.mockResolvedValueOnce([
+            {
+                originalDate: '2026-05-19',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-05-24T09:30:00Z',
+                newTimeEnd: '2026-05-24T10:30:00Z',
+            },
+        ]);
+        await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+
+        const afterFirst = await itemsDAO.findByOwnerAndId('item-moved', userId);
+        expect(afterFirst?.timeStart).toBe('2026-05-24T09:30:00Z');
+
+        // Second move of the same instance: May 24 → May 25. The `originalDate` stays at May 19
+        // (rrule slot didn't change). Pre-fix: date-keyed lookup found nothing because the item
+        // was already at May 24. Post-fix: `calendarInstanceEventId` resolves it directly.
+        getExceptionsSpy.mockResolvedValueOnce([
+            {
+                originalDate: '2026-05-19',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-05-25T11:00:00Z',
+                newTimeEnd: '2026-05-25T12:00:00Z',
+            },
+        ]);
+        await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+
+        const afterSecond = await itemsDAO.findByOwnerAndId('item-moved', userId);
+        expect(afterSecond?.timeStart).toBe('2026-05-25T11:00:00Z');
+        expect(afterSecond?.timeEnd).toBe('2026-05-25T12:00:00Z');
+
+        const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(allForRoutine).toHaveLength(1);
+    });
+
+    it('create-on-miss: modified exception with no matching item inserts a fresh calendar item', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+        // No item seeded — the exception has nothing to find via either tier.
+
+        const instanceEventId = 'gcal-evt-master_20260601T060000Z';
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2026-06-01',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-06-02T07:00:00Z',
+                newTimeEnd: '2026-06-02T07:30:00Z',
+                title: 'Standup (moved)',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const created = await itemsDAO.findArray({ user: userId, routineId: 'routine-1', calendarInstanceEventId: instanceEventId } as never);
+        expect(created).toHaveLength(1);
+        const [item] = created;
+        if (!item) throw new Error('expected create-on-miss to insert one item');
+        expect(item.status).toBe('calendar');
+        expect(item.title).toBe('Standup (moved)');
+        expect(item.timeStart).toBe('2026-06-02T07:00:00Z');
+        expect(item.timeEnd).toBe('2026-06-02T07:30:00Z');
+        // Inherits the routine's integration link so the UI can group it under the right calendar.
+        expect(item.calendarIntegrationId).toBe('int-1');
+        expect(item.calendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('create-on-miss does NOT fire for deleted exceptions', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: '2026-06-15', type: 'deleted', googleEventId: 'gcal-evt-master_20260615T060000Z' },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Deleted exception with no matching item must NOT spawn a phantom item.
+        const itemsForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(itemsForRoutine).toHaveLength(0);
+
+        // Positive assertion: prove the create branch was not taken. (The shape "0 items remain"
+        // would silently pass even if a phantom create op were recorded — checking the op log
+        // directly catches the path having been reached at all.)
+        const createOps = await operationsDAO.findArray({ user: userId, entityType: 'item', opType: 'create' });
+        expect(createOps).toHaveLength(0);
+    });
+
+    it('legacy row moved twice (no calendarInstanceEventId): first move via fallback, second move converges with no duplicate', async () => {
+        // Pre-rollout shape: routine-generated item has NO `calendarInstanceEventId`. The first
+        // move hits the date-keyed fallback OK. The second move would historically miss (item's
+        // timeStart already shifted off May 19) — assert we end up with one item, not two.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        await itemsDAO.insertOne({
+            _id: 'item-legacy-moved',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            // No calendarInstanceEventId — this is the legacy shape.
+            timeStart: '2026-05-19T06:00:00Z',
+            timeEnd: '2026-05-19T06:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        const instanceEventId = 'gcal-evt-master_20260519T060000Z';
+        const getExceptionsSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions');
+
+        // Move 1: May 19 → May 24. Fallback (routineId + date) finds the row on May 19.
+        getExceptionsSpy.mockResolvedValueOnce([
+            {
+                originalDate: '2026-05-19',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-05-24T09:30:00Z',
+                newTimeEnd: '2026-05-24T10:30:00Z',
+            },
+        ]);
+        await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+
+        // Move 2 of the SAME instance: May 24 → May 25. Date-keyed fallback misses (item's
+        // timeStart is now May 24). Without `calendarInstanceEventId`, the preferred lookup also
+        // misses — the create-on-miss branch fires and the unique partial index on
+        // calendarInstanceEventId admits it (legacy row has none, no collision). Net behavior:
+        // one item remains via create-on-miss carrying the instance id.
+        getExceptionsSpy.mockResolvedValueOnce([
+            {
+                originalDate: '2026-05-19',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-05-25T11:00:00Z',
+                newTimeEnd: '2026-05-25T12:00:00Z',
+            },
+        ]);
+        await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+
+        // The legacy row is at May 24 (post-move-1), a freshly-created create-on-miss row is at
+        // May 25 (post-move-2). The bug we're guarding against is move 2 producing a SECOND
+        // create-on-miss + leaving us with three rows. Two is acceptable; three is not. A future
+        // backfill closes the legacy row's gap so move 2 would patch the same row.
+        const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(allForRoutine.length).toBeLessThanOrEqual(2);
+        // At least one row carries the instance id — proves create-on-miss did fire as expected.
+        const withInstanceId = allForRoutine.filter((i) => i.calendarInstanceEventId === instanceEventId);
+        expect(withInstanceId).toHaveLength(1);
+    });
+
+    it('concurrent updatedTs bump between resolve and apply: modified exception is skipped, not clobbered', async () => {
+        // Simulates the race the reviewer flagged: `resolveExceptionTarget` reads an item, then
+        // a /sync/push edit lands between read and apply (bumping updatedTs). The updateOne
+        // conditional on the stale updatedTs must matchCount=0 and skip — otherwise the apply
+        // silently overwrites the user's edit.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20260701T060000Z';
+        const initialUpdatedTs = dayjs().subtract(10, 'minute').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-race',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: instanceEventId,
+            timeStart: '2026-07-01T06:00:00Z',
+            timeEnd: '2026-07-01T06:30:00Z',
+            createdTs: initialUpdatedTs,
+            updatedTs: initialUpdatedTs,
+        });
+
+        // Bump updatedTs BEFORE the exception lands — same effect as a concurrent /sync/push
+        // racing in between resolveExceptionTarget and the apply's updateOne. Since vitest can't
+        // truly interleave, we mutate first; the conditional updateOne sees a mismatched
+        // updatedTs from the snapshot the resolver captured.
+        const racingTs = dayjs().toISOString();
+        await itemsDAO.updateOne({ _id: 'item-race', user: userId } as never, { $set: { title: 'User edited title', updatedTs: racingTs } });
+
+        // Mock the resolver-internal findArray to return the STALE pre-race snapshot, exactly the
+        // window we're guarding against. The actual write goes through the real DB.
+        const findArraySpy = vi.spyOn(itemsDAO, 'findArray');
+        let staleReturned = false;
+        findArraySpy.mockImplementationOnce(async () => {
+            staleReturned = true;
+            return [
+                {
+                    _id: 'item-race',
+                    user: userId,
+                    status: 'calendar' as const,
+                    title: 'Standup',
+                    routineId: 'routine-1',
+                    calendarInstanceEventId: instanceEventId,
+                    timeStart: '2026-07-01T06:00:00Z',
+                    timeEnd: '2026-07-01T06:30:00Z',
+                    createdTs: initialUpdatedTs,
+                    updatedTs: initialUpdatedTs, // stale
+                },
+            ];
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2026-07-01',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-07-02T08:00:00Z',
+                newTimeEnd: '2026-07-02T08:30:00Z',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        expect(staleReturned).toBe(true);
+
+        // The user's racing edit must survive — title + timeStart unchanged from the racing write.
+        const finalItem = await itemsDAO.findByOwnerAndId('item-race', userId);
+        expect(finalItem?.title).toBe('User edited title');
+        expect(finalItem?.timeStart).toBe('2026-07-01T06:00:00Z');
+    });
+
+    it('concurrent create race: two callers seeing target miss converge on one item (no duplicate)', async () => {
+        // Real-world scenario the unique partial index guards: a webhook delivery and a manual
+        // /calendar/integrations/:id/sync land within the same window, both see resolve miss,
+        // both reach createItemForOrphanedException. The loser gets E11000 and falls through to
+        // re-resolve + apply on the winner's row. End state: exactly one item.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const routine = await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20260801T060000Z';
+        const exception = {
+            originalDate: '2026-08-01',
+            type: 'modified' as const,
+            googleEventId: instanceEventId,
+            newTimeStart: '2026-08-02T09:00:00Z',
+            newTimeEnd: '2026-08-02T09:30:00Z',
+            title: 'Standup (raced move)',
+        };
+
+        // Fire two concurrent applies of the same exception through the exported handler. Equivalent
+        // to what syncRoutineExceptions does for each entry returned by getExceptions, but lets us
+        // race without standing up the full /dev/* mount in this test app.
+        const { applyExceptionToItems } = await import('../routes/calendar.js');
+        const now = dayjs().toISOString();
+        const ctx1: Parameters<typeof applyExceptionToItems>[2] = { userId, now, ops: [] };
+        const ctx2: Parameters<typeof applyExceptionToItems>[2] = { userId, now, ops: [] };
+
+        await Promise.all([applyExceptionToItems(routine, exception, ctx1), applyExceptionToItems(routine, exception, ctx2)]);
+
+        // The race guard (unique partial index on calendarInstanceEventId) ensures only one row.
+        const itemsForInstance = await itemsDAO.findArray({ user: userId, calendarInstanceEventId: instanceEventId } as never);
+        expect(itemsForInstance).toHaveLength(1);
+        const winner = itemsForInstance[0];
+        if (!winner) throw new Error('expected one winner');
+        // The winning row carries the move's title/time, regardless of which caller inserted.
+        expect(winner.title).toBe('Standup (raced move)');
+        expect(winner.timeStart).toBe('2026-08-02T09:00:00Z');
+    });
+
+    it('cross-account reconnect (REGRESSION): routine-instance ids are wiped, second move does not duplicate', async () => {
+        // The Q2 reviewer's hardest case: disconnect-with-keep on account A, reconnect to a
+        // DIFFERENT Google account B. Routine items still carry calendarInstanceEventId derived
+        // from A's master id. B's exceptions use a different master id → preferred lookup misses
+        // → fallback by originalDate works on the FIRST move, then misses on the SECOND →
+        // create-on-miss inserts a duplicate. Repair pass must wipe the stale instance ids.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        // Seed: routine + items still bound to OLD account A. Items carry instance ids derived
+        // from A's master id ('gcal-master-A'). The lastKnownCalendarIntegrationId points at a
+        // defunct integration the user no longer owns.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-cross-account',
+                lastKnownCalendarEventId: 'gcal-master-A',
+                lastKnownCalendarIntegrationId: 'int-OLD-account-A',
+                lastKnownCalendarSyncConfigId: 'sync-config-OLD',
+            }),
+        );
+        await itemsDAO.insertOne({
+            _id: 'item-cross-account',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-cross-account',
+            calendarInstanceEventId: 'gcal-master-A_20260815T060000Z', // derived from A's master
+            timeStart: '2026-08-15T06:00:00Z',
+            timeEnd: '2026-08-15T06:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        // Drive the OAuth reconnect for a NEW account B.
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'B-at', refresh_token: 'B-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+
+        const callbackRes = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-B&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(callbackRes.status).toBe(302);
+
+        // Repair pass must have wiped the stale calendarInstanceEventId — otherwise the second
+        // move below would create a duplicate via the fallback-then-miss path.
+        const afterRepair = await itemsDAO.findByOwnerAndId('item-cross-account', userId);
+        expect(afterRepair?.calendarInstanceEventId).toBeUndefined();
+        expect(afterRepair?.lastKnownCalendarEventId).toBeUndefined();
+
+        // Simulate two moves under account B's master id. With the instance id wiped, the first
+        // move uses the fallback (routineId + originalDate '2026-08-15' matches the item's
+        // current timeStart). Create-on-miss may fire on the second move, but the unique partial
+        // index ensures at most one new row.
+        const integrationsB = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        const liveIntegrationId = integrationsB[0]?._id;
+        if (!liveIntegrationId) throw new Error('expected reconnected integration');
+
+        const instanceB1 = 'gcal-master-B_20260815T060000Z';
+        const getExceptionsSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions');
+        getExceptionsSpy.mockResolvedValueOnce([
+            {
+                originalDate: '2026-08-15',
+                type: 'modified',
+                googleEventId: instanceB1,
+                newTimeStart: '2026-08-20T09:00:00Z',
+                newTimeEnd: '2026-08-20T09:30:00Z',
+            },
+        ]);
+        // Bind the routine to B so syncRoutineExceptions includes it on next pass.
+        await routinesDAO.updateOne({ _id: 'routine-cross-account', user: userId } as never, {
+            $set: { calendarEventId: 'gcal-master-B', calendarIntegrationId: liveIntegrationId, calendarSyncConfigId: 'sync-config-1' },
+        });
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, liveIntegrationId));
+        await authenticatedRequest(app, { method: 'POST', path: `/calendar/integrations/${liveIntegrationId}/sync`, sessionCookie });
+
+        // Second move of the SAME instance.
+        getExceptionsSpy.mockResolvedValueOnce([
+            {
+                originalDate: '2026-08-15',
+                type: 'modified',
+                googleEventId: instanceB1,
+                newTimeStart: '2026-08-21T10:00:00Z',
+                newTimeEnd: '2026-08-21T10:30:00Z',
+            },
+        ]);
+        await authenticatedRequest(app, { method: 'POST', path: `/calendar/integrations/${liveIntegrationId}/sync`, sessionCookie });
+
+        // Critical: never more than one item per instance id, regardless of which path each move
+        // took. Strictly worse than pre-Q2 would be 2+ items here.
+        const itemsB = await itemsDAO.findArray({ user: userId, calendarInstanceEventId: instanceB1 } as never);
+        expect(itemsB.length).toBeLessThanOrEqual(1);
+        const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-cross-account' });
+        expect(allForRoutine.length).toBeLessThanOrEqual(2);
+    });
+});

@@ -28,6 +28,14 @@ export const ItemSnapshotSchema = z
         calendarEventId: nonEmptyString.optional(),
         calendarIntegrationId: nonEmptyString.optional(),
         calendarSyncConfigId: nonEmptyString.optional(),
+        // Disconnect-with-keep markers — pushed back when a client re-edits an item that was
+        // unlinked server-side. Validator must accept them so the round-trip doesn't 400.
+        lastKnownCalendarEventId: nonEmptyString.optional(),
+        lastKnownCalendarIntegrationId: nonEmptyString.optional(),
+        lastKnownCalendarSyncConfigId: nonEmptyString.optional(),
+        // GCal instance event id for routine-generated calendar items. Pushed back when the client
+        // re-edits the item locally (e.g. drag in week view).
+        calendarInstanceEventId: nonEmptyString.optional(),
         lastPushedToGCalTs: isoDateTime.optional(),
         lastSyncedFromGCalTs: isoDateTime.optional(),
         lastSyncedNotes: z.string().optional(),
@@ -81,6 +89,7 @@ const STATUS_SPECIFIC_FIELDS = [
     'timeEnd',
     'calendarEventId',
     'calendarIntegrationId',
+    'calendarInstanceEventId',
 ] as const;
 
 export type StatusSpecificField = (typeof STATUS_SPECIFIC_FIELDS)[number];
@@ -95,7 +104,7 @@ const ALL_STATUS_SPECIFIC: ReadonlySet<StatusSpecificField> = new Set(STATUS_SPE
 export const STATUS_FIELD_MATRIX: Record<ItemInterface['status'], ReadonlySet<StatusSpecificField>> = {
     inbox: new Set(),
     nextAction: new Set(['workContextIds', 'peopleIds', 'energy', 'time', 'focus', 'urgent', 'expectedBy', 'ignoreBefore']),
-    calendar: new Set(['timeStart', 'timeEnd', 'calendarEventId', 'calendarIntegrationId', 'workContextIds', 'peopleIds']),
+    calendar: new Set(['timeStart', 'timeEnd', 'calendarEventId', 'calendarIntegrationId', 'calendarInstanceEventId', 'workContextIds', 'peopleIds']),
     waitingFor: new Set(['waitingForPersonId', 'peopleIds', 'expectedBy', 'ignoreBefore']),
     somedayMaybe: new Set(),
     done: ALL_STATUS_SPECIFIC,

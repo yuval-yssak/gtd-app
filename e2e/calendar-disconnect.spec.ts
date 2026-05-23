@@ -118,6 +118,91 @@ test.describe('calendar disconnect — keepLinkedEntities', () => {
     });
 });
 
+test.describe('calendar disconnect — lastKnown* rename + reconnect relink', () => {
+    test('renames calendar* to lastKnown* on keepLinkedEntities, then relinks on reconnect (no duplicate item)', async ({ browser }) => {
+        const email = `disconnect-relink-${dayjs().valueOf()}@example.com`;
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const userId = (await gtd.getActiveAccountId(page)) as string;
+            const seeded = await seedIntegration(userId, [{ calendarId: 'primary', isDefault: true, displayName: 'Primary' }]);
+
+            // Item linked to a GCal event id; we'll later "re-import" the same event id and expect a relink.
+            const gcalEventId = 'gcal-relink-test-1';
+            const futureStart = dayjs().add(2, 'day').startOf('hour').toISOString();
+            const futureEnd = dayjs(futureStart).add(45, 'minute').toISOString();
+            const inboxItem = await gtd.collect(page, 'Strong-key relink target');
+            const calendarItem = await gtd.clarifyToCalendar(page, inboxItem, {
+                timeStart: futureStart,
+                timeEnd: futureEnd,
+                calendarIntegrationId: seeded.integrationId,
+                calendarSyncConfigId: seeded.configIds[0],
+            });
+            // Set the calendarEventId directly so the rename has something to capture.
+            await gtd.updateItem(page, { ...calendarItem, calendarEventId: gcalEventId });
+            await gtd.flush(page);
+
+            // Disconnect with "keep items".
+            await page.goto(SETTINGS_URL);
+            await expect(page.getByRole('button', { name: 'Disconnect' }).first()).toBeVisible({ timeout: 10_000 });
+            await page.getByRole('button', { name: 'Disconnect' }).first().click();
+            const dialog = page.getByRole('dialog', { name: 'Disconnect Google Calendar' });
+            await expect(dialog).toBeVisible();
+            await dialog.getByRole('button', { name: 'Disconnect' }).click();
+            await expect.poll(() => readServerIntegrationCount(userId)).toBe(0);
+
+            // Pull and verify the rename happened: lastKnownCalendarEventId set, calendarEventId cleared.
+            await expect
+                .poll(async () => {
+                    await pullIntoLocalDB(page);
+                    const items = await gtd.listItems(page);
+                    return items.find((i) => i._id === calendarItem._id)?.lastKnownCalendarEventId;
+                })
+                .toBe(gcalEventId);
+            const afterDisconnect = (await gtd.listItems(page)).find((i) => i._id === calendarItem._id);
+            expect(afterDisconnect?.calendarEventId).toBeUndefined();
+
+            // Reconnect: seed a fresh integration + config, then simulate the inbound GCal event with
+            // the same id. The server's tryRestoreFromLastKnownEventId must atomically restore the link.
+            const reseeded = await seedIntegration(userId, [{ calendarId: 'primary', isDefault: true, displayName: 'Primary' }]);
+            const inboundEvent = {
+                id: gcalEventId,
+                title: 'Strong-key relink target',
+                timeStart: futureStart,
+                timeEnd: futureEnd,
+                updated: dayjs().toISOString(),
+                status: 'confirmed',
+            };
+            const simulateRes = await fetch('http://localhost:4000/dev/calendar/simulate-webhook-event', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, integrationId: reseeded.integrationId, syncConfigId: reseeded.configIds[0], event: inboundEvent }),
+            });
+            expect(simulateRes.ok).toBeTruthy();
+
+            // After the relink, the item's live calendar* fields are set again and the lastKnown* fields are unset.
+            // CRITICAL: no duplicate item was created.
+            await expect
+                .poll(async () => {
+                    await pullIntoLocalDB(page);
+                    const items = await gtd.listItems(page);
+                    return items.find((i) => i._id === calendarItem._id)?.calendarEventId;
+                })
+                .toBe(gcalEventId);
+
+            const finalItems = (await gtd.listItems(page)).filter((i) => i.title === 'Strong-key relink target');
+            expect(finalItems).toHaveLength(1);
+            const [relinked] = finalItems;
+            if (!relinked) throw new Error('expected one relinked item');
+            expect(relinked._id).toBe(calendarItem._id);
+            expect(relinked.calendarEventId).toBe(gcalEventId);
+            expect(relinked.calendarIntegrationId).toBe(reseeded.integrationId);
+            expect(relinked.calendarSyncConfigId).toBe(reseeded.configIds[0]);
+            expect(relinked.lastKnownCalendarEventId).toBeUndefined();
+            expect(relinked.lastKnownCalendarIntegrationId).toBeUndefined();
+            expect(relinked.lastKnownCalendarSyncConfigId).toBeUndefined();
+        });
+    });
+});
+
 test.describe('calendar disconnect — removeLinkedEntities', () => {
     test('trashes items and cascades routine-generated items, never invoking GCal', async ({ browser }) => {
         const email = `disconnect-remove-${dayjs().valueOf()}@example.com`;

@@ -83,6 +83,14 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
 // ── Item push-back ───────────────────────────────────────────────────────────
 
 async function handleItemPush(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    // This entity was unlinked by disconnect-with-keep and will be relinked by the next inbound
+    // pull (strong-key restore via lastKnownCalendarEventId). Don't create a duplicate by pushing now.
+    if (snapshot.lastKnownCalendarEventId) {
+        console.debug(
+            `[debug-gcal-sync][pushback] skipping item — awaiting reconnect relink | itemId=${snapshot._id} lastKnownEventId=${snapshot.lastKnownCalendarEventId}`,
+        );
+        return;
+    }
     if (snapshot.calendarEventId) {
         await pushExistingItemToGCal(snapshot, userId, buildProvider);
         return;
@@ -314,6 +322,11 @@ export async function pushItemToGCalWithContext(snapshot: ItemInterface, ctx: Pu
     if (snapshot.routineId) {
         return { status: 'skipped' };
     }
+    // Disconnect-with-keep marker — let the next inbound pull strong-key restore the link instead
+    // of minting a new GCal event whose id will collide with the original on reconnect.
+    if (snapshot.lastKnownCalendarEventId) {
+        return { status: 'skipped' };
+    }
     // Locally bind narrowed values so they survive into the closure passed to withAuthFailureHandling.
     const { timeStart, timeEnd } = snapshot;
 
@@ -395,6 +408,14 @@ async function handleRoutinePush(
         await pushRoutineDeletion(snapshot, userId, buildProvider);
         return;
     }
+    // This routine was unlinked by disconnect-with-keep and will be relinked by the next inbound pull
+    // (strong-key restore via lastKnownCalendarEventId). Don't create a duplicate by pushing now.
+    if (snapshot.lastKnownCalendarEventId) {
+        console.debug(
+            `[debug-gcal-sync][pushback] skipping routine — awaiting reconnect relink | routineId=${snapshot._id} lastKnownEventId=${snapshot.lastKnownCalendarEventId}`,
+        );
+        return;
+    }
     // Pushback fires after the op has been inserted and the entity has been upserted. Look up the
     // single newest op strictly before this one in (ts, _id) lex order to compare prior vs current
     // active flag. Strictly-before is critical: back-to-back pause ops (e.g. flush batches with
@@ -458,7 +479,10 @@ async function readPriorActiveFlag(routineId: string, userId: string, currentOpI
  */
 async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
     const now = dayjs().toISOString();
-    await regenerateFutureRoutineItems(snapshot, userId, now);
+    // Pause only hits the trash branch (`routine.active === false` short-circuits inside
+    // regenerateFutureRoutineItems), so the TZ is never read and a missing value is safe here.
+    // Pass `undefined` explicitly so the call site reads intentionally rather than "we forgot".
+    await regenerateFutureRoutineItems(snapshot, userId, now, undefined);
     if (!snapshot.calendarEventId) {
         return;
     }
@@ -496,7 +520,21 @@ async function pushRoutineResume(snapshot: RoutineInterface, userId: string, bui
             console.error(`[calendar-pushback] resume: failed to push updated series for routine ${snapshot._id}:`, err);
         }
     }
-    await regenerateFutureRoutineItems(snapshot, userId, now);
+    // Need the calendar TZ to compute `calendarInstanceEventId` on generated items. Resolution can
+    // fail (integration revoked, no config link); when it does we still regenerate, just without the
+    // instance id — the backfill script covers those rows later.
+    const tz = await resolveTimeZoneForRoutine(snapshot, userId, buildProvider);
+    await regenerateFutureRoutineItems(snapshot, userId, now, tz);
+}
+
+/** Returns the calendar TZ for a routine's pushback context, or undefined if unresolvable. */
+async function resolveTimeZoneForRoutine(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<string | undefined> {
+    if (!snapshot.calendarEventId) {
+        return undefined;
+    }
+    const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
+    const ctx = await resolvePushContext(link, userId, buildProvider);
+    return ctx?.timeZone;
 }
 
 /**
@@ -611,6 +649,10 @@ export async function pushRoutineToGCalWithContext(snapshot: RoutineInterface, c
     }
     if (snapshot.active === false) {
         // Mirror handleRoutinePush: inactive routines do not produce GCal mutations.
+        return { status: 'skipped' };
+    }
+    // Disconnect-with-keep marker — wait for the next inbound pull to strong-key restore the link.
+    if (snapshot.lastKnownCalendarEventId) {
         return { status: 'skipped' };
     }
 

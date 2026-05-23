@@ -45,6 +45,10 @@ export const RoutineSnapshotSchema = z
         calendarEventId: nonEmptyString.optional(),
         calendarIntegrationId: nonEmptyString.optional(),
         calendarSyncConfigId: nonEmptyString.optional(),
+        // Disconnect-with-keep markers — see Item.lastKnown* note.
+        lastKnownCalendarEventId: nonEmptyString.optional(),
+        lastKnownCalendarIntegrationId: nonEmptyString.optional(),
+        lastKnownCalendarSyncConfigId: nonEmptyString.optional(),
         splitFromRoutineId: nonEmptyString.optional(),
         lastPushedToGCalTs: isoDateTime.optional(),
         lastSyncedNotes: z.string().optional(),

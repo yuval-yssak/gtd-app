@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
 import rrule from 'rrule';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -7,6 +8,7 @@ import type { ItemInterface, OperationInterface, RoutineInterface } from '../typ
 import { recordOperation } from './operationHelpers.js';
 
 dayjs.extend(utc);
+dayjs.extend(timezone);
 
 // rrule@2.8.1 ships CJS as `main`; default-import + destructure works across Node ESM/Vitest.
 const { RRule } = rrule;
@@ -48,8 +50,34 @@ function getValidFutureOccurrences(routine: RoutineInterface): Date[] {
     return rule.between(startDate, endDate, false).filter((d) => !exceptionDates.has(d.toISOString().slice(0, 10)));
 }
 
-/** Build a calendar item for a single rrule occurrence date. Mirrors the client-side helper. */
-function buildCalendarItem(userId: string, routine: RoutineInterface, occurrenceDate: Date, now: string): ItemInterface {
+/**
+ * GCal instance event id for a recurring-series occurrence — matches what Google returns in
+ * `event.id` for instances of a recurring event. Format: `<masterEventId>_<YYYYMMDDTHHMMSSZ>`
+ * where the date/time portion is the original occurrence start converted to UTC (basic ISO 8601,
+ * no separators). Computed deterministically from the routine's local-time template + the calendar
+ * timezone so exception sync can locate the item by `calendarInstanceEventId` even after a prior
+ * exception has shifted its `timeStart`.
+ */
+export function buildCalendarInstanceEventId(masterEventId: string, occurrenceDate: Date, timeOfDay: string, timeZone: string): string {
+    const dateStr = occurrenceDate.toISOString().slice(0, 10);
+    // The routine's `timeOfDay` is a wall-clock time in the calendar's TZ. Reconstruct the original
+    // instance start as UTC and emit in the YYYYMMDDTHHMMSSZ basic-ISO form GCal uses for instance ids.
+    const utcStart = dayjs.tz(`${dateStr}T${timeOfDay}:00`, timeZone).utc().format('YYYYMMDDTHHmmss[Z]');
+    return `${masterEventId}_${utcStart}`;
+}
+
+/**
+ * Build a calendar item for a single rrule occurrence date. Mirrors the client-side helper.
+ * When the routine is linked to GCal and a `timeZone` is supplied, also sets
+ * `calendarInstanceEventId` so exception sync can re-locate the item after a move.
+ *
+ * Calendar link inheritance: copies `calendarIntegrationId` + `calendarSyncConfigId` from the
+ * routine so UI/audit queries that filter by integration see all routine-generated items
+ * uniformly, regardless of which path created them. Pushback skips routine-linked items so
+ * leaving these set won't cause a duplicate event, but the rendering/grouping side needs them.
+ * Matches the shape used by `createItemForOrphanedException` for the orphan-create path.
+ */
+function buildCalendarItem(userId: string, routine: RoutineInterface, occurrenceDate: Date, now: string, timeZone?: string): ItemInterface {
     const template = routine.calendarItemTemplate;
     if (!template) {
         throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
@@ -62,6 +90,16 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
     const title = contentException?.title ?? routine.title;
     const notes = contentException?.notes ?? routine.template.notes;
 
+    // Only routines linked to GCal produce instance ids — in-app routines have nothing to key on.
+    // Window note: between a GCal master-time edit and the next inbound sync, in-flight exceptions
+    // carry `googleEventId` derived from the OLD master time while a regen'd item carries the NEW
+    // time → preferred lookup misses → create-on-miss inserts a duplicate row. The `(user,
+    // calendarInstanceEventId)` unique partial index catches concurrent duplicates within a sync
+    // window, but a stale exception batch arriving after regen is its own narrow window we can't
+    // close from here — the next full inbound resolves it.
+    const instanceEventId =
+        routine.calendarEventId && timeZone ? buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, template.timeOfDay, timeZone) : undefined;
+
     return {
         _id: randomUUID(),
         user: userId,
@@ -71,6 +109,9 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
         timeStart,
         timeEnd,
         ...(notes ? { notes } : {}),
+        ...(routine.calendarIntegrationId ? { calendarIntegrationId: routine.calendarIntegrationId } : {}),
+        ...(routine.calendarSyncConfigId ? { calendarSyncConfigId: routine.calendarSyncConfigId } : {}),
+        ...(instanceEventId ? { calendarInstanceEventId: instanceEventId } : {}),
         createdTs: now,
         updatedTs: now,
     };
@@ -117,7 +158,7 @@ export async function propagateRoutineTitleToItems(routine: RoutineInterface, us
  * not just shift them. Doing it as two clean phases (trash existing, create new) avoids a fragile
  * per-date alignment and mirrors the client's `deleteAndRegenerateFutureItems`.
  */
-export async function regenerateFutureRoutineItems(routine: RoutineInterface, userId: string, now: string): Promise<OperationInterface[]> {
+export async function regenerateFutureRoutineItems(routine: RoutineInterface, userId: string, now: string, timeZone?: string): Promise<OperationInterface[]> {
     if (!routine.calendarItemTemplate) {
         return [];
     }
@@ -127,7 +168,7 @@ export async function regenerateFutureRoutineItems(routine: RoutineInterface, us
     if (!routine.active) {
         return trashedOps;
     }
-    const createdOps = await insertFreshFutureItems(routine, userId, now);
+    const createdOps = await insertFreshFutureItems(routine, userId, now, timeZone);
     return [...trashedOps, ...createdOps];
 }
 
@@ -158,12 +199,12 @@ async function trashExistingFutureItems(routine: RoutineInterface, userId: strin
  * date that still has a non-trash item for this routine (e.g. a `done` or transformed-to-nextAction
  * item) so we never duplicate an occurrence the user has already disposed of or re-homed.
  */
-async function insertFreshFutureItems(routine: RoutineInterface, userId: string, now: string): Promise<OperationInterface[]> {
+async function insertFreshFutureItems(routine: RoutineInterface, userId: string, now: string, timeZone?: string): Promise<OperationInterface[]> {
     const claimedDates = await dateSetClaimedByNonTrashItems(routine._id, userId);
     const occurrences = getValidFutureOccurrences(routine).filter((d) => !claimedDates.has(d.toISOString().slice(0, 10)));
     const ops = await Promise.all(
         occurrences.map(async (date) => {
-            const item = buildCalendarItem(userId, routine, date, now);
+            const item = buildCalendarItem(userId, routine, date, now, timeZone);
             await itemsDAO.insertOne(item);
             if (!item._id) {
                 return null;

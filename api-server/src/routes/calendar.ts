@@ -273,10 +273,100 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     };
 
     await calendarIntegrationsDAO.upsertEncrypted(integration);
+    // Reconnect repair pass: clear lastKnown* markers that point at integrations the user no longer
+    // has. Without this, an item/routine that was unlinked under one Google account stays "pinned"
+    // to that account's integration id forever — a reconnect to a DIFFERENT Google account would
+    // never deliver an inbound event id matching the marker, and pushback would permanently skip
+    // the entity. The repair runs on every successful OAuth completion (cheap: scoped by user).
+    await clearOrphanedLastKnownMarkers(userId);
 
     // Redirect back to client settings page so the user sees the new integration.
     return c.redirect(`${clientUrl}/settings?calendarConnected=1`);
 });
+
+/**
+ * Clears `lastKnown*` calendar markers from items and routines whose recorded
+ * `lastKnownCalendarIntegrationId` no longer matches any live integration the user owns. Called
+ * after each successful OAuth completion — covers the cross-account reconnect case where the
+ * user disconnects integration A and later connects integration B. Without this, those entities
+ * would be permanently un-pushable (pushback skips them while a marker is set).
+ *
+ * Also unsets `calendarInstanceEventId` on any routine-generated item whose owning routine was
+ * orphaned. The instance id is derived from the OLD master event id (account A's series) and is
+ * meaningless after a reconnect to a different account — leaving it in place causes the preferred
+ * exception lookup to miss against account B's exceptions, then the fallback's `originalDate`
+ * match works on the first move but the second move misses (item's `timeStart` already shifted),
+ * triggering a duplicate create-on-miss. Clearing it forces the next inbound sync to either
+ * re-mint via regeneration or take create-on-miss exactly once.
+ */
+async function clearOrphanedLastKnownMarkers(userId: string): Promise<void> {
+    const liveIntegrationIds = (await calendarIntegrationsDAO.findArray({ user: userId })).map((i) => i._id);
+    const orphanFilter = { user: userId, lastKnownCalendarIntegrationId: { $exists: true, $nin: liveIntegrationIds } } as const;
+    const unsetMarkers = {
+        $unset: { lastKnownCalendarEventId: '', lastKnownCalendarIntegrationId: '', lastKnownCalendarSyncConfigId: '' },
+        $set: { updatedTs: dayjs().toISOString() },
+    } as const;
+
+    // Snapshot the orphaned entities first so we can record per-entity operations after the wipe.
+    // Without ops, other devices would keep the stale `lastKnown*` markers in their local IDB and
+    // their pushback would stay permanently skipped — defeating the whole purpose of the repair pass.
+    const [orphanItems, orphanRoutines] = await Promise.all([itemsDAO.findArray(orphanFilter), routinesDAO.findArray(orphanFilter)]);
+    if (!hasAtLeastOne(orphanItems) && !hasAtLeastOne(orphanRoutines)) {
+        return;
+    }
+    await Promise.all([itemsDAO.updateMany(orphanFilter, unsetMarkers), routinesDAO.updateMany(orphanFilter, unsetMarkers)]);
+    // Cross-account hygiene: wipe `calendarInstanceEventId` on items whose routine just had its
+    // marker cleared. Their instance ids were derived from the defunct master event id.
+    const orphanedRoutineIds = orphanRoutines.map((r) => r._id);
+    const refreshedItems = hasAtLeastOne(orphanedRoutineIds) ? await clearStaleInstanceIdsForRoutines(userId, orphanedRoutineIds) : [];
+    await recordRepairOpsForOrphans(userId, [...orphanItems, ...refreshedItems], orphanRoutines);
+}
+
+/**
+ * For each given routineId, unsets `calendarInstanceEventId` on all of its items and returns the
+ * post-wipe snapshots so the caller can record ops. Overlap with `orphanItems` from
+ * `clearOrphanedLastKnownMarkers` is fine — `recordRepairOpsForOrphans` dedupes by `_id`.
+ */
+async function clearStaleInstanceIdsForRoutines(userId: string, routineIds: NonEmptyArray<string>): Promise<ItemInterface[]> {
+    const filter = { user: userId, routineId: { $in: routineIds }, calendarInstanceEventId: { $exists: true } } as const;
+    const before = await itemsDAO.findArray(filter);
+    if (!hasAtLeastOne(before)) {
+        return [];
+    }
+    await itemsDAO.updateMany(filter, { $unset: { calendarInstanceEventId: '' }, $set: { updatedTs: dayjs().toISOString() } });
+    return itemsDAO.findArray({ _id: { $in: before.map((i) => i._id) }, user: userId } as never);
+}
+
+/**
+ * Re-fetches each repaired entity and records an `update` op so the operations log advertises the
+ * cleared markers to every other device for this user. Uses post-wipe snapshots so the op carries
+ * the correct (no-marker) state — recording the pre-wipe snapshot would propagate the stale data.
+ */
+async function recordRepairOpsForOrphans(userId: string, orphanItems: ItemInterface[], orphanRoutines: RoutineInterface[]): Promise<void> {
+    const now = dayjs().toISOString();
+    // Dedupe by _id — the caller may pass an item twice (once for its own lastKnown* marker,
+    // once because its routine's instance id was wiped). Recording two ops would double-bump
+    // updatedTs and confuse last-write-wins.
+    const seen = new Set<string>();
+    const itemOpPromises = orphanItems.flatMap((item) => {
+        if (!item._id || seen.has(item._id)) {
+            return [];
+        }
+        seen.add(item._id);
+        return [recordRepairOp(userId, 'item', item._id, now)];
+    });
+    const routineOpPromises = orphanRoutines.map((routine) => recordRepairOp(userId, 'routine', routine._id, now));
+    await Promise.all([...itemOpPromises, ...routineOpPromises]);
+}
+
+async function recordRepairOp(userId: string, entityType: 'item' | 'routine', entityId: string, now: string): Promise<void> {
+    const dao = entityType === 'item' ? itemsDAO : routinesDAO;
+    const fresh = await dao.findByOwnerAndId(entityId, userId);
+    if (!fresh) {
+        return;
+    }
+    await recordOperation(userId, { entityType, entityId, snapshot: fresh, opType: 'update', now });
+}
 
 /** Reads the authorized account email from Google's userinfo endpoint. Returns null on any error. */
 async function tryFetchAuthorizedEmail(oauth2: ReturnType<typeof buildOAuthClient>): Promise<string | null> {
@@ -434,6 +524,48 @@ calendarRoutes.get('/all-sync-configs', authenticateRequest, async (c) => {
 });
 
 /**
+ * Disconnect-with-keep orchestrator. Two sibling passes operate on disjoint slices of the docs
+ * matched by `baseFilter`:
+ *
+ *  - `renameCalendarLinkFieldsToLastKnown` — docs WITH `calendarEventId`. Renames all three
+ *    `calendar*` fields to their `lastKnown*` counterparts so a later reconnect can do a
+ *    strong-key relink. The `calendarEventId: { $exists: true }` predicate also protects an
+ *    already-renamed second-disconnect from clobbering a previously-stored
+ *    `lastKnownCalendarEventId`.
+ *  - `unsetUnpushedCalendarLinkFields` — docs WITHOUT `calendarEventId` (linked at the integration
+ *    level but never pushed to GCal yet). Nothing to preserve, but they must still be unlinked so
+ *    they don't keep pointing at a now-defunct integration.
+ *
+ * Both passes share the `$set: { updatedTs }` bump so sync picks up the change.
+ */
+type CalendarLinkDAO = { updateMany: (filter: object, update: object) => Promise<unknown> };
+
+async function renameOrUnsetCalendarLinkFields(dao: CalendarLinkDAO, baseFilter: object, now: string): Promise<void> {
+    await Promise.all([renameCalendarLinkFieldsToLastKnown(dao, baseFilter, now), unsetUnpushedCalendarLinkFields(dao, baseFilter, now)]);
+}
+
+async function renameCalendarLinkFieldsToLastKnown(dao: CalendarLinkDAO, baseFilter: object, now: string): Promise<void> {
+    await dao.updateMany(
+        { ...baseFilter, calendarEventId: { $exists: true } },
+        {
+            $rename: {
+                calendarEventId: 'lastKnownCalendarEventId',
+                calendarIntegrationId: 'lastKnownCalendarIntegrationId',
+                calendarSyncConfigId: 'lastKnownCalendarSyncConfigId',
+            },
+            $set: { updatedTs: now },
+        },
+    );
+}
+
+async function unsetUnpushedCalendarLinkFields(dao: CalendarLinkDAO, baseFilter: object, now: string): Promise<void> {
+    await dao.updateMany(
+        { ...baseFilter, calendarEventId: { $exists: false } },
+        { $unset: { calendarIntegrationId: '', calendarSyncConfigId: '' }, $set: { updatedTs: now } },
+    );
+}
+
+/**
  * Handles the `removeLinkedEntities` disconnect path for items:
  * - Items with status 'done' are treated as terminal — they are unlinked (calendar fields cleared)
  *   but kept as 'done', so a later GCal reconnect will not resurrect them as live calendar items.
@@ -460,10 +592,7 @@ async function trashItemsForIntegration(userId: string, integrationId: string, n
     if (hasAtLeastOne(doneIds)) {
         // Done items: unlink only (clear calendar fields, status stays 'done'). Same shape as
         // the keepLinkedEntities path, so reconnect won't create a duplicate or revive the item.
-        await itemsDAO.updateMany(
-            { _id: { $in: doneIds }, user: userId },
-            { $unset: { calendarEventId: '', calendarIntegrationId: '', calendarSyncConfigId: '' }, $set: { updatedTs: now } },
-        );
+        await renameOrUnsetCalendarLinkFields(itemsDAO, { _id: { $in: doneIds }, user: userId }, now);
     }
 
     // Re-fetch so operation snapshots reflect the persisted state.
@@ -511,10 +640,7 @@ async function unlinkItems(userId: string, integrationId: string, now: string): 
     if (!hasAtLeastOne(ids)) {
         return;
     }
-    await itemsDAO.updateMany(
-        { _id: { $in: ids }, user: userId },
-        { $unset: { calendarEventId: '', calendarIntegrationId: '', calendarSyncConfigId: '' }, $set: { updatedTs: now } },
-    );
+    await renameOrUnsetCalendarLinkFields(itemsDAO, { _id: { $in: ids }, user: userId }, now);
     // Re-fetch by stable IDs so snapshots reflect the cleared fields.
     const updated = await itemsDAO.findArray({ _id: { $in: ids }, user: userId });
     await Promise.all(
@@ -559,14 +685,7 @@ function buildLocalProvider(): GoogleCalendarProvider {
 
 /** Clears calendarEventId and calendarIntegrationId from routines in the DB and records operations so other devices sync the cleared fields. */
 async function unlinkRoutines(userId: string, routines: RoutineInterface[], now: string): Promise<void> {
-    await Promise.all(
-        routines.map((r) =>
-            routinesDAO.updateOne(
-                { _id: r._id, user: userId },
-                { $unset: { calendarEventId: '', calendarIntegrationId: '', calendarSyncConfigId: '' }, $set: { updatedTs: now } },
-            ),
-        ),
-    );
+    await Promise.all(routines.map((r) => renameOrUnsetCalendarLinkFields(routinesDAO, { _id: r._id, user: userId }, now)));
     // Record the unlinked state so other devices learn about the cleared calendarEventId/calendarIntegrationId.
     // TOCTOU note: the updateOne + findByOwnerAndId pair is non-atomic; a concurrent write between
     // the two could produce a snapshot that doesn't match the persisted document. This is an
@@ -1367,8 +1486,20 @@ async function findExistingRoutineForEvent(
         calendarEventId: event.id,
         calendarIntegrationId: source.integration._id,
     });
-    if (byEventId || !rrule) {
+    if (byEventId) {
         return byEventId;
+    }
+    // Skip restore for cancelled masters — there's nothing to restore TO, and the caller will
+    // immediately deactivate. Restoring then deactivating would emit a redundant op + flap.
+    // Mirrors the naked-search skip below.
+    if (event.status === 'cancelled') {
+        return undefined;
+    }
+    // Strong-key restore: a routine whose link was renamed to lastKnown* on disconnect gets atomically
+    // restored when the GCal master event re-imports. Mirrors `tryRestoreFromLastKnownEventId` for items.
+    const restored = await tryRestoreRoutineFromLastKnownEventId(event, source, ctx);
+    if (restored || !rrule) {
+        return restored;
     }
     const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
     const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
@@ -1388,6 +1519,41 @@ async function findExistingRoutineForEvent(
     }
     const best = pickMostRecentlyUpdated(naked);
     return await relinkRoutineToEvent(best, event, source, ctx);
+}
+
+/**
+ * Strong-key restore for routines: atomically rebinds a routine whose calendar link was renamed
+ * to `lastKnown*` on disconnect-with-keep, when the matching GCal master event re-imports. TOCTOU-safe
+ * via the conditional update on `lastKnownCalendarEventId` — a concurrent restore wins, the loser
+ * returns undefined.
+ */
+async function tryRestoreRoutineFromLastKnownEventId(event: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<RoutineInterface | undefined> {
+    const [candidate] = await routinesDAO.findArray({ user: ctx.userId, lastKnownCalendarEventId: event.id });
+    if (!candidate) {
+        return undefined;
+    }
+    const result = await routinesDAO.updateOne(
+        { _id: candidate._id, user: ctx.userId, lastKnownCalendarEventId: event.id },
+        {
+            $set: {
+                calendarEventId: event.id,
+                calendarIntegrationId: source.integration._id,
+                calendarSyncConfigId: source.config._id,
+                updatedTs: ctx.now,
+            },
+            $unset: { lastKnownCalendarEventId: '', lastKnownCalendarIntegrationId: '', lastKnownCalendarSyncConfigId: '' },
+        },
+    );
+    if (result.matchedCount === 0) {
+        return undefined;
+    }
+    const restored = await routinesDAO.findByOwnerAndId(candidate._id, ctx.userId);
+    if (!restored) {
+        return undefined;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: candidate._id, snapshot: restored, opType: 'update', now: ctx.now }));
+    console.log(`[gcal-sync] restored routine from lastKnownCalendarEventId | routineId=${candidate._id} eventId=${event.id} title="${event.title}"`);
+    return restored;
 }
 
 /**
@@ -1458,7 +1624,7 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
     // change (line ~1048) but a brand-new routine — most importantly the tail of a "this and following"
     // split — never goes through that path. Without this, the tail arrives via sync as a routine with
     // zero items, while the parent's future items have been (correctly) trashed past UNTIL.
-    const itemOps = await regenerateFutureRoutineItems(routine, ctx.userId, ctx.now);
+    const itemOps = await regenerateFutureRoutineItems(routine, ctx.userId, ctx.now, source.config.timeZone ?? 'UTC');
     ctx.ops.push(...itemOps);
 }
 
@@ -1531,7 +1697,7 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     // near-term instance window when fetching exceptions, so relying on `syncRoutineExceptions`
     // alone leaves far-future items stuck on the old schedule/title.
     if (structurallyNewer) {
-        await propagateMasterScheduleChanges(existing, updated, ctx);
+        await propagateMasterScheduleChanges(existing, updated, source, ctx);
     }
 }
 
@@ -1541,14 +1707,14 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
  *  - rrule / timeOfDay / duration change → delete future items and regenerate on the new schedule
  *  - title-only change → rename future items in place (preserves IDs and per-instance overrides)
  */
-async function propagateMasterScheduleChanges(previous: RoutineInterface, next: RoutineInterface, ctx: SyncContext): Promise<void> {
+async function propagateMasterScheduleChanges(previous: RoutineInterface, next: RoutineInterface, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const scheduleChanged =
         previous.rrule !== next.rrule ||
         previous.calendarItemTemplate?.timeOfDay !== next.calendarItemTemplate?.timeOfDay ||
         previous.calendarItemTemplate?.duration !== next.calendarItemTemplate?.duration;
 
     if (scheduleChanged) {
-        const itemOps = await regenerateFutureRoutineItems(next, ctx.userId, ctx.now);
+        const itemOps = await regenerateFutureRoutineItems(next, ctx.userId, ctx.now, source.config.timeZone ?? 'UTC');
         ctx.ops.push(...itemOps);
         return;
     }
@@ -1646,6 +1812,42 @@ async function findCalendarItemByEventId(event: CalendarEvent, ctx: SyncContext)
 }
 
 /**
+ * Strong-key restore: an item whose link fields were renamed to `lastKnown*` on disconnect-with-keep
+ * gets atomically restored when the matching GCal event is re-imported. Conditional on
+ * `lastKnownCalendarEventId` still being set (TOCTOU-safe — a concurrent restore wins, the loser
+ * returns undefined and the caller falls through to title+time fallback or create).
+ */
+async function tryRestoreFromLastKnownEventId(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<ItemInterface | undefined> {
+    const [candidate] = await itemsDAO.findArray({ user: ctx.userId, lastKnownCalendarEventId: event.id });
+    if (!candidate?._id) {
+        return undefined;
+    }
+    const itemId = candidate._id;
+    const result = await itemsDAO.updateOne(
+        { _id: itemId, user: ctx.userId, lastKnownCalendarEventId: event.id },
+        {
+            $set: {
+                calendarEventId: event.id,
+                calendarIntegrationId: source.integration._id,
+                calendarSyncConfigId: source.config._id,
+                updatedTs: ctx.now,
+            },
+            $unset: { lastKnownCalendarEventId: '', lastKnownCalendarIntegrationId: '', lastKnownCalendarSyncConfigId: '' },
+        },
+    );
+    if (result.matchedCount === 0) {
+        return undefined;
+    }
+    const restored = await itemsDAO.findByOwnerAndId(itemId, ctx.userId);
+    if (!restored) {
+        return undefined;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: restored, opType: 'update', now: ctx.now }));
+    console.log(`[gcal-sync] restored item from lastKnownCalendarEventId | itemId=${itemId} eventId=${event.id} title="${event.title}"`);
+    return restored;
+}
+
+/**
  * Looks for a "naked" candidate — an item previously linked but unlinked by a `keepLinkedEntities`
  * disconnect (or `removeLinkedEntities` for done items, which also unlink) — and atomically relinks
  * it to the inbound event. Returns the relinked item, or `undefined` if no candidate matches OR if
@@ -1736,8 +1938,7 @@ function pickMostRecentlyUpdated<T extends { updatedTs?: string }>(items: NonEmp
 }
 
 export async function upsertCalendarItem(event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
-    const byEventId = await findCalendarItemByEventId(event, ctx);
-    let existing = byEventId;
+    let existing = await findCalendarItemByEventId(event, ctx);
 
     console.log(
         `[debug-gcal-sync][server] upsertCalendarItem | eventId=${event.id} title="${event.title}" status=${event.status} eventUpdated=${event.updated} existing=${!!existing} existingUpdatedTs=${existing?.updatedTs ?? 'n/a'} existingStatus=${existing?.status ?? 'n/a'} lastPushedToGCalTs=${existing?.lastPushedToGCalTs ?? 'n/a'}`,
@@ -1751,6 +1952,8 @@ export async function upsertCalendarItem(event: CalendarEvent, source: CalendarS
     }
 
     if (event.status === 'cancelled') {
+        // Skip the strong-key restore for cancelled events: there's nothing to restore TO (the
+        // event is gone). Restoring then trashing would emit a redundant op + status flap.
         await trashItem(existing, ctx);
         return;
     }
@@ -1759,10 +1962,19 @@ export async function upsertCalendarItem(event: CalendarEvent, source: CalendarS
     // is treated as past. New past events are ignored; an existing live `calendar` item moved to
     // before today is trashed (the user dragged it into the past, so it's no longer on the calendar).
     // Routine-managed items are preserved (the routine path owns their lifecycle).
+    // Skip strong-key restore for past events for the same reason as cancelled — restoring an item
+    // that we'd immediately trash via `applyPastEventToExisting` is a wasted op + flap.
     const cutoffIso = startOfTodayInTz(ctx.now, source.config.timeZone ?? 'UTC');
     if (event.timeStart && isPastEvent(event, cutoffIso)) {
         await applyPastEventToExisting(existing, event, source, ctx);
         return;
+    }
+
+    // Strong-key restore from the disconnect-with-keep marker. Runs AFTER the cancelled/past/echo
+    // short-circuits so a marker-matching cancelled/past/own-echo event doesn't emit a redundant
+    // restore op followed immediately by a trash/no-op.
+    if (!existing) {
+        existing = await tryRestoreFromLastKnownEventId(event, source, ctx);
     }
 
     // Revive: a future-confirmed event whose local item was trashed (typically by a prior
@@ -2010,17 +2222,15 @@ async function updateItemsAndRecordOps(ctx: SyncContext, query: { filter: Record
 }
 
 /** Applies a single GCal exception's side effects to the items collection. */
-async function applyExceptionToItems(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): Promise<void> {
+export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): Promise<void> {
     if (!ISO_DATE_RE.test(ex.originalDate)) {
         return;
     }
-    // Use a date-range query rather than $regex to avoid regex injection from GCal data.
-    const nextDay = dayjs(ex.originalDate).add(1, 'day').format('YYYY-MM-DD');
-    const dateFilter = { $gte: ex.originalDate, $lt: nextDay };
-    const baseFilter = { user: ctx.userId, routineId: routine._id, timeStart: dateFilter };
+    const target = await resolveExceptionTarget(routine, ex, ctx.userId);
 
     if (ex.type === 'deleted') {
-        await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields: { status: 'trash', updatedTs: ctx.now } });
+        // No create-on-miss for deletes — there's nothing to delete if no item matches.
+        await updateItemsAndRecordOps(ctx, { filter: target.filter, setFields: { status: 'trash', updatedTs: ctx.now } });
         return;
     }
 
@@ -2032,36 +2242,183 @@ async function applyExceptionToItems(routine: RoutineInterface, ex: GCalExceptio
             // ex.notes is raw HTML from GCal — convert to markdown for storage, keep HTML as lastSyncedNotes
             ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
         };
-        // The sync layer owns the "✓ " done marker on GCal — strip it on inbound only when the
-        // local item is already done (e.g. our own pushback echo). Otherwise a routine-instance
-        // round-trip would corrupt the stored title with the marker we ourselves applied.
-        if (ex.title === undefined) {
-            await updateItemsAndRecordOps(ctx, { filter: baseFilter, setFields: sharedFields });
+        if (hasAtLeastOne(target.matches)) {
+            await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
             return;
         }
-        await applyTitledExceptionToItems(baseFilter, ex.title, sharedFields, ctx);
+        // Create-on-miss closes the gap where applyExceptionToItems silently dropped moves —
+        // typically a second move of the same instance, where the prior move's exception had already
+        // shifted the item's `timeStart` so the date-keyed lookup misses.
+        await createItemForOrphanedException(routine, ex, ctx);
     }
 }
 
-async function applyTitledExceptionToItems(
-    filter: Record<string, unknown>,
-    incomingTitle: string,
+interface ExceptionTarget {
+    /** Filter that produced `matches` — kept around for `deleted` exceptions which write via filter. */
+    filter: Record<string, unknown>;
+    matches: ItemInterface[];
+}
+
+/**
+ * Two-tier lookup for the item(s) an inbound exception should target:
+ *
+ *  1. Preferred — match by `calendarInstanceEventId`. Works even after a prior exception has
+ *     shifted the item's `timeStart`, because the instance id is anchored to the *original*
+ *     occurrence date and never changes for the life of the row.
+ *  2. Fallback (transitional) — match by `routineId + originalDate` for routine-generated rows
+ *     that pre-date the `calendarInstanceEventId` rollout. Remove once the backfill is fully
+ *     applied across all production users.
+ *
+ * Pre-fetches the matching rows so the apply path doesn't re-query (avoids a TOCTOU window where
+ * a concurrent delete between two reads would make the apply silently no-op).
+ */
+async function resolveExceptionTarget(routine: RoutineInterface, ex: GCalException, userId: string): Promise<ExceptionTarget> {
+    if (ex.googleEventId) {
+        const preferred = { user: userId, calendarInstanceEventId: ex.googleEventId } as const;
+        const hits = await itemsDAO.findArray(preferred);
+        if (hits.length > 0) {
+            return { filter: preferred, matches: hits };
+        }
+    }
+    // Use a date-range query rather than $regex to avoid regex injection from GCal data.
+    // Scope to status:'calendar' so we never reanimate a `done` or re-trash a `trash` row that
+    // happens to share the originalDate with this routine.
+    const nextDay = dayjs(ex.originalDate).add(1, 'day').format('YYYY-MM-DD');
+    const fallbackFilter = { user: userId, routineId: routine._id, status: 'calendar', timeStart: { $gte: ex.originalDate, $lt: nextDay } } as const;
+    return { filter: fallbackFilter, matches: await itemsDAO.findArray(fallbackFilter) };
+}
+
+/**
+ * Applies a `modified` exception to the already-resolved match set. Writes use an `updateOne`
+ * conditional on the row's `updatedTs` matching what we resolved — protects against a concurrent
+ * `/sync/push` edit landing between `resolveExceptionTarget` and apply that we would otherwise
+ * silently clobber. On match-zero we skip; the next inbound sync re-reads and resolves naturally.
+ *
+ * NonEmptyArray guarantees at least one match. The previous re-narrowing via `withId.filter` is
+ * dead under that invariant — `resolveExceptionTarget` always pre-filters to rows with `_id` set
+ * (Mongo populates `_id` on insert) so we go straight to per-item updates.
+ */
+async function applyModifiedExceptionToMatches(
+    matches: NonEmptyArray<ItemInterface>,
+    ex: GCalException,
     sharedFields: Record<string, unknown>,
     ctx: SyncContext,
 ): Promise<void> {
-    const before = await itemsDAO.findArray(filter);
-    const withId = before.filter((item): item is ItemInterface & { _id: string } => Boolean(item._id));
-    if (!hasAtLeastOne(withId)) {
+    await Promise.all(matches.map((item) => applyModifiedExceptionToOne(item, ex, sharedFields, ctx)));
+}
+
+async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalException, sharedFields: Record<string, unknown>, ctx: SyncContext): Promise<void> {
+    const itemId = item._id;
+    if (!itemId) {
         return;
     }
-    await Promise.all(
-        withId.map(async (item) => {
-            const title = item.status === 'done' ? stripDoneMarker(incomingTitle) : incomingTitle;
-            const updated: ItemInterface = { ...item, ...sharedFields, title };
-            await itemsDAO.replaceById(item._id, updated);
-            ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: item._id, snapshot: updated, opType: 'update', now: ctx.now }));
-        }),
+    // The sync layer owns the "✓ " done marker on GCal — strip it on inbound only when the local
+    // item is already done (e.g. our own pushback echo). Otherwise a routine-instance round-trip
+    // would corrupt the stored title with the marker we ourselves applied.
+    const title = ex.title !== undefined && item.status === 'done' ? stripDoneMarker(ex.title) : (ex.title ?? item.title);
+    const setFields = { ...sharedFields, title } as Record<string, unknown>;
+    // Conditional on `updatedTs` — a concurrent /sync/push edit landing between resolve and apply
+    // would change `updatedTs`; matchedCount === 0 means we lost the race and must not clobber.
+    const result = await itemsDAO.updateOne({ _id: itemId, user: ctx.userId, updatedTs: item.updatedTs } as never, { $set: setFields });
+    if (result.matchedCount === 0) {
+        console.log(`[gcal-sync] applyModifiedExceptionToOne: skipped due to concurrent updatedTs bump | itemId=${itemId}`);
+        return;
+    }
+    const updated: ItemInterface = { ...item, ...setFields } as ItemInterface;
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: updated, opType: 'update', now: ctx.now }));
+}
+
+/**
+ * Inserts a fresh calendar item for a `modified` exception that matched zero existing rows. The
+ * derived `timeStart`/`timeEnd` fall back to the routine's regular schedule when GCal didn't
+ * include explicit move times (a pure title/notes edit on a missing item — uncommon but possible).
+ *
+ * Race protection: two concurrent inbound paths (manual `/calendar/integrations/:id/sync` racing a
+ * `webhooks/google` delivery) can both see `resolveExceptionTarget` miss and both reach this code.
+ * The `(user, calendarInstanceEventId)` unique partial index forces the loser's `insertOne` to
+ * raise E11000 — we re-resolve and apply onto the race winner's row so both callers converge on
+ * one item. Without this, you'd see two duplicate items for one exception.
+ */
+async function createItemForOrphanedException(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): Promise<void> {
+    const derived = deriveExceptionItemTimes(routine, ex);
+    if (!derived) {
+        // No schedule data to fall back to — skip rather than insert a malformed row.
+        console.warn(`[gcal-sync] applyExceptionToItems: cannot derive timeStart for orphan exception | routineId=${routine._id} date=${ex.originalDate}`);
+        return;
+    }
+    const itemId = randomUUID();
+    // Mirrors the `buildCalendarItem` shape for parity: orphan-create rows carry the routine's
+    // calendarIntegrationId + calendarSyncConfigId so UI/audit queries that filter by integration
+    // see all routine-generated items uniformly, regardless of which path created them.
+    const item: ItemInterface = {
+        _id: itemId,
+        user: ctx.userId,
+        routineId: routine._id,
+        status: 'calendar',
+        title: ex.title ?? routine.title,
+        timeStart: derived.timeStart,
+        timeEnd: derived.timeEnd,
+        ...(routine.calendarIntegrationId ? { calendarIntegrationId: routine.calendarIntegrationId } : {}),
+        ...(routine.calendarSyncConfigId ? { calendarSyncConfigId: routine.calendarSyncConfigId } : {}),
+        ...(ex.googleEventId ? { calendarInstanceEventId: ex.googleEventId } : {}),
+        ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
+        createdTs: ctx.now,
+        updatedTs: ctx.now,
+    };
+    try {
+        await itemsDAO.insertOne(item);
+    } catch (err) {
+        if (isDuplicateKeyError(err)) {
+            // The race winner already inserted a row with this `calendarInstanceEventId`. Re-resolve
+            // — `target.matches` will now find the winner — and fall through to the standard apply.
+            await applyExceptionAfterDuplicate(routine, ex, ctx);
+            return;
+        }
+        throw err;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: item, opType: 'create', now: ctx.now }));
+    console.log(
+        `[gcal-sync] applyExceptionToItems: created orphan-exception item | routineId=${routine._id} itemId=${itemId} googleEventId=${ex.googleEventId ?? 'n/a'}`,
     );
+}
+
+function isDuplicateKeyError(err: unknown): boolean {
+    return err instanceof Error && 'code' in err && (err as { code: number }).code === 11000;
+}
+
+/**
+ * Race-loser fallthrough: re-resolve the exception target (the race winner's row is now visible)
+ * and apply the exception's `sharedFields` onto it via the normal modified-exception path. Keeps
+ * the post-write state of the row consistent regardless of which caller actually inserted it.
+ */
+async function applyExceptionAfterDuplicate(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): Promise<void> {
+    const target = await resolveExceptionTarget(routine, ex, ctx.userId);
+    if (!hasAtLeastOne(target.matches)) {
+        // Index says a row exists with our instance id, but resolve missed — log + bail rather than retry forever.
+        console.warn(`[gcal-sync] applyExceptionAfterDuplicate: index hit but re-resolve missed | routineId=${routine._id} eventId=${ex.googleEventId}`);
+        return;
+    }
+    const sharedFields = {
+        updatedTs: ctx.now,
+        ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
+        ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
+        ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
+    };
+    await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
+}
+
+/** Picks `timeStart`/`timeEnd` for an orphan-create from the exception's move times, falling back to the routine's regular schedule. */
+function deriveExceptionItemTimes(routine: RoutineInterface, ex: GCalException): { timeStart: string; timeEnd: string } | undefined {
+    if (ex.newTimeStart && ex.newTimeEnd) {
+        return { timeStart: ex.newTimeStart, timeEnd: ex.newTimeEnd };
+    }
+    const template = routine.calendarItemTemplate;
+    if (!template) {
+        return undefined;
+    }
+    const timeStart = `${ex.originalDate}T${template.timeOfDay}:00`;
+    const timeEnd = dayjs(timeStart).add(template.duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
+    return { timeStart, timeEnd };
 }
 
 async function syncRoutineExceptions(routine: RoutineInterface, provider: GoogleCalendarProvider, ctx: RoutineSyncCtx): Promise<void> {

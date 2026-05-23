@@ -66,6 +66,25 @@ export interface ItemInterface {
      */
     calendarSyncConfigId?: string;
     /**
+     * Disconnect-with-keep markers — set when the user disconnects an integration with
+     * `keepLinkedEntities`, capturing the prior `calendar*` ids so a later reconnect can do a
+     * strong-key relink without depending on title+time fallback. All three are cleared atomically
+     * the moment relink restores the live `calendar*` fields (`tryRestoreFromLastKnownEventId`).
+     * The integration id is also used by the OAuth reconnect repair pass
+     * (`clearOrphanedLastKnownMarkers`) to drop markers pointing at integrations the user no longer
+     * owns — otherwise a cross-account reconnect would leave the item permanently un-pushable.
+     */
+    lastKnownCalendarEventId?: string;
+    lastKnownCalendarIntegrationId?: string;
+    lastKnownCalendarSyncConfigId?: string;
+    /**
+     * Set on routine-generated calendar items so exception sync can locate them even after their
+     * `timeStart` has been shifted by a prior exception. Format: `<masterEventId>_<YYYYMMDDTHHMMSSZ>`
+     * (e.g. `4l19d4t1kqscltspotnhpiopci_20260519T120000Z`) — matches what Google returns in
+     * `event.id` for instances of a recurring series.
+     */
+    calendarInstanceEventId?: string;
+    /**
      * ISO datetime — set when the app pushes an edit to Google Calendar.
      * Used to detect and skip our own echo when a webhook-triggered pull finds the same change.
      */
@@ -150,6 +169,19 @@ export interface RoutineInterface {
      * Ref to CalendarSyncConfigInterface._id. Tracks which specific calendar within the integration this routine is linked to.
      */
     calendarSyncConfigId?: string;
+    /**
+     * Disconnect-with-keep markers — set when the user disconnects an integration with
+     * `keepLinkedEntities`, capturing the prior `calendar*` ids so a later reconnect can do a
+     * strong-key relink without depending on the title+rrule+timeOfDay fallback. All three are
+     * cleared atomically the moment relink restores the live `calendar*` fields
+     * (`tryRestoreRoutineFromLastKnownEventId`). The integration id is also used by the OAuth
+     * reconnect repair pass (`clearOrphanedLastKnownMarkers`) to drop markers pointing at
+     * integrations the user no longer owns — otherwise a cross-account reconnect would leave the
+     * routine permanently un-pushable.
+     */
+    lastKnownCalendarEventId?: string;
+    lastKnownCalendarIntegrationId?: string;
+    lastKnownCalendarSyncConfigId?: string;
     /**
      * Ref to the routine this was split from via a "this and all following" edit.
      * Set on the new tail routine; points back to the original (head) routine.

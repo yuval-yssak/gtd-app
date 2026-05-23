@@ -213,6 +213,13 @@ function buildCalendarItem(
     const title = contentException?.title ?? routine.title;
     const notes = contentException?.notes ?? routine.template.notes;
 
+    // NOTE — `calendarInstanceEventId` is intentionally NOT set here. The server-side mirror
+    // (`api-server/src/lib/routineItemRegeneration.ts`) sets it because exception sync uses it as
+    // the preferred lookup key. The client mirror would also benefit from setting it, but the
+    // client doesn't currently sync the calendar TZ (StoredCalendarSyncConfig has no timeZone
+    // field), so deriving the id deterministically is not possible here. Items born from this
+    // path fall back to the date-keyed exception lookup (which works for first-move scenarios)
+    // and are picked up by the backfill script once they round-trip through the server.
     return {
         _id: crypto.randomUUID(),
         userId,

@@ -482,6 +482,45 @@ export const devLoginRoutes = new Hono()
         return c.json({ ok: true, opsRecorded: ctx.ops.length });
     })
 
+    // POST /dev/calendar/simulate-routine-exception — drives one inbound GCal recurring-instance
+    // exception through `applyExceptionToItems`, the same path `syncRoutineExceptions` invokes for
+    // each entry returned by `getExceptions`. Used by the "moved-twice" e2e to confirm the
+    // calendarInstanceEventId lookup correctly finds an item whose `timeStart` was shifted by a
+    // prior exception.
+    //
+    // Trust boundary: body.userId is accepted without a session check. Safe because the entire
+    // devLogin module throws on load when NODE_ENV === 'production' (see top of file) AND
+    // index.ts only mounts /dev when NODE_ENV !== 'production' — staging + prod both set
+    // NODE_ENV=production, so this route is physically unreachable outside dev.
+    .post('/calendar/simulate-routine-exception', async (c) => {
+        const { default: routinesDAO } = await import('../dataAccess/routinesDAO.js');
+        const { applyExceptionToItems } = await import('./calendar.js');
+        const body = await c.req.json<{
+            userId: string;
+            routineId: string;
+            exception: {
+                originalDate: string;
+                type: 'modified' | 'deleted';
+                googleEventId?: string;
+                newTimeStart?: string;
+                newTimeEnd?: string;
+                title?: string;
+                notes?: string;
+            };
+        }>();
+        if (!body.userId || !body.routineId || !body.exception) {
+            return c.json({ error: 'userId, routineId, exception required' }, 400);
+        }
+        const routine = await routinesDAO.findByOwnerAndId(body.routineId, body.userId);
+        if (!routine) {
+            return c.json({ error: 'routine not found' }, 404);
+        }
+        const now = dayjs().toISOString();
+        const ctx: Parameters<typeof applyExceptionToItems>[2] = { userId: body.userId, now, ops: [] };
+        await applyExceptionToItems(routine, body.exception, ctx);
+        return c.json({ ok: true, opsRecorded: ctx.ops.length });
+    })
+
     // POST /dev/api-tokens — issue a personal API token for the currently logged-in user.
     // Stand-in for a settings-page mint UI: the dev runs this from a browser/curl with their
     // session cookie and pastes the resulting plaintext into their MCP env file. Production has
