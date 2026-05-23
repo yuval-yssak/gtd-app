@@ -50,5 +50,8 @@ test-results/
 # Claude Code per-user settings (machine-specific, not shared)
 **/.claude/settings.local.json
 
+# Stop-hook sentinel — touched by PostToolUse, consumed by post-change-checks.sh
+.claude/.edited-this-turn
+
 # GCal sync smoke test results (per-run, not shared)
 e2e/gcal-sync-smoke/session-*-results.md

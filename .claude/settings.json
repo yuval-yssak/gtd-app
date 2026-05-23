@@ -7,6 +7,17 @@
         ]
     },
     "hooks": {
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write|NotebookEdit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash -c 'touch \"$(git rev-parse --show-toplevel)/.claude/.edited-this-turn\"'"
+                    }
+                ]
+            }
+        ],
         "Stop": [
             {
                 "hooks": [

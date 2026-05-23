@@ -6,9 +6,18 @@
 # temp file and printed sequentially at the end so failure messages stay readable.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Sentinel touched by a PostToolUse hook on Edit/Write/NotebookEdit. If absent,
+# Claude didn't edit any files this turn (pure Q&A, read-only, etc.) so skip checks.
+SENTINEL="$REPO_ROOT/.claude/.edited-this-turn"
+if [ ! -f "$SENTINEL" ]; then
+    exit 0
+fi
+rm -f "$SENTINEL"
+
 CHANGED=$(git -C "$REPO_ROOT" diff --name-only HEAD 2>/dev/null)
 
-# Nothing changed — nothing to check
+# Edits happened but net diff is empty (edited then reverted) — nothing to check
 if [ -z "$CHANGED" ]; then
     exit 0
 fi
