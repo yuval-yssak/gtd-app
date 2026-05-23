@@ -70,8 +70,10 @@ type UnlinkSideEffectCtx = { userId: string; now: string };
 /** Groups the integration + sync config identity needed by import/upsert functions. */
 export type CalendarSource = { integration: CalendarIntegrationInterface; config: CalendarSyncConfigInterface };
 // Discriminated union to distinguish network failures from missing-token responses in the OAuth flow.
+// `grantedScopes` rides along on success when Google's response carried `tokens.scope` (every fresh
+// consent emits it). Absent → legacy/permissive at downstream call sites.
 type OAuthTokenResult =
-    | { ok: true; accessToken: string; refreshToken: string; expiryDate: number | null | undefined }
+    | { ok: true; accessToken: string; refreshToken: string; expiryDate: number | null | undefined; grantedScopes?: string[] }
     | { ok: false; reason: 'exchange_failed' | 'missing_tokens' };
 
 // ISO date string pattern — used to validate originalDate before building MongoDB queries.
@@ -198,10 +200,28 @@ async function tryExchangeOAuthTokens(oauth2: ReturnType<typeof buildOAuthClient
         if (!tokens.access_token || !tokens.refresh_token) {
             return { ok: false, reason: 'missing_tokens' };
         }
-        return { ok: true, accessToken: tokens.access_token, refreshToken: tokens.refresh_token, expiryDate: tokens.expiry_date };
+        // Google returns `tokens.scope` as a space-separated string when the consent screen produced
+        // a new grant. Absent on some refresh paths; the callback leaves grantedScopes undefined in
+        // that case (treated as permissive — legacy integrations).
+        const grantedScopes = parseGrantedScopes(tokens.scope);
+        return {
+            ok: true,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            expiryDate: tokens.expiry_date,
+            ...(grantedScopes ? { grantedScopes } : {}),
+        };
     } catch {
         return { ok: false, reason: 'exchange_failed' };
     }
+}
+
+/** Splits Google's space-separated `scope` string into a typed array; returns undefined when absent. */
+function parseGrantedScopes(scope: string | null | undefined): string[] | undefined {
+    if (typeof scope !== 'string' || scope.trim() === '') {
+        return undefined;
+    }
+    return scope.split(/\s+/).filter((s) => s.length > 0);
 }
 
 calendarRoutes.get('/auth/google', authenticateRequest, (c) => {
@@ -249,7 +269,7 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
             ? c.text('OAuth did not return required tokens', 400)
             : c.text('Failed to exchange OAuth code for tokens', 502);
     }
-    const { accessToken, refreshToken, expiryDate } = tokenResult;
+    const { accessToken, refreshToken, expiryDate, grantedScopes } = tokenResult;
 
     // Verify the user actually authorized the account they targeted: compare the authorized
     // identity (Google userinfo) against both the login_hint we sent and the active GTD session.
@@ -275,6 +295,9 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
         // The client picks one or more calendars via ChooseCalendarDialog after this redirect.
         createdTs: now,
         updatedTs: now,
+        // Reconnect overwrites prior grantedScopes verbatim (no union with the existing list) so a
+        // narrowed re-consent is reflected accurately. Absent ⇒ legacy/permissive downstream.
+        ...(grantedScopes ? { grantedScopes } : {}),
     };
 
     await calendarIntegrationsDAO.upsertEncrypted(integration);
@@ -2597,6 +2620,164 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
 
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routine._id, snapshot: updatedRoutine, opType: 'update', now: ctx.now }));
 }
+
+// ── RSVP endpoint (online fast-path) ─────────────────────────────────────────
+//
+// Online clients hit this synchronously so the optimistic UI can commit only after GCal accepts
+// the change. Offline clients queue an `opType: 'rsvp'` op locally and replay through the standard
+// sync flush on reconnect — the replay path (added in Phase 4) calls into the same helper
+// (`applyRsvpToItem`) so the on-wire behavior is identical.
+
+/** Google Calendar scopes that authorize attendee writes (RSVP is an attendee mutation). */
+const CALENDAR_WRITE_SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'] as const;
+
+/** Allowed `responseStatus` values for the RSVP body — `needsAction` is the absence of a response, not a request. */
+const RSVP_RESPONSE_STATUSES = ['accepted', 'declined', 'tentative'] as const;
+type RsvpResponseStatus = (typeof RSVP_RESPONSE_STATUSES)[number];
+
+/** Type guard for the RSVP body. Strict: we reject 400 when the shape doesn't match. */
+function parseRsvpBody(raw: unknown): { responseStatus: RsvpResponseStatus } | null {
+    if (typeof raw !== 'object' || raw === null) {
+        return null;
+    }
+    const status = (raw as { responseStatus?: unknown }).responseStatus;
+    if (typeof status !== 'string' || !(RSVP_RESPONSE_STATUSES as readonly string[]).includes(status)) {
+        return null;
+    }
+    return { responseStatus: status as RsvpResponseStatus };
+}
+
+/**
+ * Returns true when the integration's grantedScopes allow attendee writes. Permissive when
+ * grantedScopes is undefined (legacy rows from before scope persistence) — those users authorized
+ * the full `auth/calendar` scope in practice.
+ */
+function hasCalendarWriteScope(integration: CalendarIntegrationInterface): boolean {
+    if (!integration.grantedScopes) {
+        return true;
+    }
+    return integration.grantedScopes.some((s) => (CALENDAR_WRITE_SCOPES as readonly string[]).includes(s));
+}
+
+/**
+ * Computes the next attendees array for an RSVP. Finds the self entry by case-insensitive email
+ * match and updates its responseStatus; if no self entry exists yet, appends one. Sorts by email
+ * to match the parser's stable ordering policy.
+ */
+function applyRsvpToAttendees(existing: readonly GCalAttendee[], myEmail: string, responseStatus: RsvpResponseStatus): GCalAttendee[] {
+    const normalized = myEmail.toLowerCase();
+    const selfIndex = existing.findIndex((a) => a.email.toLowerCase() === normalized);
+    const next = existing.map((a) => ({ ...a }));
+    if (selfIndex >= 0) {
+        const current = next[selfIndex];
+        if (current) {
+            next[selfIndex] = { ...current, responseStatus };
+        }
+    } else {
+        next.push({ email: myEmail, responseStatus, self: true });
+    }
+    return next.sort((a, b) => a.email.localeCompare(b.email));
+}
+
+/**
+ * Looks up the sync config that owns this item's GCal event. We don't store `calendarSyncConfigId`
+ * on every item (legacy items lack it), so fall back to the integration's default config.
+ */
+async function resolveSyncConfigForItem(item: ItemInterface, integrationId: string, userId: string): Promise<CalendarSyncConfigInterface | null> {
+    if (item.calendarSyncConfigId) {
+        const config = await calendarSyncConfigsDAO.findByOwnerAndId(item.calendarSyncConfigId, userId);
+        if (config) {
+            return config;
+        }
+    }
+    const configs = await calendarSyncConfigsDAO.findEnabledByIntegration(integrationId);
+    return configs.find((c) => c.isDefault) ?? configs[0] ?? null;
+}
+
+/** Builds the OAuth re-consent URL surfaced when `grantedScopes` lacks calendar write. */
+function buildReconsentUrl(loginHint: string | undefined): string {
+    const apiBase = process.env.BETTER_AUTH_URL ?? 'http://localhost:4000';
+    const params = new URLSearchParams({ intent: 'rsvp' });
+    if (loginHint) {
+        params.set('login_hint', loginHint);
+    }
+    return `${apiBase}/calendar/auth/google?${params.toString()}`;
+}
+
+calendarRoutes.post('/items/:itemId/rsvp', authenticateRequest, async (c) => {
+    const userId = c.get('session').user.id;
+    const itemId = c.req.param('itemId');
+
+    const body = parseRsvpBody(await c.req.json().catch(() => null));
+    if (!body) {
+        return c.json({ error: 'responseStatus must be one of: accepted, declined, tentative' }, 400);
+    }
+
+    const item = await itemsDAO.findByOwnerAndId(itemId, userId);
+    if (!item) {
+        return c.json({ error: 'Item not found' }, 404);
+    }
+    if (item.status !== 'calendar' || !item.calendarEventId || !item.calendarIntegrationId) {
+        return c.json({ error: 'Item is not a linked calendar event' }, 400);
+    }
+
+    const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(item.calendarIntegrationId, userId);
+    if (!integration) {
+        return c.json({ error: 'Calendar integration not found' }, 404);
+    }
+    if (!hasCalendarWriteScope(integration)) {
+        // Pass the active session email as login_hint so the popup pre-selects the right Google
+        // account. The OAuth start endpoint doesn't currently honor `intent`; we surface it for the
+        // UI's bookkeeping (post-popup it can confirm the reconnect was actually for RSVP).
+        const reconsentUrl = buildReconsentUrl(c.get('session').user.email);
+        return c.json({ error: 'scope_missing', reconsentUrl }, 403);
+    }
+
+    const config = await resolveSyncConfigForItem(item, integration._id, userId);
+    if (!config) {
+        return c.json({ error: 'No sync config found for this calendar' }, 404);
+    }
+
+    const provider = buildProvider(integration, userId);
+    const myEmail = await provider.getMyEmail();
+    const nextAttendees = applyRsvpToAttendees(item.attendees ?? [], myEmail, body.responseStatus);
+
+    try {
+        // sendUpdates:'all' so the organizer sees the response change. Per plan, RSVPs always notify.
+        await provider.patchEventAttendees(config.calendarId, item.calendarEventId, nextAttendees, { sendUpdates: 'all' });
+    } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        return c.json({ error: 'rsvp_push_failed', message }, 500);
+    }
+
+    const now = dayjs().toISOString();
+    // lastPushedToGCalTs feeds the echo guard at the top of this file — a webhook fired by the
+    // patch we just made arrives within seconds and would otherwise be re-applied to the local item.
+    const updated: ItemInterface = {
+        ...item,
+        attendees: nextAttendees,
+        responseStatus: body.responseStatus,
+        lastPushedToGCalTs: now,
+        updatedTs: now,
+    };
+    await itemsDAO.replaceById(itemId, updated);
+
+    await recordOperation(userId, {
+        entityType: 'item',
+        entityId: itemId,
+        snapshot: null,
+        opType: 'rsvp',
+        rsvp: {
+            itemId,
+            calendarEventId: item.calendarEventId,
+            calendarIntegrationId: integration._id,
+            responseStatus: body.responseStatus,
+        },
+        now,
+    });
+
+    return c.json(updated);
+});
 
 // ── Webhook watch management ─────────────────────────────────────────────────
 

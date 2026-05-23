@@ -327,6 +327,9 @@ function optionalField<K extends string, V>(key: K, value: V | undefined): Recor
 
 export class GoogleCalendarProvider implements CalendarProvider {
     private readonly auth: InstanceType<typeof google.auth.OAuth2>;
+    // Per-instance cache for the authenticated account's email. Resolved on first RSVP/lookup and
+    // reused for the lifetime of the provider (one request) so we don't issue a userinfo call per RSVP.
+    private myEmail?: string;
 
     constructor(integration: CalendarIntegrationInterface, onTokenRefresh?: (accessToken: string, refreshToken: string, expiry: string) => Promise<void>) {
         const oauth2 = new google.auth.OAuth2(
@@ -726,6 +729,36 @@ export class GoogleCalendarProvider implements CalendarProvider {
             }
 
             return buildModifiedException(event, originalDate, masterContent);
+        });
+    }
+
+    /**
+     * Returns the authenticated Google account's primary email via `oauth2.userinfo.get`. Result is
+     * cached on the instance so repeated RSVP pushes within one request don't issue extra userinfo
+     * round-trips. Throws if Google omits the email — the RSVP path can't proceed without it.
+     */
+    async getMyEmail(): Promise<string> {
+        if (this.myEmail !== undefined) {
+            return this.myEmail;
+        }
+        const { data } = await google.oauth2({ version: 'v2', auth: this.auth }).userinfo.get();
+        if (!data.email) {
+            throw new Error('Google userinfo did not return an email for the authenticated account');
+        }
+        this.myEmail = data.email;
+        return data.email;
+    }
+
+    async patchEventAttendees(calendarId: string, eventId: string, attendees: GCalAttendee[], options?: { sendUpdates?: 'all' | 'none' }): Promise<void> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        // Patch (not update) so only the attendees array is sent — the rest of the event body is preserved.
+        // sendUpdates defaults to 'none' to match the rest of the provider; the RSVP endpoint passes 'all'
+        // explicitly so the organizer sees the response status change.
+        await cal.events.patch({
+            calendarId,
+            eventId,
+            requestBody: { attendees },
+            sendUpdates: options?.sendUpdates ?? 'none',
         });
     }
 }

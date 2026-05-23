@@ -158,4 +158,16 @@ export interface CalendarProvider {
     cancelRecurringInstance(masterEventId: string, originalDate: string, calendarId: string): Promise<void>;
     /** Deletes (cancels) a single event. */
     deleteEvent(calendarId: string, eventId: string): Promise<void>;
+    /**
+     * Returns the authenticated Google account's email — used by the RSVP endpoint to locate the
+     * self-attendee entry (GCal's `attendees[].self` flag is only reliable on inbound payloads).
+     * Implementations should cache the result per-instance to avoid repeated userinfo round-trips.
+     */
+    getMyEmail(): Promise<string>;
+    /**
+     * Patches the attendees array on a single event. Used by the RSVP fast-path so a Decline click
+     * sends one PATCH instead of a full `events.update`. `sendUpdates` defaults to `'none'` to
+     * preserve silent behavior for callers that don't yet forward the user's choice.
+     */
+    patchEventAttendees(calendarId: string, eventId: string, attendees: GCalAttendee[], options?: { sendUpdates?: 'all' | 'none' }): Promise<void>;
 }

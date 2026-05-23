@@ -356,6 +356,74 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(revokeSpy).toHaveBeenCalled();
         expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toHaveLength(0);
     });
+
+    it('persists tokens.scope as grantedScopes on the integration', async () => {
+        // Google returns scope as a space-separated string on every fresh consent; the callback
+        // splits it into an array on the integration so RSVP can gate on calendar write later.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: {
+                access_token: 'scoped-at',
+                refresh_token: 'scoped-rt',
+                expiry_date: dayjs().add(1, 'hour').valueOf(),
+                scope: 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/userinfo.email',
+            },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+
+        const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        expect(integrations).toHaveLength(1);
+        const [integration] = integrations;
+        if (!integration) throw new Error('expected an integration');
+        expect(integration.grantedScopes).toEqual(['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']);
+    });
+
+    it('leaves grantedScopes undefined when tokens.scope is absent', async () => {
+        // Some refresh-token paths omit scope; the callback treats absence as permissive (legacy).
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'noscope-at', refresh_token: 'noscope-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+
+        const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        expect(integrations).toHaveLength(1);
+        const [integration] = integrations;
+        if (!integration) throw new Error('expected an integration');
+        expect(integration.grantedScopes).toBeUndefined();
+    });
 });
 
 /**
@@ -401,6 +469,24 @@ describe('GET /calendar/integrations', () => {
 
         const res = await authenticatedRequest(app, { method: 'GET', path: '/calendar/integrations', sessionCookie: aliceCookie });
         expect(await res.json()).toEqual([]);
+    });
+
+    it('surfaces grantedScopes on the response payload', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(
+            makeIntegration(userId, {
+                grantedScopes: ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email'],
+            }),
+        );
+
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/calendar/integrations', sessionCookie });
+        expect(res.status).toBe(200);
+        const integrations = (await res.json()) as Array<{ grantedScopes?: string[] }>;
+        expect(integrations).toHaveLength(1);
+        const [first] = integrations;
+        if (!first) throw new Error('expected one integration');
+        expect(first.grantedScopes).toEqual(['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']);
     });
 });
 
@@ -8028,14 +8114,18 @@ function spyOnGCalEventsApi() {
     // Each google.calendar() call returns a fresh Resource$Events; the methods we care about
     // live on its shared prototype. Patching the prototype affects every future instance.
     const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
-    type ApiCall = (params: unknown) => Promise<{ data: { id?: string; items?: Array<{ id?: string; originalStartTime?: { dateTime?: string; date?: string } }> } }>;
+    type ApiCall = (
+        params: unknown,
+    ) => Promise<{ data: { id?: string; items?: Array<{ id?: string; originalStartTime?: { dateTime?: string; date?: string } }> } }>;
     const insertSpy = vi.spyOn(eventsProto, 'insert' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
     const patchSpy = vi.spyOn(eventsProto, 'patch' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
     // routine-instance overrides hit cal.events.instances first to resolve the master+date → instance id.
     const instancesSpy = vi.spyOn(eventsProto, 'instances' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
     insertSpy.mockResolvedValue({ data: { id: 'mocked-id' } });
     patchSpy.mockResolvedValue({ data: {} });
-    instancesSpy.mockImplementation(async () => ({ data: { items: [{ id: 'mocked-instance-id', originalStartTime: { date: dayjs().add(1, 'day').format('YYYY-MM-DD') } }] } }));
+    instancesSpy.mockImplementation(async () => ({
+        data: { items: [{ id: 'mocked-instance-id', originalStartTime: { date: dayjs().add(1, 'day').format('YYYY-MM-DD') } }] },
+    }));
     return { insertSpy, patchSpy, instancesSpy };
 }
 
@@ -8282,5 +8372,250 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
         const params = getPatchRequestBody(patchSpy);
         expect(params.requestBody?.start).toEqual({ date: '2026-05-27' });
         expect(params.requestBody?.end).toEqual({ date: '2026-05-28' });
+    });
+});
+
+// ─── Phase 3: RSVP endpoint + scope-missing re-consent ────────────────────────
+
+describe('POST /calendar/items/:itemId/rsvp', () => {
+    /** Inserts a linked calendar item with an existing self attendee in `needsAction`. */
+    async function insertLinkedCalendarItem(userId: string, overrides: Partial<ItemInterface> = {}): Promise<ItemInterface> {
+        const item = makeItem(userId, {
+            _id: 'item-rsvp-1',
+            calendarEventId: 'gcal-rsvp-ev',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            attendees: [
+                { email: 'alice@example.com', responseStatus: 'needsAction', self: true },
+                { email: 'organizer@example.com', responseStatus: 'accepted', organizer: true },
+            ],
+            responseStatus: 'needsAction',
+            ...overrides,
+        });
+        await itemsDAO.insertOne(item);
+        return item;
+    }
+
+    it('updates the existing self attendee and stamps the item on success', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedCalendarItem(userId);
+
+        // Skip the userinfo round-trip — the spy returns alice's email so it matches the self entry.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getMyEmail').mockResolvedValueOnce('alice@example.com');
+        const patchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockResolvedValueOnce(undefined);
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'accepted' },
+        });
+        expect(res.status).toBe(200);
+
+        // sendUpdates:'all' propagates so the organizer sees the chip flip in real time.
+        expect(patchSpy).toHaveBeenCalledOnce();
+        const [args] = patchSpy.mock.calls;
+        if (!args) throw new Error('expected one patch call');
+        const [calendarId, eventId, attendees, options] = args;
+        expect(calendarId).toBe('primary');
+        expect(eventId).toBe('gcal-rsvp-ev');
+        expect(options).toEqual({ sendUpdates: 'all' });
+        // Attendees sorted by email; self entry updated to accepted; other entries preserved.
+        expect(attendees).toEqual([
+            { email: 'alice@example.com', responseStatus: 'accepted', self: true },
+            { email: 'organizer@example.com', responseStatus: 'accepted', organizer: true },
+        ]);
+
+        const stored = await itemsDAO.findByOwnerAndId('item-rsvp-1', userId);
+        expect(stored?.responseStatus).toBe('accepted');
+        expect(stored?.attendees?.find((a) => a.self)?.responseStatus).toBe('accepted');
+        expect(stored?.lastPushedToGCalTs).toBeDefined();
+    });
+
+    it("records an opType:'rsvp' op with the rsvp sidecar", async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedCalendarItem(userId);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getMyEmail').mockResolvedValueOnce('alice@example.com');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockResolvedValueOnce(undefined);
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'declined' },
+        });
+        expect(res.status).toBe(200);
+
+        const ops = await operationsDAO.findArray({ user: userId, entityId: 'item-rsvp-1' });
+        const rsvpOps = ops.filter((o) => o.opType === 'rsvp');
+        expect(rsvpOps).toHaveLength(1);
+        const [op] = rsvpOps;
+        if (!op) throw new Error('expected one rsvp op');
+        expect(op.snapshot).toBeNull();
+        expect(op.rsvp).toEqual({
+            itemId: 'item-rsvp-1',
+            calendarEventId: 'gcal-rsvp-ev',
+            calendarIntegrationId: 'int-1',
+            responseStatus: 'declined',
+        });
+    });
+
+    it('appends a self attendee when none exists yet', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedCalendarItem(userId, {
+            // No self entry — the user wasn't on the invite list (e.g. delegated mailbox case).
+            attendees: [{ email: 'organizer@example.com', responseStatus: 'accepted', organizer: true }],
+            responseStatus: undefined,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getMyEmail').mockResolvedValueOnce('alice@example.com');
+        const patchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockResolvedValueOnce(undefined);
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'tentative' },
+        });
+        expect(res.status).toBe(200);
+
+        const [args] = patchSpy.mock.calls;
+        if (!args) throw new Error('expected one patch call');
+        const [, , attendees] = args;
+        // Sorted by email — alice comes before organizer alphabetically.
+        expect(attendees).toEqual([
+            { email: 'alice@example.com', responseStatus: 'tentative', self: true },
+            { email: 'organizer@example.com', responseStatus: 'accepted', organizer: true },
+        ]);
+
+        const stored = await itemsDAO.findByOwnerAndId('item-rsvp-1', userId);
+        expect(stored?.attendees).toHaveLength(2);
+        expect(stored?.responseStatus).toBe('tentative');
+    });
+
+    it('returns 403 scope_missing when grantedScopes lacks calendar write', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId, {
+            // Only the email scope was granted — RSVP requires calendar or calendar.events.
+            grantedScopes: ['https://www.googleapis.com/auth/userinfo.email'],
+        });
+        await insertLinkedCalendarItem(userId);
+
+        const patchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockResolvedValueOnce(undefined);
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'accepted' },
+        });
+        expect(res.status).toBe(403);
+        const body = (await res.json()) as { error: string; reconsentUrl: string };
+        expect(body.error).toBe('scope_missing');
+        expect(body.reconsentUrl).toContain('/calendar/auth/google');
+        expect(body.reconsentUrl).toContain('intent=rsvp');
+        // The active session is alice@example.com (set up by oauthLogin); login_hint pre-fills the picker.
+        expect(body.reconsentUrl).toContain('login_hint=alice');
+
+        // No push was attempted — the gate rejected before reaching the provider.
+        expect(patchSpy).not.toHaveBeenCalled();
+    });
+
+    it('treats absent grantedScopes as permissive (legacy integrations)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // grantedScopes omitted — the integration predates Phase 3 scope persistence.
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedCalendarItem(userId);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getMyEmail').mockResolvedValueOnce('alice@example.com');
+        const patchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockResolvedValueOnce(undefined);
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'accepted' },
+        });
+        expect(res.status).toBe(200);
+        expect(patchSpy).toHaveBeenCalledOnce();
+    });
+
+    it('returns 404 when the item does not exist', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/no-such-item/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'accepted' },
+        });
+        expect(res.status).toBe(404);
+    });
+
+    it('returns 400 when the item is not a calendar item', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // nextAction item — no calendarEventId either, so the calendar-shape guard rejects.
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-na-1', status: 'nextAction', calendarEventId: undefined, calendarIntegrationId: undefined }));
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-na-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'accepted' },
+        });
+        expect(res.status).toBe(400);
+    });
+
+    it('returns 400 when responseStatus is invalid', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedCalendarItem(userId);
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'maybe' },
+        });
+        expect(res.status).toBe(400);
+    });
+
+    it('returns 500 rsvp_push_failed and does not mutate the local item when the GCal patch throws', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedCalendarItem(userId);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getMyEmail').mockResolvedValueOnce('alice@example.com');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockRejectedValueOnce(new Error('gcal exploded'));
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'accepted' },
+        });
+        expect(res.status).toBe(500);
+        const body = (await res.json()) as { error: string; message: string };
+        expect(body.error).toBe('rsvp_push_failed');
+        expect(body.message).toContain('gcal exploded');
+
+        // Local state unchanged — the client is expected to roll back its optimistic UI.
+        const stored = await itemsDAO.findByOwnerAndId('item-rsvp-1', userId);
+        expect(stored?.responseStatus).toBe('needsAction');
     });
 });

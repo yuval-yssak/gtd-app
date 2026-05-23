@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import operationsDAO from '../dataAccess/operationsDAO.js';
-import type { EntitySnapshot, OperationInterface } from '../types/entities.js';
+import type { EntitySnapshot, OperationInterface, RsvpOpPayload } from '../types/entities.js';
 
-// Discriminated on opType: create/update require a full snapshot; delete carries null.
+// Discriminated on opType: create/update require a full snapshot; delete carries null;
+// rsvp carries a sidecar payload (no snapshot — replay reads the item by id).
 // `entityType` widened to all four entity types so the reassign endpoint (which moves
 // people / workContexts as well as items / routines) can publish ops without a parallel helper.
 type RecordOperationInput =
@@ -19,6 +20,15 @@ type RecordOperationInput =
           entityId: string;
           snapshot: null;
           opType: 'delete';
+          now: string;
+          deviceId?: string;
+      }
+    | {
+          entityType: 'item';
+          entityId: string;
+          snapshot: null;
+          opType: 'rsvp';
+          rsvp: RsvpOpPayload;
           now: string;
           deviceId?: string;
       };
@@ -39,6 +49,9 @@ export async function recordOperation(userId: string, op: RecordOperationInput):
         entityId: op.entityId,
         opType: op.opType,
         snapshot: op.snapshot,
+        // RSVP ops carry their payload sidecar — `snapshot` stays null because replay reads the
+        // current item by id rather than reconstructing from the op log.
+        ...(op.opType === 'rsvp' ? { rsvp: op.rsvp } : {}),
     };
     await operationsDAO.insertOne(operation);
     return operation;
