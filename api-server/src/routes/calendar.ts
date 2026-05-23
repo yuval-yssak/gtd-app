@@ -38,13 +38,18 @@ import { hasAtLeastOne, type NonEmptyArray } from '../lib/typeUtils.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import type {
-    CalendarIntegrationInterface,
-    CalendarSyncConfigInterface,
-    ItemInterface,
-    OperationInterface,
-    RoutineInterface,
-    RoutineItemTemplate,
+import {
+    type CalendarIntegrationInterface,
+    type CalendarSyncConfigInterface,
+    GCAL_OWNED_ITEM_KEYS,
+    type GCalAttendee,
+    type GCalEventType,
+    type GCalPerson,
+    type GCalResponseStatus,
+    type ItemInterface,
+    type OperationInterface,
+    type RoutineInterface,
+    type RoutineItemTemplate,
 } from '../types/entities.js';
 
 type UnlinkAction = 'keepLinkedEntities' | 'removeLinkedEntities';
@@ -1591,8 +1596,13 @@ async function relinkRoutineToEvent(
 }
 
 async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
-    const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
-    const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+    // All-day routines skip the time/duration extraction — GCal emits `start.date` (YYYY-MM-DD)
+    // with no time component, so `extractLocalTime` and the `diff('minute')` math would both yield
+    // junk. Downstream item generation reads `template.allDay` to switch to the all-day shape.
+    // The existing `buildCalendarItem` guard (`throw 'all-day not yet wired here'`) still trips
+    // until Phase 8 — that's intentional, since this routine carrying `template = { allDay: true }`
+    // is what signals which reader needs the all-day branch.
+    const calendarItemTemplate = event.allDay ? { allDay: true as const } : buildTimedTemplate(event, source.config.timeZone ?? 'UTC');
 
     // Use the GCal event's start date as createdTs so the rrule DTSTART is anchored
     // to the first occurrence. This is critical for split tails ("this and following"):
@@ -1610,7 +1620,7 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
         calendarEventId: event.id,
         calendarIntegrationId: source.integration._id,
         calendarSyncConfigId: source.config._id,
-        calendarItemTemplate: { timeOfDay, duration },
+        calendarItemTemplate,
         template: event.description != null ? { notes: htmlToMarkdown(event.description) } : {},
         ...(event.description != null ? { lastSyncedNotes: event.description } : {}),
         createdTs,
@@ -1626,6 +1636,14 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
     // zero items, while the parent's future items have been (correctly) trashed past UNTIL.
     const itemOps = await regenerateFutureRoutineItems(routine, ctx.userId, ctx.now, source.config.timeZone ?? 'UTC');
     ctx.ops.push(...itemOps);
+}
+
+/** Extracts the {timeOfDay, duration} pair for a timed routine template. Pulled out of
+ * `createRoutineFromGCal` so the all-day branch reads as a clean ternary. */
+function buildTimedTemplate(event: GCalEvent, timeZone: string): { timeOfDay: string; duration: number } {
+    const timeOfDay = extractLocalTime(event.timeStart, timeZone);
+    const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+    return { timeOfDay, duration };
 }
 
 async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
@@ -1799,7 +1817,73 @@ export function resolveInboundNotes(
 
 // ── Single calendar event import ─────────────────────────────────────────────
 
-export type CalendarEvent = { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string; description?: string };
+/**
+ * Subset of `GCalEvent` consumed by the inbound upsert/create/update path. Carries the GCal-owned
+ * metadata fields (organizer/creator/attendees/responseStatus/eventType) and the `allDay` flag so
+ * inbound parsing output can flow through unchanged. Kept as a structural-subset alias rather than
+ * `GCalEvent` directly so the import-callsites (which already narrow `status: string`) stay valid.
+ */
+export type CalendarEvent = {
+    id: string;
+    title: string;
+    timeStart: string;
+    timeEnd: string;
+    updated: string;
+    status: string;
+    description?: string;
+    allDay?: boolean;
+    organizer?: GCalPerson;
+    creator?: GCalPerson;
+    attendees?: GCalAttendee[];
+    responseStatus?: GCalResponseStatus;
+    eventType?: GCalEventType;
+};
+
+/**
+ * Builds the GCal-owned slice of a calendar item from an inbound event. Returns the keys present
+ * on `event` so the caller can spread the result; missing keys are explicitly cleared via
+ * `clearOmittedGCalOwnedFields` on the merge path so a stale local value can't survive when GCal
+ * stops emitting the field (e.g. last attendee removed).
+ */
+function pickGCalOwnedFields(event: CalendarEvent): Partial<Pick<ItemInterface, (typeof GCAL_OWNED_ITEM_KEYS)[number]>> {
+    return {
+        ...(event.organizer !== undefined ? { organizer: event.organizer } : {}),
+        ...(event.creator !== undefined ? { creator: event.creator } : {}),
+        ...(event.attendees !== undefined ? { attendees: event.attendees } : {}),
+        ...(event.responseStatus !== undefined ? { responseStatus: event.responseStatus } : {}),
+        ...(event.eventType !== undefined ? { eventType: event.eventType } : {}),
+    };
+}
+
+/**
+ * Field-level merge guard: `itemsDAO.replaceById` is a full-doc replace, so spreading
+ * `{ ...existing, organizer: undefined }` would silently keep `existing.organizer`. After the merge
+ * computes the next item, any GCal-owned key that isn't present on the inbound event must be
+ * explicitly removed from the merged document — otherwise a stale local value (e.g. attendees from
+ * a prior sync) survives even though GCal no longer reports it. Chose the explicit-delete strategy
+ * over `$set/$unset` to keep the single `replaceById` write path uniform across all inbound branches.
+ */
+function clearOmittedGCalOwnedFields(merged: ItemInterface, event: CalendarEvent): ItemInterface {
+    const next: ItemInterface = { ...merged };
+    for (const key of GCAL_OWNED_ITEM_KEYS) {
+        if (event[key] === undefined) {
+            delete next[key];
+        }
+    }
+    return next;
+}
+
+/**
+ * True iff the inbound event reports a different value (including absent-vs-present) for any
+ * GCal-owned key compared to the local item. Used to bypass the structural-newer early-exit so an
+ * older payload can still propagate authoritative attendee/organizer/etc. changes.
+ *
+ * Deep-equality via JSON.stringify is fine here: the inbound parser sorts attendees by email and
+ * the GCalPerson/GCalAttendee shapes are flat, deterministic objects.
+ */
+function hasGCalOwnedDelta(existing: ItemInterface, event: CalendarEvent): boolean {
+    return GCAL_OWNED_ITEM_KEYS.some((key) => JSON.stringify(existing[key]) !== JSON.stringify(event[key]));
+}
 
 /**
  * Strong-key lookup: by `calendarEventId` only. Used for echo/cancelled/past-event branches that
@@ -1954,7 +2038,9 @@ export async function upsertCalendarItem(event: CalendarEvent, source: CalendarS
     if (event.status === 'cancelled') {
         // Skip the strong-key restore for cancelled events: there's nothing to restore TO (the
         // event is gone). Restoring then trashing would emit a redundant op + status flap.
-        await trashItem(existing, ctx);
+        // Stamp `cancelledByGCal: true` so the trash view can surface a "Cancelled in Calendar"
+        // badge — distinguishes a GCal-driven cancellation from a user-initiated trash.
+        await trashItem(existing, ctx, { cancelledByGCal: true });
         return;
     }
 
@@ -2033,19 +2119,38 @@ async function reviveTrashedCalendarItem(existing: ItemInterface, event: Calenda
     // (the local trash-stamp `updatedTs` is presumed stale and never authoritative on revive).
     // Note: `dayjs('')` is `NaN` and would make GCal lose every comparison — must use a real timestamp.
     const notesUpdate = resolveInboundNotes(event.description, existing.lastSyncedNotes, event.updated, '1970-01-01T00:00:00.000Z');
-    const updated: ItemInterface = {
-        ...existing,
+    // Revive overwrites every structural + GCal-owned field from GCal verbatim — the local trashed
+    // snapshot is presumed stale, so a prior `cancelledByGCal: true` (set when GCal first cancelled
+    // the event) must be cleared so the revived item doesn't carry a phantom "Cancelled" badge.
+    const { cancelledByGCal: _cleared, ...withoutCancelledFlag } = existing;
+    const merged: ItemInterface = {
+        ...withoutCancelledFlag,
         status: 'calendar',
         title: event.title,
         timeStart: event.timeStart,
         timeEnd: event.timeEnd,
         calendarSyncConfigId: source.config._id,
+        ...(event.allDay ? { allDay: true } : {}),
+        ...pickGCalOwnedFields(event),
         ...notesUpdate,
         lastSyncedFromGCalTs: event.updated,
         updatedTs: ctx.now,
     };
+    // Strip stale GCal-owned values (e.g. attendees removed) — replaceById would otherwise preserve them.
+    // Also clear `allDay` if GCal no longer marks the event as all-day.
+    const updated = clearAllDayIfAbsent(clearOmittedGCalOwnedFields(merged, event), event);
     await itemsDAO.replaceById(itemId, updated);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: updated, opType: 'update', now: ctx.now }));
+}
+
+/** Symmetric to `clearOmittedGCalOwnedFields` for the `allDay` flag — replaceById would otherwise
+ * keep a stale `true` after GCal converts a previously-all-day event to a timed one. */
+function clearAllDayIfAbsent(merged: ItemInterface, event: CalendarEvent): ItemInterface {
+    if (event.allDay) {
+        return merged;
+    }
+    const { allDay: _stale, ...rest } = merged;
+    return rest;
 }
 
 /**
@@ -2069,9 +2174,11 @@ async function applyPastEventToExisting(existing: ItemInterface | undefined, eve
 /**
  * Idempotently trashes the given item. No-ops on:
  * - missing item, routine-managed item, or already-trashed item.
- * Used by both the cancelled-event path and the moved-to-past path.
+ * Used by both the cancelled-event path and the moved-to-past path. When `cancelledByGCal` is true
+ * the item is stamped so the trash view can surface a "Cancelled in Calendar" badge; the past-event
+ * path leaves it unset so a user-driven drag-into-past doesn't masquerade as a GCal cancellation.
  */
-async function trashItem(existing: ItemInterface | undefined, ctx: SyncContext): Promise<void> {
+async function trashItem(existing: ItemInterface | undefined, ctx: SyncContext, options: { cancelledByGCal?: boolean } = {}): Promise<void> {
     if (!existing || existing.routineId || existing.status === 'trash') {
         return;
     }
@@ -2079,11 +2186,16 @@ async function trashItem(existing: ItemInterface | undefined, ctx: SyncContext):
     if (!itemId) {
         return;
     }
-    await itemsDAO.updateOne({ _id: itemId, user: ctx.userId }, { $set: { status: 'trash', updatedTs: ctx.now } });
+    const setFields = {
+        status: 'trash' as const,
+        updatedTs: ctx.now,
+        ...(options.cancelledByGCal ? { cancelledByGCal: true } : {}),
+    };
+    await itemsDAO.updateOne({ _id: itemId, user: ctx.userId }, { $set: setFields });
     const op = await recordOperation(ctx.userId, {
         entityType: 'item',
         entityId: itemId,
-        snapshot: { ...existing, status: 'trash', updatedTs: ctx.now },
+        snapshot: { ...existing, ...setFields },
         opType: 'update',
         now: ctx.now,
     });
@@ -2106,21 +2218,34 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
     // last applied payload), not `updatedTs` — local-only writes (e.g. trash-on-disconnect) bump
     // `updatedTs` and would otherwise lock GCal out of reasserting state.
     const structurallyNewer = event.updated > (existing.lastSyncedFromGCalTs ?? '');
-    if (!structurallyNewer && !notesUpdate) {
+    // GCal-owned fields are always overwritten even when the payload is structurally older — they
+    // have no LWW gate (RSVP is the one local-write exception, routed through opType:'rsvp'). The
+    // early-exit must therefore also fall through when any owned field differs, otherwise an older
+    // payload with newer attendees/organizer/etc. would silently no-op the merge.
+    const gcalOwnedChanged = hasGCalOwnedDelta(existing, event);
+    if (!structurallyNewer && !notesUpdate && !gcalOwnedChanged) {
         console.log(
             `[debug-gcal-sync][server] updateExistingCalendarItem skipped — not newer | eventId=${event.id} eventUpdated=${event.updated} existingLastSyncedFromGCalTs=${existing.lastSyncedFromGCalTs ?? 'n/a'} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate}`,
         );
         return;
     }
     console.log(
-        `[debug-gcal-sync][server] updateExistingCalendarItem applying | eventId=${event.id} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate}`,
+        `[debug-gcal-sync][server] updateExistingCalendarItem applying | eventId=${event.id} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate} gcalOwnedChanged=${gcalOwnedChanged}`,
     );
 
     // Sync layer owns the "✓ " done marker on GCal — strip it on inbound only when this item is
     // already done locally. For an open item, a user-typed "✓ " in GCal must be preserved verbatim.
     const incomingTitle = existing.status === 'done' ? stripDoneMarker(event.title) : event.title;
 
-    const updated: ItemInterface = {
+    // Field-level merge:
+    //  - Structural fields (title/time/allDay) stay behind the `structurallyNewer` gate.
+    //  - GCal-owned fields (organizer/creator/attendees/responseStatus/eventType) are ALWAYS
+    //    overwritten — they're authoritative on the GCal side regardless of `event.updated`, and
+    //    the only sanctioned local-write into that set (RSVP) routes through a dedicated op type.
+    //  - `replaceById` is full-doc replace, so we wrap the merged object through
+    //    `clearOmittedGCalOwnedFields` to drop stale values whenever GCal stops emitting a key
+    //    (e.g. attendees emptied, eventType reset to default).
+    const merged: ItemInterface = {
         ...existing,
         ...(structurallyNewer
             ? {
@@ -2128,9 +2253,11 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
                   timeStart: event.timeStart,
                   timeEnd: event.timeEnd,
                   calendarSyncConfigId: source.config._id,
+                  ...(event.allDay ? { allDay: true } : {}),
               }
             : {}),
         ...notesUpdate,
+        ...pickGCalOwnedFields(event),
         // Only advance the anchor when this payload is structurally newer than the last one we
         // applied. A notes-only update against an older `event.updated` (out-of-order webhook
         // delivery) must not regress the anchor — that would let an even-older subsequent
@@ -2138,6 +2265,11 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
         ...(structurallyNewer ? { lastSyncedFromGCalTs: event.updated } : {}),
         updatedTs: ctx.now,
     };
+    const withGCalOwnedCleared = clearOmittedGCalOwnedFields(merged, event);
+    // Only re-evaluate `allDay` against the inbound event when structural fields are being
+    // applied — a non-structural inbound (notes-only / older payload) must not erase the local
+    // `allDay` flag, since GCal didn't authorize a structural change.
+    const updated = structurallyNewer ? clearAllDayIfAbsent(withGCalOwnedCleared, event) : withGCalOwnedCleared;
     await itemsDAO.replaceById(itemId, updated);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: updated, opType: 'update', now: ctx.now }));
 }
@@ -2155,6 +2287,11 @@ async function createNewCalendarItem(event: CalendarEvent, source: CalendarSourc
         calendarIntegrationId: source.integration._id,
         calendarSyncConfigId: source.config._id,
         ...(event.description != null ? { notes: htmlToMarkdown(event.description), lastSyncedNotes: event.description } : {}),
+        // Forward all-day flag + GCal-owned meeting metadata so the new item carries the same
+        // surface as a subsequent inbound update. On create no `clearOmitted*` is needed —
+        // there's no stale local state to wipe.
+        ...(event.allDay ? { allDay: true } : {}),
+        ...pickGCalOwnedFields(event),
         lastSyncedFromGCalTs: event.updated,
         createdTs: ctx.now,
         updatedTs: ctx.now,

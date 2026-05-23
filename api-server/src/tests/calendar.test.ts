@@ -2138,6 +2138,276 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
     });
 });
 
+// ─── Phase 1c: GCal-owned field-level merge + all-day + cancelledByGCal ───
+//
+// Covers the inbound paths in routes/calendar.ts: createNewCalendarItem (all-day inbound),
+// updateExistingCalendarItem (GCal-newer + GCal-older field-level merge, attendee-clear), the
+// cancelled branch (cancelledByGCal stamp), and createRoutineFromGCal (all-day routine template).
+
+describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('inbound GCal-newer event overwrites the local title AND the attendees array (basic merge)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const localAnchor = dayjs().subtract(1, 'hour').toISOString();
+        const eventUpdated = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-merge-newer',
+            user: userId,
+            status: 'calendar',
+            title: 'Local title',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-merge-newer',
+            calendarIntegrationId: 'int-1',
+            attendees: [{ email: 'old@example.com', responseStatus: 'needsAction' }],
+            createdTs: localAnchor,
+            updatedTs: localAnchor,
+            lastSyncedFromGCalTs: localAnchor,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-merge-newer',
+                    title: 'GCal title',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                    attendees: [
+                        { email: 'a@example.com', responseStatus: 'accepted' },
+                        { email: 'b@example.com', responseStatus: 'declined' },
+                    ],
+                    organizer: { email: 'a@example.com' },
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-merge-newer' });
+        // Structural overwrite when GCal is newer: title updated.
+        expect(item?.title).toBe('GCal title');
+        // GCal-owned overwrite: attendees + organizer mirror the inbound payload exactly.
+        expect(item?.attendees).toEqual([
+            { email: 'a@example.com', responseStatus: 'accepted' },
+            { email: 'b@example.com', responseStatus: 'declined' },
+        ]);
+        expect(item?.organizer).toEqual({ email: 'a@example.com' });
+    });
+
+    it('inbound GCal-older event preserves the local title BUT still overwrites attendees (GCal-owned policy)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // localAnchor newer than eventUpdated → structurallyNewer = false → title stays local.
+        const eventUpdated = dayjs().subtract(2, 'hour').toISOString();
+        const localAnchor = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-merge-older',
+            user: userId,
+            status: 'calendar',
+            title: 'Local title wins',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-merge-older',
+            calendarIntegrationId: 'int-1',
+            attendees: [{ email: 'stale@example.com', responseStatus: 'needsAction' }],
+            createdTs: eventUpdated,
+            updatedTs: localAnchor,
+            lastSyncedFromGCalTs: localAnchor,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-merge-older',
+                    title: 'GCal stale title (should not win)',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                    attendees: [{ email: 'fresh@example.com', responseStatus: 'accepted' }],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-merge-older' });
+        // Title is structural and gated — local wins because GCal is older.
+        expect(item?.title).toBe('Local title wins');
+        // Attendees are GCal-owned — always overwritten, even when GCal is older.
+        expect(item?.attendees).toEqual([{ email: 'fresh@example.com', responseStatus: 'accepted' }]);
+    });
+
+    it('inbound event without attendees clears the local stale attendees (GCal-owned absent ⇒ delete)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const localAnchor = dayjs().subtract(1, 'hour').toISOString();
+        const eventUpdated = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-attendees-clear',
+            user: userId,
+            status: 'calendar',
+            title: 'Stale attendees',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-attendees-clear',
+            calendarIntegrationId: 'int-1',
+            attendees: [{ email: 'leaving@example.com', responseStatus: 'declined' }],
+            organizer: { email: 'leaving@example.com' },
+            createdTs: localAnchor,
+            updatedTs: localAnchor,
+            lastSyncedFromGCalTs: localAnchor,
+        });
+
+        // Inbound event omits attendees entirely (GCal returned an empty array → parser drops to undefined).
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-attendees-clear',
+                    title: 'Stale attendees',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-attendees-clear' });
+        // Both GCal-owned fields cleared — neither attendees nor organizer survives the replace.
+        expect(item?.attendees).toBeUndefined();
+        expect(item?.organizer).toBeUndefined();
+    });
+
+    it('cancelled inbound event trashes the item AND stamps cancelledByGCal: true', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-cancelled-flag',
+            user: userId,
+            status: 'calendar',
+            title: 'About to be cancelled',
+            timeStart: now,
+            timeEnd: now,
+            calendarEventId: 'evt-cancelled-flag',
+            calendarIntegrationId: 'int-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-cancelled-flag', title: 'About to be cancelled', timeStart: now, timeEnd: now, updated: now, status: 'cancelled' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-cancelled-flag' });
+        expect(item?.status).toBe('trash');
+        expect(item?.cancelledByGCal).toBe(true);
+    });
+
+    it('all-day inbound event creates an item with allDay: true and YYYY-MM-DD time fields', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // GCal exclusive-end: a single-day all-day event on May 27 stores end = May 28.
+        const startDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const endDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+        const updated = dayjs().toISOString();
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-allday-new',
+                    title: 'Holiday',
+                    timeStart: startDate,
+                    timeEnd: endDate,
+                    updated,
+                    status: 'confirmed',
+                    allDay: true,
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ calendarEventId: 'evt-allday-new' });
+        expect(item).not.toBeNull();
+        expect(item?.allDay).toBe(true);
+        expect(item?.timeStart).toBe(startDate);
+        expect(item?.timeEnd).toBe(endDate);
+        expect(item?.status).toBe('calendar');
+    });
+
+    it('createRoutineFromGCal with an all-day recurring master builds template = { allDay: true } (no timeOfDay/duration)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // GCal recurring all-day master: start/end are YYYY-MM-DD strings, allDay: true.
+        const startDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const endDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-allday-master',
+                    title: 'Daily walk',
+                    timeStart: startDate,
+                    timeEnd: endDate,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    allDay: true,
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        // The sync route returns 502 once `regenerateFutureRoutineItems` hits the all-day stopgap
+        // guard (`throw 'all-day not yet wired here'`) — Phase 8 fixes that reader. The routine
+        // insert happens before regen runs, so the Mongo row still reflects the correct template.
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(502);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-allday-master' });
+        expect(routine).not.toBeNull();
+        expect(routine?.calendarItemTemplate).toEqual({ allDay: true });
+        expect(routine?.title).toBe('Daily walk');
+        expect(routine?.rrule).toBe('FREQ=DAILY');
+    });
+});
+
 // ─── POST /calendar/integrations/:id/link-routine/:routineId ─────────────
 
 describe('POST /calendar/integrations/:id/link-routine/:routineId', () => {
