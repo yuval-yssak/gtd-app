@@ -1,4 +1,4 @@
-import type { RoutineInterface } from '../types/entities.js';
+import type { GCalAttendee, GCalEventType, GCalPerson, GCalResponseStatus, RoutineInterface } from '../types/entities.js';
 
 /** Result of an incremental or full event sync — includes events and the token for the next sync. */
 export interface EventSyncResult {
@@ -33,13 +33,27 @@ export interface MasterContent {
 export interface GCalEvent {
     id: string;
     title: string;
-    timeStart: string; // ISO datetime
-    timeEnd: string; // ISO datetime
+    /** ISO datetime for timed events; `YYYY-MM-DD` when `allDay === true`. */
+    timeStart: string;
+    /** ISO datetime for timed events; `YYYY-MM-DD` (exclusive — GCal's convention) when `allDay === true`. */
+    timeEnd: string;
     updated: string; // ISO datetime — used for last-write-wins conflict resolution
     status: 'confirmed' | 'tentative' | 'cancelled';
     recurringEventId?: string; // set for instances that belong to a recurring series
     recurrence?: string[]; // present on master recurring event definitions (e.g. ["RRULE:FREQ=WEEKLY;BYDAY=MO"])
     description?: string; // GCal event description — maps to ItemInterface.notes
+    /** True when GCal returned `start.date` (no time) — `timeStart`/`timeEnd` are then `YYYY-MM-DD`. */
+    allDay?: boolean;
+    /** GCal organizer of the event. Server-overwrites local on every inbound pull. */
+    organizer?: GCalPerson;
+    /** GCal creator (often equals organizer). Server-overwrites local on every inbound pull. */
+    creator?: GCalPerson;
+    /** Attendees, sorted by email for stable equality. Server-overwrites local on every inbound pull. */
+    attendees?: GCalAttendee[];
+    /** Denormalized from the `self` attendee's responseStatus. RSVP is the one local-write exception. */
+    responseStatus?: GCalResponseStatus;
+    /** GCal event type — usually `'default'`; outOfOffice/focusTime/workingLocation are special. */
+    eventType?: GCalEventType;
 }
 
 export interface CalendarProvider {

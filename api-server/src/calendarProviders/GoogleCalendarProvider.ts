@@ -12,7 +12,7 @@ const { RRule } = rrule;
 dayjs.extend(utc);
 
 import { markdownToHtml } from '../lib/markdownHtml.js';
-import type { CalendarIntegrationInterface, RoutineInterface } from '../types/entities.js';
+import type { CalendarIntegrationInterface, GCalAttendee, GCalEventType, GCalPerson, GCalResponseStatus, RoutineInterface } from '../types/entities.js';
 import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
 import { SyncTokenInvalidError } from './CalendarProvider.js';
 
@@ -125,62 +125,165 @@ export function isDuplicateIdError(err: unknown): boolean {
     return err.code === 409;
 }
 
-/** Parses raw Google Calendar API event items into typed GCalEvent objects. Skips all-day events (no dateTime). */
-function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCalEvent[] {
+/** Raw shape we accept from googleapis. Loose enough to cover both `start.dateTime` and `start.date`. */
+type RawGCalEvent = {
+    id?: string | null;
+    summary?: string | null;
+    start?: { dateTime?: string | null; date?: string | null } | null;
+    end?: { dateTime?: string | null; date?: string | null } | null;
+    updated?: string | null;
+    status?: string | null;
+    recurringEventId?: string | null;
+    recurrence?: string[] | null;
+    description?: string | null;
+    organizer?: { email?: string | null; displayName?: string | null; self?: boolean | null } | null;
+    creator?: { email?: string | null; displayName?: string | null; self?: boolean | null } | null;
+    attendees?: Array<{
+        email?: string | null;
+        displayName?: string | null;
+        responseStatus?: string | null;
+        self?: boolean | null;
+        organizer?: boolean | null;
+        optional?: boolean | null;
+    }> | null;
+    eventType?: string | null;
+};
+
+/** Converts a raw GCal person object into our GCalPerson shape, dropping entries without an email. */
+function toPerson(raw: { email?: string | null; displayName?: string | null; self?: boolean | null } | undefined | null): GCalPerson | undefined {
+    if (!raw?.email) {
+        return undefined;
+    }
+    const person: GCalPerson = { email: raw.email };
+    if (raw.displayName) {
+        person.displayName = raw.displayName;
+    }
+    if (raw.self) {
+        person.self = true;
+    }
+    return person;
+}
+
+/**
+ * Normalizes GCal attendees into our GCalAttendee[] shape: drops entries without an email
+ * (e.g. calendar resources) and sorts by email so equality checks against the previous
+ * stored attendees list are stable.
+ */
+function toAttendees(raw: RawGCalEvent['attendees']): GCalAttendee[] | undefined {
+    if (!raw || raw.length === 0) {
+        return undefined;
+    }
+    const withEmail = raw.filter((a): a is { email: string } & typeof a => Boolean(a.email));
+    const mapped = withEmail.map((a) => {
+        const attendee: GCalAttendee = {
+            email: a.email,
+            responseStatus: (a.responseStatus as GCalResponseStatus) ?? 'needsAction',
+        };
+        if (a.displayName) {
+            attendee.displayName = a.displayName;
+        }
+        if (a.self) {
+            attendee.self = true;
+        }
+        if (a.organizer) {
+            attendee.organizer = true;
+        }
+        if (a.optional) {
+            attendee.optional = true;
+        }
+        return attendee;
+    });
+    const sorted = mapped.sort((a, b) => a.email.localeCompare(b.email));
+    return sorted.length > 0 ? sorted : undefined;
+}
+
+/**
+ * Parses raw Google Calendar API event items into typed GCalEvent objects. Accepts both
+ * timed events (`start.dateTime`) and all-day events (`start.date`); the latter come back
+ * with `allDay: true` and `timeStart`/`timeEnd` as `YYYY-MM-DD` strings (GCal's exclusive-end
+ * convention preserved verbatim). Cancelled events keep their sparse shape — no attendee/
+ * organizer extraction since those fields are usually absent on cancellation.
+ *
+ * Exported for unit testing — internal callers still go through the provider methods.
+ */
+export function parseGCalEvents(items: Array<Record<string, unknown>> | undefined): GCalEvent[] {
     // Type-safe cast: googleapis returns `calendar_v3.Schema$Event[]` but we treat it generically
     // here to decouple the parser from the googleapis type system.
-    const events = (items ?? []) as Array<{
-        id?: string | null;
-        summary?: string | null;
-        start?: { dateTime?: string | null; date?: string | null } | null;
-        end?: { dateTime?: string | null } | null;
-        updated?: string | null;
-        status?: string | null;
-        recurringEventId?: string | null;
-        recurrence?: string[] | null;
-        description?: string | null;
-    }>;
+    const events = (items ?? []) as RawGCalEvent[];
     return events.flatMap<GCalEvent>((event) => {
-        if (!event.id) {
+        const eventId = event.id;
+        if (!eventId) {
             return [];
         }
-        // Cancelled events from incremental sync often lack summary/start/end —
-        // only id and status are needed for the trash-on-cancel path in upsertCalendarItem.
         if (event.status === 'cancelled') {
-            return [
-                {
-                    id: event.id,
-                    title: event.summary ?? '',
-                    timeStart: event.start?.dateTime ?? '',
-                    timeEnd: event.end?.dateTime ?? '',
-                    updated: event.updated ?? '',
-                    status: 'cancelled',
-                    ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
-                    ...(event.recurrence ? { recurrence: event.recurrence } : {}),
-                },
-            ];
+            return [buildCancelledEvent(event, eventId)];
         }
-        if (!event.summary || !event.start?.dateTime || !event.end?.dateTime) {
-            return [];
-        }
-        const rawStatus = event.status;
-        const status: GCalEvent['status'] = rawStatus === 'tentative' ? 'tentative' : 'confirmed';
-        return [
-            {
-                id: event.id,
-                title: event.summary,
-                timeStart: event.start.dateTime,
-                timeEnd: event.end.dateTime,
-                // Fall back to timeStart so last-write-wins comparison doesn't incorrectly
-                // treat a missing `updated` field as "just modified now".
-                updated: event.updated ?? event.start.dateTime,
-                status,
-                ...(event.description != null ? { description: event.description } : {}),
-                ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
-                ...(event.recurrence ? { recurrence: event.recurrence } : {}),
-            },
-        ];
+        return buildConfirmedEvent(event, eventId);
     });
+}
+
+/** Cancelled events from incremental sync often lack summary/start/end — only id is required. */
+function buildCancelledEvent(event: RawGCalEvent, eventId: string): GCalEvent {
+    return {
+        id: eventId,
+        title: event.summary ?? '',
+        timeStart: event.start?.dateTime ?? event.start?.date ?? '',
+        timeEnd: event.end?.dateTime ?? event.end?.date ?? '',
+        updated: event.updated ?? '',
+        status: 'cancelled',
+        ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
+        ...(event.recurrence ? { recurrence: event.recurrence } : {}),
+    };
+}
+
+/** Builds the confirmed/tentative variant, branching on dateTime vs date to support all-day events. */
+function buildConfirmedEvent(event: RawGCalEvent, eventId: string): GCalEvent[] {
+    if (!event.summary) {
+        return [];
+    }
+    const timing = extractEventTiming(event);
+    if (!timing) {
+        return [];
+    }
+    const attendees = toAttendees(event.attendees);
+    const status: GCalEvent['status'] = event.status === 'tentative' ? 'tentative' : 'confirmed';
+    return [
+        {
+            id: eventId,
+            title: event.summary,
+            timeStart: timing.timeStart,
+            timeEnd: timing.timeEnd,
+            // Fall back to timeStart so last-write-wins comparison doesn't incorrectly
+            // treat a missing `updated` field as "just modified now".
+            updated: event.updated ?? timing.timeStart,
+            status,
+            ...(timing.allDay ? { allDay: true } : {}),
+            ...(event.description != null ? { description: event.description } : {}),
+            ...(event.recurringEventId ? { recurringEventId: event.recurringEventId } : {}),
+            ...(event.recurrence ? { recurrence: event.recurrence } : {}),
+            ...optionalField('organizer', toPerson(event.organizer)),
+            ...optionalField('creator', toPerson(event.creator)),
+            ...optionalField('attendees', attendees),
+            ...optionalField('responseStatus', attendees?.find((a) => a.self)?.responseStatus),
+            ...optionalField('eventType', event.eventType ? (event.eventType as GCalEventType) : undefined),
+        },
+    ];
+}
+
+/** Picks the right start/end pair, preferring dateTime when present and falling back to date for all-day. */
+function extractEventTiming(event: RawGCalEvent): { timeStart: string; timeEnd: string; allDay: boolean } | null {
+    if (event.start?.dateTime && event.end?.dateTime) {
+        return { timeStart: event.start.dateTime, timeEnd: event.end.dateTime, allDay: false };
+    }
+    if (event.start?.date && event.end?.date) {
+        return { timeStart: event.start.date, timeEnd: event.end.date, allDay: true };
+    }
+    return null;
+}
+
+/** Spreadable shorthand for `value !== undefined ? { [key]: value } : {}` with strong key typing. */
+function optionalField<K extends string, V>(key: K, value: V | undefined): Record<K, V> | Record<string, never> {
+    return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
 }
 
 export class GoogleCalendarProvider implements CalendarProvider {
