@@ -2742,17 +2742,23 @@ calendarRoutes.post('/items/:itemId/rsvp', authenticateRequest, async (c) => {
     const myEmail = await provider.getMyEmail();
     const nextAttendees = applyRsvpToAttendees(item.attendees ?? [], myEmail, body.responseStatus);
 
+    // Stamp `lastPushedToGCalTs` BEFORE the GCal PATCH so the echo guard at line 88 anchors on
+    // the moment we initiated the push. If we stamped after the await, slow PATCH/Pub-Sub
+    // latency could push the diff past ECHO_WINDOW_SECONDS and the webhook-arrived inbound
+    // would be mis-classified as an external change and re-applied to the local item.
+    const now = dayjs().toISOString();
     try {
         // sendUpdates:'all' so the organizer sees the response change. Per plan, RSVPs always notify.
+        // patchEventAttendees replaces the entire attendees array on GCal — if the organizer added a
+        // new attendee between our last pull and this PATCH, we will inadvertently drop them. The plan
+        // accepts this race for v1; the next inbound pull from GCal restores the missing attendee
+        // because GCal-owned fields are always overwritten regardless of event.updated ordering.
         await provider.patchEventAttendees(config.calendarId, item.calendarEventId, nextAttendees, { sendUpdates: 'all' });
     } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         return c.json({ error: 'rsvp_push_failed', message }, 500);
     }
 
-    const now = dayjs().toISOString();
-    // lastPushedToGCalTs feeds the echo guard at the top of this file — a webhook fired by the
-    // patch we just made arrives within seconds and would otherwise be re-applied to the local item.
     const updated: ItemInterface = {
         ...item,
         attendees: nextAttendees,

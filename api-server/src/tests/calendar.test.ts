@@ -8618,4 +8618,34 @@ describe('POST /calendar/items/:itemId/rsvp', () => {
         const stored = await itemsDAO.findByOwnerAndId('item-rsvp-1', userId);
         expect(stored?.responseStatus).toBe('needsAction');
     });
+
+    it("tenant isolation: user B cannot RSVP on user A's calendar item (returns 404)", async () => {
+        // Set up user A with a calendar item.
+        const aliceCookie = await loginAsAlice();
+        const aliceId = await getUserId(aliceCookie);
+        await insertIntegrationWithConfig(aliceId);
+        await insertLinkedCalendarItem(aliceId);
+
+        // Log in as user B via GitHub — Google's test mock always returns sub:g1, so a second
+        // Google login would link back to alice. Routing bob through GitHub gives us a distinct user.
+        const { sessionCookie: bobCookieRaw } = await oauthLogin(app, 'github', { email: 'bob@example.com', login: 'bob-gh' });
+        if (!bobCookieRaw) throw new Error('expected bob session cookie');
+        const bobCookie = bobCookieRaw;
+        const bobId = await getUserId(bobCookie);
+        expect(bobId).not.toBe(aliceId);
+
+        // No spies set up — if isolation fails and the handler reaches the provider, the test
+        // crashes on the unmocked network call, surfacing the leak loud and clear.
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie: bobCookie,
+            body: { responseStatus: 'accepted' },
+        });
+        expect(res.status).toBe(404);
+
+        // Alice's item is untouched.
+        const aliceItem = await itemsDAO.findByOwnerAndId('item-rsvp-1', aliceId);
+        expect(aliceItem?.responseStatus).toBe('needsAction');
+    });
 });
