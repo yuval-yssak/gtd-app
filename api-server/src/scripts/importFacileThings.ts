@@ -30,13 +30,20 @@
  * sparse-unique `(user, externalId)` index — existing rows are replaced in place.
  */
 
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { generateId } from 'better-auth';
 import dayjs from 'dayjs';
+import { type BulkWriteResult, MongoBulkWriteError } from 'mongodb';
 import itemsDAO from '../dataAccess/itemsDAO.js';
-import { recordOperation } from '../lib/operationHelpers.js';
+import operationsDAO from '../dataAccess/operationsDAO.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import type { ItemInterface, ItemStatus } from '../types/entities.js';
+import type { ItemInterface, ItemStatus, OperationInterface } from '../types/entities.js';
+
+// One bulkWrite request handles this many plans. Sized so payload stays well under
+// Mongo's 16MB request cap (notes can be large) and op cap (100k), and so a single
+// failure batch is cheap to retry.
+const BATCH_SIZE = 1000;
 
 interface CliOptions {
     email: string;
@@ -268,8 +275,8 @@ interface RunCounters {
     failed: number;
 }
 
-function buildItemDoc(plan: PlannedImport, userId: string, nowIso: string): ItemInterface {
-    const doc: ItemInterface = {
+function buildItemDoc(plan: PlannedImport, userId: string, nowIso: string): ItemInterface & { _id: string } {
+    const doc: ItemInterface & { _id: string } = {
         _id: generateId(32),
         user: userId,
         status: plan.status,
@@ -288,48 +295,133 @@ function buildItemDoc(plan: PlannedImport, userId: string, nowIso: string): Item
     return doc;
 }
 
-async function upsertItemAndRecordOp(plan: PlannedImport, userId: string, nowIso: string): Promise<'create' | 'update'> {
+function buildItemUpsert(plan: PlannedImport, userId: string, nowIso: string) {
     const doc = buildItemDoc(plan, userId, nowIso);
-    // Upsert by (user, externalId): re-running the import replaces the row in place.
-    // We can't use `replaceById` because the _id we just generated won't match an existing
-    // row from a prior run; the externalId is the stable identity here.
-    const res = await itemsDAO.updateOne({ user: userId, externalId: plan.externalId }, { $set: doc as never }, { upsert: true });
-    const isCreate = res.upsertedCount > 0;
-    // On replace the upserted _id is null; re-read the row so the op carries the row's actual _id.
-    const persisted = isCreate ? doc : await itemsDAO.findOne({ user: userId, externalId: plan.externalId });
-    if (!persisted?._id) {
-        throw new Error(`item missing after upsert externalId=${plan.externalId}`);
-    }
-    // Record a sync operation so already-bootstrapped devices see the import on next pull.
-    // Without this, items written directly to the items collection are invisible to /sync/pull.
-    await recordOperation(userId, {
+    const { _id, createdTs, ...mutable } = doc;
+    return {
+        doc,
+        op: {
+            updateOne: {
+                filter: { user: userId, externalId: plan.externalId },
+                // `_id` must go in `$setOnInsert` — Mongo rejects `$set` on `_id` for replaces
+                // with ImmutableField (66). `createdTs` also goes there so re-runs preserve
+                // the original import time instead of bumping it to the re-run's `nowIso`.
+                update: { $set: mutable as never, $setOnInsert: { _id, createdTs } as never },
+                upsert: true,
+            },
+        },
+    };
+}
+
+function buildOpDoc(persisted: ItemInterface & { _id: string }, userId: string, isCreate: boolean, nowIso: string): OperationInterface {
+    return {
+        _id: randomUUID(),
+        user: userId,
+        deviceId: 'import:facilethings',
+        ts: nowIso,
         entityType: 'item',
         entityId: persisted._id,
-        snapshot: persisted,
         opType: isCreate ? 'create' : 'update',
-        now: nowIso,
-        deviceId: 'import:facilethings',
-    });
-    return isCreate ? 'create' : 'update';
+        snapshot: persisted,
+    };
+}
+
+type PreparedRow = { plan: PlannedImport; doc: ItemInterface & { _id: string }; op: ReturnType<typeof buildItemUpsert>['op'] };
+
+async function runBatchBulkWrite(prepared: PreparedRow[], counters: RunCounters): Promise<BulkWriteResult> {
+    try {
+        // `ordered: false` so a single row's error doesn't abort the rest of the batch.
+        return await itemsDAO.bulkWrite(
+            prepared.map((p) => p.op),
+            { ordered: false },
+        );
+    } catch (err) {
+        // Only swallow per-row failures (MongoBulkWriteError carries a partial `.result` and
+        // `.writeErrors`). Anything else — disconnect, auth failure, etc. — must abort the run,
+        // otherwise we'd keep slamming a broken connection and finish with a fake summary.
+        if (!(err instanceof MongoBulkWriteError)) {
+            throw err;
+        }
+        // `writeErrors` is typed as `WriteError | WriteError[]` (driver's `OneOrMore<…>`).
+        const writeErrors = Array.isArray(err.writeErrors) ? err.writeErrors : [err.writeErrors];
+        counters.failed += writeErrors.length;
+        for (const we of writeErrors) {
+            const failedPlan = prepared[we.index]?.plan;
+            console.warn(`  ! upsert failed externalId=${failedPlan?.externalId}: ${we.errmsg ?? 'unknown'}`);
+        }
+        return err.result;
+    }
+}
+
+async function writeBatch(batch: PlannedImport[], userId: string, nowIso: string, counters: RunCounters) {
+    if (batch.length === 0) {
+        return;
+    }
+    const prepared = batch.map((plan) => ({ plan, ...buildItemUpsert(plan, userId, nowIso) }));
+    const bulkRes = await runBatchBulkWrite(prepared, counters);
+    // `upsertedIds` is keyed by the index of the op in the input array.
+    const upsertedIndexes = new Set(Object.keys(bulkRes.upsertedIds ?? {}).map(Number));
+    counters.upserted += upsertedIndexes.size;
+
+    // Replaced rows need a re-read to learn the row's existing _id for the op snapshot.
+    const replacedPlans = prepared.filter((_p, i) => !upsertedIndexes.has(i)).map((p) => p.plan);
+    counters.replaced += replacedPlans.length;
+    const replacedById = await readReplacedRows(userId, replacedPlans);
+
+    const ops: OperationInterface[] = [];
+    for (const [i, { plan, doc }] of prepared.entries()) {
+        if (upsertedIndexes.has(i)) {
+            ops.push(buildOpDoc(doc, userId, true, nowIso));
+            continue;
+        }
+        const persisted = replacedById.get(plan.externalId);
+        if (!persisted) {
+            // Should be unreachable — either the row was upserted or it already existed.
+            counters.failed++;
+            console.warn(`  ! missing replaced row externalId=${plan.externalId}`);
+            continue;
+        }
+        ops.push(buildOpDoc(persisted, userId, false, nowIso));
+    }
+
+    if (ops.length === 0) {
+        return;
+    }
+    try {
+        await operationsDAO.insertMany(ops, { ordered: false });
+    } catch (err) {
+        if (!(err instanceof MongoBulkWriteError)) {
+            throw err;
+        }
+        const lost = ops.length - err.result.insertedCount;
+        counters.failed += lost;
+        console.warn(`  ! operation log insertMany lost ${lost}/${ops.length} rows: ${err.message}`);
+    }
+}
+
+async function readReplacedRows(userId: string, replacedPlans: PlannedImport[]): Promise<Map<string, ItemInterface & { _id: string }>> {
+    if (replacedPlans.length === 0) {
+        return new Map();
+    }
+    const externalIds = replacedPlans.map((p) => p.externalId);
+    const rows = await itemsDAO.findArray<ItemInterface>({ user: userId, externalId: { $in: externalIds } } as never);
+    const byExternalId = new Map<string, ItemInterface & { _id: string }>();
+    for (const row of rows) {
+        // Rows read back from Mongo always carry an _id; the optional `_id?` on the type is just
+        // for pre-insert docs. Narrow here so the op-log builder doesn't need a runtime assert.
+        if (row.externalId && row._id) {
+            byExternalId.set(row.externalId, row as ItemInterface & { _id: string });
+        }
+    }
+    return byExternalId;
 }
 
 async function importDirect(plans: PlannedImport[], userId: string, counters: RunCounters) {
     const nowIso = dayjs().toISOString();
-    let processed = 0;
-    for (const plan of plans) {
-        processed++;
-        try {
-            const outcome = await upsertItemAndRecordOp(plan, userId, nowIso);
-            if (outcome === 'create') {
-                counters.upserted++;
-            } else {
-                counters.replaced++;
-            }
-        } catch (err) {
-            counters.failed++;
-            console.warn(`  ! upsert+op record failed externalId=${plan.externalId}: ${(err as Error).message}`);
-        }
-        if (processed % 200 === 0) console.log(`  upsert: ${processed}/${plans.length}`);
+    for (let start = 0; start < plans.length; start += BATCH_SIZE) {
+        const batch = plans.slice(start, start + BATCH_SIZE);
+        await writeBatch(batch, userId, nowIso, counters);
+        console.log(`  upsert: ${Math.min(start + batch.length, plans.length)}/${plans.length}`);
     }
 }
 
