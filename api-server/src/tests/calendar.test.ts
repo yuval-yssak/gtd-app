@@ -2406,6 +2406,155 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         expect(routine?.title).toBe('Daily walk');
         expect(routine?.rrule).toBe('FREQ=DAILY');
     });
+
+    it('revive clears a prior cancelledByGCal: true (restored item carries no phantom badge)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const past = dayjs().subtract(1, 'hour').toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        // Item was previously cancelled by GCal — trashed locally and stamped.
+        await itemsDAO.insertOne({
+            _id: 'item-revive-clear-flag',
+            user: userId,
+            status: 'trash',
+            title: 'Was cancelled',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-revive-clear-flag',
+            calendarIntegrationId: 'int-1',
+            cancelledByGCal: true,
+            createdTs: past,
+            updatedTs: past,
+            lastSyncedFromGCalTs: past,
+        });
+
+        // GCal re-emits the event as confirmed (e.g. user un-cancelled it on the GCal side).
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-revive-clear-flag',
+                    title: 'Was cancelled',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-revive-clear-flag' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.cancelledByGCal).toBeUndefined();
+    });
+
+    it('allDay: true → false transition strips the stale flag from the local item', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const localAnchor = dayjs().subtract(1, 'hour').toISOString();
+        const eventUpdated = dayjs().toISOString();
+        const startDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const endDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+        // Local item was previously all-day.
+        await itemsDAO.insertOne({
+            _id: 'item-allday-flip',
+            user: userId,
+            status: 'calendar',
+            title: 'Was all day',
+            allDay: true,
+            timeStart: startDate,
+            timeEnd: endDate,
+            calendarEventId: 'evt-allday-flip',
+            calendarIntegrationId: 'int-1',
+            createdTs: localAnchor,
+            updatedTs: localAnchor,
+            lastSyncedFromGCalTs: localAnchor,
+        });
+
+        // GCal now returns the event as timed (allDay: false / absent).
+        const timedStart = dayjs().add(1, 'day').toISOString();
+        const timedEnd = dayjs(timedStart).add(1, 'hour').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-allday-flip',
+                    title: 'Now timed',
+                    timeStart: timedStart,
+                    timeEnd: timedEnd,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-allday-flip' });
+        expect(item?.allDay).toBeUndefined();
+        expect(item?.timeStart).toBe(timedStart);
+        expect(item?.timeEnd).toBe(timedEnd);
+    });
+
+    it('GCal-older payload changing only responseStatus still falls through and overwrites', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const eventUpdated = dayjs().subtract(2, 'hour').toISOString();
+        const localAnchor = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-responsestatus-only',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-responsestatus-only',
+            calendarIntegrationId: 'int-1',
+            attendees: [{ email: 'alice@example.com', responseStatus: 'needsAction', self: true }],
+            responseStatus: 'needsAction',
+            createdTs: eventUpdated,
+            updatedTs: localAnchor,
+            lastSyncedFromGCalTs: localAnchor,
+        });
+
+        // GCal payload is older but reports a fresher RSVP on the self attendee.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-responsestatus-only',
+                    title: 'Meeting',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                    attendees: [{ email: 'alice@example.com', responseStatus: 'accepted', self: true }],
+                    responseStatus: 'accepted',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-responsestatus-only' });
+        // Title (structural, older payload) preserved; responseStatus (GCal-owned) overwritten.
+        expect(item?.title).toBe('Meeting');
+        expect(item?.responseStatus).toBe('accepted');
+        const acceptedAttendee = item?.attendees?.find((a) => a.self);
+        expect(acceptedAttendee?.responseStatus).toBe('accepted');
+    });
 });
 
 // ─── POST /calendar/integrations/:id/link-routine/:routineId ─────────────

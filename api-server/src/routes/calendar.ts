@@ -2099,16 +2099,21 @@ async function reviveTrashedCalendarItem(existing: ItemInterface, event: Calenda
     // Title is also the only persisted signal we have; `lastDoneTs` is not tracked.
     if (existing.title.startsWith(DONE_PREFIX) || (event.title.startsWith(DONE_PREFIX) && existing.title === stripDoneMarker(event.title))) {
         console.warn(`[gcal-sync] refusing to revive trashed item with done marker | itemId=${itemId} eventId=${event.id} title="${existing.title}"`);
-        const restored: ItemInterface = {
-            ...existing,
+        // Same GCal-owned merge as the live-revive path below — done-marker revive is rare but
+        // must not leave stale attendees/organizer/etc. behind once they're first-class fields.
+        const { cancelledByGCal: _cleared, ...withoutCancelledFlag } = existing;
+        const merged: ItemInterface = {
+            ...withoutCancelledFlag,
             status: 'done',
             title: stripDoneMarker(existing.title),
             calendarEventId: event.id,
             calendarIntegrationId: source.integration._id,
             calendarSyncConfigId: source.config._id,
+            ...pickGCalOwnedFields(event),
             lastSyncedFromGCalTs: event.updated,
             updatedTs: ctx.now,
         };
+        const restored = clearOmittedGCalOwnedFields(merged, event);
         await itemsDAO.replaceById(itemId, restored);
         ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: restored, opType: 'update', now: ctx.now }));
         return;
@@ -2225,7 +2230,7 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
     const gcalOwnedChanged = hasGCalOwnedDelta(existing, event);
     if (!structurallyNewer && !notesUpdate && !gcalOwnedChanged) {
         console.log(
-            `[debug-gcal-sync][server] updateExistingCalendarItem skipped — not newer | eventId=${event.id} eventUpdated=${event.updated} existingLastSyncedFromGCalTs=${existing.lastSyncedFromGCalTs ?? 'n/a'} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate}`,
+            `[debug-gcal-sync][server] updateExistingCalendarItem skipped — not newer | eventId=${event.id} eventUpdated=${event.updated} existingLastSyncedFromGCalTs=${existing.lastSyncedFromGCalTs ?? 'n/a'} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate} gcalOwnedChanged=${gcalOwnedChanged}`,
         );
         return;
     }
