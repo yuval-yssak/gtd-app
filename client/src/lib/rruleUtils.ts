@@ -113,9 +113,16 @@ export function formatCalendarRrule(routine: StoredRoutine): string {
     if (!calendarItemTemplate) {
         return freqPart;
     }
-    const timePart = `at ${calendarItemTemplate.timeOfDay}`;
-    const durationPart = `for ${formatDuration(calendarItemTemplate.duration)}`;
     const rangePart = formatDateRange(routine);
+    if (calendarItemTemplate.allDay) {
+        return `${freqPart} (all day)${rangePart}`;
+    }
+    const { timeOfDay, duration } = calendarItemTemplate;
+    if (timeOfDay === undefined || duration === undefined) {
+        return `${freqPart}${rangePart}`;
+    }
+    const timePart = `at ${timeOfDay}`;
+    const durationPart = `for ${formatDuration(duration)}`;
     return `${freqPart} ${timePart} ${durationPart}${rangePart}`;
 }
 

@@ -2416,8 +2416,13 @@ function deriveExceptionItemTimes(routine: RoutineInterface, ex: GCalException):
     if (!template) {
         return undefined;
     }
-    const timeStart = `${ex.originalDate}T${template.timeOfDay}:00`;
-    const timeEnd = dayjs(timeStart).add(template.duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
+    const { timeOfDay, duration } = template;
+    if (timeOfDay === undefined || duration === undefined) {
+        // all-day routine — orphan-create derivation is handled by the all-day branch (Phase 8); skip here.
+        return undefined;
+    }
+    const timeStart = `${ex.originalDate}T${timeOfDay}:00`;
+    const timeEnd = dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
     return { timeStart, timeEnd };
 }
 

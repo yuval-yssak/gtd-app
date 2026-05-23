@@ -132,9 +132,13 @@ function planUpdate(resolved: ResolvedRow): { update: AnyBulkWriteOperation<Item
     if (!template || !routine.calendarEventId) {
         throw new Error(`planUpdate called with routine ${routine._id} missing template or calendarEventId`);
     }
+    const { timeOfDay } = template;
+    if (timeOfDay === undefined) {
+        throw new Error(`planUpdate: routine ${routine._id} has all-day template; backfill not applicable (instance ids differ for all-day)`);
+    }
     // dayjs.utc treats `YYYY-MM-DD` as midnight UTC; converting back to a JS Date is safe here.
     const occurrenceDate = dayjs.utc(originalDate).toDate();
-    const instanceEventId = buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, template.timeOfDay, timeZone);
+    const instanceEventId = buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, timeOfDay, timeZone);
     const nowIso = dayjs().toISOString();
     const snapshot: ItemInterface & { _id: string } = { ...item, calendarInstanceEventId: instanceEventId, updatedTs: nowIso };
     const update: AnyBulkWriteOperation<ItemInterface> = {

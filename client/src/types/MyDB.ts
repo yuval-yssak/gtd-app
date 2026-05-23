@@ -3,7 +3,21 @@ import type { DBSchema } from 'idb';
 export type OAuthProvider = 'google' | 'github';
 export type EnergyLevel = 'low' | 'medium' | 'high';
 export type EntityType = 'item' | 'routine' | 'person' | 'workContext';
-export type OpType = 'create' | 'update' | 'delete';
+export type OpType = 'create' | 'update' | 'delete' | 'rsvp';
+
+/** Mirrored from api-server/src/types/entities.ts. Keep in sync. */
+export interface GCalPerson {
+    email: string;
+    displayName?: string;
+    self?: boolean;
+}
+export type GCalResponseStatus = 'needsAction' | 'accepted' | 'declined' | 'tentative';
+export interface GCalAttendee extends GCalPerson {
+    responseStatus: GCalResponseStatus;
+    organizer?: boolean;
+    optional?: boolean;
+}
+export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation';
 
 export interface StoredAccount {
     id: string; // Better Auth user ID (UUID)
@@ -26,8 +40,9 @@ export interface StoredItem {
     waitingForPersonId?: string; // ref to StoredPerson._id — the person being waited on
     expectedBy?: string; // ISO date — deadline
     ignoreBefore?: string; // ISO date — tickler: item hidden until this date passes
-    timeStart?: string; // ISO datetime — calendar items only
-    timeEnd?: string; // ISO datetime — calendar items only
+    timeStart?: string; // ISO datetime for timed events, YYYY-MM-DD when allDay — calendar items only
+    timeEnd?: string; // ISO datetime for timed events, YYYY-MM-DD (exclusive) when allDay — calendar items only
+    allDay?: boolean; // true when timeStart/timeEnd are date-only YYYY-MM-DD strings (GCal exclusive-end preserved)
     calendarEventId?: string;
     calendarIntegrationId?: string;
     calendarSyncConfigId?: string; // ref to StoredCalendarSyncConfig._id — tracks which calendar this event belongs to
@@ -48,6 +63,13 @@ export interface StoredItem {
     urgent?: boolean;
     notes?: string; // freeform markdown notes — applies to all statuses
     lastSyncedNotes?: string; // last notes value synced from/to Google Calendar — used for conflict detection
+    /** GCal-mirror fields. Server-overwritten on every inbound pull; RSVP + attendee-editor are local-write exceptions. */
+    organizer?: GCalPerson;
+    creator?: GCalPerson;
+    attendees?: GCalAttendee[]; // sorted by email
+    responseStatus?: GCalResponseStatus; // denormalized from self attendee
+    eventType?: GCalEventType;
+    cancelledByGCal?: boolean; // true when an inbound GCal cancel pushed this item to trash
 }
 
 export interface StoredRoutineTemplate {
@@ -98,10 +120,11 @@ export interface StoredRoutine {
      * generated with an occurrence date before startDate.
      */
     startDate?: string;
-    /** Present when routineType === 'calendar'. Defines time and duration for generated calendar items. */
+    /** Present when routineType === 'calendar'. Defines time + duration (or all-day flag) for generated calendar items. */
     calendarItemTemplate?: {
-        timeOfDay: string; // HH:MM (24h) — start time
-        duration: number; // minutes
+        allDay?: boolean; // when true, timeOfDay/duration are ignored; generated items are all-day single-day
+        timeOfDay?: string; // HH:MM (24h) — start time. Required when !allDay.
+        duration?: number; // minutes. Required when !allDay.
     };
     /** ISO date of the most recently generated calendar item. Used to avoid scanning items for the next occurrence. */
     lastGeneratedDate?: string;
@@ -178,6 +201,14 @@ export interface StoredSyncCursor {
     lastSyncedTs: string; // ISO datetime of the last successful pull for this (device, user) pair
 }
 
+/** RSVP payload mirrored from RsvpOpPayload on the server side. */
+export interface StoredRsvpOpPayload {
+    itemId: string;
+    calendarEventId: string;
+    calendarIntegrationId: string;
+    responseStatus: GCalResponseStatus;
+}
+
 export interface SyncOperation {
     id?: number; // auto-increment — omitted before insertion
     /**
@@ -194,8 +225,13 @@ export interface SyncOperation {
     /**
      * Full entity state at the time of the operation. null for delete operations.
      * Stored as a snapshot (not a diff) so last-write-wins resolution is trivial on the server.
+     * Null for opType === 'rsvp' (use `rsvp` sidecar instead).
      */
     snapshot: StoredEntity | null;
+    /** Captured at edit time from SendUpdatesDialog; replays through pushback on flush. */
+    gcalMeta?: { sendUpdates: 'all' | 'none' };
+    /** Required when opType === 'rsvp'; absent otherwise. */
+    rsvp?: StoredRsvpOpPayload;
 }
 
 export interface MyDB extends DBSchema {

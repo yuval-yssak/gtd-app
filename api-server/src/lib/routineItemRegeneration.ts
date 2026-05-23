@@ -82,9 +82,13 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
     if (!template) {
         throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
     }
+    const { timeOfDay, duration } = template;
+    if (timeOfDay === undefined || duration === undefined) {
+        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration (all-day not yet wired here)`);
+    }
     const dateStr = occurrenceDate.toISOString().slice(0, 10);
-    const timeStart = `${dateStr}T${template.timeOfDay}:00`;
-    const timeEnd = dayjs(timeStart).add(template.duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
+    const timeStart = `${dateStr}T${timeOfDay}:00`;
+    const timeEnd = dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
 
     const contentException = (routine.routineExceptions ?? []).find((e) => e.type === 'modified' && e.date === dateStr);
     const title = contentException?.title ?? routine.title;
@@ -98,7 +102,7 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
     // window, but a stale exception batch arriving after regen is its own narrow window we can't
     // close from here — the next full inbound resolves it.
     const instanceEventId =
-        routine.calendarEventId && timeZone ? buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, template.timeOfDay, timeZone) : undefined;
+        routine.calendarEventId && timeZone ? buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, timeOfDay, timeZone) : undefined;
 
     return {
         _id: randomUUID(),

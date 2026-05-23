@@ -161,6 +161,10 @@ export async function createNextCalendarItem(db: IDBPDatabase<MyDB>, userId: str
     if (!calendarItemTemplate) {
         throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
     }
+    const { timeOfDay, duration } = calendarItemTemplate;
+    if (timeOfDay === undefined || duration === undefined) {
+        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration (all-day not yet wired here)`);
+    }
 
     const exceptions = (routine.routineExceptions ?? []).map((e) => e.date);
     const dtstart = parseAnchorToUtcDate(routine.startDate ?? routine.createdTs);
@@ -170,8 +174,8 @@ export async function createNextCalendarItem(db: IDBPDatabase<MyDB>, userId: str
     // local-time strings (no Z suffix) to avoid an implicit UTC conversion via .toISOString().
     // nextDate is at 00:00:00Z (from computeNextCalendarDate), so .toISOString().slice(0,10)
     // gives the correct UTC calendar date regardless of the local timezone.
-    const timeStart = `${nextDate.toISOString().slice(0, 10)}T${calendarItemTemplate.timeOfDay}:00`;
-    const timeEnd = dayjs(timeStart).add(calendarItemTemplate.duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
+    const timeStart = `${nextDate.toISOString().slice(0, 10)}T${timeOfDay}:00`;
+    const timeEnd = dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
 
     const now = dayjs().toISOString();
     const item = {
@@ -290,6 +294,11 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
     if (!calendarItemTemplate) {
         throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
     }
+    const { timeOfDay, duration } = calendarItemTemplate;
+    if (timeOfDay === undefined || duration === undefined) {
+        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration (all-day not yet wired here)`);
+    }
+    const narrowedTemplate = { timeOfDay, duration };
 
     const validOccurrences = getValidFutureOccurrences(routine);
     // Dedupe against any item tied to this routine regardless of status — a `done`/`trash` item on
@@ -312,7 +321,7 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
 
     const now = dayjs().toISOString();
     for (const date of newDates) {
-        const item = buildCalendarItem(userId, routine, date, now, calendarItemTemplate);
+        const item = buildCalendarItem(userId, routine, date, now, narrowedTemplate);
         await putItem(db, item);
         await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
     }

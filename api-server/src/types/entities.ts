@@ -11,7 +11,28 @@ export type ItemStatus = (typeof ItemStatus)[keyof typeof ItemStatus];
 
 export type EnergyLevel = 'low' | 'medium' | 'high';
 export type EntityType = 'item' | 'routine' | 'person' | 'workContext';
-export type OpType = 'create' | 'update' | 'delete';
+export type OpType = 'create' | 'update' | 'delete' | 'rsvp';
+
+/**
+ * GCal-mirror types. Server-authoritative on inbound pulls (always overwritten); the only
+ * local-write exceptions are RSVP (routed through opType:'rsvp') and the attendee editor
+ * (pushed through the standard update with `gcalMeta.sendUpdates`).
+ */
+export interface GCalPerson {
+    email: string;
+    displayName?: string;
+    self?: boolean;
+}
+export type GCalResponseStatus = 'needsAction' | 'accepted' | 'declined' | 'tentative';
+export interface GCalAttendee extends GCalPerson {
+    responseStatus: GCalResponseStatus;
+    organizer?: boolean;
+    optional?: boolean;
+}
+export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation';
+
+/** Keys overwritten verbatim from inbound GCal — replaceById must clear these when absent. */
+export const GCAL_OWNED_ITEM_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType'] as const;
 
 export interface ItemInterface {
     /**
@@ -46,11 +67,13 @@ export interface ItemInterface {
      */
     ignoreBefore?: string;
     /**
-     * Calendar event start datetime (ISO datetime string). `calendar` items only.
+     * Calendar event start. ISO datetime string for timed events; `YYYY-MM-DD` when `allDay === true`.
+     * `calendar` items only.
      */
     timeStart?: string;
     /**
-     * Calendar event end datetime (ISO datetime string). `calendar` items only.
+     * Calendar event end. ISO datetime string for timed events; `YYYY-MM-DD` (exclusive — GCal's
+     * convention) when `allDay === true`. `calendar` items only.
      */
     timeEnd?: string;
     /**
@@ -111,6 +134,23 @@ export interface ItemInterface {
      * enabling last-write-wins conflict resolution only when GCal actually changed it.
      */
     lastSyncedNotes?: string;
+    /**
+     * When true on a `calendar` item, `timeStart` and `timeEnd` are `YYYY-MM-DD` strings
+     * (GCal's exclusive-end convention preserved verbatim) rather than ISO datetimes.
+     */
+    allDay?: boolean;
+    /** GCal organizer of this event. Server-overwritten on every inbound pull. */
+    organizer?: GCalPerson;
+    /** GCal creator of this event (often equal to organizer). Server-overwritten. */
+    creator?: GCalPerson;
+    /** Attendees, sorted by email for stable equality. Server-overwritten. */
+    attendees?: GCalAttendee[];
+    /** Denormalized from `attendees.find(a => a.self)?.responseStatus`. GCal-owned with RSVP write exception. */
+    responseStatus?: GCalResponseStatus;
+    /** GCal event type — usually `'default'`; outOfOffice/focusTime/workingLocation are special. Server-overwritten. */
+    eventType?: GCalEventType;
+    /** Server-set to true when an inbound GCal cancellation pushed this item to trash. UI surfaces it as a badge. */
+    cancelledByGCal?: boolean;
     /**
      * Caller-supplied dedupe key, set only by the public API. Sparse-unique on (user, externalId)
      * so re-running an import with the same key upserts instead of creating duplicates.
@@ -212,11 +252,13 @@ export interface RoutineInterface {
      */
     startDate?: string;
     /**
-     * Present when routineType === 'calendar'. Defines time and duration for generated calendar items.
+     * Present when routineType === 'calendar'. Defines time + duration (or all-day flag) for generated calendar items.
+     * When `allDay === true`, `timeOfDay` and `duration` are ignored; generated items are all-day single-day occurrences.
      */
     calendarItemTemplate?: {
-        timeOfDay: string; // HH:MM (24h) — start time
-        duration: number; // minutes
+        allDay?: boolean;
+        timeOfDay?: string; // HH:MM (24h) — start time. Required when !allDay.
+        duration?: number; // minutes. Required when !allDay.
     };
     /**
      * ISO date string of the most recently generated calendar item's date.
@@ -265,6 +307,21 @@ export interface WorkContextInterface {
     updatedTs: string;
 }
 
+/**
+ * Payload for an `rsvp` opType: a local RSVP click that needs to push the user's responseStatus
+ * to GCal as the only sanctioned local-write into the GCal-owned attendee set. Carried in the
+ * op log so an offline RSVP replays correctly on reconnect.
+ */
+export interface RsvpOpPayload {
+    itemId: string;
+    calendarEventId: string;
+    calendarIntegrationId: string;
+    responseStatus: GCalResponseStatus;
+}
+
+/** Reason an op's GCal-side effect could not be applied. UI maps each to a remediation action. */
+export type OpFailureReason = 'transient_exhausted' | 'scope_missing' | 'calendar_missing' | 'edit_conflict' | 'terminal';
+
 export interface OperationInterface {
     _id: string; // server-generated UUID
     user: string;
@@ -279,8 +336,23 @@ export interface OperationInterface {
     /**
      * Full entity state at the time of the operation. null for delete operations.
      * Stored to allow any device to reconstruct state by replaying operations in ts order.
+     * For opType === 'rsvp', snapshot is null and rsvp lives in `rsvp` sidecar instead.
      */
     snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | null;
+    /**
+     * Sidecar for GCal-coupled writes. Populated when the user picked Send/Don't Send in the
+     * SendUpdatesDialog so the choice survives offline queueing and replays through pushback.
+     */
+    gcalMeta?: { sendUpdates: 'all' | 'none' };
+    /**
+     * RSVP payload for opType === 'rsvp'. Required when opType === 'rsvp'; absent otherwise.
+     */
+    rsvp?: RsvpOpPayload;
+    /** Set true when the GCal-side effect failed after retry. Surfaced via SyncIssuesPanel. */
+    syncFailed?: boolean;
+    failureReason?: OpFailureReason;
+    failureDetail?: string;
+    failedTs?: string;
 }
 
 export interface DeviceSyncStateInterface {
@@ -379,6 +451,12 @@ export interface CalendarIntegrationInterface {
     suspendedAt?: string; // ISO datetime — set when first invalid_grant detected
     revokedAt?: string; // ISO datetime — set when 24h grace expires
     lastAuthErrorAt?: string; // ISO datetime — bumped on every invalid_grant occurrence
+    /**
+     * OAuth scopes actually granted by Google on the most recent consent. Populated from
+     * `tokens.scope` in the OAuth callback. Absent on legacy integrations → treated as permissive
+     * (those users authorized the full `auth/calendar` scope). New consents stamp it explicitly.
+     */
+    grantedScopes?: string[];
     createdTs: string;
     updatedTs: string;
 }

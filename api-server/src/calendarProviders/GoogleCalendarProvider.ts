@@ -238,6 +238,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
         if (!template) {
             throw new Error(`Routine ${routine._id} has no calendarItemTemplate`);
         }
+        const { timeOfDay, duration } = template;
+        if (timeOfDay === undefined || duration === undefined) {
+            throw new Error(`Routine ${routine._id} calendarItemTemplate missing timeOfDay/duration (all-day routines not yet supported on this path)`);
+        }
 
         const startDate = seriesStartDate(routine);
         // GCal recurrence uses RRULE: prefix — the stored rrule omits it.
@@ -247,8 +251,8 @@ export class GoogleCalendarProvider implements CalendarProvider {
         // second series. Without it, Google generates a fresh id per call.
         const requestBody = {
             summary: routine.title,
-            start: buildDateTime(startDate, template.timeOfDay, timeZone),
-            end: endDateTime(startDate, template.timeOfDay, template.duration, timeZone),
+            start: buildDateTime(startDate, timeOfDay, timeZone),
+            end: endDateTime(startDate, timeOfDay, duration, timeZone),
             recurrence,
             ...(routine.template.notes !== undefined ? { description: markdownToHtml(routine.template.notes) } : {}),
             ...(options?.id ? { id: options.id } : {}),
@@ -269,6 +273,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
         if (!template) {
             throw new Error(`Routine ${routine._id} has no calendarItemTemplate`);
         }
+        const { timeOfDay, duration } = template;
+        if (timeOfDay === undefined || duration === undefined) {
+            throw new Error(`Routine ${routine._id} calendarItemTemplate missing timeOfDay/duration (all-day routines not yet supported on this path)`);
+        }
 
         const startDate = seriesStartDate(routine);
         await cal.events.update({
@@ -276,8 +284,8 @@ export class GoogleCalendarProvider implements CalendarProvider {
             eventId,
             requestBody: {
                 summary: routine.title,
-                start: buildDateTime(startDate, template.timeOfDay, timeZone),
-                end: endDateTime(startDate, template.timeOfDay, template.duration, timeZone),
+                start: buildDateTime(startDate, timeOfDay, timeZone),
+                end: endDateTime(startDate, timeOfDay, duration, timeZone),
                 recurrence: [`RRULE:${routine.rrule}`],
                 // events.update is a full replace — always send description to avoid leaving stale values.
                 description: routine.template.notes ? markdownToHtml(routine.template.notes) : '',
