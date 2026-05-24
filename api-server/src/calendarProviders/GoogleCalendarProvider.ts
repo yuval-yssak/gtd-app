@@ -12,6 +12,7 @@ const { RRule } = rrule;
 dayjs.extend(utc);
 
 import { markdownToHtml } from '../lib/markdownHtml.js';
+import { normalizeMasterEventId } from '../lib/routineItemRegeneration.js';
 import type { CalendarIntegrationInterface, GCalAttendee, GCalEventType, GCalPerson, GCalResponseStatus, RoutineInterface } from '../types/entities.js';
 import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
 import { SyncTokenInvalidError } from './CalendarProvider.js';
@@ -712,9 +713,14 @@ export class GoogleCalendarProvider implements CalendarProvider {
             orderBy: 'startTime',
         });
 
+        // Caller passes `eventId` as the bare master id; inbound `event.recurringEventId` from GCal
+        // can carry the `_R<YYYYMMDDTHHMMSS>` rebased-master suffix after a "this and following"
+        // split. Normalize both sides — otherwise exceptions on rebased series are silently dropped
+        // and modified/deleted GCal instances never reach the items table.
+        const normalizedEventId = normalizeMasterEventId(eventId);
         return (response.data.items ?? []).flatMap((event): GCalException[] => {
             // Only care about instances that belong to this recurring series.
-            if (event.recurringEventId !== eventId) {
+            if (normalizeMasterEventId(event.recurringEventId ?? '') !== normalizedEventId) {
                 return [];
             }
 

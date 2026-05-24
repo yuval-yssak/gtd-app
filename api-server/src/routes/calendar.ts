@@ -31,7 +31,7 @@ import {
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
-import { propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
+import { normalizeMasterEventId, propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { applyRsvpToAttendees, resolveSyncConfigForItem } from '../lib/rsvpHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
@@ -1124,7 +1124,9 @@ calendarRoutes.post('/integrations/:id/link-routine/:routineId', authenticateReq
         console.error(`[calendar] createRecurringEvent failed for integration ${integrationId}:`, createResult.error);
         return c.json({ error: 'Failed to create Google Calendar event' }, 502);
     }
-    const { calendarEventId } = createResult;
+    // Defensive normalization: a freshly-created GCal event should already have a bare master id,
+    // but `normalizeMasterEventId` is idempotent on bare ids and protects against provider quirks.
+    const calendarEventId = normalizeMasterEventId(createResult.calendarEventId);
 
     const now = dayjs().toISOString();
     // Seed lastSyncedNotes with the exact HTML we just pushed so the next sync doesn't mistake
@@ -1367,9 +1369,12 @@ async function importCalendarEvents(source: CalendarSource, events: GCalEvent[],
         calendarIntegrationId: source.integration._id,
         calendarEventId: { $exists: true },
     });
+    // Stored `calendarEventId` is always the bare master id (normalized at write time by
+    // `importRecurringEventAsRoutine`). Inbound ids may still carry the `_R<...>` rebased-master
+    // suffix, so normalize on both sides of every comparison below.
     const knownRoutineEventIds = new Set(existingLinkedRoutines.map((r) => r.calendarEventId).filter((id): id is string => Boolean(id)));
 
-    const isRecurringMaster = (e: GCalEvent) => hasAtLeastOne(e.recurrence ?? []) || knownRoutineEventIds.has(e.id);
+    const isRecurringMaster = (e: GCalEvent) => hasAtLeastOne(e.recurrence ?? []) || knownRoutineEventIds.has(normalizeMasterEventId(e.id));
     const recurringMasters = events.filter(isRecurringMaster);
     const regularEvents = events.filter((e) => !isRecurringMaster(e));
 
@@ -1388,7 +1393,10 @@ async function importCalendarEvents(source: CalendarSource, events: GCalEvent[],
     // Detect GCal series splits ("this and all following") and link new routines to their parent.
     await detectAndLinkSplits(existingLinkedRoutines, allLinkedRoutines, recurringMasters, ctx);
 
-    const eventsToUpsert = regularEvents.filter((e) => !e.recurringEventId || !routineEventIds.has(e.recurringEventId));
+    // An instance's `recurringEventId` can also carry the `_R<...>` rebased-master suffix; normalize
+    // before lookup so series instances are correctly filtered out (otherwise they'd surface as
+    // duplicate standalone items alongside the routine-generated ones).
+    const eventsToUpsert = regularEvents.filter((e) => !e.recurringEventId || !routineEventIds.has(normalizeMasterEventId(e.recurringEventId)));
     await Promise.all(eventsToUpsert.map((event) => upsertCalendarItem(event, source, ctx)));
 }
 
@@ -1463,7 +1471,10 @@ async function detectAndLinkSplits(
             continue;
         }
 
-        const event = masterEvents.find((e) => e.id === tail.calendarEventId);
+        // Match on the normalized master id — `tail.calendarEventId` is stored normalized by
+        // `importRecurringEventAsRoutine`, while `masterEvents` carries raw GCal ids that may
+        // still bear the `_R<…>` rebased-master suffix.
+        const event = masterEvents.find((e) => normalizeMasterEventId(e.id) === tail.calendarEventId);
         if (!event) {
             continue;
         }
@@ -1500,8 +1511,14 @@ function extractRrule(recurrence: string[]): string | null {
 /**
  * Imports a GCal recurring master event as a routine.
  * Creates a new routine if none exists for this calendarEventId, or updates the existing one.
+ *
+ * `event.id` is normalized via `normalizeMasterEventId` before any persistence or lookup, so a
+ * GCal rebased-master id like `<masterId>_R<YYYYMMDDTHHMMSS>` is collapsed to the bare master id.
+ * Without this, downstream `buildCalendarInstanceEventId` produces double-anchored instance ids
+ * that never match GCal payloads → reconcile orphan-creates a duplicate item per occurrence.
  */
-async function importRecurringEventAsRoutine(event: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+async function importRecurringEventAsRoutine(rawEvent: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const event: GCalEvent = { ...rawEvent, id: normalizeMasterEventId(rawEvent.id) };
     const rrule = event.status === 'cancelled' ? null : extractRrule(event.recurrence ?? []);
 
     const existing = await findExistingRoutineForEvent(event, rrule, source, ctx);

@@ -13,7 +13,7 @@ import dayjs from 'dayjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
-import { buildCalendarInstanceEventId, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
+import { buildCalendarInstanceEventId, normalizeMasterEventId, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { RoutineInterface } from '../types/entities.js';
 
@@ -216,5 +216,45 @@ describe('regenerateFutureRoutineItems — sets calendarInstanceEventId', () => 
         for (const item of items) {
             expect(item.calendarInstanceEventId).toMatch(new RegExp(`^${MASTER}_\\d{8}T090000Z$`));
         }
+    });
+});
+
+describe('normalizeMasterEventId', () => {
+    it('strips the timed recurrence-anchor suffix (_R<YYYYMMDDTHHMMSS>)', () => {
+        expect(normalizeMasterEventId('mleem99efhim4a0tsh3s86797o_R20260519T123000')).toBe('mleem99efhim4a0tsh3s86797o');
+    });
+
+    it('strips the timed recurrence-anchor suffix with trailing Z (_R<YYYYMMDDTHHMMSS>Z)', () => {
+        expect(normalizeMasterEventId('abc123_R20260519T123000Z')).toBe('abc123');
+    });
+
+    it('strips the all-day recurrence-anchor suffix (_R<YYYYMMDD>)', () => {
+        expect(normalizeMasterEventId('def456_R20260519')).toBe('def456');
+    });
+
+    it('is idempotent — bare master ids pass through unchanged', () => {
+        expect(normalizeMasterEventId('mleem99efhim4a0tsh3s86797o')).toBe('mleem99efhim4a0tsh3s86797o');
+    });
+
+    it('does NOT strip plain instance suffixes (_<UTC>Z) — those are valid instance ids, not master suffixes', () => {
+        // Plain `_20260526T123000Z` is a single-instance id, not a rebased master. Stripping it
+        // would conflate instances with the master id and break per-instance reconcile.
+        expect(normalizeMasterEventId('mleem99efhim4a0tsh3s86797o_20260526T123000Z')).toBe('mleem99efhim4a0tsh3s86797o_20260526T123000Z');
+    });
+
+    it('strips only the trailing _R<…> anchor — leaves internal underscores intact', () => {
+        // Defensive: master ids can in principle contain underscores; the regex is anchored to end-of-string.
+        expect(normalizeMasterEventId('foo_bar_baz_R20260519T123000')).toBe('foo_bar_baz');
+    });
+
+    it('passes through an empty string unchanged', () => {
+        // Defensive: callers protect against `undefined` via `?? ''`; the helper must not crash on the fallback.
+        expect(normalizeMasterEventId('')).toBe('');
+    });
+
+    it('does NOT strip an all-day-with-Z form (_R<YYYYMMDD>Z) — current regex only handles the timed-with-Z case', () => {
+        // GCal has not been observed to emit this form; if it ever does, the regex would need to widen
+        // to `_R\d{8}(T\d{6})?Z?$`. This test pins the current behavior so future changes are intentional.
+        expect(normalizeMasterEventId('abc_R20260519Z')).toBe('abc_R20260519Z');
     });
 });

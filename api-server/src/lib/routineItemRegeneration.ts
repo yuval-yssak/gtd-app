@@ -73,6 +73,23 @@ function getValidFutureOccurrences(routine: RoutineInterface): Date[] {
 }
 
 /**
+ * Strip the recurrence-anchor suffix from a GCal recurring-master event id. Google sometimes
+ * returns rebased masters (after a "this and following" split done in GCal) with ids of the form
+ * `<masterId>_R<YYYYMMDDTHHMMSS>Z?` (timed) or `<masterId>_R<YYYYMMDD>` (all-day). Storing the
+ * suffixed form as `routine.calendarEventId` breaks two things:
+ *  1. `buildCalendarInstanceEventId` concatenates a `_<utc>Z` instance suffix and produces a
+ *     double-anchored id that no GCal payload ever matches → reconcile orphan-creates duplicates.
+ *  2. The `recurringEventId` filter that hides series instances (calendar.ts) compares against the
+ *     stored `calendarEventId` set; if storage is suffixed but GCal's `recurringEventId` is the
+ *     bare master id, the filter misses and instances surface as standalone items.
+ *
+ * Idempotent: a bare master id passes through unchanged. Exported for unit testing.
+ */
+export function normalizeMasterEventId(id: string): string {
+    return id.replace(/_R\d{8}(T\d{6}Z?)?$/, '');
+}
+
+/**
  * GCal instance event id for a recurring-series occurrence — matches what Google returns in
  * `event.id` for instances of a recurring event.
  *

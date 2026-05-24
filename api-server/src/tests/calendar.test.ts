@@ -2550,6 +2550,103 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         }
     });
 
+    // Regression: pre-fix, GCal returning a rebased-master id (`<master>_R<YYYYMMDDTHHmmss>`) led to
+    // a doubly-suffixed `calendarInstanceEventId` on every generated item, causing reconcile to
+    // orphan-create a duplicate item per occurrence. The import path now normalizes `event.id` at
+    // its boundary; this test pins the contract that a bare-stored routine + suffixed inbound id
+    // → exactly one routine (not two), and stored `calendarEventId` stays bare.
+    it('importRecurringEventAsRoutine normalizes a suffixed _R<…> master id and matches a bare-stored routine (no duplicate)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareMasterId = 'mleem99efhim4a0tsh3s86797o';
+        const suffixedMasterId = `${bareMasterId}_R20260519T123000`;
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-bare',
+                calendarEventId: bareMasterId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'cfg-1',
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: suffixedMasterId,
+                    title: 'Standup',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-rebased',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routines = await routinesDAO.findArray({ user: userId });
+        // Exactly the one pre-existing routine — no duplicate created by the suffixed inbound id.
+        expect(routines).toHaveLength(1);
+        const [routine] = routines;
+        if (!routine) throw new Error('expected one routine');
+        expect(routine._id).toBe('routine-bare');
+        expect(routine.calendarEventId).toBe(bareMasterId);
+    });
+
+    it('importCalendarEvents normalizes a suffixed recurringEventId on an instance so it is filtered as a series instance (not upserted as a standalone item)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareMasterId = 'mleem99efhim4a0tsh3s86797o';
+        const suffixedMasterId = `${bareMasterId}_R20260519T123000`;
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const tomorrowAt930 = dayjs(tomorrowAt9).add(30, 'minute').toISOString();
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-bare-2',
+                calendarEventId: bareMasterId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'cfg-1',
+            }),
+        );
+
+        // Inbound: one instance event whose recurringEventId carries the rebased-master suffix.
+        // Pre-fix, this was treated as a standalone event (not a series instance) and upserted as
+        // a duplicate item alongside the routine-generated one.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: `${bareMasterId}_20260518T060000Z`,
+                    title: 'Standup',
+                    timeStart: tomorrowAt9,
+                    timeEnd: tomorrowAt930,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurringEventId: suffixedMasterId,
+                },
+            ],
+            nextSyncToken: 'tok-instance',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // No standalone item should be upserted — the routine generator owns the series instances.
+        const standaloneItems = await itemsDAO.findArray({ user: userId, calendarEventId: `${bareMasterId}_20260518T060000Z` } as never);
+        expect(standaloneItems).toHaveLength(0);
+    });
+
     it('revive clears a prior cancelledByGCal: true (restored item carries no phantom badge)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -3738,6 +3835,69 @@ describe('GoogleCalendarProvider token refresh callback', () => {
         const provider = new GoogleCalendarProvider(makeIntegration('user-1'));
         // Emitting should not throw even with no listener registered.
         expect(() => getAuth(provider).emit('tokens', { access_token: 'at' })).not.toThrow();
+    });
+});
+
+// Regression: post-fix, stored `calendarEventId` is always the bare master id, but GCal may still
+// emit instances whose `recurringEventId` carries the `_R<YYYYMMDDTHHmmss>` rebased-master suffix.
+// `getExceptions` filters instances by `recurringEventId !== eventId`; without normalization on
+// both sides, every exception is silently dropped → modified/deleted GCal instances never reach
+// the items table. This test pins the contract by running `getExceptions` end-to-end against a
+// mocked `cal.events.list` and asserting the mismatched-form pair is treated as the same series.
+describe('GoogleCalendarProvider.getExceptions — rebased-master id normalization', () => {
+    it('matches an instance whose recurringEventId carries the _R<…> suffix against a bare master eventId', async () => {
+        const bareMasterId = 'mleem99efhim4a0tsh3s86797o';
+        const suffixedMasterId = `${bareMasterId}_R20260519T123000`;
+        // Spy on the prototype so `getExceptions`'s internal `cal.events.list` call hits our mock.
+        const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
+        type ListCall = (params: unknown) => Promise<{ data: { items?: unknown[] } }>;
+        const listSpy = vi.spyOn(eventsProto, 'list' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ListCall>>;
+        listSpy.mockResolvedValue({
+            data: {
+                items: [
+                    {
+                        id: `${bareMasterId}_20260526T123000Z`,
+                        recurringEventId: suffixedMasterId,
+                        originalStartTime: { dateTime: '2026-05-26T12:30:00Z' },
+                        status: 'cancelled',
+                    },
+                ],
+            },
+        });
+
+        const provider = new GoogleCalendarProvider(makeIntegration('user-1'));
+        const exceptions = await provider.getExceptions(bareMasterId, 'cal-1', '2026-01-01T00:00:00Z');
+
+        // Pre-fix this would be `[]` (silent drop). Post-fix, the deleted instance surfaces as
+        // a `type: 'deleted'` exception with the inbound googleEventId.
+        expect(exceptions).toHaveLength(1);
+        const [ex] = exceptions;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.type).toBe('deleted');
+        expect(ex.originalDate).toBe('2026-05-26');
+    });
+
+    it('still matches when both sides are bare master ids — guards against a future regex tweak silently breaking the common case', async () => {
+        const bareMasterId = 'bare-no-suffix-anywhere';
+        const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
+        type ListCall = (params: unknown) => Promise<{ data: { items?: unknown[] } }>;
+        const listSpy = vi.spyOn(eventsProto, 'list' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ListCall>>;
+        listSpy.mockResolvedValue({
+            data: {
+                items: [
+                    {
+                        id: `${bareMasterId}_20260526T123000Z`,
+                        recurringEventId: bareMasterId,
+                        originalStartTime: { dateTime: '2026-05-26T12:30:00Z' },
+                        status: 'cancelled',
+                    },
+                ],
+            },
+        });
+
+        const provider = new GoogleCalendarProvider(makeIntegration('user-1'));
+        const exceptions = await provider.getExceptions(bareMasterId, 'cal-1', '2026-01-01T00:00:00Z');
+        expect(exceptions).toHaveLength(1);
     });
 });
 
