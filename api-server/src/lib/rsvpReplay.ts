@@ -41,7 +41,10 @@ export async function replayRsvpOp(userId: string, op: OperationInterface, build
     }
     const { rsvp } = op;
     const item = await itemsDAO.findByOwnerAndId(rsvp.itemId, userId);
-    if (!item || item.status !== 'calendar' || !item.calendarEventId || !item.calendarIntegrationId) {
+    // Routine-instance items carry calendarInstanceEventId in place of calendarEventId — the op's
+    // own rsvp.calendarEventId snapshot already pins whichever id the issuing client saw, so the
+    // pre-flight just needs the item to be calendar-status with a live integration id.
+    if (!item || item.status !== 'calendar' || !item.calendarIntegrationId) {
         await markOpFailed(op._id, 'terminal', 'item missing or no longer calendar');
         return;
     }
@@ -85,6 +88,11 @@ async function pushRsvpToGCal(args: PushArgs): Promise<void> {
     const { userId, op, rsvp, item, integration, config, buildProvider } = args;
     const provider = buildProvider(integration, userId);
     const priorResponseStatus = item.responseStatus;
+    // Re-derive the GCal event id at replay time. For single events `item.calendarEventId` is
+    // authoritative; for routine-instance items `item.calendarInstanceEventId` is the current
+    // GCal id even if a since-applied master-time edit invalidated the original id captured in
+    // `rsvp.calendarEventId`. Falls back to the op's snapshot when both are absent (legacy ops).
+    const eventId = item.calendarEventId ?? item.calendarInstanceEventId ?? rsvp.calendarEventId;
     // Stamp `now` BEFORE the GCal call (including retries). The online endpoint does the same;
     // stamping after the await lets slow PATCH + webhook latency exceed ECHO_WINDOW_SECONDS, and
     // the webhook-arrived inbound is then mis-classified as an external change and re-applied.
@@ -94,7 +102,7 @@ async function pushRsvpToGCal(args: PushArgs): Promise<void> {
         const myEmail = await provider.getMyEmail();
         const nextAttendees = applyRsvpToAttendees(item.attendees ?? [], myEmail, rsvp.responseStatus);
         await retryWithBackoff(
-            () => provider.patchEventAttendees(config.calendarId, rsvp.calendarEventId, nextAttendees, { sendUpdates: 'all' }),
+            () => provider.patchEventAttendees(config.calendarId, eventId, nextAttendees, { sendUpdates: 'all' }),
             (err) => categorizeGCalError(err) === 'transient_exhausted',
         );
         await commitRsvpLocally(item, nextAttendees, rsvp.responseStatus, now);

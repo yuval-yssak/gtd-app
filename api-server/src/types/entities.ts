@@ -34,6 +34,13 @@ export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLo
 /** Keys overwritten verbatim from inbound GCal — replaceById must clear these when absent. */
 export const GCAL_OWNED_ITEM_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType'] as const;
 
+/**
+ * Mirrors `GCAL_OWNED_ITEM_KEYS` for the routine surface (RFC 5545 master) and per-instance overrides.
+ * Routines store master attendees/organizer/etc. so the regenerator can copy them onto generated items;
+ * per-instance overrides under `routineExceptions[]` carry the same set when they differ from the master.
+ */
+export const GCAL_OWNED_ROUTINE_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType'] as const;
+
 export interface ItemInterface {
     /**
      * Client-generated UUID used as the MongoDB _id. Optional so MongoDB accepts documents created without one (e.g. in tests) but always present in practice.
@@ -202,6 +209,17 @@ export interface RoutineInterface {
      */
     calendarEventId?: string;
     /**
+     * GCal master organizer/creator/attendees/responseStatus/eventType. Mirrors `ItemInterface`'s
+     * GCal-owned fields per RFC 5545: the recurring series carries one canonical attendee list which
+     * applies to every generated occurrence unless a per-instance exception overrides it. Always
+     * overwritten on inbound master refresh; see `GCAL_OWNED_ROUTINE_KEYS`.
+     */
+    organizer?: GCalPerson;
+    creator?: GCalPerson;
+    attendees?: GCalAttendee[];
+    responseStatus?: GCalResponseStatus;
+    eventType?: GCalEventType;
+    /**
      * Ref to CalendarIntegrationInterface._id. Identifies which calendar integration owns the series.
      */
     calendarIntegrationId?: string;
@@ -278,6 +296,16 @@ export interface RoutineInterface {
         newTimeEnd?: string;
         title?: string; // overridden title — present when GCal instance title differs from master
         notes?: string; // overridden description — present when GCal instance description differs from master
+        /**
+         * Per-instance GCal-owned override fields (RFC 5545: each modified instance is its own VEVENT
+         * with its own attendees). Only emitted when the instance value differs from the master; an
+         * absent key means "inherit from master". Server-overwritten on inbound exception refresh.
+         */
+        organizer?: GCalPerson;
+        creator?: GCalPerson;
+        attendees?: GCalAttendee[];
+        responseStatus?: GCalResponseStatus;
+        eventType?: GCalEventType;
     }>;
 }
 

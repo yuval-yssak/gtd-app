@@ -234,6 +234,95 @@ describe('generateCalendarItemsToHorizon', () => {
         }
     });
 
+    it('mirrors routine master attendees/organizer onto every generated item', async () => {
+        const routine = buildCalendarRoutine({
+            organizer: { email: 'org@example.com', displayName: 'Org' },
+            attendees: [
+                { email: 'alice@example.com', responseStatus: 'accepted' },
+                { email: 'bob@example.com', responseStatus: 'accepted' },
+            ],
+            eventType: 'default',
+        });
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const generated = items.filter((i) => i.routineId === 'cal-routine-1' && i.status === 'calendar');
+        expect(generated.length).toBeGreaterThan(0);
+        for (const item of generated) {
+            expect(item.organizer?.email).toBe('org@example.com');
+            expect(item.attendees).toHaveLength(2);
+            expect(item.eventType).toBe('default');
+        }
+    });
+
+    it('per-instance exception attendees override master attendees on the matching date only', async () => {
+        const nextMonday = dayjs().startOf('day').day(8);
+        const overrideDate = nextMonday.format('YYYY-MM-DD');
+        const routine = buildCalendarRoutine({
+            attendees: [{ email: 'alice@example.com', responseStatus: 'accepted' }],
+            routineExceptions: [
+                {
+                    date: overrideDate,
+                    type: 'modified',
+                    attendees: [
+                        { email: 'alice@example.com', responseStatus: 'accepted' },
+                        { email: 'carol@example.com', responseStatus: 'needsAction' },
+                    ],
+                },
+            ],
+        });
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const overriddenItem = items.find((i) => (i.timeStart ?? '').startsWith(overrideDate));
+        expect(overriddenItem?.attendees).toHaveLength(2);
+
+        const masterItems = items.filter((i) => !(i.timeStart ?? '').startsWith(overrideDate) && i.routineId === 'cal-routine-1');
+        for (const item of masterItems) {
+            expect(item.attendees).toHaveLength(1);
+            expect(item.attendees?.[0]?.email).toBe('alice@example.com');
+        }
+    });
+
+    it('per-instance exception with only responseStatus override keeps master organizer/attendees', async () => {
+        const nextMonday = dayjs().startOf('day').day(8);
+        const overrideDate = nextMonday.format('YYYY-MM-DD');
+        const routine = buildCalendarRoutine({
+            organizer: { email: 'org@example.com' },
+            attendees: [{ email: 'alice@example.com', responseStatus: 'accepted' }],
+            responseStatus: 'accepted',
+            routineExceptions: [
+                {
+                    date: overrideDate,
+                    type: 'modified',
+                    responseStatus: 'declined',
+                },
+            ],
+        });
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const overriddenItem = items.find((i) => (i.timeStart ?? '').startsWith(overrideDate));
+        expect(overriddenItem?.organizer?.email).toBe('org@example.com');
+        expect(overriddenItem?.attendees).toHaveLength(1);
+        expect(overriddenItem?.attendees?.[0]?.email).toBe('alice@example.com');
+        expect(overriddenItem?.responseStatus).toBe('declined');
+    });
+
+    it('per-instance exception with explicit empty attendees clears the master attendee list on that date', async () => {
+        const nextMonday = dayjs().startOf('day').day(8);
+        const overrideDate = nextMonday.format('YYYY-MM-DD');
+        const routine = buildCalendarRoutine({
+            attendees: [{ email: 'alice@example.com', responseStatus: 'accepted' }],
+            routineExceptions: [{ date: overrideDate, type: 'modified', attendees: [] }],
+        });
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const overriddenItem = items.find((i) => (i.timeStart ?? '').startsWith(overrideDate));
+        expect(overriddenItem?.attendees).toEqual([]);
+    });
+
     it('does not create duplicate items for existing dates', async () => {
         const routine = buildCalendarRoutine();
 

@@ -1,0 +1,1 @@
+- [Shared dialog refresh gap](feedback_shared_dialog_refresh_gap.md) — Extracted edit dialogs (e.g. PersonEditDialog) often have callers that forget refreshXxx(); refresh should live inside the dialog.

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseGCalEvents } from '../calendarProviders/GoogleCalendarProvider.js';
+import type { MasterContent } from '../calendarProviders/CalendarProvider.js';
+import { buildModifiedException, parseGCalEvents } from '../calendarProviders/GoogleCalendarProvider.js';
 
 // Mirrors the relevant subset of googleapis' calendar_v3.Schema$Event — the parser accepts
 // arbitrary records and narrows internally, so tests just hand it the same shape Google does.
@@ -170,6 +171,112 @@ describe('parseGCalEvents — meeting metadata', () => {
         if (!event) throw new Error('expected one event');
         expect(event.responseStatus).toBeUndefined();
         expect(event.attendees).toHaveLength(2);
+    });
+});
+
+describe('buildModifiedException — per-instance override emission', () => {
+    const baseMaster: MasterContent = {
+        title: 'Weekly 1:1',
+        description: '',
+        organizer: { email: 'organizer@example.com', displayName: 'Org' },
+        attendees: [
+            { email: 'alice@example.com', responseStatus: 'accepted' },
+            { email: 'bob@example.com', responseStatus: 'accepted' },
+        ],
+        eventType: 'default',
+    };
+
+    function buildInstance(overrides: Record<string, unknown> = {}): RawEvent {
+        return {
+            id: 'gcal-inst-1_20260520T120000Z',
+            summary: 'Weekly 1:1',
+            start: { dateTime: '2026-05-20T12:00:00Z' },
+            end: { dateTime: '2026-05-20T12:30:00Z' },
+            originalStartTime: { dateTime: '2026-05-20T12:00:00Z' },
+            description: '',
+            organizer: { email: 'organizer@example.com', displayName: 'Org' },
+            attendees: [
+                { email: 'alice@example.com', responseStatus: 'accepted' },
+                { email: 'bob@example.com', responseStatus: 'accepted' },
+            ],
+            eventType: 'default',
+            ...overrides,
+        };
+    }
+
+    it('returns an empty array when the instance matches the master in every field (RFC 5545 inheritance)', () => {
+        const result = buildModifiedException(buildInstance(), '2026-05-20', baseMaster);
+        expect(result).toEqual([]);
+    });
+
+    it('emits attendees on the exception when the instance has an extra attendee', () => {
+        const result = buildModifiedException(
+            buildInstance({
+                attendees: [
+                    { email: 'alice@example.com', responseStatus: 'accepted' },
+                    { email: 'bob@example.com', responseStatus: 'accepted' },
+                    { email: 'carol@example.com', responseStatus: 'needsAction' },
+                ],
+            }),
+            '2026-05-20',
+            baseMaster,
+        );
+        expect(result).toHaveLength(1);
+        const [ex] = result;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.attendees).toHaveLength(3);
+        expect(ex.attendees?.map((a) => a.email)).toEqual(['alice@example.com', 'bob@example.com', 'carol@example.com']);
+    });
+
+    it('emits attendees on the exception when the instance has fewer attendees', () => {
+        const result = buildModifiedException(
+            buildInstance({
+                attendees: [{ email: 'alice@example.com', responseStatus: 'accepted' }],
+            }),
+            '2026-05-20',
+            baseMaster,
+        );
+        expect(result).toHaveLength(1);
+        const [ex] = result;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.attendees).toHaveLength(1);
+        expect(ex.attendees?.[0]?.email).toBe('alice@example.com');
+    });
+
+    it('emits attendees when one attendee responseStatus differs (declined)', () => {
+        const result = buildModifiedException(
+            buildInstance({
+                attendees: [
+                    { email: 'alice@example.com', responseStatus: 'declined' },
+                    { email: 'bob@example.com', responseStatus: 'accepted' },
+                ],
+            }),
+            '2026-05-20',
+            baseMaster,
+        );
+        expect(result).toHaveLength(1);
+        const [ex] = result;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.attendees?.find((a) => a.email === 'alice@example.com')?.responseStatus).toBe('declined');
+    });
+
+    it('emits eventType when the instance type diverges from the master', () => {
+        const result = buildModifiedException(buildInstance({ eventType: 'focusTime' }), '2026-05-20', baseMaster);
+        expect(result).toHaveLength(1);
+        const [ex] = result;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.eventType).toBe('focusTime');
+    });
+
+    it('omits inherited keys on a title-only override (other GCal-owned fields stay absent)', () => {
+        const result = buildModifiedException(buildInstance({ summary: 'Special title — this date' }), '2026-05-20', baseMaster);
+        expect(result).toHaveLength(1);
+        const [ex] = result;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.title).toBe('Special title — this date');
+        expect(ex.attendees).toBeUndefined();
+        expect(ex.organizer).toBeUndefined();
+        expect(ex.eventType).toBeUndefined();
     });
 });
 

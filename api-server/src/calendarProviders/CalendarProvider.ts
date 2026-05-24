@@ -22,12 +22,30 @@ export interface GCalException {
     googleEventId?: string;
     title?: string; // overridden title — present when instance summary differs from master
     notes?: string; // overridden description — present when instance description differs from master
+    /**
+     * Per-instance GCal-owned override fields. Only set when the instance differs from the master
+     * (RFC 5545 inheritance: missing keys mean "inherit from the master VEVENT"). The parser uses
+     * `MasterContent` to diff each field against the master before emitting.
+     */
+    organizer?: GCalPerson;
+    creator?: GCalPerson;
+    attendees?: GCalAttendee[];
+    responseStatus?: GCalResponseStatus;
+    eventType?: GCalEventType;
 }
 
-/** Master event content passed to getExceptions() so it can detect content-only changes. */
+/**
+ * Master event content passed to getExceptions() so it can detect content-only changes. Carries
+ * the same GCal-owned fields the parser may need to diff against — when the instance value matches
+ * the master, the exception omits that field so downstream consumers inherit from the master.
+ */
 export interface MasterContent {
     title: string;
     description: string;
+    organizer?: GCalPerson;
+    creator?: GCalPerson;
+    attendees?: GCalAttendee[];
+    eventType?: GCalEventType;
 }
 
 export interface GCalEvent {

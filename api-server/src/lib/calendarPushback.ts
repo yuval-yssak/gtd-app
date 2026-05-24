@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
 import type { CalendarProvider } from '../calendarProviders/CalendarProvider.js';
-import { buildDeterministicGCalId, isDuplicateIdError } from '../calendarProviders/GoogleCalendarProvider.js';
+import { attendeesEqual, buildDeterministicGCalId, isDuplicateIdError } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -150,8 +150,17 @@ async function pushRoutineInstanceOverride(
     const { provider, config, timeZone, integration } = ctx;
     const isDone = snapshot.status === 'done';
     const calendarEventId = routine.calendarEventId;
+    // Server-side gate: only forward `attendees` when the snapshot's list actually diverges from
+    // the routine master's list. `buildCalendarItem` mirrors master attendees onto every generated
+    // item, so a title-only edit on a routine instance would otherwise carry attendees identical
+    // to the master — forwarding them would silently fork the occurrence per RFC 5545 (the
+    // detach-warning client dialog only fires on actual membership changes; the server must be
+    // the gate of last resort for non-attendee edits and replayed legacy ops).
+    // `attendeesEqual` canonicalizes shape + sort order so key-order drift between the master
+    // mirror and the item snapshot doesn't trigger a false-positive divergence.
+    const attendeesDiverge = !attendeesEqual(routine.attendees, snapshot.attendees);
     console.log(
-        `[gcal-pushback] overriding routine instance | routineId=${snapshot.routineId} eventId=${calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
+        `[gcal-pushback] overriding routine instance | routineId=${snapshot.routineId} eventId=${calendarEventId} originalDate=${originalDate} status=${snapshot.status} attendeesDiverge=${attendeesDiverge}`,
     );
     await withAuthFailureHandling(integration._id, () =>
         provider.updateRecurringInstance(
@@ -163,13 +172,12 @@ async function pushRoutineInstanceOverride(
                 ...(snapshot.timeEnd ? { timeEnd: snapshot.timeEnd } : {}),
                 description: snapshot.notes != null ? markdownToHtml(snapshot.notes) : '',
                 colorId: isDone ? DONE_COLOR_ID : null,
-                // allDay drives {date} vs {dateTime} serialization. attendees is intentionally NOT
-                // forwarded on routine-instance overrides — GCal interprets a non-null attendees on
-                // an instance patch as a per-instance override that severs inheritance from the
-                // master's attendee list. Single-event paths (pushExistingItemToGCal) push attendees
-                // normally; routine-master paths (createRecurringEvent/updateRecurringEvent) own the
-                // attendee list for the whole series.
+                // allDay drives {date} vs {dateTime} serialization. attendees forwarding is the
+                // explicit "detach this occurrence" gesture (RFC 5545: per-instance attendee list
+                // severs inheritance from the master). Gated by the JSON-equality diff above so a
+                // title/time/notes edit on a routine instance does NOT silently fork attendees.
                 ...(snapshot.allDay !== undefined ? { allDay: snapshot.allDay } : {}),
+                ...(attendeesDiverge ? { attendees: snapshot.attendees } : {}),
             },
             config.calendarId,
             timeZone,

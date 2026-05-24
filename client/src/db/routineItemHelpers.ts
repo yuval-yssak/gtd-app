@@ -208,6 +208,8 @@ function buildCalendarItem(
     const contentException = (routine.routineExceptions ?? []).find((e) => e.type === 'modified' && e.date === dateStr);
     const title = contentException?.title ?? routine.title;
     const notes = contentException?.notes ?? routine.template.notes;
+    // RFC 5545 attendee/organizer/etc. inheritance — exception (if any) overrides master per key.
+    const gcalOwned = mergeGCalOwnedForOccurrence(routine, contentException);
 
     if (template.allDay === true) {
         const timeEnd = dayjs(dateStr).add(1, 'day').format('YYYY-MM-DD');
@@ -221,6 +223,7 @@ function buildCalendarItem(
             timeEnd,
             allDay: true,
             ...(notes ? { notes } : {}),
+            ...gcalOwned,
             createdTs: now,
             updatedTs: now,
         };
@@ -241,9 +244,33 @@ function buildCalendarItem(
         timeStart,
         timeEnd,
         ...(notes ? { notes } : {}),
+        ...gcalOwned,
         createdTs: now,
         updatedTs: now,
     };
+}
+
+/**
+ * Returns the merged GCal-owned slice (organizer/creator/attendees/responseStatus/eventType) for
+ * a single occurrence: routine master first, then the per-instance exception override overlayed
+ * key by key. Mirrors `api-server/src/lib/routineItemRegeneration.ts`'s `pickGCalOwnedRoutineMirror`.
+ */
+function mergeGCalOwnedForOccurrence(
+    routine: StoredRoutine,
+    contentException: NonNullable<StoredRoutine['routineExceptions']>[number] | undefined,
+): Partial<Pick<StoredItem, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> {
+    const merged: Partial<Pick<StoredItem, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> = {};
+    if (routine.organizer !== undefined) merged.organizer = routine.organizer;
+    if (routine.creator !== undefined) merged.creator = routine.creator;
+    if (routine.attendees !== undefined) merged.attendees = routine.attendees;
+    if (routine.responseStatus !== undefined) merged.responseStatus = routine.responseStatus;
+    if (routine.eventType !== undefined) merged.eventType = routine.eventType;
+    if (contentException?.organizer !== undefined) merged.organizer = contentException.organizer;
+    if (contentException?.creator !== undefined) merged.creator = contentException.creator;
+    if (contentException?.attendees !== undefined) merged.attendees = contentException.attendees;
+    if (contentException?.responseStatus !== undefined) merged.responseStatus = contentException.responseStatus;
+    if (contentException?.eventType !== undefined) merged.eventType = contentException.eventType;
+    return merged;
 }
 
 /** Dates that must be skipped when generating or counting occurrences. Shared between the

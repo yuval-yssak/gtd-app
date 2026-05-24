@@ -4,8 +4,30 @@ import timezone from 'dayjs/plugin/timezone.js';
 import utc from 'dayjs/plugin/utc.js';
 import rrule from 'rrule';
 import itemsDAO from '../dataAccess/itemsDAO.js';
-import type { ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
+import { GCAL_OWNED_ROUTINE_KEYS, type ItemInterface, type OperationInterface, type RoutineInterface } from '../types/entities.js';
 import { recordOperation } from './operationHelpers.js';
+
+/**
+ * Extracts the GCal-owned slice (organizer/creator/attendees/responseStatus/eventType) from either
+ * the routine master or a per-instance exception override. Per RFC 5545 each modified instance is
+ * its own VEVENT carrying a full attendee list — but only the keys that diverged from the master
+ * are persisted on the exception entry. Callers merge override-over-master so per-key inheritance
+ * is preserved: missing key on the override ⇒ inherit master, present key ⇒ override wins.
+ */
+function pickGCalOwnedRoutineMirror(
+    source: Partial<Pick<RoutineInterface, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>>,
+): Partial<Pick<ItemInterface, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> {
+    const next: Partial<Pick<ItemInterface, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> = {};
+    for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+        const value = source[key];
+        if (value !== undefined) {
+            // Both routine + exception entry use the same field shape as ItemInterface for these keys
+            // (same `GCalPerson`/`GCalAttendee` types from entities.ts), so the assignment is shape-safe.
+            (next as Record<string, unknown>)[key] = value;
+        }
+    }
+    return next;
+}
 
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -98,6 +120,12 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
     const contentException = (routine.routineExceptions ?? []).find((e) => e.type === 'modified' && e.date === dateStr);
     const title = contentException?.title ?? routine.title;
     const notes = contentException?.notes ?? routine.template.notes;
+    // Per RFC 5545: per-instance override wins per-key over the master attendee list. Master mirror
+    // first; exception keys (if any) overlay on top. Both are pulled through `pickGCalOwnedRoutineMirror`
+    // so undefined keys never reach the spread (preserves exactOptionalPropertyTypes).
+    const masterGCalOwned = pickGCalOwnedRoutineMirror(routine);
+    const overrideGCalOwned = contentException ? pickGCalOwnedRoutineMirror(contentException) : {};
+    const gcalOwned = { ...masterGCalOwned, ...overrideGCalOwned };
 
     // Only routines linked to GCal produce instance ids — in-app routines have nothing to key on.
     // Window note: between a GCal master-time edit and the next inbound sync, in-flight exceptions
@@ -126,6 +154,7 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
         ...(routine.calendarIntegrationId ? { calendarIntegrationId: routine.calendarIntegrationId } : {}),
         ...(routine.calendarSyncConfigId ? { calendarSyncConfigId: routine.calendarSyncConfigId } : {}),
         ...(instanceEventId ? { calendarInstanceEventId: instanceEventId } : {}),
+        ...gcalOwned,
         createdTs: now,
         updatedTs: now,
     };

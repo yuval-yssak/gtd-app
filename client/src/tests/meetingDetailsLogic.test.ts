@@ -12,6 +12,7 @@ import {
     findPersonByEmail,
     findSelfAttendee,
     formatResponseSummary,
+    isAttendeeMembershipChange,
     isPlausibleEmail,
     removeAttendeeByEmail,
 } from '../components/itemEditor/meetingDetailsLogic';
@@ -194,6 +195,48 @@ describe('isPlausibleEmail', () => {
         expect(isPlausibleEmail('alice')).toBe(false);
         expect(isPlausibleEmail('alice@')).toBe(false);
         expect(isPlausibleEmail('alice@nope')).toBe(false);
+    });
+});
+
+describe('isAttendeeMembershipChange', () => {
+    it('returns false when only responseStatus changes (RSVP flip)', () => {
+        const prev = [attendee('a@x.com', 'accepted'), attendee('b@x.com', 'accepted')];
+        const next = [attendee('a@x.com', 'declined'), attendee('b@x.com', 'accepted')];
+        expect(isAttendeeMembershipChange(prev, next)).toBe(false);
+    });
+
+    it('returns true when an attendee is added', () => {
+        const prev = [attendee('a@x.com', 'accepted')];
+        const next = [attendee('a@x.com', 'accepted'), attendee('b@x.com', 'needsAction')];
+        expect(isAttendeeMembershipChange(prev, next)).toBe(true);
+    });
+
+    it('returns true when an attendee is removed', () => {
+        const prev = [attendee('a@x.com', 'accepted'), attendee('b@x.com', 'accepted')];
+        const next = [attendee('a@x.com', 'accepted')];
+        expect(isAttendeeMembershipChange(prev, next)).toBe(true);
+    });
+
+    it('returns false on identical lists', () => {
+        const prev = [attendee('a@x.com', 'accepted'), attendee('b@x.com', 'needsAction')];
+        const next = [attendee('a@x.com', 'accepted'), attendee('b@x.com', 'needsAction')];
+        expect(isAttendeeMembershipChange(prev, next)).toBe(false);
+    });
+
+    it('is case-insensitive on email', () => {
+        const prev = [attendee('Alice@X.com', 'accepted')];
+        const next = [attendee('alice@x.com', 'declined')];
+        expect(isAttendeeMembershipChange(prev, next)).toBe(false);
+    });
+
+    it('returns true when sizes match but one email is swapped for another', () => {
+        const prev = [attendee('a@x.com'), attendee('b@x.com')];
+        const next = [attendee('a@x.com'), attendee('c@x.com')];
+        expect(isAttendeeMembershipChange(prev, next)).toBe(true);
+    });
+
+    it('returns false when both lists are empty', () => {
+        expect(isAttendeeMembershipChange([], [])).toBe(false);
     });
 });
 

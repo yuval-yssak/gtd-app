@@ -43,6 +43,7 @@ import {
     type CalendarIntegrationInterface,
     type CalendarSyncConfigInterface,
     GCAL_OWNED_ITEM_KEYS,
+    GCAL_OWNED_ROUTINE_KEYS,
     type GCalAttendee,
     type GCalEventType,
     type GCalPerson,
@@ -1678,6 +1679,10 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
         calendarItemTemplate,
         template: event.description != null ? { notes: htmlToMarkdown(event.description) } : {},
         ...(event.description != null ? { lastSyncedNotes: event.description } : {}),
+        // Mirror the GCal master's organizer/creator/attendees/responseStatus/eventType onto the
+        // routine doc. `buildCalendarItem` copies these onto every generated occurrence so the
+        // first sync after import already produces meeting-aware items.
+        ...pickGCalOwnedFields(event),
         createdTs,
         updatedTs: ctx.now,
     };
@@ -1709,7 +1714,17 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     const notesUpdate = resolveInboundNotes(event.description, existing.lastSyncedNotes, event.updated, existing.updatedTs);
 
     const structurallyNewer = isGCalAtLeastAsRecent(event.updated, existing.updatedTs);
+    // GCal-owned routine fields (organizer/creator/attendees/responseStatus/eventType) flow through
+    // even when the event timestamp is older — these are server-authoritative regardless of LWW so
+    // an attendee-only edit on GCal can't be locked out by a stale local update bumping updatedTs.
+    const gcalOwnedDelta = hasGCalOwnedRoutineDelta(existing, event);
+    if (!structurallyNewer && !notesUpdate && !gcalOwnedDelta) {
+        return;
+    }
+    // GCal-owned-only path: avoids the read→merge→replaceById race for older webhooks. Targets
+    // only the five GCal-owned keys via $set/$unset and bypasses the structural merge.
     if (!structurallyNewer && !notesUpdate) {
+        await applyGCalOwnedRoutineDeltaOnly(existing, event, ctx);
         return;
     }
 
@@ -1722,7 +1737,9 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     // snapshot as the base for replaceById would drop those exceptions.
     const fresh = (await routinesDAO.findByOwnerAndId(routineId, ctx.userId)) ?? existing;
 
-    const updated: RoutineInterface = {
+    // Build the merged routine, then explicitly clear any GCal-owned key absent from the inbound
+    // event so a stale local attendee list cannot survive when GCal removes the last attendee.
+    const mergedWithGCalOwned: RoutineInterface = {
         ...fresh,
         ...(structurallyNewer
             ? {
@@ -1743,8 +1760,10 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
                   lastSyncedNotes: notesUpdate.lastSyncedNotes,
               }
             : {}),
+        ...pickGCalOwnedFields(event),
         updatedTs: ctx.now,
     };
+    const updated = clearOmittedGCalOwnedRoutineFields(mergedWithGCalOwned, event);
 
     await routinesDAO.replaceById(routineId, updated);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
@@ -1772,6 +1791,89 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     if (structurallyNewer) {
         await propagateMasterScheduleChanges(existing, updated, source, ctx);
     }
+    // GCal-owned master changes (attendee added/removed, organizer changed, eventType flipped) must
+    // reach existing items too, independent of schedule/title propagation. Items that already carry
+    // a per-instance routine exception (override) keep their per-key override values.
+    if (gcalOwnedDelta) {
+        await propagateMasterGCalOwnedChangesToItems(updated, ctx);
+    }
+}
+
+/**
+ * Pushes GCal-owned master changes (attendees, organizer, creator, responseStatus, eventType) onto
+ * every generated calendar item for this routine, EXCEPT items whose matching routineException
+ * carries a per-key override (those keep their override per RFC 5545 inheritance).
+ *
+ * Walks items, computes the merged GCal-owned slice (master ∪ per-instance override) for each, and
+ * writes the result via per-item `$set`/`$unset` so a removed master attendee actually clears on
+ * items that previously inherited it. Each write records an op so other devices converge via pull.
+ */
+async function propagateMasterGCalOwnedChangesToItems(routine: RoutineInterface, ctx: SyncContext): Promise<void> {
+    const items = await itemsDAO.findArray({ user: ctx.userId, routineId: routine._id, status: 'calendar' });
+    if (items.length === 0) {
+        return;
+    }
+    const exceptionsByDate = new Map((routine.routineExceptions ?? []).filter((e) => e.type === 'modified').map((e) => [e.date, e]));
+    const masterSlice = pickGCalOwnedRoutineFields(routine);
+
+    await Promise.all(
+        items.map(async (item) => {
+            const itemId = item._id;
+            if (!itemId) {
+                return;
+            }
+            const occurrenceDate = (item.timeStart ?? '').slice(0, 10);
+            const override = exceptionsByDate.get(occurrenceDate);
+            // Per-key merge: exception override wins per-key; absent override key ⇒ inherit master.
+            const overrideSlice = override ? pickGCalOwnedExceptionFields(override) : {};
+            const merged = { ...masterSlice, ...overrideSlice };
+            const updateOps = buildGCalOwnedFieldUpdate(merged);
+            if (updateOps.$set === undefined && updateOps.$unset === undefined) {
+                return;
+            }
+            const setOps = { ...(updateOps.$set ?? {}), updatedTs: ctx.now };
+            // Mirrors applyModifiedExceptionToOne: filter on the snapshot's updatedTs so a
+            // concurrent /sync/push edit landing between the find and the write loses cleanly.
+            const result = await itemsDAO.updateOne({ _id: itemId, user: ctx.userId, updatedTs: item.updatedTs } as never, {
+                $set: setOps,
+                ...(updateOps.$unset ? { $unset: updateOps.$unset } : {}),
+            });
+            if (result.matchedCount === 0) {
+                console.log(`[gcal-sync] propagateMasterGCalOwnedChangesToItems: skipped due to concurrent updatedTs bump | itemId=${itemId}`);
+                return;
+            }
+            const refreshed = await itemsDAO.findByOwnerAndId(itemId, ctx.userId);
+            if (!refreshed) {
+                return;
+            }
+            ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: refreshed, opType: 'update', now: ctx.now }));
+        }),
+    );
+}
+
+/**
+ * Builds `$set` / `$unset` slices for a Mongo update so a GCal-owned key whose target value is
+ * undefined gets `$unset` (clearing inherited stale values) and present keys get `$set`. Returns
+ * undefined slices when neither operation has any keys, so the caller can skip the write.
+ */
+function buildGCalOwnedFieldUpdate(merged: Partial<Pick<RoutineInterface, (typeof GCAL_OWNED_ROUTINE_KEYS)[number]>>): {
+    $set?: Record<string, unknown>;
+    $unset?: Record<string, ''>;
+} {
+    const setOps: Record<string, unknown> = {};
+    const unsetOps: Record<string, ''> = {};
+    for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+        const value = merged[key];
+        if (value === undefined) {
+            unsetOps[key] = '';
+        } else {
+            setOps[key] = value;
+        }
+    }
+    return {
+        ...(Object.keys(setOps).length > 0 ? { $set: setOps } : {}),
+        ...(Object.keys(unsetOps).length > 0 ? { $unset: unsetOps } : {}),
+    };
 }
 
 /**
@@ -1911,6 +2013,33 @@ function pickGCalOwnedFields(event: CalendarEvent): Partial<Pick<ItemInterface, 
 }
 
 /**
+ * Routine-surface mirror of `pickGCalOwnedFields`. Extracts the GCal-owned set from any source
+ * carrying the same five optional keys (a routine doc, an exception entry, or another routine
+ * write path) so callers can spread it onto a generated item or persisted record. The two surfaces
+ * (routine master + per-instance exception) share the exact same key types, so a single helper
+ * is enough — drift between them would fail compile via the explicit `Pick<RoutineInterface, K>`.
+ */
+type GCalOwnedRoutineSource = {
+    organizer?: GCalPerson;
+    creator?: GCalPerson;
+    attendees?: GCalAttendee[];
+    responseStatus?: GCalResponseStatus;
+    eventType?: GCalEventType;
+};
+function pickGCalOwnedRoutineFields(
+    source: GCalOwnedRoutineSource,
+): Partial<Pick<RoutineInterface, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> {
+    return {
+        ...(source.organizer !== undefined ? { organizer: source.organizer } : {}),
+        ...(source.creator !== undefined ? { creator: source.creator } : {}),
+        ...(source.attendees !== undefined ? { attendees: source.attendees } : {}),
+        ...(source.responseStatus !== undefined ? { responseStatus: source.responseStatus } : {}),
+        ...(source.eventType !== undefined ? { eventType: source.eventType } : {}),
+    };
+}
+const pickGCalOwnedExceptionFields = pickGCalOwnedRoutineFields;
+
+/**
  * Field-level merge guard: `itemsDAO.replaceById` is a full-doc replace, so spreading
  * `{ ...existing, organizer: undefined }` would silently keep `existing.organizer`. After the merge
  * computes the next item, any GCal-owned key that isn't present on the inbound event must be
@@ -1926,6 +2055,58 @@ function clearOmittedGCalOwnedFields(merged: ItemInterface, event: CalendarEvent
         }
     }
     return next;
+}
+
+/** Routine-surface twin of `clearOmittedGCalOwnedFields`. Same semantics, RoutineInterface shape. */
+function clearOmittedGCalOwnedRoutineFields(merged: RoutineInterface, event: CalendarEvent): RoutineInterface {
+    const next: RoutineInterface = { ...merged };
+    for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+        if (event[key] === undefined) {
+            delete next[key];
+        }
+    }
+    return next;
+}
+
+/** True iff the inbound event reports a different GCal-owned value on the routine surface. */
+function hasGCalOwnedRoutineDelta(existing: RoutineInterface, event: CalendarEvent): boolean {
+    return GCAL_OWNED_ROUTINE_KEYS.some((key) => JSON.stringify(existing[key]) !== JSON.stringify(event[key]));
+}
+
+/**
+ * Applies a GCal-owned-only update to a routine via targeted $set/$unset. Used when GCal's webhook
+ * arrives older than the local updatedTs but a GCal-owned field still diverges. Avoids the
+ * read→merge→replaceById race window used by the structural-update path: writes only the five
+ * GCal-owned keys (and bumps updatedTs) without touching anything the client owns.
+ *
+ * Also propagates the new master values onto existing items via `propagateMasterGCalOwnedChangesToItems`.
+ */
+async function applyGCalOwnedRoutineDeltaOnly(existing: RoutineInterface, event: CalendarEvent, ctx: SyncContext): Promise<void> {
+    const routineId = existing._id;
+    // Anchor `updatedTs` on `event.updated`, NOT ctx.now, so a future structural-newer event whose
+    // `event.updated` falls between `existing.updatedTs` and `ctx.now` is not locked out by this
+    // older-webhook fast-path bumping the local clock past the real GCal-side timestamp.
+    const setOps: Record<string, unknown> = { updatedTs: event.updated };
+    const unsetOps: Record<string, ''> = {};
+    for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+        const value = event[key];
+        if (value === undefined) {
+            unsetOps[key] = '';
+        } else {
+            setOps[key] = value;
+        }
+    }
+    const updateDoc: { $set: Record<string, unknown>; $unset?: Record<string, ''> } = { $set: setOps };
+    if (Object.keys(unsetOps).length > 0) {
+        updateDoc.$unset = unsetOps;
+    }
+    await routinesDAO.updateOne({ _id: routineId, user: ctx.userId }, updateDoc);
+    const updated = await routinesDAO.findByOwnerAndId(routineId, ctx.userId);
+    if (!updated) {
+        return;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
+    await propagateMasterGCalOwnedChangesToItems(updated, ctx);
 }
 
 /**
@@ -2375,6 +2556,12 @@ function buildExceptionEntry(ex: GCalException): RoutineException {
         ...(ex.title !== undefined ? { title: ex.title } : {}),
         // ex.notes is raw HTML from GCal — convert to markdown for client consumption
         ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes) } : {}),
+        // Per-instance GCal-owned overrides — only set when the parser detected divergence from the master.
+        ...(ex.organizer !== undefined ? { organizer: ex.organizer } : {}),
+        ...(ex.creator !== undefined ? { creator: ex.creator } : {}),
+        ...(ex.attendees !== undefined ? { attendees: ex.attendees } : {}),
+        ...(ex.responseStatus !== undefined ? { responseStatus: ex.responseStatus } : {}),
+        ...(ex.eventType !== undefined ? { eventType: ex.eventType } : {}),
     };
 }
 
@@ -2438,6 +2625,14 @@ export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalE
             ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
             // ex.notes is raw HTML from GCal — convert to markdown for storage, keep HTML as lastSyncedNotes
             ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
+            // Per-instance GCal-owned overrides win over the master values that buildCalendarItem
+            // already mirrored onto the item. Absent on the exception ⇒ instance inherits master
+            // and the item's mirrored value (which was set from master) stays put.
+            ...(ex.organizer !== undefined ? { organizer: ex.organizer } : {}),
+            ...(ex.creator !== undefined ? { creator: ex.creator } : {}),
+            ...(ex.attendees !== undefined ? { attendees: ex.attendees } : {}),
+            ...(ex.responseStatus !== undefined ? { responseStatus: ex.responseStatus } : {}),
+            ...(ex.eventType !== undefined ? { eventType: ex.eventType } : {}),
         };
         if (hasAtLeastOne(target.matches)) {
             await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
@@ -2514,15 +2709,31 @@ async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalExceptio
     // would corrupt the stored title with the marker we ourselves applied.
     const title = ex.title !== undefined && item.status === 'done' ? stripDoneMarker(ex.title) : (ex.title ?? item.title);
     const setFields = { ...sharedFields, title } as Record<string, unknown>;
+    // GCal-owned keys absent on the exception ⇒ instance inherits master per RFC 5545. Any keys the
+    // item carried as a prior per-instance override must be explicitly unset so the regenerator can
+    // re-mirror the master values; otherwise a "removed an attendee, reverted to master" GCal edit
+    // would leave the item stuck on the stale 3-attendee override.
+    const unsetFields: Record<string, ''> = {};
+    for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+        if (ex[key] === undefined && item[key] !== undefined) {
+            unsetFields[key] = '';
+        }
+    }
+    const update = Object.keys(unsetFields).length > 0 ? { $set: setFields, $unset: unsetFields } : { $set: setFields };
     // Conditional on `updatedTs` — a concurrent /sync/push edit landing between resolve and apply
     // would change `updatedTs`; matchedCount === 0 means we lost the race and must not clobber.
-    const result = await itemsDAO.updateOne({ _id: itemId, user: ctx.userId, updatedTs: item.updatedTs } as never, { $set: setFields });
+    const result = await itemsDAO.updateOne({ _id: itemId, user: ctx.userId, updatedTs: item.updatedTs } as never, update);
     if (result.matchedCount === 0) {
         console.log(`[gcal-sync] applyModifiedExceptionToOne: skipped due to concurrent updatedTs bump | itemId=${itemId}`);
         return;
     }
-    const updated: ItemInterface = { ...item, ...setFields } as ItemInterface;
-    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: updated, opType: 'update', now: ctx.now }));
+    // Re-read so the recorded op snapshot reflects the post-$unset state. Building it locally via
+    // `{ ...item, ...setFields }` would carry stale unset keys forward and confuse downstream sync.
+    const refreshed = await itemsDAO.findByOwnerAndId(itemId, ctx.userId);
+    if (!refreshed) {
+        return;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: refreshed, opType: 'update', now: ctx.now }));
 }
 
 /**
@@ -2544,6 +2755,12 @@ async function createItemForOrphanedException(routine: RoutineInterface, ex: GCa
         return;
     }
     const itemId = randomUUID();
+    // Per-instance overrides (if present) win over the routine's master values; otherwise the
+    // master values inherit so the orphan-created item shows the same attendees / organizer / etc.
+    // as every other generated occurrence.
+    const inheritedGCalOwned = pickGCalOwnedRoutineFields(routine);
+    const overrideGCalOwned = pickGCalOwnedExceptionFields(ex);
+    const mergedGCalOwned = { ...inheritedGCalOwned, ...overrideGCalOwned };
     // Mirrors the `buildCalendarItem` shape for parity: orphan-create rows carry the routine's
     // calendarIntegrationId + calendarSyncConfigId so UI/audit queries that filter by integration
     // see all routine-generated items uniformly, regardless of which path created them.
@@ -2560,6 +2777,7 @@ async function createItemForOrphanedException(routine: RoutineInterface, ex: GCa
         ...(routine.calendarSyncConfigId ? { calendarSyncConfigId: routine.calendarSyncConfigId } : {}),
         ...(ex.googleEventId ? { calendarInstanceEventId: ex.googleEventId } : {}),
         ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
+        ...mergedGCalOwned,
         createdTs: ctx.now,
         updatedTs: ctx.now,
     };
@@ -2601,6 +2819,11 @@ async function applyExceptionAfterDuplicate(routine: RoutineInterface, ex: GCalE
         ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
         ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
         ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
+        ...(ex.organizer !== undefined ? { organizer: ex.organizer } : {}),
+        ...(ex.creator !== undefined ? { creator: ex.creator } : {}),
+        ...(ex.attendees !== undefined ? { attendees: ex.attendees } : {}),
+        ...(ex.responseStatus !== undefined ? { responseStatus: ex.responseStatus } : {}),
+        ...(ex.eventType !== undefined ? { eventType: ex.eventType } : {}),
     };
     await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
 }
@@ -2634,7 +2857,16 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
     }
 
     // Compare against lastSyncedNotes (raw HTML) since GCal returns HTML descriptions.
-    const masterContent = { title: routine.title, description: routine.lastSyncedNotes ?? '' };
+    // GCal-owned fields are passed through too so the parser can suppress no-op exception writes
+    // when the instance attendee list / organizer / etc. match the master (RFC 5545 inheritance).
+    const masterContent = {
+        title: routine.title,
+        description: routine.lastSyncedNotes ?? '',
+        ...(routine.organizer ? { organizer: routine.organizer } : {}),
+        ...(routine.creator ? { creator: routine.creator } : {}),
+        ...(routine.attendees ? { attendees: routine.attendees } : {}),
+        ...(routine.eventType ? { eventType: routine.eventType } : {}),
+    };
     const exceptions = await provider.getExceptions(routine.calendarEventId, ctx.calendarId, ctx.since, masterContent);
     if (!hasAtLeastOne(exceptions)) {
         return;
@@ -2719,7 +2951,11 @@ calendarRoutes.post('/items/:itemId/rsvp', authenticateRequest, async (c) => {
     if (!item) {
         return c.json({ error: 'Item not found' }, 404);
     }
-    if (item.status !== 'calendar' || !item.calendarEventId || !item.calendarIntegrationId) {
+    // RSVP targets one specific GCal event. For single events that's item.calendarEventId; for
+    // routine-generated instances it's item.calendarInstanceEventId (master id lives on the routine,
+    // the instance id pins the per-occurrence event GCal returns in `instances.list`).
+    const rsvpEventId = item.calendarEventId ?? item.calendarInstanceEventId;
+    if (item.status !== 'calendar' || !rsvpEventId || !item.calendarIntegrationId) {
         return c.json({ error: 'Item is not a linked calendar event' }, 400);
     }
 
@@ -2755,7 +2991,7 @@ calendarRoutes.post('/items/:itemId/rsvp', authenticateRequest, async (c) => {
         // new attendee between our last pull and this PATCH, we will inadvertently drop them. The plan
         // accepts this race for v1; the next inbound pull from GCal restores the missing attendee
         // because GCal-owned fields are always overwritten regardless of event.updated ordering.
-        await provider.patchEventAttendees(config.calendarId, item.calendarEventId, nextAttendees, { sendUpdates: 'all' });
+        await provider.patchEventAttendees(config.calendarId, rsvpEventId, nextAttendees, { sendUpdates: 'all' });
     } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Unknown error';
         return c.json({ error: 'rsvp_push_failed', message }, 500);
@@ -2777,7 +3013,7 @@ calendarRoutes.post('/items/:itemId/rsvp', authenticateRequest, async (c) => {
         opType: 'rsvp',
         rsvp: {
             itemId,
-            calendarEventId: item.calendarEventId,
+            calendarEventId: rsvpEventId,
             calendarIntegrationId: integration._id,
             responseStatus: body.responseStatus,
         },

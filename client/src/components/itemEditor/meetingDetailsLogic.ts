@@ -120,3 +120,25 @@ export function addAttendeeByEmail(attendees: GCalAttendee[], email: string, dis
         : { email, responseStatus: 'needsAction' };
     return [...attendees, next];
 }
+
+/**
+ * Detects whether a proposed attendee mutation changes the membership of the set (someone added
+ * or removed) rather than just flipping the self responseStatus (RSVP). Used by the routine-instance
+ * detach-warning gate so RSVP clicks bypass the dialog.
+ *
+ * Considers a change "membership" when the set of emails (case-insensitive) differs in either
+ * direction. responseStatus / displayName flips do not count.
+ */
+export function isAttendeeMembershipChange(prev: GCalAttendee[], next: GCalAttendee[]): boolean {
+    const prevEmails = new Set(prev.map((a) => a.email.toLowerCase()));
+    const nextEmails = new Set(next.map((a) => a.email.toLowerCase()));
+    if (prevEmails.size !== nextEmails.size) {
+        return true;
+    }
+    for (const email of prevEmails) {
+        if (!nextEmails.has(email)) {
+            return true;
+        }
+    }
+    return false;
+}

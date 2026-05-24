@@ -728,7 +728,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
                 return [{ originalDate, type: 'deleted', ...(event.id ? { googleEventId: event.id } : {}) }];
             }
 
-            return buildModifiedException(event, originalDate, masterContent);
+            return buildModifiedException(event as RawGCalEvent & { originalStartTime?: { dateTime?: string | null } | null }, originalDate, masterContent);
         });
     }
 
@@ -763,21 +763,21 @@ export class GoogleCalendarProvider implements CalendarProvider {
     }
 }
 
-/** Detects time-move and/or content changes on a non-cancelled instance compared to the master. */
-function buildModifiedException(
-    event: {
-        start?: { dateTime?: string | null } | null;
-        end?: { dateTime?: string | null } | null;
-        originalStartTime?: { dateTime?: string | null } | null;
-        summary?: string | null;
-        description?: string | null;
-        id?: string | null;
-    },
+/**
+ * Detects time-move and/or content changes on a non-cancelled instance compared to the master.
+ * Emits per-instance overrides for the GCal-owned set (attendees/organizer/creator/eventType) only
+ * when the instance value diverges from the master — preserving RFC 5545 inheritance so a routine
+ * with a master attendee list and a date-only override still inherits attendees from the master.
+ *
+ * Exported for unit testing — internal callers still go through `getExceptions`.
+ */
+export function buildModifiedException(
+    event: RawGCalEvent & { originalStartTime?: { dateTime?: string | null } | null },
     originalDate: string,
     masterContent?: MasterContent,
 ): GCalException[] {
-    const startDateTime = event.start?.dateTime;
-    const originalDateTime = event.originalStartTime?.dateTime;
+    const startDateTime = event.start?.dateTime ?? null;
+    const originalDateTime = event.originalStartTime?.dateTime ?? null;
     const timeMoved = Boolean(startDateTime && originalDateTime && startDateTime !== originalDateTime);
 
     const instanceTitle = event.summary ?? '';
@@ -785,7 +785,17 @@ function buildModifiedException(
     const titleChanged = masterContent ? instanceTitle !== masterContent.title : false;
     const descChanged = masterContent ? instanceDesc !== masterContent.description : false;
 
-    if (!timeMoved && !titleChanged && !descChanged) {
+    const instanceOrganizer = toPerson(event.organizer);
+    const instanceCreator = toPerson(event.creator);
+    const instanceAttendees = toAttendees(event.attendees);
+    const instanceEventType = event.eventType ? (event.eventType as GCalEventType) : undefined;
+
+    const organizerChanged = masterContent ? !shallowPersonEqual(instanceOrganizer, masterContent.organizer) : false;
+    const creatorChanged = masterContent ? !shallowPersonEqual(instanceCreator, masterContent.creator) : false;
+    const attendeesChanged = masterContent ? !attendeesEqual(instanceAttendees, masterContent.attendees) : false;
+    const eventTypeChanged = masterContent ? instanceEventType !== masterContent.eventType : false;
+
+    if (!timeMoved && !titleChanged && !descChanged && !organizerChanged && !creatorChanged && !attendeesChanged && !eventTypeChanged) {
         return [];
     }
 
@@ -797,7 +807,43 @@ function buildModifiedException(
             ...(timeMoved && event.end?.dateTime ? { newTimeEnd: event.end.dateTime } : {}),
             ...(titleChanged ? { title: instanceTitle } : {}),
             ...(descChanged ? { notes: instanceDesc } : {}),
+            ...(organizerChanged && instanceOrganizer ? { organizer: instanceOrganizer } : {}),
+            ...(creatorChanged && instanceCreator ? { creator: instanceCreator } : {}),
+            ...(attendeesChanged && instanceAttendees ? { attendees: instanceAttendees } : {}),
+            ...(eventTypeChanged && instanceEventType ? { eventType: instanceEventType } : {}),
             ...(event.id ? { googleEventId: event.id } : {}),
         },
     ];
+}
+
+/** Stable equality for `GCalPerson | undefined` — compares the only persisted keys. */
+function shallowPersonEqual(a: GCalPerson | undefined, b: GCalPerson | undefined): boolean {
+    if (a === b) return true;
+    if (!a || !b) return false;
+    return a.email === b.email && a.displayName === b.displayName && Boolean(a.self) === Boolean(b.self);
+}
+
+/**
+ * Stable equality for attendee arrays. Sorts by email and compares projected key sets so callers
+ * that happen to mint attendees in a different key order (e.g. `{email, responseStatus}` vs
+ * `{responseStatus, email}`) or with absent-vs-`false` boolean flags still compare equal. Exported
+ * for reuse by the pushback divergence gate (which compares routine master ↔ item snapshot).
+ */
+export function attendeesEqual(a: GCalAttendee[] | undefined, b: GCalAttendee[] | undefined): boolean {
+    if (a === b) return true;
+    const left = a ?? [];
+    const right = b ?? [];
+    if (left.length !== right.length) return false;
+    const project = (att: GCalAttendee) => ({
+        email: att.email.toLowerCase(),
+        responseStatus: att.responseStatus,
+        displayName: att.displayName,
+        self: Boolean(att.self),
+        organizer: Boolean(att.organizer),
+        optional: Boolean(att.optional),
+    });
+    const sortByEmail = (xs: GCalAttendee[]) => [...xs].sort((x, y) => x.email.toLowerCase().localeCompare(y.email.toLowerCase()));
+    const leftCanonical = sortByEmail(left).map(project);
+    const rightCanonical = sortByEmail(right).map(project);
+    return JSON.stringify(leftCanonical) === JSON.stringify(rightCanonical);
 }

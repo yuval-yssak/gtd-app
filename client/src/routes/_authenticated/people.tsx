@@ -20,9 +20,9 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
+import { PersonEditDialog } from '../../components/people/PersonEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
-import { reassignEntity } from '../../db/reassignMutations';
+import { createPerson, removePerson } from '../../db/personMutations';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './-people.module.css';
 
@@ -30,77 +30,40 @@ export const Route = createFileRoute('/_authenticated/people')({
     component: PeoplePage,
 });
 
-interface PersonFormState {
+interface CreateFormState {
     name: string;
     email: string;
     phone: string;
 }
 
-const emptyForm: PersonFormState = { name: '', email: '', phone: '' };
+const emptyForm: CreateFormState = { name: '', email: '', phone: '' };
 
 function PeoplePage() {
     const { db } = Route.useRouteContext();
     const { account, people, refreshPeople, loggedInAccounts } = useAppData();
-    const [dialogOpen, setDialogOpen] = useState(false);
+    const [createOpen, setCreateOpen] = useState(false);
     const [editing, setEditing] = useState<StoredPerson | null>(null);
-    const [form, setForm] = useState<PersonFormState>(emptyForm);
-    // Owner of the entity. New persons default to the active account; edits default to the
-    // current owner. A change here drives `/sync/reassign` after the local update is saved.
-    const [ownerUserId, setOwnerUserId] = useState<string>('');
+    const [createForm, setCreateForm] = useState<CreateFormState>(emptyForm);
+    // Owner of the entity for create flow. Edit flow lives inside PersonEditDialog (which has its own picker).
+    const [createOwnerUserId, setCreateOwnerUserId] = useState<string>('');
 
     function openCreate() {
-        setEditing(null);
-        setForm(emptyForm);
-        setOwnerUserId(account?.id ?? '');
-        setDialogOpen(true);
-    }
-
-    function openEdit(person: StoredPerson) {
-        setEditing(person);
-        setForm({ name: person.name, email: person.email ?? '', phone: person.phone ?? '' });
-        setOwnerUserId(person.userId);
-        setDialogOpen(true);
-    }
-
-    async function onSave() {
-        if (!account || !form.name.trim()) return;
-        if (editing) {
-            await saveEdit(editing);
-            return;
-        }
-        await saveCreate();
-    }
-
-    /** Persist the form fields locally first, then move ownership server-side if the picker changed. */
-    async function saveEdit(target: StoredPerson) {
-        const fields = buildPersonFields(target.userId);
-        await updatePerson(db, { ...target, ...fields });
-        if (ownerUserId !== target.userId) {
-            await reassignEntity(db, { entityType: 'person', entityId: target._id, fromUserId: target.userId, toUserId: ownerUserId });
-        }
-        setDialogOpen(false);
-        await refreshPeople();
+        setCreateForm(emptyForm);
+        setCreateOwnerUserId(account?.id ?? '');
+        setCreateOpen(true);
     }
 
     async function saveCreate() {
-        // New persons always belong to the picked owner — when the user changes the picker for
-        // a brand-new entity, we just create it under that owner directly (no reassign needed).
-        const ownerForCreate = ownerUserId || account?.id;
-        if (!ownerForCreate) {
-            return;
-        }
-        await createPerson(db, buildPersonFields(ownerForCreate));
-        setDialogOpen(false);
+        if (!account || !createForm.name.trim()) return;
+        const ownerForCreate = createOwnerUserId || account.id;
+        await createPerson(db, {
+            userId: ownerForCreate,
+            name: createForm.name.trim(),
+            ...(createForm.email.trim() ? { email: createForm.email.trim() } : {}),
+            ...(createForm.phone.trim() ? { phone: createForm.phone.trim() } : {}),
+        });
+        setCreateOpen(false);
         await refreshPeople();
-    }
-
-    function buildPersonFields(userId: string) {
-        return {
-            userId,
-            name: form.name.trim(),
-            ...(form.email.trim() ? { email: form.email.trim() } : {}),
-            ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
-        };
     }
 
     async function onDelete(person: StoredPerson) {
@@ -144,7 +107,7 @@ function PeoplePage() {
                                 secondaryAction={
                                     <Box className={styles.actionButtons}>
                                         <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => openEdit(person)}>
+                                            <IconButton size="small" onClick={() => setEditing(person)}>
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
@@ -172,34 +135,37 @@ function PeoplePage() {
                     ))}
                 </List>
             )}
-            <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
-                <DialogTitle>{editing ? 'Edit person' : 'Add person'}</DialogTitle>
+            {/* Edit dialog reuses the shared PersonEditDialog component (also used by MeetingDetails).
+                Mount-on-open so the form re-initializes per person — see PersonEditDialog comment. */}
+            {editing && <PersonEditDialog db={db} person={editing} showAccountPicker onSaved={() => setEditing(null)} onCancel={() => setEditing(null)} />}
+            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="xs" fullWidth>
+                <DialogTitle>Add person</DialogTitle>
                 <DialogContent>
                     <Box className={styles.personForm}>
                         <TextField
                             label="Name"
-                            value={form.name}
-                            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                            value={createForm.name}
+                            onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
                             fullWidth
                             autoFocus
                             required
                         />
                         <TextField
                             label="Email"
-                            value={form.email}
-                            onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                            value={createForm.email}
+                            onChange={(e) => setCreateForm((f) => ({ ...f, email: e.target.value }))}
                             fullWidth
                             type="email"
                         />
-                        <TextField label="Phone" value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} fullWidth />
+                        <TextField label="Phone" value={createForm.phone} onChange={(e) => setCreateForm((f) => ({ ...f, phone: e.target.value }))} fullWidth />
                         {/* AccountPicker auto-hides on single-account devices */}
-                        {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} />}
+                        {loggedInAccounts.length > 1 && <AccountPicker value={createOwnerUserId} onChange={setCreateOwnerUserId} />}
                     </Box>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-                    <Button onClick={() => void onSave()} variant="contained" disabled={!form.name.trim()}>
-                        {editing ? 'Save' : 'Add'}
+                    <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
+                    <Button onClick={() => void saveCreate()} variant="contained" disabled={!createForm.name.trim()}>
+                        Add
                     </Button>
                 </DialogActions>
             </Dialog>

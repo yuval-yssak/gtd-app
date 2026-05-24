@@ -47,3 +47,29 @@ export const opTypeSchema = z.enum(['create', 'update', 'delete']);
 export const rruleSchema = z.string().regex(/FREQ=/, { message: 'rrule must contain FREQ=' });
 
 export const nonEmptyString = z.string().min(1);
+
+/**
+ * GCal-mirror schemas (organizer/creator/attendees/responseStatus/eventType). Shared between item
+ * and routine snapshot validators so the strict-mode round-trip accepts the same shape on both
+ * surfaces. Mirrors `GCalPerson` / `GCalAttendee` / `GCalResponseStatus` / `GCalEventType` in
+ * `types/entities.ts`.
+ */
+export const gcalResponseStatusSchema = z.enum(['needsAction', 'accepted', 'declined', 'tentative']);
+export const gcalPersonSchema = z
+    .object({
+        email: nonEmptyString,
+        displayName: z.string().optional(),
+        self: z.boolean().optional(),
+    })
+    .strict();
+export const gcalAttendeeSchema = z
+    .object({
+        email: nonEmptyString,
+        displayName: z.string().optional(),
+        self: z.boolean().optional(),
+        responseStatus: gcalResponseStatusSchema,
+        organizer: z.boolean().optional(),
+        optional: z.boolean().optional(),
+    })
+    .strict();
+export const gcalEventTypeSchema = z.enum(['default', 'outOfOffice', 'focusTime', 'workingLocation']);

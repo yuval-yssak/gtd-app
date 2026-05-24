@@ -109,6 +109,12 @@ export interface StoredRoutine {
     splitFromRoutineId?: string;
     lastPushedToGCalTs?: string;
     lastSyncedNotes?: string; // last template.notes value synced from/to Google Calendar — used for conflict detection
+    /** GCal master organizer/creator/attendees/responseStatus/eventType — RFC 5545 mirror; see RoutineInterface for semantics. */
+    organizer?: GCalPerson;
+    creator?: GCalPerson;
+    attendees?: GCalAttendee[];
+    responseStatus?: GCalResponseStatus;
+    eventType?: GCalEventType;
     template: StoredRoutineTemplate;
     active: boolean;
     createdTs: string;
@@ -137,6 +143,12 @@ export interface StoredRoutine {
         newTimeEnd?: string;
         title?: string; // overridden title — present when GCal instance title differs from master
         notes?: string; // overridden description — present when GCal instance description differs from master
+        /** Per-instance GCal-owned overrides. Absent ⇒ inherit master. See RoutineInterface. */
+        organizer?: GCalPerson;
+        creator?: GCalPerson;
+        attendees?: GCalAttendee[];
+        responseStatus?: GCalResponseStatus;
+        eventType?: GCalEventType;
     }>;
 }
 

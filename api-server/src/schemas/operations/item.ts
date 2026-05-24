@@ -1,29 +1,17 @@
 import { z } from 'zod';
 import type { ItemInterface } from '../../types/entities.js';
-import { energySchema, floatingDateTime, isoDateOrDateTime, isoDateTime, itemStatusSchema, nonEmptyString } from './shared.js';
-
-/** GCal-mirror types validated on snapshot. Server-overwritten on inbound pulls, but `update` ops
- *  that round-trip through /sync/push carry the parsed values; strict-mode rejection here would
- *  block any calendar-item edit that includes meeting metadata. Mirrors entities.ts. */
-const gcalResponseStatusSchema = z.enum(['needsAction', 'accepted', 'declined', 'tentative']);
-const gcalPersonSchema = z
-    .object({
-        email: nonEmptyString,
-        displayName: z.string().optional(),
-        self: z.boolean().optional(),
-    })
-    .strict();
-const gcalAttendeeSchema = z
-    .object({
-        email: nonEmptyString,
-        displayName: z.string().optional(),
-        self: z.boolean().optional(),
-        responseStatus: gcalResponseStatusSchema,
-        organizer: z.boolean().optional(),
-        optional: z.boolean().optional(),
-    })
-    .strict();
-const gcalEventTypeSchema = z.enum(['default', 'outOfOffice', 'focusTime', 'workingLocation']);
+import {
+    energySchema,
+    floatingDateTime,
+    gcalAttendeeSchema,
+    gcalEventTypeSchema,
+    gcalPersonSchema,
+    gcalResponseStatusSchema,
+    isoDateOrDateTime,
+    isoDateTime,
+    itemStatusSchema,
+    nonEmptyString,
+} from './shared.js';
 
 // Item snapshot schema — every persistable field. The status→field matrix runs as a separate
 // pass (`assertStatusFieldRules`) so violation messages can pinpoint the offending status×field

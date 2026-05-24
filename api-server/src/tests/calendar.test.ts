@@ -2456,6 +2456,56 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         expect(item?.status).toBe('calendar');
     });
 
+    it('createRoutineFromGCal mirrors the master organizer/attendees/eventType onto the routine doc, and generated items inherit them', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const tomorrowAt10 = dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-master-with-attendees',
+                    title: 'Yuval <> Gilad',
+                    timeStart: tomorrowAt9,
+                    timeEnd: tomorrowAt10,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                    organizer: { email: 'yuval@example.com', displayName: 'Yuval' },
+                    creator: { email: 'yuval@example.com' },
+                    attendees: [
+                        { email: 'gilad@example.com', responseStatus: 'accepted' },
+                        { email: 'yuval@example.com', responseStatus: 'accepted', self: true },
+                    ],
+                    responseStatus: 'accepted',
+                    eventType: 'default',
+                },
+            ],
+            nextSyncToken: 'tok-attendees',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'gcal-master-with-attendees' });
+        expect(routine).not.toBeNull();
+        // Routine doc now carries the master attendee list verbatim.
+        expect(routine?.attendees).toHaveLength(2);
+        expect(routine?.organizer?.email).toBe('yuval@example.com');
+        expect(routine?.eventType).toBe('default');
+
+        // Every generated item carries the same attendees mirrored from the master.
+        const items = await itemsDAO.findArray({ user: userId, routineId: routine?._id ?? '' });
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) {
+            expect(item.attendees).toHaveLength(2);
+            expect(item.organizer?.email).toBe('yuval@example.com');
+            expect(item.eventType).toBe('default');
+        }
+    });
+
     it('createRoutineFromGCal with an all-day recurring master builds template = { allDay: true } and generates all-day items', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -8321,20 +8371,25 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
         expect(params.sendUpdates).toBe('none');
     });
 
-    it('routine-instance override omits attendees (GCal interprets non-null attendees on instance patch as inheritance-severing override)', async () => {
+    it('routine-instance override omits attendees when they match the routine master (server-side detach gate)', async () => {
+        // Server-side detach gate: when the snapshot attendees match the routine master attendees,
+        // the pushback skips the `attendees` field so a title/time/notes edit does NOT silently
+        // fork the instance per RFC 5545. The UI's detach-warning dialog covers the membership-change
+        // case; the server gate covers everything else (including replayed legacy ops).
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
+        const masterAttendees = [{ email: 'master-attendee@example.com', responseStatus: 'accepted' as const }];
         const routine = makeRoutine(userId, {
             _id: 'routine-with-attendees-master',
             calendarEventId: 'gcal-master-attendees',
             calendarIntegrationId: 'int-1',
             calendarSyncConfigId: 'sync-config-1',
+            attendees: masterAttendees,
         });
         await routinesDAO.insertOne(routine);
 
-        // Routine-generated instance carries attendees in its snapshot (echoed from the master at parse time).
         const occurrenceTs = dayjs().add(1, 'day').toISOString();
         const item = makeItem(userId, {
             _id: 'item-routine-instance-attendees',
@@ -8343,7 +8398,7 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
             timeEnd: dayjs(occurrenceTs).add(30, 'minute').toISOString(),
             calendarIntegrationId: 'int-1',
             calendarSyncConfigId: 'sync-config-1',
-            attendees: [{ email: 'master-attendee@example.com', responseStatus: 'accepted' }],
+            attendees: masterAttendees, // identical to routine.attendees ⇒ inheritance preserved
         });
         await itemsDAO.insertOne(item);
 
@@ -8352,8 +8407,48 @@ describe('calendar push-back — attendees + sendUpdates threading', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id ?? '', snapshot: item }), mockBuildProvider());
 
         const params = getPatchRequestBody(patchSpy);
-        // attendees must NOT appear in the patch body — forwarding would create a per-instance override.
         expect(params.requestBody).not.toHaveProperty('attendees');
+    });
+
+    it('routine-instance override forwards attendees when they diverge from the routine master (detach gesture)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const masterAttendees = [{ email: 'master-attendee@example.com', responseStatus: 'accepted' as const }];
+        const routine = makeRoutine(userId, {
+            _id: 'routine-with-attendees-master-2',
+            calendarEventId: 'gcal-master-attendees-2',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            attendees: masterAttendees,
+        });
+        await routinesDAO.insertOne(routine);
+
+        // User added a second attendee on this specific date — the snapshot diverges from the master.
+        const divergentAttendees = [
+            { email: 'master-attendee@example.com', responseStatus: 'accepted' as const },
+            { email: 'guest@example.com', responseStatus: 'needsAction' as const },
+        ];
+        const occurrenceTs = dayjs().add(1, 'day').toISOString();
+        const item = makeItem(userId, {
+            _id: 'item-routine-instance-attendees-2',
+            routineId: routine._id,
+            timeStart: occurrenceTs,
+            timeEnd: dayjs(occurrenceTs).add(30, 'minute').toISOString(),
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            attendees: divergentAttendees,
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy } = spyOnGCalEventsApi();
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id ?? '', snapshot: item }), mockBuildProvider());
+
+        const params = getPatchRequestBody(patchSpy);
+        expect(params.requestBody).toHaveProperty('attendees');
+        expect(params.requestBody.attendees).toEqual(divergentAttendees);
     });
 
     it('all-day item done-marker push emits { date } start/end (not { dateTime })', async () => {
