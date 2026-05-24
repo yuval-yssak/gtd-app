@@ -232,14 +232,17 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
                     </Button>
                 </Box>
             )}
-            <QuickCreatePersonDialog
-                open={quickCreateEmail !== null}
-                prefilledEmail={quickCreateEmail ?? ''}
-                db={db}
-                ownerUserId={ownerUserIdForNewPeople}
-                onCreated={() => setQuickCreateEmail(null)}
-                onCancel={() => setQuickCreateEmail(null)}
-            />
+            {/* Mount conditionally so the dialog's useState(prefilledEmail) re-initializes each open;
+                keeping it mounted with a toggled `open` would freeze the email field at its first value (''). */}
+            {quickCreateEmail !== null && (
+                <QuickCreatePersonDialog
+                    prefilledEmail={quickCreateEmail}
+                    db={db}
+                    ownerUserId={ownerUserIdForNewPeople}
+                    onCreated={() => setQuickCreateEmail(null)}
+                    onCancel={() => setQuickCreateEmail(null)}
+                />
+            )}
         </Box>
     );
 }

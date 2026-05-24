@@ -12,7 +12,6 @@ import { createPerson } from '../../db/personMutations';
 import type { MyDB, StoredPerson } from '../../types/MyDB';
 
 interface QuickCreatePersonDialogProps {
-    open: boolean;
     prefilledEmail: string;
     db: IDBPDatabase<MyDB>;
     /** New person belongs to this owner (the item owner — keeps cross-account references consistent). */
@@ -24,8 +23,10 @@ interface QuickCreatePersonDialogProps {
 /**
  * Minimal "Save as person" modal launched from the meeting-details attendee chip.
  * Two fields only — full edits happen on the People page after creation.
+ *
+ * Parent mounts this conditionally so each open re-initializes `email` from `prefilledEmail`.
  */
-export function QuickCreatePersonDialog({ open, prefilledEmail, db, ownerUserId, onCreated, onCancel }: QuickCreatePersonDialogProps) {
+export function QuickCreatePersonDialog({ prefilledEmail, db, ownerUserId, onCreated, onCancel }: QuickCreatePersonDialogProps) {
     const { refreshPeople } = useAppData();
     const [name, setName] = useState('');
     const [email, setEmail] = useState(prefilledEmail);
@@ -40,13 +41,11 @@ export function QuickCreatePersonDialog({ open, prefilledEmail, db, ownerUserId,
             const person = await createPerson(db, fields);
             await refreshPeople();
             onCreated(person);
-            // Reset so the next launch starts clean if the parent keeps the dialog mounted.
-            setName('');
         });
     }
 
     return (
-        <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth data-testid="quickCreatePersonDialog">
+        <Dialog open onClose={onCancel} maxWidth="xs" fullWidth data-testid="quickCreatePersonDialog">
             <DialogTitle>Save as person</DialogTitle>
             <DialogContent>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: 1 }}>
