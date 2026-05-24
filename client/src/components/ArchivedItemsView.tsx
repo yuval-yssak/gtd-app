@@ -135,6 +135,9 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                                                         />
                                                     )}
                                                     <AccountChip userId={item.userId} />
+                                                    {item.cancelledByGCal && (
+                                                        <Chip label="Cancelled in Calendar" size="small" color="warning" data-testid="cancelledByGCalChip" />
+                                                    )}
                                                 </Box>
                                             }
                                             secondary={`${verb} ${dayjs(ts).fromNow()}`}

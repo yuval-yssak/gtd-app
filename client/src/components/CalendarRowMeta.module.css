@@ -1,0 +1,42 @@
+.root {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+}
+
+.countGroup {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.125rem;
+}
+
+/* The small RSVP dot — colored by responseStatus. Sized to align with the body-text baseline. */
+.rsvpDot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    display: inline-block;
+    background-color: var(--mui-palette-action-disabled, rgba(0, 0, 0, 0.26));
+}
+
+.rsvpDotAccepted {
+    background-color: var(--mui-palette-success-main);
+}
+
+.rsvpDotDeclined {
+    background-color: var(--mui-palette-error-main);
+}
+
+.rsvpDotTentative {
+    background-color: var(--mui-palette-warning-main);
+}
+
+/* Truncate the organizer label so it never wraps the row. 18ch matches the spec — keeps "Long Last
+ * Name <email>" from blowing out the layout on short viewports. */
+.organizer {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 18ch;
+}

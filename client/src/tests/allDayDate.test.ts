@@ -71,6 +71,32 @@ describe('formatAllDayDate', () => {
     });
 });
 
+describe('formatAllDayDate — multi-day range pairs', () => {
+    // The calendar route renders multi-day all-day events with two formatAllDayDate calls separated by an
+    // en-dash. The inclusive end is recovered via fromGCalExclusive, so pinning both sides here protects
+    // the visible "All day · May 27 – May 29" label from drift.
+    it('formats both ends of a 3-day inclusive range', () => {
+        const start = '2026-05-27';
+        const exclusiveEnd = '2026-05-30';
+        const inclusiveEnd = fromGCalExclusive(exclusiveEnd);
+        expect(`${formatAllDayDate(start)} – ${formatAllDayDate(inclusiveEnd)}`).toBe('May 27 – May 29');
+    });
+
+    it('formats a range that crosses a month boundary', () => {
+        const start = '2026-05-30';
+        const exclusiveEnd = '2026-06-02';
+        const inclusiveEnd = fromGCalExclusive(exclusiveEnd);
+        expect(`${formatAllDayDate(start)} – ${formatAllDayDate(inclusiveEnd)}`).toBe('May 30 – Jun 1');
+    });
+
+    it('formats a range that crosses a year boundary', () => {
+        const start = '2026-12-30';
+        const exclusiveEnd = '2027-01-02';
+        const inclusiveEnd = fromGCalExclusive(exclusiveEnd);
+        expect(`${formatAllDayDate(start)} – ${formatAllDayDate(inclusiveEnd)}`).toBe('Dec 30 – Jan 1');
+    });
+});
+
 describe('isAllDayDateString', () => {
     it('returns true for YYYY-MM-DD', () => {
         expect(isAllDayDateString('2026-05-27')).toBe(true);
