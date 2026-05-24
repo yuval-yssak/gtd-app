@@ -3,9 +3,10 @@ import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
 import type { EntitySnapshot, EntityType, OperationInterface, OpType, RsvpOpPayload } from '../types/entities.js';
-import { applyEntityOp, hydrateRoutineDeleteSnapshots } from './applyEntityOp.js';
+import { applyEntityOp, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
+import { maybeCascadeReferenceRemoval } from './referenceCascades.js';
 import { replayRsvpOp } from './rsvpReplay.js';
 
 export interface RawOperation {
@@ -62,7 +63,8 @@ export class OperationValidationError extends Error {
  * Pipeline:
  *   1. Validate (Zod + status×field matrix). Permissive by default; `strict: true` throws.
  *   2. Build server `Operation` (assign _id, ts, server-authoritative user, deviceId).
- *   3. Hydrate routine-delete snapshots from DB (so the GCal cascade has the pre-delete state).
+ *   3. Hydrate delete-op snapshots from DB (so the GCal cascade and reference cascades have the
+ *      pre-delete state for items, routines, people, and workContexts).
  *   4. `applyEntityOp` — last-write-wins persist into the target collection.
  *   5. Insert the op into the operations collection.
  *   6. `notifyChange` — SSE + web push + GCal pushback + webhook fan-out.
@@ -108,8 +110,10 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
         ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
     };
 
-    // Step 3 — routine-delete snapshot hydration. Mutates op.snapshot in place.
-    await hydrateRoutineDeleteSnapshots(userId, [op]);
+    // Step 3 — delete-op snapshot hydration. Mutates op.snapshot in place so the downstream
+    // notify fan-out (GCal pushback, person/workContext reference cascades) has the pre-delete
+    // state to work from. Covers items, routines, people, and workContexts uniformly.
+    await hydrateDeleteSnapshots(userId, [op]);
 
     // Steps 4 + 5 — persist + log. Apply first so a failure in `applyEntityOp` leaves no op in
     // the log; otherwise other devices would replay an op the server's collections never saw.
@@ -134,7 +138,22 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     };
     await notifyChange(op, notifyOpts);
 
+    // Step 7 — reference cascades. See `runReferenceCascades` for the contract.
+    await runReferenceCascades([op]);
+
     return op;
+}
+
+/**
+ * Runs the person/workContext → item reference cascade for every op that needs one. Iterating
+ * sequentially (not Promise.all) is intentional: two deletes targeting the same items would
+ * race on the breadcrumb ordering otherwise, since each cascade re-reads the items collection.
+ * Items don't themselves trigger cascades, so this loop is bounded.
+ */
+async function runReferenceCascades(ops: OperationInterface[]): Promise<void> {
+    for (const op of ops) {
+        await maybeCascadeReferenceRemoval(op);
+    }
 }
 
 /**
@@ -200,8 +219,10 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
         ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
     }));
 
-    // Hydrate routine-delete snapshots before the apply Promise.all races against the deletion.
-    await hydrateRoutineDeleteSnapshots(userId, ops);
+    // Hydrate delete-op snapshots before the apply Promise.all races against the deletion.
+    // Covers items / routines / people / workContexts; needed so the downstream fan-out has the
+    // pre-delete state for GCal cancellation and reference cascades.
+    await hydrateDeleteSnapshots(userId, ops);
 
     await Promise.all([operationsDAO.insertMany(ops), ...ops.map((op) => applyEntityOp(userId, op))]);
 
@@ -220,6 +241,8 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
         ...(opts.suppressGCalPushback ? { suppressGCalPushback: true } : {}),
     };
     await notifyChanges(ops, notifyOpts);
+
+    await runReferenceCascades(ops);
 
     return ops;
 }

@@ -26,6 +26,13 @@ class ItemsDAO extends AbstractDAO<ItemInterface> {
             { key: { user: 1, calendarInstanceEventId: 1 }, unique: true, partialFilterExpression: { calendarInstanceEventId: { $type: 'string' } } },
             // Public API content-dedupe: lookup is { user, status:'inbox', contentHash, createdTs >= cutoff }.
             { key: { user: 1, status: 1, contentHash: 1, createdTs: 1 } },
+            // Reference-cascade scans: when a person/workContext is deleted, the cascade in
+            // `lib/referenceCascades.ts` queries items by `{user, peopleIds: id}` / `{user,
+            // workContextIds: id}` / `{user, waitingForPersonId: id}`. The first two are
+            // multikey indexes (arrays); the third is a sparse scalar lookup.
+            { key: { user: 1, peopleIds: 1 } },
+            { key: { user: 1, workContextIds: 1 } },
+            { key: { user: 1, waitingForPersonId: 1 } },
         ]);
     }
 }

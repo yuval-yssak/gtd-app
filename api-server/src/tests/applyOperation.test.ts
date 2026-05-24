@@ -74,7 +74,7 @@ describe('applyAndPublishOperation — happy path', () => {
         expect(stored?.user).toBe(userId);
     });
 
-    it('handles item.delete with snapshot=null', async () => {
+    it('handles item.delete with snapshot=null and hydrates from the pre-delete row', async () => {
         await itemsDAO.insertOne(baseInboxItem());
         const op = await applyAndPublishOperation(
             userId,
@@ -82,7 +82,9 @@ describe('applyAndPublishOperation — happy path', () => {
             { deviceId: 'device-abc' },
         );
 
-        expect(op.snapshot).toBeNull();
+        // The wire op carried snapshot:null; the pipeline hydrates it so downstream fan-out
+        // (GCal pushback, reference cascades) has the pre-delete state.
+        expect(op.snapshot).toMatchObject({ _id: 'item-1', title: 'buy milk' });
         const stored = await itemsDAO.findByOwnerAndId('item-1', userId);
         expect(stored).toBeNull();
     });

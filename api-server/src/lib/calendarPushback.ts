@@ -74,12 +74,55 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
     // the entityType check guarantees the snapshot shape.
     console.log(`[gcal-pushback] op=${op.opType} entityType=${op.entityType} entityId=${op.entityId} opId=${op._id} ts=${op.ts}`);
     const sendUpdates = op.gcalMeta?.sendUpdates ?? 'none';
+    // Item-delete ops travel snapshot:null over the wire. `hydrateDeleteSnapshots` fills the
+    // snapshot from the pre-delete row before this fires, so we can read calendarEventId /
+    // routineId here. We must NOT route delete ops through `handleItemPush` — that branches on
+    // `snapshot.status`, which for a hydrated delete is whatever the item's status was *before*
+    // it was hard-deleted (often 'calendar'), so it would push an update for a row that no
+    // longer exists.
+    if (op.entityType === 'item' && op.opType === 'delete') {
+        await handleItemDelete(op.snapshot as ItemInterface | null, op.user, buildProvider);
+        return;
+    }
     if (op.entityType === 'item' && op.snapshot) {
         await handleItemPush(op.snapshot as ItemInterface, op.user, buildProvider, sendUpdates);
         return;
     }
     if (op.entityType === 'routine' && op.snapshot) {
         await handleRoutinePush(op.snapshot as RoutineInterface, op.user, op.opType, op._id, op.ts, buildProvider);
+    }
+}
+
+/**
+ * GCal-side cleanup when an item is hard-deleted (via `opType: 'delete'`, not a `status: 'trash'`
+ * update). Three shapes:
+ *  1. Calendar-linked standalone item — `calendarEventId` + integration ids on the snapshot →
+ *     delete the GCal event.
+ *  2. Routine-generated instance — `routineId` + `timeStart` on the snapshot → cancel that single
+ *     occurrence on the routine's master recurring event.
+ *  3. No GCal linkage (e.g. inbox item) — no-op.
+ *
+ * Snapshot:null reaches here only when the row was already gone at hydration time (concurrent
+ * delete from another device). No way to recover GCal state in that case — just no-op.
+ */
+async function handleItemDelete(snapshot: ItemInterface | null, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    if (!snapshot) {
+        return;
+    }
+    if (snapshot.calendarEventId) {
+        const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
+        const ctx = await resolvePushContext(link, userId, buildProvider);
+        if (!ctx) {
+            return;
+        }
+        console.log(
+            `[gcal-pushback] deleting GCal event for hard-deleted item | eventId=${snapshot.calendarEventId} itemId=${snapshot._id} title=${snapshot.title}`,
+        );
+        await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.deleteEvent(ctx.config.calendarId, snapshot.calendarEventId as string));
+        return;
+    }
+    if (snapshot.routineId && snapshot.timeStart) {
+        await pushRoutineInstanceCancellation(snapshot, userId, buildProvider, { skipStamp: true });
     }
 }
 
@@ -199,7 +242,12 @@ async function pushRoutineInstanceOverride(
  *
  * No-ops gracefully when the routine isn't linked to GCal yet or the item lacks a timeStart.
  */
-async function pushRoutineInstanceCancellation(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function pushRoutineInstanceCancellation(
+    snapshot: ItemInterface,
+    userId: string,
+    buildProvider: ProviderFactory,
+    opts: { skipStamp?: boolean } = {},
+): Promise<void> {
     if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
         return;
     }
@@ -222,7 +270,12 @@ async function pushRoutineInstanceCancellation(snapshot: ItemInterface, userId: 
         `[gcal-pushback] cancelling routine instance | routineId=${snapshot.routineId} eventId=${calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
     );
     await withAuthFailureHandling(integration._id, () => provider.cancelRecurringInstance(calendarEventId, originalDate, config.calendarId));
-    await stampItemLastPushed(userId, snapshot._id);
+    // Skip stamping when the caller is `handleItemDelete` — the item row has already been
+    // hard-deleted by `applyEntityOp`, so the `updateOne` would silently no-op. Wasteful, not
+    // wrong, but cleaner to gate it explicitly.
+    if (!opts.skipStamp) {
+        await stampItemLastPushed(userId, snapshot._id);
+    }
 }
 
 /**

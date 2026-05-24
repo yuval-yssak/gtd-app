@@ -300,11 +300,10 @@ export const v1PeopleRoutes = new Hono<{ Variables: BearerVariables }>()
 
     // ── DELETE /v1/people/:id ───────────────────────────────────────────────
     // Idempotent: deleting a missing row returns 200 with `alreadyDeleted: true` (a delete-after-
-    // delete is normally a benign retry, not an error). Deleting a person referenced from items
-    // (peopleIds, waitingForPersonId) leaves the references dangling — the client treats
-    // dangling references as "missing person" and renders accordingly. Cascading deletion is
-    // intentionally NOT performed so callers can recover by re-creating the person with the
-    // same _id within the same transaction window.
+    // delete is normally a benign retry, not an error). Referencing items have their `peopleIds`
+    // and `waitingForPersonId` cleaned up by the pipeline's reference-cascade step, which also
+    // appends a `[person removed: <name>]` breadcrumb to each affected item's title so the
+    // history of the link survives the deletion.
     .delete('/people/:id', requireScope('people.write'), async (c) => {
         const { userId, tokenId } = c.var.apiAuth;
         const id = c.req.param('id');

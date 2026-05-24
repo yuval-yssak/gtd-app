@@ -190,8 +190,10 @@ describe('POST /v1/routines — bootstrap first item', () => {
         expect(items).toHaveLength(1);
         const first = items[0]!;
         // For FREQ=DAILY with includeAnchor=true and anchor=today (since past start is clamped),
-        // the first occurrence is today.
-        const today = dayjs.utc().format('YYYY-MM-DD');
+        // the first occurrence is today. `computeFirstAnchor` uses the server's LOCAL calendar
+        // date (intentional, per its docstring), so we mirror that here — using `dayjs.utc()`
+        // would make this test fail on dev machines where local date diverges from UTC.
+        const today = dayjs().format('YYYY-MM-DD');
         expect(first.expectedBy).toBe(today);
         // expectedBy must not be before today.
         expect(first.expectedBy! >= today).toBe(true);
@@ -203,7 +205,7 @@ describe('POST /v1/routines — bootstrap first item', () => {
         const routine = await createRoutineViaApi(token, { rrule: 'FREQ=DAILY' });
         const items = await getItemsForRoutine(userId, routine._id);
         expect(items).toHaveLength(1);
-        const today = dayjs.utc().format('YYYY-MM-DD');
+        const today = dayjs().format('YYYY-MM-DD');
         expect(items[0]!.expectedBy).toBe(today);
     });
 
