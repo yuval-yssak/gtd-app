@@ -185,6 +185,8 @@ export const emptyCalendarState: CalendarFormState = {
     startTime: '',
     endTime: '',
     calendarSyncConfigId: '',
+    allDay: false,
+    endDate: '',
 };
 
 export const filledCalendarState: CalendarFormState = {
@@ -192,6 +194,8 @@ export const filledCalendarState: CalendarFormState = {
     startTime: '10:00',
     endTime: '11:00',
     calendarSyncConfigId: '',
+    allDay: false,
+    endDate: '',
 };
 
 export const emptyWaitingForState: WaitingForFormState = {

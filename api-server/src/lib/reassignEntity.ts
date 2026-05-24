@@ -41,6 +41,8 @@ export interface ReassignItemEditPatch {
     expectedBy?: string;
     ignoreBefore?: string;
     waitingForPersonId?: string;
+    /** All-day flag — paired with date-only timeStart/timeEnd when true. */
+    allDay?: boolean;
 }
 
 /** Whitelisted edit fields that ride along on a routine reassign. Same rationale as ReassignItemEditPatch. */
@@ -183,6 +185,13 @@ function applyItemEditPatch(item: ItemInterface, patch: ReassignItemEditPatch | 
     }
     if (typeof patch.focus === 'boolean') {
         next.focus = patch.focus;
+    }
+    // Toggling off clears the flag entirely (matches the rest-strip semantics used elsewhere); the
+    // accompanying timeStart/timeEnd in the same patch convert from YYYY-MM-DD ↔ ISO datetime.
+    if (patch.allDay === true) {
+        next.allDay = true;
+    } else if (patch.allDay === false) {
+        delete next.allDay;
     }
     return next;
 }

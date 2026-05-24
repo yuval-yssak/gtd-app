@@ -104,12 +104,12 @@ describe('isSaveDisabled', () => {
     });
 
     it('disables save when the calendar end time is before the start time on the same date', () => {
-        const cal = { date: '2026-05-04', startTime: '14:00', endTime: '13:00', calendarSyncConfigId: '' };
+        const cal = { ...emptyCalendar, date: '2026-05-04', startTime: '14:00', endTime: '13:00' };
         expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(true);
     });
 
     it('enables save when start and end times match (zero-duration is permitted)', () => {
-        const cal = { date: '2026-05-04', startTime: '14:00', endTime: '14:00', calendarSyncConfigId: '' };
+        const cal = { ...emptyCalendar, date: '2026-05-04', startTime: '14:00', endTime: '14:00' };
         expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(false);
     });
 });
@@ -143,7 +143,7 @@ describe('applyCalendarForm', () => {
         };
         const updated = applyCalendarForm(
             item,
-            { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: '' },
+            { ...emptyCalendar, date: '2026-05-04', startTime: '09:00', endTime: '09:30' },
             // Empty options list — no option matches, so buildCalendarMeta omits the config keys entirely.
             [],
         );
@@ -157,15 +157,17 @@ describe('applyCalendarForm', () => {
             calendarEventId: 'evt-1',
             routineId: 'routine-1',
         };
-        const updated = applyCalendarForm(item, { date: '2026-05-04', startTime: '10:00', endTime: '10:30', calendarSyncConfigId: '' }, []);
+        const updated = applyCalendarForm(item, { ...emptyCalendar, date: '2026-05-04', startTime: '10:00', endTime: '10:30' }, []);
         expect(updated.calendarEventId).toBe('evt-1');
         expect(updated.routineId).toBe('routine-1');
     });
 
     it('sets the chosen config and integration IDs when meta resolves to an option', () => {
-        const updated = applyCalendarForm(BASE_ITEM, { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-1' }, [
-            { configId: 'cfg-1', integrationId: 'int-1', userId: 'user-1', accountEmail: 'user@example.com', displayName: 'Work', isDefault: false },
-        ]);
+        const updated = applyCalendarForm(
+            BASE_ITEM,
+            { ...emptyCalendar, date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-1' },
+            [{ configId: 'cfg-1', integrationId: 'int-1', userId: 'user-1', accountEmail: 'user@example.com', displayName: 'Work', isDefault: false }],
+        );
         expect(updated.calendarSyncConfigId).toBe('cfg-1');
         expect(updated.calendarIntegrationId).toBe('int-1');
     });
@@ -181,7 +183,11 @@ describe('applyCalendarForm', () => {
             calendarIntegrationId: 'int-existing',
             calendarEventId: 'evt-existing',
         };
-        const updated = applyCalendarForm(item, { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-existing' }, []);
+        const updated = applyCalendarForm(
+            item,
+            { ...emptyCalendar, date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-existing' },
+            [],
+        );
         expect(updated.calendarSyncConfigId).toBe('cfg-existing');
         expect(updated.calendarIntegrationId).toBe('int-existing');
         expect(updated.calendarEventId).toBe('evt-existing');
@@ -196,7 +202,11 @@ describe('applyCalendarForm', () => {
             calendarSyncConfigId: 'cfg-existing',
             calendarIntegrationId: 'int-existing',
         };
-        const updated = applyCalendarForm(item, { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-different' }, []);
+        const updated = applyCalendarForm(
+            item,
+            { ...emptyCalendar, date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-different' },
+            [],
+        );
         expect(updated.calendarSyncConfigId).toBeUndefined();
         expect(updated.calendarIntegrationId).toBeUndefined();
     });
@@ -211,7 +221,11 @@ describe('applyCalendarForm', () => {
             calendarEventId: 'evt-existing',
             // calendarIntegrationId intentionally absent — already-corrupted shape.
         };
-        const updated = applyCalendarForm(item, { date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-existing' }, []);
+        const updated = applyCalendarForm(
+            item,
+            { ...emptyCalendar, date: '2026-05-04', startTime: '09:00', endTime: '09:30', calendarSyncConfigId: 'cfg-existing' },
+            [],
+        );
         expect(updated.calendarSyncConfigId).toBeUndefined();
         expect(updated.calendarIntegrationId).toBeUndefined();
     });
@@ -229,17 +243,40 @@ describe('mergeFormsIntoItem', () => {
             BASE_ITEM,
             'calendar',
             emptyNextAction,
-            { date: '2026-06-01', startTime: '11:00', endTime: '11:30', calendarSyncConfigId: '' },
+            { ...emptyCalendar, date: '2026-06-01', startTime: '11:00', endTime: '11:30' },
             emptyWaitingFor,
             [],
         );
         // Any date/time change proves the calendar branch ran.
         expect(updated.timeStart).not.toBe(BASE_ITEM.timeStart);
     });
+
+    it('persists allDay on the merged item when the form toggles all-day on', () => {
+        const updated = mergeFormsIntoItem(BASE_ITEM, 'calendar', emptyNextAction, { ...emptyCalendar, date: '2026-06-01', allDay: true }, emptyWaitingFor, []);
+        expect(updated.allDay).toBe(true);
+        // Date-only string proves the all-day branch ran (timed would emit ISO datetimes).
+        expect(updated.timeStart).toBe('2026-06-01');
+        expect(updated.timeEnd).toBe('2026-06-02');
+    });
+
+    it('clears a previously-set allDay flag when the form toggles all-day off', () => {
+        const previouslyAllDay: StoredItem = { ...BASE_ITEM, allDay: true, timeStart: '2026-06-01', timeEnd: '2026-06-02' };
+        const updated = mergeFormsIntoItem(
+            previouslyAllDay,
+            'calendar',
+            emptyNextAction,
+            { ...emptyCalendar, date: '2026-06-01', startTime: '09:00', endTime: '10:00', allDay: false },
+            emptyWaitingFor,
+            [],
+        );
+        expect(updated.allDay).toBeUndefined();
+        // exactOptionalPropertyTypes: the key must be missing, not set to undefined.
+        expect('allDay' in updated).toBe(false);
+    });
 });
 
 describe('applyCalendarPatch', () => {
-    const FORM = { date: '2026-05-04', startTime: '14:00', endTime: '15:00', calendarSyncConfigId: '' };
+    const FORM = { ...emptyCalendar, date: '2026-05-04', startTime: '14:00', endTime: '15:00' };
 
     it('shifts endTime to preserve duration when startTime changes', () => {
         const next = applyCalendarPatch(FORM, { startTime: '15:30' });
@@ -279,6 +316,15 @@ describe('applyCalendarPatch', () => {
     it('passes through changes to calendarSyncConfigId', () => {
         const next = applyCalendarPatch(FORM, { calendarSyncConfigId: 'cfg-1' });
         expect(next).toEqual({ ...FORM, calendarSyncConfigId: 'cfg-1' });
+    });
+
+    it('does not run the duration-preserve trick when the form is in all-day mode', () => {
+        // The duration-preserve logic mutates endTime in response to startTime — but all-day events
+        // ignore startTime entirely and use endDate. Running it would produce nonsense edits to
+        // a field the UI no longer renders.
+        const allDayForm = { ...emptyCalendar, date: '2026-05-04', allDay: true };
+        const next = applyCalendarPatch(allDayForm, { startTime: '15:30' });
+        expect(next.endTime).toBe('');
     });
 });
 
@@ -374,7 +420,7 @@ describe('buildEditPatch', () => {
     };
 
     function calForm(date: string, startTime: string, endTime: string, configId = ''): typeof emptyCalendar {
-        return { date, startTime, endTime, calendarSyncConfigId: configId };
+        return { ...emptyCalendar, date, startTime, endTime, calendarSyncConfigId: configId };
     }
 
     it('returns an empty object when nothing changed', () => {
@@ -533,6 +579,46 @@ describe('buildEditPatch', () => {
         const wf = { waitingForPersonId: 'p-2', expectedBy: '2026-12-31', ignoreBefore: '' };
         const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', emptyNextAction, emptyCalendar, wf);
         expect(patch.waitingForPersonId).toBe('p-2');
+    });
+
+    // ── all-day calendar patch fields ─────────────────────────────────────────
+    // Cross-account reassign of an all-day item must survive the move (Risk #5 in the plan).
+
+    it('emits allDay=true and date-only timeStart/timeEnd when the form switches a timed item to all-day', () => {
+        const cal = { ...emptyCalendar, date: '2026-05-27', allDay: true };
+        const patch = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, CALENDAR_ITEM.notes ?? '', 'calendar', emptyNextAction, cal, emptyWaitingFor);
+        expect(patch.allDay).toBe(true);
+        expect(patch.timeStart).toBe('2026-05-27');
+        expect(patch.timeEnd).toBe('2026-05-28');
+    });
+
+    it('emits allDay=false when the form switches an all-day item back to timed', () => {
+        const allDayItem: StoredItem = { ...CALENDAR_ITEM, allDay: true, timeStart: '2026-05-27', timeEnd: '2026-05-28' };
+        const cal = { ...emptyCalendar, date: '2026-05-27', startTime: '09:00', endTime: '10:00', allDay: false };
+        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', emptyNextAction, cal, emptyWaitingFor);
+        expect(patch.allDay).toBe(false);
+        // ISO datetimes prove the timed branch ran.
+        expect(patch.timeStart).toBeDefined();
+        expect(patch.timeEnd).toBeDefined();
+    });
+
+    it('omits allDay when the form stays all-day and dates are unchanged', () => {
+        const allDayItem: StoredItem = { ...CALENDAR_ITEM, allDay: true, timeStart: '2026-05-27', timeEnd: '2026-05-28' };
+        const cal = { ...emptyCalendar, date: '2026-05-27', allDay: true };
+        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', emptyNextAction, cal, emptyWaitingFor);
+        expect(patch.allDay).toBeUndefined();
+        expect(patch.timeStart).toBeUndefined();
+        expect(patch.timeEnd).toBeUndefined();
+    });
+
+    it('emits a multi-day timeEnd when the all-day form extends endDate', () => {
+        const allDayItem: StoredItem = { ...CALENDAR_ITEM, allDay: true, timeStart: '2026-05-27', timeEnd: '2026-05-28' };
+        const cal = { ...emptyCalendar, date: '2026-05-27', endDate: '2026-05-29', allDay: true };
+        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', emptyNextAction, cal, emptyWaitingFor);
+        // Inclusive endDate 2026-05-29 → exclusive 2026-05-30.
+        expect(patch.timeEnd).toBe('2026-05-30');
+        // allDay flag was already set on the item, so the toggle-state diff stays silent.
+        expect(patch.allDay).toBeUndefined();
     });
 });
 

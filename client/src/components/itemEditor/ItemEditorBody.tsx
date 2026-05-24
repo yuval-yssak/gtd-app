@@ -113,6 +113,21 @@ function itemToCalendarForm(item: StoredItem): CalendarFormState {
     if (!item.timeStart) {
         return emptyCalendar;
     }
+    // All-day items store YYYY-MM-DD strings on timeStart/timeEnd (GCal exclusive-end preserved).
+    // Decode the +1-day shift back to an inclusive endDate so the picker shows the date the user
+    // would think of as "the last day"; a single-day event renders with endDate === '' (blank).
+    if (item.allDay) {
+        const startDate = item.timeStart;
+        const inclusiveEnd = item.timeEnd ? dayjs(item.timeEnd).subtract(1, 'day').format('YYYY-MM-DD') : startDate;
+        return {
+            date: startDate,
+            startTime: '',
+            endTime: '',
+            calendarSyncConfigId: item.calendarSyncConfigId ?? '',
+            allDay: true,
+            endDate: inclusiveEnd === startDate ? '' : inclusiveEnd,
+        };
+    }
     const start = dayjs(item.timeStart);
     const end = item.timeEnd ? dayjs(item.timeEnd) : start.add(1, 'hour');
     return {
@@ -120,6 +135,8 @@ function itemToCalendarForm(item: StoredItem): CalendarFormState {
         startTime: start.format('HH:mm'),
         endTime: end.format('HH:mm'),
         calendarSyncConfigId: item.calendarSyncConfigId ?? '',
+        allDay: false,
+        endDate: '',
     };
 }
 

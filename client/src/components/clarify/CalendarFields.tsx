@@ -1,9 +1,11 @@
 import FormControl from '@mui/material/FormControl';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import InputLabel from '@mui/material/InputLabel';
 import ListSubheader from '@mui/material/ListSubheader';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import Stack from '@mui/material/Stack';
+import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
 import type { CalendarOption } from '../../hooks/useCalendarOptions';
 import type { CalendarFormState } from './types';
@@ -51,8 +53,21 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
                 gap: 2,
             }}
         >
+            <FormControlLabel
+                // data-testid sits on the wrapping label so tests can locate the toggle by stable
+                // selector; checkbox role from the inner Switch remains the canonical a11y entry point.
+                data-testid="allDayToggle"
+                control={
+                    <Switch
+                        checked={value.allDay}
+                        onChange={(e) => onChange({ allDay: e.target.checked })}
+                        slotProps={{ input: { 'aria-label': 'All day' } }}
+                    />
+                }
+                label="All day"
+            />
             <TextField
-                label="Date"
+                label={value.allDay ? 'Start date' : 'Date'}
                 type="date"
                 value={value.date}
                 onChange={(e) => onChange({ date: e.target.value })}
@@ -60,29 +75,41 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
                 required
                 slotProps={{ inputLabel: { shrink: true } }}
             />
-            <Stack
-                direction="row"
-                sx={{
-                    gap: 2,
-                }}
-            >
+            {value.allDay ? (
                 <TextField
-                    label="Start time"
-                    type="time"
-                    value={value.startTime}
-                    onChange={(e) => onChange({ startTime: e.target.value })}
+                    label="End date"
+                    type="date"
+                    value={value.endDate}
+                    onChange={(e) => onChange({ endDate: e.target.value })}
                     size="small"
-                    slotProps={{ inputLabel: { shrink: true } }}
+                    helperText="Leave empty for a single day"
+                    slotProps={{ inputLabel: { shrink: true }, htmlInput: { 'data-testid': 'endDatePicker' } }}
                 />
-                <TextField
-                    label="End time"
-                    type="time"
-                    value={value.endTime}
-                    onChange={(e) => onChange({ endTime: e.target.value })}
-                    size="small"
-                    slotProps={{ inputLabel: { shrink: true } }}
-                />
-            </Stack>
+            ) : (
+                <Stack
+                    direction="row"
+                    sx={{
+                        gap: 2,
+                    }}
+                >
+                    <TextField
+                        label="Start time"
+                        type="time"
+                        value={value.startTime}
+                        onChange={(e) => onChange({ startTime: e.target.value })}
+                        size="small"
+                        slotProps={{ inputLabel: { shrink: true } }}
+                    />
+                    <TextField
+                        label="End time"
+                        type="time"
+                        value={value.endTime}
+                        onChange={(e) => onChange({ endTime: e.target.value })}
+                        size="small"
+                        slotProps={{ inputLabel: { shrink: true } }}
+                    />
+                </Stack>
+            )}
             {showPicker && (
                 <FormControl size="small">
                     <InputLabel>Calendar</InputLabel>

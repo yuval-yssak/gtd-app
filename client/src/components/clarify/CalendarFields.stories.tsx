@@ -29,7 +29,17 @@ export const Empty: Story = {
 
 /** Only the date is set — start and end times still empty. */
 export const DateOnly: Story = {
-    render: () => <ControlledCalendarFields initial={{ date: '2024-04-15', startTime: '', endTime: '', calendarSyncConfigId: '' }} />,
+    render: () => <ControlledCalendarFields initial={{ ...emptyCalendarState, date: '2024-04-15' }} />,
+};
+
+/** All-day single-day event — toggle on, end date empty. */
+export const AllDaySingle: Story = {
+    render: () => <ControlledCalendarFields initial={{ ...emptyCalendarState, date: '2024-04-15', allDay: true }} />,
+};
+
+/** All-day multi-day event — toggle on with explicit inclusive end date. */
+export const AllDayMulti: Story = {
+    render: () => <ControlledCalendarFields initial={{ ...emptyCalendarState, date: '2024-04-15', endDate: '2024-04-17', allDay: true }} />,
 };
 
 /** All fields filled — a complete calendar event time block. */

@@ -56,6 +56,7 @@ export async function clarifyToNextAction(db: IDBPDatabase<MyDB>, item: StoredIt
         calendarIntegrationId: _ci,
         calendarSyncConfigId: _csc,
         waitingForPersonId: _wfp,
+        allDay: _ad,
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'nextAction', ...meta, updatedTs: nowIso() };
@@ -69,10 +70,14 @@ export interface CalendarMeta {
     timeEnd: string;
     calendarSyncConfigId?: string;
     calendarIntegrationId?: string;
+    /** True when timeStart/timeEnd are date-only YYYY-MM-DD strings (GCal exclusive-end preserved). */
+    allDay?: boolean;
 }
 
 export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem, meta: CalendarMeta): Promise<StoredItem> {
     // Strip nextAction/waitingFor-specific fields and stale calendar IDs so meta can set fresh ones.
+    // Also strip `allDay` so the meta's value (true OR omitted) wins — leaving a stale `true`
+    // on a now-timed event would corrupt GCal pushback (it would emit { date } against an ISO timeStart).
     const {
         workContextIds: _wc,
         energy: _e,
@@ -83,6 +88,7 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
         ignoreBefore: _ib,
         calendarSyncConfigId: _csc,
         calendarIntegrationId: _ci,
+        allDay: _ad,
         ...rest
     } = item;
     const updated: StoredItem = {
@@ -92,6 +98,7 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
         timeEnd: meta.timeEnd,
         ...(meta.calendarSyncConfigId ? { calendarSyncConfigId: meta.calendarSyncConfigId } : {}),
         ...(meta.calendarIntegrationId ? { calendarIntegrationId: meta.calendarIntegrationId } : {}),
+        ...(meta.allDay ? { allDay: true } : {}),
         updatedTs: nowIso(),
     };
     await putItem(db, updated);
@@ -119,6 +126,7 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
         time: _t,
         focus: _f,
         urgent: _u,
+        allDay: _ad,
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'waitingFor', ...meta, updatedTs: nowIso() };
@@ -143,6 +151,7 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
         calendarIntegrationId: _ci,
         calendarSyncConfigId: _csc,
         waitingForPersonId: _wfp,
+        allDay: _ad,
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'inbox', updatedTs: nowIso() };
@@ -167,6 +176,7 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
         calendarIntegrationId: _ci,
         calendarSyncConfigId: _csc,
         waitingForPersonId: _wfp,
+        allDay: _ad,
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'somedayMaybe', updatedTs: nowIso() };

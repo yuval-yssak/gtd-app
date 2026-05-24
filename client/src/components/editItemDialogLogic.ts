@@ -106,10 +106,14 @@ function shiftEndKeepingDuration(prevStart: string, prevEnd: string, nextStart: 
  * Applies a partial calendar-form edit while preserving the existing duration when the user moves
  * the start time. Editing `endTime` directly is the explicit "change the duration" gesture, so end
  * is left untouched in that case. Same-day events only — the form has a single `date` field, so
- * date changes shift both endpoints together and need no special handling.
+ * date changes shift both endpoints together and need no special handling. The duration-preserve
+ * trick only applies to timed events — all-day events use endDate, not endTime, and never need it.
  */
 export function applyCalendarPatch(prev: CalendarFormState, patch: Partial<CalendarFormState>): CalendarFormState {
     const next = { ...prev, ...patch };
+    if (next.allDay) {
+        return next;
+    }
     if (patch.startTime === undefined || patch.startTime === prev.startTime || !prev.startTime || !prev.endTime) {
         return next;
     }
@@ -133,9 +137,11 @@ export function applyCalendarPatch(prev: CalendarFormState, patch: Partial<Calen
  */
 export function applyCalendarForm(item: StoredItem, cal: CalendarFormState, calendarOptions: CalendarOption[]): StoredItem {
     const meta: CalendarMeta = buildCalendarMeta(cal, calendarOptions);
-    const { calendarSyncConfigId: _csc, calendarIntegrationId: _ci, ...rest } = item;
+    // Strip `allDay` alongside the calendar-link keys so meta controls the final value — never leave
+    // a stale `true` from a prior all-day save when the user toggled back to timed.
+    const { calendarSyncConfigId: _csc, calendarIntegrationId: _ci, allDay: _ad, ...rest } = item;
     const link = pickLinkForInPlaceEdit(item, cal, meta);
-    return { ...rest, timeStart: meta.timeStart, timeEnd: meta.timeEnd, ...link };
+    return { ...rest, timeStart: meta.timeStart, timeEnd: meta.timeEnd, ...(meta.allDay ? { allDay: true } : {}), ...link };
 }
 
 /** Either both link IDs together (paired link) or neither (cleared). The discriminated shape
@@ -256,15 +262,47 @@ export function buildEditPatch(
     return patch;
 }
 
-/** Calendar wall-clock changes flow into timeStart/timeEnd. The configId is NOT in the patch — see buildEditPatch. */
+/**
+ * Calendar wall-clock changes flow into timeStart/timeEnd; the all-day flag rides as `allDay`.
+ * The configId is NOT in the patch — see buildEditPatch. Branches on `cal.allDay`:
+ *   - All-day → emits YYYY-MM-DD timeStart and a +1-day exclusive timeEnd; tracks `allDay` only
+ *     when it differs from the item's current flag (toggling the switch is itself a meaningful diff).
+ *   - Timed → existing wall-clock behavior; tracks `allDay: false` when the item was previously all-day.
+ */
 function addCalendarPatchFields(patch: ReassignItemEditPatch, item: StoredItem, cal: CalendarFormState): void {
-    if (!cal.date || !cal.startTime || !cal.endTime) {
+    if (!cal.date) {
+        return;
+    }
+    const wasAllDay = item.allDay === true;
+    if (cal.allDay) {
+        addAllDayCalendarPatchFields(patch, item, cal);
+        if (!wasAllDay) {
+            patch.allDay = true;
+        }
+        return;
+    }
+    if (!cal.startTime || !cal.endTime) {
         return;
     }
     const nextStart = dayjs(`${cal.date}T${cal.startTime}`).toISOString();
     const nextEnd = dayjs(`${cal.date}T${cal.endTime}`).toISOString();
     if (nextStart !== item.timeStart) {
         patch.timeStart = nextStart;
+    }
+    if (nextEnd !== item.timeEnd) {
+        patch.timeEnd = nextEnd;
+    }
+    if (wasAllDay) {
+        patch.allDay = false;
+    }
+}
+
+/** Emits timeStart / timeEnd for an all-day form when they differ from the item's stored YYYY-MM-DD strings. */
+function addAllDayCalendarPatchFields(patch: ReassignItemEditPatch, item: StoredItem, cal: CalendarFormState): void {
+    const inclusiveEnd = cal.endDate && cal.endDate >= cal.date ? cal.endDate : cal.date;
+    const nextEnd = dayjs(inclusiveEnd).add(1, 'day').format('YYYY-MM-DD');
+    if (cal.date !== item.timeStart) {
+        patch.timeStart = cal.date;
     }
     if (nextEnd !== item.timeEnd) {
         patch.timeEnd = nextEnd;

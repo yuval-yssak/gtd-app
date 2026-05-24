@@ -28,6 +28,8 @@ export interface ReassignItemEditPatch {
     expectedBy?: string;
     ignoreBefore?: string;
     waitingForPersonId?: string;
+    /** All-day flag — true/false flips between date-only and ISO-datetime semantics on timeStart/timeEnd. */
+    allDay?: boolean;
 }
 
 /** Whitelisted routine edits that ride along on a reassign. Mirrors server's ReassignRoutineEditPatch. */
