@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
-import type { EntitySnapshot, EntityType, OperationInterface, OpType } from '../types/entities.js';
+import type { EntitySnapshot, EntityType, OperationInterface, OpType, RsvpOpPayload } from '../types/entities.js';
 import { applyEntityOp, hydrateRoutineDeleteSnapshots } from './applyEntityOp.js';
+import { buildCalendarProvider } from './buildCalendarProvider.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
+import { replayRsvpOp } from './rsvpReplay.js';
 
 export interface RawOperation {
     entityType: EntityType;
@@ -17,6 +19,11 @@ export interface RawOperation {
      * Absent → pushback defaults to `'none'`.
      */
     gcalMeta?: { sendUpdates: 'all' | 'none' };
+    /**
+     * RSVP payload. Required when `opType === 'rsvp'`, absent otherwise. The replay path in
+     * `rsvpReplay.ts` reads this off the persisted op to drive the GCal `events.patch` call.
+     */
+    rsvp?: RsvpOpPayload;
 }
 
 export interface ApplyOptions {
@@ -96,6 +103,7 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
         opType: raw.opType,
         snapshot: raw.snapshot ? ({ ...raw.snapshot, user: userId } as EntitySnapshot) : null,
         ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
+        ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
     };
 
     // Step 3 — routine-delete snapshot hydration. Mutates op.snapshot in place.
@@ -107,6 +115,14 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     // `/sync/push` throughput target — single-batch ops should never target the same entityId.)
     await applyEntityOp(userId, op);
     await operationsDAO.insertOne(op);
+
+    // Step 5b — RSVP replay (offline-first). For `opType: 'rsvp'` ops the GCal push is part of
+    // the contract: we await it so the persisted op row can carry `syncFailed` / `failureReason`
+    // before the response goes out. Online callers (the dedicated /rsvp endpoint) hit a separate
+    // sync path; this branch fires only for ops replayed via /sync/push.
+    if (op.opType === 'rsvp') {
+        await replayRsvpOp(userId, op, buildCalendarProvider);
+    }
 
     // Step 6 — fan-out. Awaiting only the in-process synchronous legs (SSE + push); GCal +
     // webhooks are fire-and-forget under the hood.
@@ -175,12 +191,23 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
         opType: raw.opType,
         snapshot: raw.snapshot ? ({ ...raw.snapshot, user: userId } as EntitySnapshot) : null,
         ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
+        ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
     }));
 
     // Hydrate routine-delete snapshots before the apply Promise.all races against the deletion.
     await hydrateRoutineDeleteSnapshots(userId, ops);
 
     await Promise.all([operationsDAO.insertMany(ops), ...ops.map((op) => applyEntityOp(userId, op))]);
+
+    // RSVP replay (offline-first). Awaited in queue order — every RSVP replays so the organizer
+    // sees the full history, per plan ("do NOT coalesce queued RSVPs"). Sequential await (not
+    // Promise.all) keeps the per-entity ordering deterministic when multiple RSVPs land on the
+    // same item from a single flush batch.
+    for (const op of ops) {
+        if (op.opType === 'rsvp') {
+            await replayRsvpOp(userId, op, buildCalendarProvider);
+        }
+    }
 
     const notifyOpts: NotifyChangeOptions = {
         ...(opts.deviceId.startsWith('api:') ? {} : { excludeDeviceId: opts.deviceId }),

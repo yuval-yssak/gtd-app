@@ -15,7 +15,7 @@ import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/
 import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import { deviceSyncStateId, type EntitySnapshot, type EntityType, type OpType } from '../types/entities.js';
+import { deviceSyncStateId, type EntitySnapshot, type EntityType, type OpType, type RsvpOpPayload } from '../types/entities.js';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
 // Snapshot uses `userId` (IndexedDB field name); the server remaps it to `user`.
@@ -30,6 +30,11 @@ interface ClientOp {
      * verbatim onto the persisted operation so GCal pushback can forward it to provider calls.
      */
     gcalMeta?: { sendUpdates: 'all' | 'none' };
+    /**
+     * Required when `opType === 'rsvp'`. The replay path (lib/rsvpReplay.ts) reads this off the
+     * persisted op to drive `events.patch` after a long offline period.
+     */
+    rsvp?: RsvpOpPayload;
 }
 
 const STALE_DEVICE_DAYS = 90;
@@ -156,8 +161,9 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // Strip client-side `userId` and let `applyAndPublishOperations` stamp the
         // server-authoritative `user`. The misroute guard above already ensured no snapshot tags
         // disagree with the active session; we still re-stamp inside the pipeline as a defense.
-        // gcalMeta rides along untouched — the pipeline forwards it onto the persisted op so
-        // `maybePushToGCal` can read sendUpdates and thread it into the provider call.
+        // gcalMeta and rsvp ride along untouched — the pipeline forwards them onto the persisted
+        // op so `maybePushToGCal` can read sendUpdates and `replayRsvpOp` can drive events.patch
+        // for offline RSVPs.
         const rawOps: RawOperation[] = ops.map((op) => {
             const { userId: _stripped, ...snapshotFields } = op.snapshot ?? {};
             const snapshot = op.snapshot ? ({ ...snapshotFields, user: user.id } as EntitySnapshot) : null;
@@ -167,6 +173,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
                 opType: op.opType,
                 snapshot,
                 ...(op.gcalMeta ? { gcalMeta: op.gcalMeta } : {}),
+                ...(op.rsvp ? { rsvp: op.rsvp } : {}),
             };
         });
 

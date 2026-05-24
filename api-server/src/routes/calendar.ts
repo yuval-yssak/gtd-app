@@ -33,6 +33,7 @@ import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { recordOperation } from '../lib/operationHelpers.js';
 import { propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
+import { applyRsvpToAttendees, resolveSyncConfigForItem } from '../lib/rsvpHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
 import { hasAtLeastOne, type NonEmptyArray } from '../lib/typeUtils.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
@@ -2657,41 +2658,6 @@ function hasCalendarWriteScope(integration: CalendarIntegrationInterface): boole
         return true;
     }
     return integration.grantedScopes.some((s) => (CALENDAR_WRITE_SCOPES as readonly string[]).includes(s));
-}
-
-/**
- * Computes the next attendees array for an RSVP. Finds the self entry by case-insensitive email
- * match and updates its responseStatus; if no self entry exists yet, appends one. Sorts by email
- * to match the parser's stable ordering policy.
- */
-function applyRsvpToAttendees(existing: readonly GCalAttendee[], myEmail: string, responseStatus: RsvpResponseStatus): GCalAttendee[] {
-    const normalized = myEmail.toLowerCase();
-    const selfIndex = existing.findIndex((a) => a.email.toLowerCase() === normalized);
-    const next = existing.map((a) => ({ ...a }));
-    if (selfIndex >= 0) {
-        const current = next[selfIndex];
-        if (current) {
-            next[selfIndex] = { ...current, responseStatus };
-        }
-    } else {
-        next.push({ email: myEmail, responseStatus, self: true });
-    }
-    return next.sort((a, b) => a.email.localeCompare(b.email));
-}
-
-/**
- * Looks up the sync config that owns this item's GCal event. We don't store `calendarSyncConfigId`
- * on every item (legacy items lack it), so fall back to the integration's default config.
- */
-async function resolveSyncConfigForItem(item: ItemInterface, integrationId: string, userId: string): Promise<CalendarSyncConfigInterface | null> {
-    if (item.calendarSyncConfigId) {
-        const config = await calendarSyncConfigsDAO.findByOwnerAndId(item.calendarSyncConfigId, userId);
-        if (config) {
-            return config;
-        }
-    }
-    const configs = await calendarSyncConfigsDAO.findEnabledByIntegration(integrationId);
-    return configs.find((c) => c.isDefault) ?? configs[0] ?? null;
 }
 
 /** Builds the OAuth re-consent URL surfaced when `grantedScopes` lacks calendar write. */
