@@ -1,0 +1,37 @@
+.badgeButton {
+    /* Sits next to the status indicator in the drawer footer — give it the same compact footprint. */
+    padding: 0.25rem;
+}
+
+.dialogTitle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.row {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 0.5rem 0;
+}
+
+.rowBody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.rowTitle {
+    font-weight: 500;
+}
+
+.rowActions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}

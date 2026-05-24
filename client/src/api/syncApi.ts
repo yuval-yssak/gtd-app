@@ -83,3 +83,53 @@ export async function reassignEntityOnServer(params: ReassignParams): Promise<Re
     }
     return (await res.json()) as { ok: true; crossUserReferences?: { peopleIds?: string[]; workContextIds?: string[] } };
 }
+
+// ─── Sync Issues panel API ───────────────────────────────────────────────────
+
+/**
+ * Mirror of the server's `OpFailureReason` enum. Kept inline (not imported from server types)
+ * because the client cannot reach into api-server packages. Adding a new server-side reason
+ * requires updating BOTH this union AND the failure-label map in `SyncIssuesPanel`.
+ */
+export type SyncIssueFailureReason = 'transient_exhausted' | 'scope_missing' | 'calendar_missing' | 'edit_conflict' | 'terminal';
+
+/** One row in the SyncIssuesPanel — projection of a persisted op with `syncFailed: true`. */
+export interface SyncIssue {
+    _id: string;
+    ts: string;
+    opType: string;
+    entityType: string;
+    entityId: string;
+    failureReason: SyncIssueFailureReason;
+    failureDetail?: string;
+    /** False for `terminal` reasons; true for retryable buckets surfaced as Retry button. */
+    retryable: boolean;
+}
+
+/** Discriminated result of a Retry click — `false` keeps the row in place; `true` clears it. */
+export type RetrySyncIssueResult = { ok: true } | { ok: false; failureReason?: SyncIssueFailureReason };
+
+/** GET /sync/issues — drives the panel's render. Throws on non-2xx so the boundary can show a toast. */
+export async function fetchSyncIssues(): Promise<SyncIssue[]> {
+    const res = await fetch(`${API_SERVER}/sync/issues`, { credentials: 'include' });
+    if (!res.ok) {
+        throw new Error(`GET /sync/issues ${res.status}`);
+    }
+    const body = (await res.json()) as { issues: SyncIssue[] };
+    return body.issues;
+}
+
+/** POST /sync/issues/:opId/retry — re-runs the GCal-side effect server-side. */
+export async function retrySyncIssue(opId: string): Promise<RetrySyncIssueResult> {
+    const res = await fetch(`${API_SERVER}/sync/issues/${opId}/retry`, { method: 'POST', credentials: 'include' });
+    if (!res.ok) {
+        return { ok: false };
+    }
+    return (await res.json()) as RetrySyncIssueResult;
+}
+
+/** POST /sync/issues/:opId/dismiss — removes the op row server-side. */
+export async function dismissSyncIssue(opId: string): Promise<{ ok: boolean }> {
+    const res = await fetch(`${API_SERVER}/sync/issues/${opId}/dismiss`, { method: 'POST', credentials: 'include' });
+    return { ok: res.ok };
+}

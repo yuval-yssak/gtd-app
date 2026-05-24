@@ -18,6 +18,16 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
         // received every op at that timestamp. Safe to delete ops at and before `ts`.
         await this._collection.deleteMany({ user: userId, ts: { $lte: ts } } as never);
     }
+
+    /**
+     * Owner-scoped single-op delete. Returns the result so callers (e.g. /sync/issues/:opId/dismiss)
+     * can branch on `deletedCount === 0` to surface a 404 instead of pretending the op was removed.
+     * Distinct from `deleteByOwner` (void-returning) on AbstractDAO since the panel handler needs
+     * to discriminate "not found" from "deleted" to keep the UX honest.
+     */
+    async deleteOne(opId: string, userId: string) {
+        return await this._collection.deleteOne({ _id: opId, user: userId } as never);
+    }
 }
 
 export default new OperationsDAO();

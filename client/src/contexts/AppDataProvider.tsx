@@ -17,6 +17,7 @@ import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
 import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 import { applyOverrideToItem, applyOverrideToRoutine, usePendingReassignMaps } from './PendingReassignProvider';
+import { dispatchSyncIssuesRefresh } from './syncIssuesEvents';
 
 export interface AppData {
     /** The active session's account — the default-owner for newly created entities. */
@@ -188,6 +189,9 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                 return;
             }
             triggerAppResourceRefresh('all');
+            // Tell the SyncIssuesPanel to re-poll. Every sync round-trip is a candidate for new
+            // failed ops (server-side rsvp replay marks `syncFailed` during the pushback step).
+            dispatchSyncIssuesRefresh();
         } finally {
             isSyncingRef.current = false;
             // If an SSE/push event arrived while we were syncing, do a lightweight catch-up
@@ -202,6 +206,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     .then(() => {
                         if (unmountedRef.current) return;
                         triggerAppResourceRefresh('all');
+                        dispatchSyncIssuesRefresh();
                     })
                     .catch((err) => console.error('[sync] catch-up pull failed:', err));
             }
@@ -229,6 +234,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     }
                     if (unmountedRef.current) return;
                     triggerAppResourceRefresh('all');
+                    dispatchSyncIssuesRefresh();
                 } catch (err) {
                     console.error('[sse] per-user sync failed:', err);
                 }

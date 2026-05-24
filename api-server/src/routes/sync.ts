@@ -16,6 +16,7 @@ import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import { deviceSyncStateId, type EntitySnapshot, type EntityType, type OpType, type RsvpOpPayload } from '../types/entities.js';
+import { syncIssuesRoutes } from './syncIssues.js';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
 // Snapshot uses `userId` (IndexedDB field name); the server remaps it to `user`.
@@ -328,7 +329,14 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         notifyUserViaSse(params.fromUserId, { type: 'update', ts: now });
         notifyUserViaSse(params.toUserId, { type: 'update', ts: now });
         return c.json({ ok: true, ...(result.crossUserReferences ? { crossUserReferences: result.crossUserReferences } : {}) }, 200);
-    });
+    })
+
+    // ---------------------------------------------------------------------------
+    // /sync/issues — Sync Issues panel surface (list / dismiss / retry)
+    // ---------------------------------------------------------------------------
+    // Mounted as a sub-router so the failed-op endpoints stay grouped under /sync without
+    // bloating this file. Auth + tenant scoping live inside syncIssues.ts.
+    .route('/issues', syncIssuesRoutes);
 
 type ReassignGuardResult = { ok: true } | { ok: false; status: 400 | 403; error: string };
 
