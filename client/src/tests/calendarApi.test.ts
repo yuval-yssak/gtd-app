@@ -6,7 +6,8 @@
  * Mirrors the structure of `pushApi.test.ts` — global fetch is replaced per-test, then restored.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { deleteIntegration, initiateGoogleCalendarAuth, type UnlinkAction } from '../api/calendarApi';
+import { deleteIntegration, initiateGoogleCalendarAuth, rsvpOnline, type UnlinkAction } from '../api/calendarApi';
+import type { StoredItem } from '../types/MyDB';
 
 const API_SERVER = import.meta.env.VITE_API_SERVER ?? '';
 
@@ -115,6 +116,91 @@ describe('deleteIntegration', () => {
     it('throws when the server responds with a non-OK status so the UI can surface an error', async () => {
         fetchSpy.mockImplementationOnce(() => Promise.resolve(new Response('boom', { status: 500 })));
         await expect(deleteIntegration('int-3', 'keepLinkedEntities')).rejects.toThrow(/500/);
+    });
+});
+
+describe('rsvpOnline', () => {
+    function makeItem(): StoredItem {
+        return {
+            _id: 'item-1',
+            userId: 'user-1',
+            status: 'calendar',
+            title: 'Standup',
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-02T00:00:00.000Z',
+            timeStart: '2026-05-04T09:00:00.000Z',
+            timeEnd: '2026-05-04T09:30:00.000Z',
+        };
+    }
+
+    it('posts the responseStatus and returns the server-side item on success', async () => {
+        const item = makeItem();
+        fetchSpy.mockImplementationOnce((input, init) => {
+            recordFetchCall(input as RequestInfo, init as RequestInit);
+            return Promise.resolve(makeJsonResponse(item));
+        });
+
+        const result = await rsvpOnline('item-1', 'accepted');
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error('expected ok=true');
+        expect(result.item._id).toBe('item-1');
+
+        const [call] = fetchCalls;
+        if (!call) throw new Error('expected one fetch call');
+        const url = new URL(call.url, 'http://placeholder');
+        expect(url.pathname).toBe('/calendar/items/item-1/rsvp');
+        expect(call.init?.method).toBe('POST');
+        expect(call.init?.credentials).toBe('include');
+        const headers = (call.init?.headers ?? {}) as Record<string, string>;
+        expect(headers['Content-Type']).toBe('application/json');
+        expect(call.init?.body).toBe(JSON.stringify({ responseStatus: 'accepted' }));
+    });
+
+    it('returns scope_missing with the reconsent URL on a 403', async () => {
+        fetchSpy.mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ error: 'scope_missing', reconsentUrl: 'https://api.example/oauth' }, 403)));
+
+        const result = await rsvpOnline('item-1', 'declined');
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error('expected ok=false');
+        expect(result.scopeMissing).toBe(true);
+        if (!result.scopeMissing) throw new Error('expected scopeMissing=true');
+        expect(result.reconsentUrl).toBe('https://api.example/oauth');
+    });
+
+    it('returns a generic error when the 403 body is malformed', async () => {
+        // Defensive parse: if the server somehow returns 403 without `reconsentUrl`, we don't pretend
+        // we have one. The caller falls through to the generic-error arm and the UI shows a toast
+        // rather than crashing trying to open `undefined`.
+        fetchSpy.mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ error: 'scope_missing' }, 403)));
+
+        const result = await rsvpOnline('item-1', 'declined');
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error('expected ok=false');
+        expect(result.scopeMissing).toBe(false);
+        if (result.scopeMissing) throw new Error('expected scopeMissing=false');
+        expect(result.error).toBe('scope_missing_no_url');
+    });
+
+    it('returns a generic error on a 500', async () => {
+        fetchSpy.mockImplementationOnce(() => Promise.resolve(new Response('boom', { status: 500 })));
+
+        const result = await rsvpOnline('item-1', 'tentative');
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error('expected ok=false');
+        expect(result.scopeMissing).toBe(false);
+        if (result.scopeMissing) throw new Error('expected scopeMissing=false');
+        expect(result.error).toBe('rsvp_failed_500');
+    });
+
+    it('returns network_error when fetch throws (offline, DNS failure, etc.)', async () => {
+        fetchSpy.mockImplementationOnce(() => Promise.reject(new Error('network down')));
+
+        const result = await rsvpOnline('item-1', 'accepted');
+        expect(result.ok).toBe(false);
+        if (result.ok) throw new Error('expected ok=false');
+        expect(result.scopeMissing).toBe(false);
+        if (result.scopeMissing) throw new Error('expected scopeMissing=false');
+        expect(result.error).toBe('network_error');
     });
 });
 

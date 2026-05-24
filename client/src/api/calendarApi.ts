@@ -1,5 +1,5 @@
 import { API_SERVER } from '../constants/globals';
-import type { StoredCalendarSyncConfig } from '../types/MyDB';
+import type { GCalResponseStatus, StoredCalendarSyncConfig, StoredItem } from '../types/MyDB';
 
 export type UnlinkAction = 'keepLinkedEntities' | 'removeLinkedEntities';
 
@@ -113,6 +113,77 @@ export interface AccountSyncConfigsBundle {
 export async function getAllSyncConfigs(): Promise<AccountSyncConfigsBundle[]> {
     const res = await apiFetch('/calendar/all-sync-configs');
     return res.json();
+}
+
+// ── Online RSVP ──────────────────────────────────────────────────────────────
+
+/**
+ * The set of RSVP values the UI may push. `needsAction` is excluded — it represents the
+ * "no answer yet" state and is only ever surfaced by inbound parsing.
+ */
+export type RsvpPushStatus = Exclude<GCalResponseStatus, 'needsAction'>;
+
+/**
+ * Discriminated result type so callers can branch without unwrapping HTTP details.
+ *  - `ok: true` carries the server-returned item snapshot to seed optimistic UI reconciliation.
+ *  - `ok: false, scopeMissing: true` is the 403 path — the integration lacks calendar.events
+ *    write scope; the caller opens `reconsentUrl` in a popup, then retries on close.
+ *  - `ok: false, error: ...` is any other failure (404, 500, network, etc.); the caller can
+ *    queue an offline-replay op and surface a transient toast.
+ */
+export type RsvpOnlineResult =
+    | { ok: true; item: StoredItem }
+    | { ok: false; scopeMissing: true; reconsentUrl: string }
+    | { ok: false; scopeMissing: false; error: string };
+
+/**
+ * Posts an online RSVP. Returns a discriminated result so the caller can branch on scope_missing
+ * without losing the structured `reconsentUrl`. Network errors and non-2xx responses (other than
+ * the 403 scope path) collapse into the generic `error` arm — the caller falls through to the
+ * offline-replay queue (Phase 4) in either case.
+ */
+export async function rsvpOnline(itemId: string, responseStatus: RsvpPushStatus): Promise<RsvpOnlineResult> {
+    const response = await fetchRsvp(itemId, responseStatus);
+    if (!response) {
+        return { ok: false, scopeMissing: false, error: 'network_error' };
+    }
+    if (response.ok) {
+        return parseSuccess(response);
+    }
+    if (response.status === 403) {
+        return parseScopeMissing(response);
+    }
+    return { ok: false, scopeMissing: false, error: `rsvp_failed_${response.status}` };
+}
+
+async function fetchRsvp(itemId: string, responseStatus: RsvpPushStatus): Promise<Response | null> {
+    try {
+        // credentials: 'include' — mirrors apiFetch above so the Better Auth session cookie rides
+        // along on the cross-origin POST.
+        return await fetch(`${API_SERVER}/calendar/items/${itemId}/rsvp`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ responseStatus }),
+        });
+    } catch {
+        return null;
+    }
+}
+
+async function parseSuccess(response: Response): Promise<RsvpOnlineResult> {
+    const item = (await response.json()) as StoredItem;
+    return { ok: true, item };
+}
+
+async function parseScopeMissing(response: Response): Promise<RsvpOnlineResult> {
+    // Server shape: `{ error: 'scope_missing', reconsentUrl: string }`. Defensive parse so a server
+    // bug that drops `reconsentUrl` doesn't crash the UI — we fall through to the generic error arm.
+    const body = (await response.json().catch(() => null)) as { error?: string; reconsentUrl?: string } | null;
+    if (body?.error === 'scope_missing' && typeof body.reconsentUrl === 'string') {
+        return { ok: false, scopeMissing: true, reconsentUrl: body.reconsentUrl };
+    }
+    return { ok: false, scopeMissing: false, error: 'scope_missing_no_url' };
 }
 
 /**

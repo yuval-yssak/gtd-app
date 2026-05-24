@@ -1,0 +1,49 @@
+.accordion {
+    box-shadow: none;
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+.summaryHeader {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    width: 100%;
+}
+
+.summaryTitle {
+    font-weight: 600;
+}
+
+.body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.attendeesList {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+}
+
+.rsvpButtons {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+/* A subtle inline-form for "add email" / "save as person" affordances that pop next to the
+ * attendee chip — keeps them visually grouped without yanking layout. */
+.inlineInputRow {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.inlineInput {
+    min-width: 12rem;
+}

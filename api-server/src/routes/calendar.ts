@@ -7,7 +7,7 @@ dayjs.extend(utc);
 dayjs.extend(timezone);
 
 import { google } from 'googleapis';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
 import type { EventSyncResult, GCalEvent, GCalException } from '../calendarProviders/CalendarProvider.js';
 import { SyncTokenInvalidError } from '../calendarProviders/CalendarProvider.js';
@@ -141,6 +141,8 @@ interface OAuthStatePayload {
     userId: string;
     /** Email of the Google account the user expects to authorize. Verified against userinfo + active session. */
     loginHint?: string;
+    /** Caller-supplied hint for what the user came here to do. `'rsvp'` triggers a popup-close redirect target. */
+    intent?: 'rsvp';
 }
 
 /** Signs a state payload with HMAC-SHA256 to prevent CSRF / userId injection in the OAuth callback. */
@@ -234,6 +236,9 @@ calendarRoutes.get('/auth/google', authenticateRequest, (c) => {
     // as a@ from accidentally authorizing an unrelated b@ Google identity.
     const rawHint = c.req.query('login_hint');
     const loginHint = typeof rawHint === 'string' && rawHint.trim() !== '' ? rawHint.trim() : undefined;
+    // `intent=rsvp` rides through state so the callback can route to the popup-close finalizer
+    // page (versus the normal /settings landing) when an RSVP re-consent popup completes.
+    const intent = c.req.query('intent') === 'rsvp' ? ('rsvp' as const) : undefined;
 
     // state is HMAC-signed so the callback can verify it wasn't tampered with.
     // userinfo.email is required so the callback can verify the authorized account matches
@@ -243,7 +248,7 @@ calendarRoutes.get('/auth/google', authenticateRequest, (c) => {
         access_type: 'offline', // request refresh token
         prompt: 'consent', // always show consent screen so we always get a refresh token
         scope: ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email'],
-        state: signState({ userId, ...(loginHint ? { loginHint } : {}) }),
+        state: signState({ userId, ...(loginHint ? { loginHint } : {}), ...(intent ? { intent } : {}) }),
         ...(loginHint ? { login_hint: loginHint } : {}),
     });
 
@@ -261,7 +266,7 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     if (!state) {
         return c.text('Invalid state parameter', 400);
     }
-    const { userId, loginHint } = state;
+    const { userId, loginHint, intent } = state;
 
     const oauth2 = buildOAuthClient();
     const tokenResult = await tryExchangeOAuthTokens(oauth2, code);
@@ -281,6 +286,9 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     const sessionEmail = await tryFetchSessionEmail(c.req.raw.headers);
     if (!authorizedEmailMatches(authorizedEmail, loginHint, sessionEmail)) {
         await oauth2.revokeToken(accessToken).catch(() => {});
+        if (intent === 'rsvp') {
+            return renderPopupCloser(c, { ok: false, reason: 'mismatch' });
+        }
         return c.redirect(`${clientUrl}/settings?calendarConnectError=mismatch`);
     }
 
@@ -309,9 +317,34 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     // the entity. The repair runs on every successful OAuth completion (cheap: scoped by user).
     await clearOrphanedLastKnownMarkers(userId);
 
+    // intent=rsvp branch: the OAuth ran in a popup launched by MeetingDetails. Serve a tiny HTML
+    // page that posts a message to window.opener and closes itself — saves the parent a 500ms poll
+    // and gives a clean visual "popup vanishes on success" UX.
+    if (intent === 'rsvp') {
+        return renderPopupCloser(c, { ok: true });
+    }
+
     // Redirect back to client settings page so the user sees the new integration.
     return c.redirect(`${clientUrl}/settings?calendarConnected=1`);
 });
+
+/**
+ * Renders a minimal HTML page that posts an rsvp-reconsent result to the parent window via
+ * postMessage, then closes itself. Same-origin restrictions don't apply to postMessage; the parent
+ * filters on the message shape + the API origin to authenticate the message.
+ */
+function renderPopupCloser(c: Context, result: { ok: true } | { ok: false; reason: string }) {
+    const payload = JSON.stringify({ type: 'gtd-rsvp-reconsent', ...result });
+    // Target origin '*' is acceptable here because the payload contains no secrets — the parent
+    // re-fetches /calendar/integrations over its authenticated session to learn the actual scope state.
+    const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>RSVP reconnect</title></head>
+<body><script>
+try { if (window.opener) { window.opener.postMessage(${payload}, '*'); } } catch (e) {}
+setTimeout(() => window.close(), 100);
+</script><p>You can close this window.</p></body></html>`;
+    return c.html(html);
+}
 
 /**
  * Clears `lastKnown*` calendar markers from items and routines whose recorded

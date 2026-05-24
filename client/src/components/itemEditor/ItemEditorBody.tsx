@@ -16,6 +16,7 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useMemo, useState, useTransition } from 'react';
+import { type RsvpPushStatus, rsvpOnline } from '../../api/calendarApi';
 import type { ReassignItemEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
@@ -27,11 +28,14 @@ import {
     clarifyToSomedayMaybe,
     clarifyToTrash,
     clarifyToWaitingFor,
+    queueOfflineRsvp,
     recordRoutineInstanceModification,
     updateItem,
+    updateItemAttendees,
+    updateItemWithGcalMeta,
 } from '../../db/itemMutations';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
-import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
+import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
 import { CalendarFields } from '../clarify/CalendarFields';
 import { NextActionFields } from '../clarify/NextActionFields';
@@ -60,8 +64,12 @@ import {
     stripRoutineId,
 } from '../editItemDialogLogic';
 import styles from './ItemEditorBody.module.css';
+import { MeetingDetails, type RsvpStatus } from './MeetingDetails';
+import { applyOptimisticRsvp, findSelfAttendee } from './meetingDetailsLogic';
 import { NotesSection } from './NotesSection';
 import { ReassignInFlightInline } from './ReassignInFlightInline';
+import { SendUpdatesDialog } from './SendUpdatesDialog';
+import { shouldFireSendUpdatesDialog } from './sendUpdatesDialogLogic';
 
 export type { ItemEditorChrome } from '../editItemDialogLogic';
 
@@ -171,6 +179,15 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
     const [reassignError, setReassignError] = useState<string | null>(null);
     const [isSaving, startSaving] = useTransition();
     const isRoutineGenerated = Boolean(item.routineId);
+    // Live mirror of the GCal-owned fields the meeting editor mutates. Seeded from `item` on mount
+    // (the body remounts on `key={item._id}` per ItemEditorBody contract). Kept separate from
+    // `calForm` because attendees aren't a calendar form input — they live on the item itself and
+    // are pushed via their own queueSyncOp path (rsvp / attendee-update), independent of Save.
+    const [liveAttendees, setLiveAttendees] = useState<GCalAttendee[] | undefined>(item.attendees);
+    const [scopeMissingReconsentUrl, setScopeMissingReconsentUrl] = useState<string | null>(null);
+    // Deferred save state. When the SendUpdatesDialog needs to fire we stash the normalized
+    // title/notes here and resolve them when the user picks all/none/cancel.
+    const [pendingSave, setPendingSave] = useState<{ trimmedTitle: string; trimmedNotes: string } | null>(null);
 
     const [naForm, setNaForm] = useState<NextActionFormState>({
         ignoreBefore: item.ignoreBefore ?? '',
@@ -203,6 +220,7 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
         if (!trimmedTitle) {
             return;
         }
+        const trimmedNotes = notes.trim();
         const ownerChanged = ownerUserId !== item.userId;
         const statusChanged = status !== item.status;
         const path = decideSavePath(ownerChanged, statusChanged);
@@ -214,20 +232,70 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
             return;
         }
         if (path.kind === 'reassign') {
-            startReassignInBackground(buildEditPatch(item, trimmedTitle, notes.trim(), status, naForm, calForm, wfForm), trimmedTitle);
+            startReassignInBackground(buildEditPatch(item, trimmedTitle, trimmedNotes, status, naForm, calForm, wfForm), trimmedTitle);
             onClose();
             return;
         }
         setReassignError(null);
+        // Gate: if this save would push a notification-worthy change to a meeting with attendees,
+        // intercept with the SendUpdatesDialog so the organizer can pick all vs. none. Cancel falls
+        // back to the no-dialog path below.
+        if (shouldInterceptForSendUpdates(trimmedTitle, trimmedNotes)) {
+            setPendingSave({ trimmedTitle, trimmedNotes });
+            return;
+        }
+        commitSave(trimmedTitle, trimmedNotes, undefined);
+    }
+
+    function commitSave(trimmedTitle: string, trimmedNotes: string, gcalMeta: { sendUpdates: 'all' | 'none' } | undefined) {
+        const ownerChanged = ownerUserId !== item.userId;
+        const statusChanged = status !== item.status;
+        const path = decideSavePath(ownerChanged, statusChanged);
         startSaving(async () => {
             if (path.kind === 'statusTransition') {
-                await saveViaStatusTransition(normalizeTitleAndNotes(item, trimmedTitle, notes.trim()));
+                await saveViaStatusTransition(normalizeTitleAndNotes(item, trimmedTitle, trimmedNotes));
             } else {
-                await saveInPlace(normalizeTitleAndNotes(item, trimmedTitle, notes.trim()));
+                await saveInPlace(normalizeTitleAndNotes(item, trimmedTitle, trimmedNotes), gcalMeta);
             }
             await onSaved();
             onClose();
         });
+    }
+
+    /**
+     * Decision: do we need to ask the organizer about emailing attendees before saving?
+     * Only `inPlace` saves trigger the gate — status transitions and cross-account reassigns route
+     * through different server paths that don't currently honour the sidecar.
+     */
+    function shouldInterceptForSendUpdates(trimmedTitle: string, trimmedNotes: string): boolean {
+        if (status !== 'calendar') return false;
+        const ownerChanged = ownerUserId !== item.userId;
+        const statusChanged = status !== item.status;
+        const path = decideSavePath(ownerChanged, statusChanged);
+        if (path.kind !== 'saveInPlace') return false;
+        const merged = mergeFormsIntoItem({ ...item, title: trimmedTitle, notes: trimmedNotes }, status, naForm, calForm, wfForm, visibleCalendarOptions);
+        // Treat the live attendees state as the post-edit attendee set — attendee-editor changes
+        // bypass Save (they queue their own ops) but a parallel title edit still needs the prompt.
+        return shouldFireSendUpdatesDialog(
+            {
+                status: item.status,
+                title: item.title,
+                notes: item.notes,
+                timeStart: item.timeStart,
+                timeEnd: item.timeEnd,
+                allDay: item.allDay,
+                attendees: item.attendees,
+            },
+            {
+                status,
+                title: trimmedTitle,
+                notes: trimmedNotes,
+                timeStart: merged.timeStart,
+                timeEnd: merged.timeEnd,
+                allDay: merged.allDay,
+                attendees: liveAttendees,
+            },
+        );
     }
 
     function validateReassign(): boolean {
@@ -278,10 +346,17 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
         return { integrationId: targetOption.integrationId, syncConfigId: targetOption.configId };
     }
 
-    async function saveInPlace(itemNormalized: StoredItem) {
+    async function saveInPlace(itemNormalized: StoredItem, gcalMeta: { sendUpdates: 'all' | 'none' } | undefined) {
         const merged = mergeFormsIntoItem(itemNormalized, status, naForm, calForm, wfForm, visibleCalendarOptions);
-        await updateItem(db, merged);
-        await maybeRecordRoutineException(merged);
+        // Fold in the live attendee state — it lives outside the form because the meeting-details
+        // editor mutates it asynchronously and shouldn't be lost on Save.
+        const withAttendees = liveAttendees && liveAttendees.length > 0 ? { ...merged, attendees: liveAttendees } : merged;
+        if (gcalMeta) {
+            await updateItemWithGcalMeta(db, withAttendees, gcalMeta);
+        } else {
+            await updateItem(db, withAttendees);
+        }
+        await maybeRecordRoutineException(withAttendees);
     }
 
     async function maybeRecordRoutineException(merged: StoredItem) {
@@ -329,6 +404,59 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
                 await clarifyToTrash(db, baseItem);
                 break;
         }
+    }
+
+    /**
+     * RSVP click handler — attempts the online path first so the user sees a fast organizer-side
+     * notification when connected, then falls back to the offline replay queue for every other
+     * outcome (network failure, generic 5xx, missing-scope). The optimistic UI flip happens
+     * up-front so the chip color changes immediately regardless of which path resolves.
+     */
+    async function onRsvp(nextStatus: RsvpStatus) {
+        const self = findSelfAttendee(liveAttendees ?? []);
+        if (!self) {
+            // The button only renders when a self attendee exists, but guard anyway — a race with an
+            // inbound pull that strips the self attendee could surface a click without one.
+            return;
+        }
+        const nextAttendees = applyOptimisticRsvp(liveAttendees ?? [], self.email, nextStatus);
+        setLiveAttendees(nextAttendees);
+        const result = await rsvpOnline(item._id, nextStatus as RsvpPushStatus);
+        if (result.ok) {
+            setScopeMissingReconsentUrl(null);
+            // Server-confirmed RSVP — adopt its attendees array verbatim so any concurrent organizer
+            // changes (added attendees, etc.) land locally. updatedTs comes from the server too.
+            if (result.item.attendees) setLiveAttendees(result.item.attendees);
+            await onSaved();
+            return;
+        }
+        if (result.scopeMissing) {
+            setScopeMissingReconsentUrl(result.reconsentUrl);
+            return;
+        }
+        // Generic failure (network or other 5xx) — queue an offline rsvp op so the replay path
+        // resolves it on next flush. Only enqueue when the item carries enough GCal context.
+        if (item.calendarEventId && item.calendarIntegrationId) {
+            await queueOfflineRsvp(db, item, {
+                responseStatus: nextStatus,
+                calendarEventId: item.calendarEventId,
+                calendarIntegrationId: item.calendarIntegrationId,
+                attendees: nextAttendees,
+            });
+            await onSaved();
+        }
+    }
+
+    /**
+     * Attendees-editor handler. Persist immediately so the change shows up on every device — the
+     * server-side pushback turns this into an events.patch with GCal-default notifications. We
+     * deliberately do not surface a SendUpdatesDialog here: attendee additions/removals always
+     * notify the affected party on GCal's side regardless of organizer preference.
+     */
+    async function onAttendeesChange(next: GCalAttendee[]) {
+        setLiveAttendees(next);
+        await updateItemAttendees(db, item, next);
+        await onSaved();
     }
 
     if (reassignInFlight) {
@@ -433,6 +561,17 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
                         calendarOptions={visibleCalendarOptions}
                         forceShowPicker={ownerUserId !== item.userId}
                     />
+                    {((liveAttendees?.length ?? 0) > 0 || item.organizer) && (
+                        <MeetingDetails
+                            item={{ ...item, ...(liveAttendees ? { attendees: liveAttendees } : {}) }}
+                            db={db}
+                            ownerUserIdForNewPeople={ownerUserId}
+                            onRsvp={onRsvp}
+                            onAttendeesChange={onAttendeesChange}
+                            {...(scopeMissingReconsentUrl ? { scopeMissingReconsentUrl } : {})}
+                            onReconsentClosed={() => setScopeMissingReconsentUrl(null)}
+                        />
+                    )}
                 </>
             )}
 
@@ -470,6 +609,17 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
                     </Button>
                 </Box>
             )}
+            <SendUpdatesDialog
+                open={pendingSave !== null}
+                attendeeCount={liveAttendees?.length ?? 0}
+                onConfirm={(sendUpdates) => {
+                    if (!pendingSave) return;
+                    const { trimmedTitle, trimmedNotes } = pendingSave;
+                    setPendingSave(null);
+                    commitSave(trimmedTitle, trimmedNotes, { sendUpdates });
+                }}
+                onCancel={() => setPendingSave(null)}
+            />
         </Box>
     );
 }

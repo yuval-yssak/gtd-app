@@ -275,6 +275,84 @@ export async function updateItem(db: IDBPDatabase<MyDB>, item: StoredItem): Prom
 }
 
 /**
+ * Variant of `updateItem` that forwards an organizer-notification decision (captured by the
+ * SendUpdatesDialog) to the queued sync op. The sidecar rides the op through the offline queue so
+ * the choice survives reconnect — `gcalMeta.sendUpdates` is read by the server-side pushback that
+ * eventually calls the GCal `events.patch` API.
+ */
+export async function updateItemWithGcalMeta(db: IDBPDatabase<MyDB>, item: StoredItem, gcalMeta: { sendUpdates: 'all' | 'none' }): Promise<StoredItem> {
+    const updated: StoredItem = { ...item, updatedTs: nowIso() };
+    await putItem(db, updated);
+    await queueSyncOp(db, {
+        opType: 'update',
+        entityType: 'item',
+        entityId: updated._id,
+        snapshot: updated,
+        userId: updated.userId,
+        gcalMeta,
+    });
+    return updated;
+}
+
+/**
+ * Updates the attendees array on a calendar item — used by the meeting-details attendee editor.
+ * Queues an `update` op so the new list propagates through the normal sync path; the server's
+ * pushback turns this into an `events.patch` against GCal with the captured `sendUpdates` choice
+ * (omitted here, defaults handled server-side).
+ */
+export async function updateItemAttendees(db: IDBPDatabase<MyDB>, item: StoredItem, attendees: StoredItem['attendees']): Promise<StoredItem> {
+    const next: StoredItem = attendees && attendees.length > 0 ? { ...item, attendees, updatedTs: nowIso() } : stripAttendees({ ...item, updatedTs: nowIso() });
+    await putItem(db, next);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: next._id, snapshot: next, userId: next.userId });
+    return next;
+}
+
+/** Removes the attendees key entirely so an empty edit doesn't leave an empty array on the item. */
+function stripAttendees(item: StoredItem): StoredItem {
+    const { attendees: _a, ...rest } = item;
+    return rest;
+}
+
+/**
+ * Records an offline RSVP. Used as the fallback when the online `/calendar/items/:id/rsvp` POST
+ * couldn't reach the server. Writes the optimistic responseStatus + attendees to IDB and queues
+ * an `opType: 'rsvp'` op carrying the structured payload — the server's replay path performs the
+ * GCal PATCH on the next flush.
+ */
+export async function queueOfflineRsvp(
+    db: IDBPDatabase<MyDB>,
+    item: StoredItem,
+    rsvp: {
+        responseStatus: 'accepted' | 'declined' | 'tentative';
+        calendarEventId: string;
+        calendarIntegrationId: string;
+        attendees: StoredItem['attendees'];
+    },
+): Promise<StoredItem> {
+    const next: StoredItem = {
+        ...item,
+        responseStatus: rsvp.responseStatus,
+        ...(rsvp.attendees ? { attendees: rsvp.attendees } : {}),
+        updatedTs: nowIso(),
+    };
+    await putItem(db, next);
+    await queueSyncOp(db, {
+        opType: 'rsvp',
+        entityType: 'item',
+        entityId: item._id,
+        snapshot: null,
+        userId: item.userId,
+        rsvp: {
+            itemId: item._id,
+            calendarEventId: rsvp.calendarEventId,
+            calendarIntegrationId: rsvp.calendarIntegrationId,
+            responseStatus: rsvp.responseStatus,
+        },
+    });
+    return next;
+}
+
+/**
  * Records a `modified` exception on the routine for the given occurrence date so future
  * series regeneration keeps the override. Idempotent — re-recording on the same date updates
  * the exception in place rather than appending duplicates.
