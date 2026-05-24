@@ -8216,6 +8216,160 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         expect(winner.timeStart).toBe('2026-08-02T09:00:00Z');
     });
 
+    it('dead-twin demote (REGRESSION): trashed twin on a different routine is demoted so the active routine can insert', async () => {
+        // Real-world scenario: a routine was paused or replaced. Its old items moved to `trash` but
+        // still carry `calendarInstanceEventId`. When the active routine's exception sync runs, the
+        // unique partial index `(user, calendarInstanceEventId)` fires E11000 on the insert. The
+        // fix demotes the trashed twin (strips its instance id) and retries — UI sees the fresh row.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const activeRoutine = await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20260526T123000Z';
+        // Trashed twin on a DIFFERENT (paused) routine, still squatting the instance slot.
+        await itemsDAO.insertOne({
+            _id: 'item-trashed-twin',
+            user: userId,
+            status: 'trash',
+            title: 'All-Hands (old)',
+            routineId: 'routine-paused',
+            calendarInstanceEventId: instanceEventId,
+            timeStart: '2026-05-26T12:30:00Z',
+            timeEnd: '2026-05-26T13:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2026-05-26',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-05-26T14:00:00Z',
+                newTimeEnd: '2026-05-26T15:00:00Z',
+                title: 'All-Hands',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Trashed twin's instance id is stripped — slot is freed.
+        const demoted = await itemsDAO.findByOwnerAndId('item-trashed-twin', userId);
+        expect(demoted?.calendarInstanceEventId).toBeUndefined();
+        expect(demoted?.status).toBe('trash');
+
+        // Active routine got its fresh `calendar` item with the freed instance id.
+        const freshForActive = await itemsDAO.findArray({ user: userId, routineId: activeRoutine._id, status: 'calendar' });
+        expect(freshForActive).toHaveLength(1);
+        const [item] = freshForActive;
+        if (!item) throw new Error('expected one fresh calendar item');
+        expect(item.calendarInstanceEventId).toBe(instanceEventId);
+        expect(item.timeStart).toBe('2026-05-26T14:00:00Z');
+        expect(item.title).toBe('All-Hands');
+    });
+
+    it('dead-twin demote: a `done` twin on a different routine is demoted just like a trashed twin', async () => {
+        // Same logic as above but the dead occupant is a completed item (kept for history). `done`
+        // rows also retain `calendarInstanceEventId` for echo matching and must be demotable.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const activeRoutine = await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20260526T123000Z';
+        await itemsDAO.insertOne({
+            _id: 'item-done-twin',
+            user: userId,
+            status: 'done',
+            title: 'All-Hands (completed)',
+            routineId: 'routine-paused',
+            calendarInstanceEventId: instanceEventId,
+            timeStart: '2026-05-26T12:30:00Z',
+            timeEnd: '2026-05-26T13:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2026-05-26',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-05-26T14:00:00Z',
+                newTimeEnd: '2026-05-26T15:00:00Z',
+                title: 'All-Hands',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const demoted = await itemsDAO.findByOwnerAndId('item-done-twin', userId);
+        expect(demoted?.calendarInstanceEventId).toBeUndefined();
+        expect(demoted?.status).toBe('done');
+
+        const freshForActive = await itemsDAO.findArray({ user: userId, routineId: activeRoutine._id, status: 'calendar' });
+        expect(freshForActive).toHaveLength(1);
+        const [item] = freshForActive;
+        if (!item) throw new Error('expected one fresh calendar item');
+        expect(item.calendarInstanceEventId).toBe(instanceEventId);
+        expect(item.timeStart).toBe('2026-05-26T14:00:00Z');
+    });
+
+    it('dead-twin demote: live `calendar` row on the SAME routine is NOT demoted (existing race-loser path runs)', async () => {
+        // Sanity check that the new demote branch is narrowly scoped: a same-routine live row is
+        // the legitimate race winner; we must NOT strip its instance id. The existing
+        // applyExceptionAfterDuplicate path patches it via the standard modified-exception apply.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const activeRoutine = await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20260526T123000Z';
+        // Live race-winner already inserted by some other path on the SAME routine.
+        await itemsDAO.insertOne({
+            _id: 'item-race-winner',
+            user: userId,
+            status: 'calendar',
+            title: 'All-Hands (existing)',
+            routineId: activeRoutine._id,
+            calendarInstanceEventId: instanceEventId,
+            timeStart: '2026-05-26T12:30:00Z',
+            timeEnd: '2026-05-26T13:30:00Z',
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        // Force the orphan-create branch by spying on resolveExceptionTarget's findArray: return
+        // empty so applyExceptionToItems treats it as a miss and reaches createItemForOrphanedException.
+        const findArraySpy = vi.spyOn(itemsDAO, 'findArray');
+        findArraySpy.mockImplementationOnce(async () => []); // preferred-lookup miss
+        findArraySpy.mockImplementationOnce(async () => []); // fallback-lookup miss
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2026-05-26',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: '2026-05-26T14:00:00Z',
+                newTimeEnd: '2026-05-26T15:00:00Z',
+                title: 'All-Hands (updated)',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Existing live row is preserved AND received the modified-exception update via the race-loser path.
+        const winner = await itemsDAO.findByOwnerAndId('item-race-winner', userId);
+        expect(winner?.calendarInstanceEventId).toBe(instanceEventId);
+        expect(winner?.title).toBe('All-Hands (updated)');
+        expect(winner?.timeStart).toBe('2026-05-26T14:00:00Z');
+
+        // No second item created — applyExceptionAfterDuplicate patched the winner instead.
+        const allForActive = await itemsDAO.findArray({ user: userId, routineId: activeRoutine._id });
+        expect(allForActive).toHaveLength(1);
+    });
+
     it('cross-account reconnect (REGRESSION): routine-instance ids are wiped, second move does not duplicate', async () => {
         // The Q2 reviewer's hardest case: disconnect-with-keep on account A, reconnect to a
         // DIFFERENT Google account B. Routine items still carry calendarInstanceEventId derived

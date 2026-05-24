@@ -2683,7 +2683,12 @@ interface ExceptionTarget {
  */
 async function resolveExceptionTarget(routine: RoutineInterface, ex: GCalException, userId: string): Promise<ExceptionTarget> {
     if (ex.googleEventId) {
-        const preferred = { user: userId, calendarInstanceEventId: ex.googleEventId } as const;
+        // Scope to `status: 'calendar'` for the same reason as the fallback: `done`/`trash` rows
+        // legitimately retain `calendarInstanceEventId` for echo matching and history, but they
+        // must not absorb a fresh modified-exception (which would silently revive their times
+        // while leaving them invisible in the UI). The squat is resolved downstream in
+        // `createItemForOrphanedException` via dead-twin demote when necessary.
+        const preferred = { user: userId, calendarInstanceEventId: ex.googleEventId, status: 'calendar' } as const;
         const hits = await itemsDAO.findArray(preferred);
         if (hits.length > 0) {
             return { filter: preferred, matches: hits };
@@ -2802,9 +2807,7 @@ async function createItemForOrphanedException(routine: RoutineInterface, ex: GCa
         await itemsDAO.insertOne(item);
     } catch (err) {
         if (isDuplicateKeyError(err)) {
-            // The race winner already inserted a row with this `calendarInstanceEventId`. Re-resolve
-            // — `target.matches` will now find the winner — and fall through to the standard apply.
-            await applyExceptionAfterDuplicate(routine, ex, ctx);
+            await handleOrphanInsertDuplicate(routine, ex, { item, itemId }, ctx);
             return;
         }
         throw err;
@@ -2812,6 +2815,70 @@ async function createItemForOrphanedException(routine: RoutineInterface, ex: GCa
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: item, opType: 'create', now: ctx.now }));
     console.log(
         `[gcal-sync] applyExceptionToItems: created orphan-exception item | routineId=${routine._id} itemId=${itemId} googleEventId=${ex.googleEventId ?? 'n/a'}`,
+    );
+}
+
+/**
+ * Two scenarios collapse the unique partial index `(user, calendarInstanceEventId)` onto our insert:
+ *  1. Live race winner — another inbound sync just inserted a fresh `calendar` row for this instance.
+ *     Re-resolve and patch the winner's row so both callers converge.
+ *  2. Dead twin on a different routine — a `trash`/`done` row left over from a paused-and-resumed or
+ *     disconnect-and-reconnect cycle is still squatting the slot. Demote (strip its
+ *     `calendarInstanceEventId`) so the slot frees up, then retry the insert.
+ */
+async function handleOrphanInsertDuplicate(
+    routine: RoutineInterface,
+    ex: GCalException,
+    pending: { item: ItemInterface; itemId: string },
+    ctx: SyncContext,
+): Promise<void> {
+    if (!ex.googleEventId) {
+        // No instance id ⇒ index can't have been the source of the conflict — defer to the existing race-loser path.
+        await applyExceptionAfterDuplicate(routine, ex, ctx);
+        return;
+    }
+    const conflicting = await itemsDAO.findOne({ user: ctx.userId, calendarInstanceEventId: ex.googleEventId } as never);
+    if (!conflicting || !isDemotableDeadTwin(conflicting, routine._id)) {
+        await applyExceptionAfterDuplicate(routine, ex, ctx);
+        return;
+    }
+    await demoteDeadTwinAndRetryInsert(conflicting, pending, ctx);
+}
+
+/** A `trash`/`done` row on a foreign routine is stale enough that we can safely strip its instance id to free the slot. */
+function isDemotableDeadTwin(conflicting: ItemInterface, currentRoutineId: string): boolean {
+    const isDead = conflicting.status === 'trash' || conflicting.status === 'done';
+    const isForeignRoutine = conflicting.routineId !== currentRoutineId;
+    return isDead && isForeignRoutine;
+}
+
+async function demoteDeadTwinAndRetryInsert(conflicting: ItemInterface, pending: { item: ItemInterface; itemId: string }, ctx: SyncContext): Promise<void> {
+    const conflictingId = conflicting._id;
+    if (!conflictingId) {
+        return;
+    }
+    await itemsDAO.updateOne({ _id: conflictingId, user: ctx.userId } as never, { $unset: { calendarInstanceEventId: '' }, $set: { updatedTs: ctx.now } });
+    // Re-read so the recorded op carries the post-$unset snapshot; building locally would leak the stripped id back into the log.
+    const refreshed = await itemsDAO.findByOwnerAndId(conflictingId, ctx.userId);
+    if (refreshed) {
+        ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: conflictingId, snapshot: refreshed, opType: 'update', now: ctx.now }));
+    }
+    const { item, itemId } = pending;
+    try {
+        await itemsDAO.insertOne(item);
+    } catch (err) {
+        if (isDuplicateKeyError(err)) {
+            // Another writer raced in between our demote and retry — bail rather than loop. Next sync re-converges.
+            console.warn(
+                `[gcal-sync] createItemForOrphanedException: second insert raced E11000 | routineId=${item.routineId} eventId=${item.calendarInstanceEventId}`,
+            );
+            return;
+        }
+        throw err;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: item, opType: 'create', now: ctx.now }));
+    console.log(
+        `[gcal-sync] applyExceptionToItems: demoted dead twin + created orphan-exception item | routineId=${item.routineId} itemId=${itemId} demotedItemId=${conflictingId}`,
     );
 }
 
