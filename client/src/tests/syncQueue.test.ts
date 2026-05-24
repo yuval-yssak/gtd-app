@@ -1,7 +1,7 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queueSyncOp, waitForPendingFlush } from '../db/syncHelpers';
-import type { MyDB, StoredItem } from '../types/MyDB';
+import type { MyDB, StoredItem, StoredRsvpOpPayload } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
 // Mock sync API calls so they don't attempt to reach the server during tests
@@ -99,5 +99,118 @@ describe('queueSyncOp coalescing', () => {
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(2);
+    });
+});
+
+describe('queueSyncOp — gcalMeta + rsvp sidecars (Phase 4)', () => {
+    function makeRsvpPayload(itemId: string, responseStatus: StoredRsvpOpPayload['responseStatus']): StoredRsvpOpPayload {
+        return {
+            itemId,
+            calendarEventId: 'gcal-ev-1',
+            calendarIntegrationId: 'int-1',
+            responseStatus,
+        };
+    }
+
+    it('stores gcalMeta on the queued op when provided', async () => {
+        const item = makeItem('item-g');
+        // Caller hands the SendUpdatesDialog choice in via the new optional field. Pre-fix the
+        // destructure at the top of queueSyncOp silently dropped this, so verify it lands.
+        await queueSyncOp(db, {
+            opType: 'update',
+            entityType: 'item',
+            entityId: item._id,
+            snapshot: item,
+            gcalMeta: { sendUpdates: 'all' },
+        });
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one op');
+        expect(op.gcalMeta).toEqual({ sendUpdates: 'all' });
+    });
+
+    it('stores rsvp payload on the queued op when opType is rsvp', async () => {
+        const itemId = 'item-h';
+        const rsvp = makeRsvpPayload(itemId, 'accepted');
+        await queueSyncOp(db, {
+            opType: 'rsvp',
+            entityType: 'item',
+            entityId: itemId,
+            snapshot: null,
+            rsvp,
+        });
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one op');
+        expect(op.opType).toBe('rsvp');
+        expect(op.snapshot).toBeNull();
+        expect(op.rsvp).toEqual(rsvp);
+    });
+
+    it('does NOT coalesce two rsvp ops on the same entity — every RSVP replays in order', async () => {
+        // Per plan: organizer gets the full sequence so the email log mirrors the user's clicks.
+        const itemId = 'item-i';
+        await queueSyncOp(db, {
+            opType: 'rsvp',
+            entityType: 'item',
+            entityId: itemId,
+            snapshot: null,
+            rsvp: makeRsvpPayload(itemId, 'accepted'),
+        });
+        await queueSyncOp(db, {
+            opType: 'rsvp',
+            entityType: 'item',
+            entityId: itemId,
+            snapshot: null,
+            rsvp: makeRsvpPayload(itemId, 'declined'),
+        });
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(2);
+        expect(ops.every((op) => op.opType === 'rsvp')).toBe(true);
+        const statuses = ops.map((op) => op.rsvp?.responseStatus);
+        expect(statuses).toEqual(['accepted', 'declined']);
+    });
+
+    it('keeps an update op and a rsvp op on the same entity as independent streams', async () => {
+        // The create→update collapse must NOT touch the rsvp op (it lives in its own stream).
+        const item = makeItem('item-j');
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: item._id, snapshot: item });
+        await queueSyncOp(db, {
+            opType: 'rsvp',
+            entityType: 'item',
+            entityId: item._id,
+            snapshot: null,
+            rsvp: makeRsvpPayload(item._id, 'tentative'),
+        });
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(2);
+        const opTypes = ops.map((op) => op.opType).sort();
+        expect(opTypes).toEqual(['rsvp', 'update']);
+    });
+
+    it('rsvp ops are not collapsed by a subsequent delete on the same entity', async () => {
+        // Delete clears the create/update/delete stream but must leave the rsvp stream alone.
+        // The rsvp op outliving the local delete is still safe — server-side replay short-circuits
+        // when the item is no longer a calendar item ('terminal' failure, surfaced in the panel).
+        const item = makeItem('item-k');
+        await queueSyncOp(db, {
+            opType: 'rsvp',
+            entityType: 'item',
+            entityId: item._id,
+            snapshot: null,
+            rsvp: makeRsvpPayload(item._id, 'accepted'),
+        });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'item', entityId: item._id, snapshot: null });
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(2);
+        const opTypes = ops.map((op) => op.opType).sort();
+        expect(opTypes).toEqual(['delete', 'rsvp']);
     });
 });

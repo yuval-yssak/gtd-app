@@ -3,7 +3,18 @@ import type { IDBPDatabase } from 'idb';
 import type { ServerOp } from '#api/syncClient';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
 import { hasAtLeastOne } from '../lib/typeUtils';
-import type { EntityType, MyDB, OpType, StoredEntity, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext, SyncOperation } from '../types/MyDB';
+import type {
+    EntityType,
+    MyDB,
+    OpType,
+    StoredEntity,
+    StoredItem,
+    StoredPerson,
+    StoredRoutine,
+    StoredRsvpOpPayload,
+    StoredWorkContext,
+    SyncOperation,
+} from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
@@ -25,6 +36,18 @@ export interface SyncOpParams {
      * the entity belongs to a non-active session (e.g. the future reassign flow).
      */
     userId?: string;
+    /**
+     * Optional GCal sidecar captured at edit time from SendUpdatesDialog. When present the value
+     * is stored on the queued op and replayed through pushback when the queue flushes so the
+     * organizer-notification decision survives offline → reconnect.
+     */
+    gcalMeta?: { sendUpdates: 'all' | 'none' };
+    /**
+     * RSVP payload — required when `opType === 'rsvp'`, absent otherwise. Stored as a sidecar
+     * (not in `snapshot`) so the server replay can drive `events.patch` without rebuilding
+     * entity state from the op log.
+     */
+    rsvp?: StoredRsvpOpPayload;
 }
 
 function remapUser<T extends Record<string, unknown>>(doc: T & { user: string }) {
@@ -49,6 +72,9 @@ async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOpera
         entityId: op.entityId,
         queuedAt: queued.queuedAt,
         snapshot: op.snapshot,
+        // gcalMeta is meaningful for calendar edits, not for the create itself, but if a caller
+        // ever attaches it here we forward it onto the merged op so nothing is silently dropped.
+        ...(op.gcalMeta ? { gcalMeta: op.gcalMeta } : {}),
     });
 }
 
@@ -70,9 +96,13 @@ function registerBackgroundSync(): void {
 }
 
 export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Promise<void> {
-    const { opType, entityType, entityId, snapshot } = op;
+    const { opType, entityType, entityId, snapshot, gcalMeta, rsvp } = op;
     const userId = await resolveQueueUserId(db, op.userId);
-    const existing = (await db.getAll('syncOperations')).filter((q) => q.entityId === entityId);
+    // RSVP ops are their own coalescing stream — per plan they NEVER collapse with each other
+    // (the organizer gets every state change so the email log matches what the user did) and they
+    // do NOT interact with the create/update/delete stream for the same entity. Filter out rsvp
+    // ops up-front so the entity-level collapse rules below don't see them.
+    const existing = (await db.getAll('syncOperations')).filter((q) => q.entityId === entityId && q.opType !== 'rsvp');
     const hasPendingCreate = existing.some((q) => q.opType === 'create');
 
     if (opType === 'update' && hasPendingCreate) {
@@ -88,7 +118,18 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
         }
     }
 
-    await db.add('syncOperations', { userId, opType, entityType, entityId, queuedAt: dayjs().toISOString(), snapshot });
+    await db.add('syncOperations', {
+        userId,
+        opType,
+        entityType,
+        entityId,
+        queuedAt: dayjs().toISOString(),
+        snapshot,
+        // Forward the GCal sidecars verbatim. Without this the destructure at the top silently
+        // dropped sendUpdates / rsvp payloads, which was the bug Phase 1a's reviewer flagged.
+        ...(gcalMeta ? { gcalMeta } : {}),
+        ...(rsvp ? { rsvp } : {}),
+    });
 
     // Attempt an immediate flush. Safari and Firefox don't support the Background Sync API,
     // so without this the op would sit in IDB until the next mount or online event.
