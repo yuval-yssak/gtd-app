@@ -148,7 +148,9 @@ async function reassignItem(params: ReassignParams, buildProvider: ReassignProvi
  * date/string fields where '' is the canonical empty value; for required fields like `title`
  * we keep the original when the patch's value is empty.
  */
-function applyItemEditPatch(item: ItemInterface, patch: ReassignItemEditPatch | undefined): ItemInterface {
+// Exported for unit testing — the integration test for /sync/reassign covers calendar-linked
+// move flow end-to-end; this lets focused tests target the patch-application step alone.
+export function applyItemEditPatch(item: ItemInterface, patch: ReassignItemEditPatch | undefined): ItemInterface {
     if (!patch) {
         return item;
     }

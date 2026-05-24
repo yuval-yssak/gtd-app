@@ -42,9 +42,15 @@ export function isSaveDisabled(title: string, status: EditableStatus, cal: Calen
     if (status === 'calendar' && !cal.date) {
         return true;
     }
+    // YYYY-MM-DD strings (from <input type="date">) sort lexicographically. Block save when the
+    // user enters an all-day end date before the start date; without this guard buildCalendarMeta's
+    // clamp silently coerces the bad range to a single-day event with zero visible feedback.
+    if (status === 'calendar' && cal.allDay && cal.endDate && cal.endDate < cal.date) {
+        return true;
+    }
     // Zero-padded HH:mm strings (from <input type="time">) compare lexicographically the same as
     // numerically, so a string compare is sufficient to detect end-before-start on the same date.
-    if (status === 'calendar' && cal.startTime && cal.endTime && cal.endTime < cal.startTime) {
+    if (status === 'calendar' && !cal.allDay && cal.startTime && cal.endTime && cal.endTime < cal.startTime) {
         return true;
     }
     if (status === 'waitingFor' && !wf.waitingForPersonId) {

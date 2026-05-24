@@ -109,7 +109,9 @@ export interface ItemEditorBodyProps {
     renderActions?: (api: ItemEditorActionsApi) => React.ReactNode;
 }
 
-function itemToCalendarForm(item: StoredItem): CalendarFormState {
+// Exported for unit testing — the all-day decode path (inclusive endDate from the +1-day exclusive
+// stored value) is the form's only round-trip dependency on Phase 5's encoding.
+export function itemToCalendarForm(item: StoredItem): CalendarFormState {
     if (!item.timeStart) {
         return emptyCalendar;
     }

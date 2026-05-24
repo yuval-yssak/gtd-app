@@ -1168,6 +1168,11 @@ describe('POST /sync/reassign', () => {
             const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
             expect(moved).toMatchObject({ title: 'kept', notes: 'also kept', urgent: true });
         });
+
+        // allDay editPatch round-trip is covered by a focused unit test on `applyItemEditPatch` in
+        // `applyItemEditPatch.allday.test.ts` — that test isolates the patch shape without needing
+        // the full calendar-reassign integration scaffolding (real integration + sync-config rows on
+        // both alice and bob plus a provider mock), which would dwarf the assertion it's making.
     });
 
     describe('editRoutinePatch', () => {

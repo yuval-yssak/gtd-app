@@ -112,6 +112,24 @@ describe('isSaveDisabled', () => {
         const cal = { ...emptyCalendar, date: '2026-05-04', startTime: '14:00', endTime: '14:00' };
         expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(false);
     });
+
+    it('disables save when an all-day end date is before the start date', () => {
+        const cal = { ...emptyCalendar, date: '2026-05-04', allDay: true, endDate: '2026-05-03' };
+        expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(true);
+    });
+
+    it('enables save for all-day with endDate empty (single-day) or endDate ≥ date', () => {
+        const single = { ...emptyCalendar, date: '2026-05-04', allDay: true, endDate: '' };
+        expect(isSaveDisabled('ok', 'calendar', single, emptyWaitingFor)).toBe(false);
+        const multi = { ...emptyCalendar, date: '2026-05-04', allDay: true, endDate: '2026-05-06' };
+        expect(isSaveDisabled('ok', 'calendar', multi, emptyWaitingFor)).toBe(false);
+    });
+
+    it('does not flag end<start time when the form is in all-day mode (times are ignored)', () => {
+        // Toggling allDay on after entering an inverted time range used to disable save spuriously.
+        const cal = { ...emptyCalendar, date: '2026-05-04', startTime: '14:00', endTime: '13:00', allDay: true };
+        expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(false);
+    });
 });
 
 describe('normalizeTitleAndNotes', () => {
