@@ -2456,7 +2456,7 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         expect(item?.status).toBe('calendar');
     });
 
-    it('createRoutineFromGCal with an all-day recurring master builds template = { allDay: true } (no timeOfDay/duration)', async () => {
+    it('createRoutineFromGCal with an all-day recurring master builds template = { allDay: true } and generates all-day items', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -2480,17 +2480,24 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
             nextSyncToken: 'tok-1',
         });
 
-        // The sync route returns 502 once `regenerateFutureRoutineItems` hits the all-day stopgap
-        // guard (`throw 'all-day not yet wired here'`) — Phase 8 fixes that reader. The routine
-        // insert happens before regen runs, so the Mongo row still reflects the correct template.
+        // Phase 8: the all-day routine path now generates items end-to-end. Sync must succeed
+        // (200) and the resulting items must carry allDay=true with YYYY-MM-DD time strings.
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
-        expect(res.status).toBe(502);
+        expect(res.status).toBe(200);
 
         const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-allday-master' });
         expect(routine).not.toBeNull();
         expect(routine?.calendarItemTemplate).toEqual({ allDay: true });
         expect(routine?.title).toBe('Daily walk');
         expect(routine?.rrule).toBe('FREQ=DAILY');
+
+        const items = await itemsDAO.findArray({ user: userId, routineId: routine?._id ?? '' });
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) {
+            expect(item.allDay).toBe(true);
+            expect(item.timeStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+            expect(item.timeEnd).toBe(dayjs(item.timeStart).add(1, 'day').format('YYYY-MM-DD'));
+        }
     });
 
     it('revive clears a prior cancelledByGCal: true (restored item carries no phantom badge)', async () => {

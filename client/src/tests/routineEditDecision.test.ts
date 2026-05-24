@@ -170,6 +170,76 @@ describe('isCalendarScheduleChanged', () => {
             }),
         ).toBe(true);
     });
+
+    // ── all-day toggling ──────────────────────────────────────────────────────
+
+    it('returns true when toggling timed → allDay (template shape changes, items must regen)', () => {
+        const previous = make(); // timed: 09:00 / 30
+        expect(
+            isCalendarScheduleChanged(previous, {
+                routineType: 'calendar',
+                rrule: previous.rrule,
+                timeOfDay: undefined,
+                duration: undefined,
+                allDay: true,
+            }),
+        ).toBe(true);
+    });
+
+    it('returns true when toggling allDay → timed (template shape changes, items must regen)', () => {
+        const previous = make({ calendarItemTemplate: { allDay: true } });
+        expect(
+            isCalendarScheduleChanged(previous, {
+                routineType: 'calendar',
+                rrule: previous.rrule,
+                timeOfDay: '09:00',
+                duration: 30,
+                allDay: false,
+            }),
+        ).toBe(true);
+    });
+
+    it('returns false for an allDay → allDay re-save with no rrule change (hidden form defaults must not trip)', () => {
+        // Form keeps timeOfDay='09:00' / duration=60 hidden when allDay is on. A title-only save
+        // must NOT flag a schedule change just because those values disagree with the prior
+        // (undefined) values on the stored template.
+        const previous = make({ calendarItemTemplate: { allDay: true } });
+        expect(
+            isCalendarScheduleChanged(previous, {
+                routineType: 'calendar',
+                rrule: previous.rrule,
+                timeOfDay: '09:00',
+                duration: 60,
+                allDay: true,
+            }),
+        ).toBe(false);
+    });
+
+    it('returns true when allDay → allDay but the rrule changed', () => {
+        const previous = make({ calendarItemTemplate: { allDay: true } });
+        expect(
+            isCalendarScheduleChanged(previous, {
+                routineType: 'calendar',
+                rrule: 'FREQ=WEEKLY;BYDAY=TU',
+                timeOfDay: undefined,
+                duration: undefined,
+                allDay: true,
+            }),
+        ).toBe(true);
+    });
+
+    it('returns true when timed → timed and only timeOfDay changed (regression guard for the new branch)', () => {
+        const previous = make(); // timed: 09:00 / 30
+        expect(
+            isCalendarScheduleChanged(previous, {
+                routineType: 'calendar',
+                rrule: previous.rrule,
+                timeOfDay: '10:30',
+                duration: 30,
+                allDay: false,
+            }),
+        ).toBe(true);
+    });
 });
 
 describe('isStartDateChanged', () => {

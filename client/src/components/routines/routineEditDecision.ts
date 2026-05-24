@@ -5,6 +5,8 @@ interface RoutineEditIntent {
     rrule: string;
     timeOfDay: string | undefined;
     duration: number | undefined;
+    /** True when the edit produces an all-day calendar item. Defaults to false on legacy callers. */
+    allDay?: boolean;
     startDate?: string | undefined;
 }
 
@@ -56,10 +58,15 @@ function canonicalRruleKey(rruleStr: string) {
 }
 
 /**
- * Returns true when a calendar routine's schedule (RRULE, start time, or duration) changed.
- * A title- or notes-only edit returns false — the split path is reserved for schedule changes
- * so that past instances keep their original schedule. A non-calendar → calendar type switch
- * introduces a schedule template and also counts as a schedule change.
+ * Returns true when a calendar routine's schedule (RRULE, start time, duration, or all-day flag)
+ * changed. A title- or notes-only edit returns false — the split path is reserved for schedule
+ * changes so that past instances keep their original schedule. A non-calendar → calendar type
+ * switch introduces a schedule template and also counts as a schedule change.
+ *
+ * All-day handling: toggling the allDay flag is always a schedule change (the generated items'
+ * time fields change shape). When BOTH sides are all-day, timeOfDay/duration are irrelevant
+ * (the template ignores them) and only the rrule diff matters — otherwise legitimate edits would
+ * trip on the form's "09:00 / 60" defaults from the hidden inputs.
  */
 export function isCalendarScheduleChanged(previous: StoredRoutine, edited: RoutineEditIntent) {
     if (edited.routineType !== 'calendar') {
@@ -67,6 +74,16 @@ export function isCalendarScheduleChanged(previous: StoredRoutine, edited: Routi
     }
     if (canonicalRruleKey(previous.rrule) !== canonicalRruleKey(edited.rrule)) {
         return true;
+    }
+    const previousAllDay = previous.calendarItemTemplate?.allDay === true;
+    const editedAllDay = edited.allDay === true;
+    if (previousAllDay !== editedAllDay) {
+        return true;
+    }
+    if (previousAllDay && editedAllDay) {
+        // Both sides all-day → timeOfDay/duration carry no semantic weight; only rrule could differ
+        // (already checked above), so nothing left to flag.
+        return false;
     }
     if (previous.calendarItemTemplate?.timeOfDay !== edited.timeOfDay) {
         return true;

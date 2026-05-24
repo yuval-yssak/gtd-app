@@ -8,6 +8,7 @@ import FormControlLabel from '@mui/material/FormControlLabel';
 import FormLabel from '@mui/material/FormLabel';
 import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
+import Switch from '@mui/material/Switch';
 import TextField from '@mui/material/TextField';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
@@ -60,8 +61,10 @@ interface FormState {
     focus: boolean;
     urgent: boolean;
     notes: string;
-    timeOfDay: string; // HH:MM — calendar routines only
-    duration: string; // minutes — calendar routines only
+    /** When true, generated calendar items are all-day; timeOfDay/duration are ignored on save. */
+    allDay: boolean;
+    timeOfDay: string; // HH:MM — calendar routines only (ignored when allDay)
+    duration: string; // minutes — calendar routines only (ignored when allDay)
     calendarSyncConfigId: string; // empty = use default calendar
     endsMode: EndsMode;
     endsDate: string; // ISO date — used when endsMode === 'onDate'
@@ -124,12 +127,28 @@ function initFormState(routine?: StoredRoutine): FormState {
         focus: routine?.template.focus ?? false,
         urgent: routine?.template.urgent ?? false,
         notes: routine?.template.notes ?? '',
+        allDay: routine?.calendarItemTemplate?.allDay === true,
         timeOfDay: routine?.calendarItemTemplate?.timeOfDay ?? '09:00',
         duration: routine?.calendarItemTemplate?.duration?.toString() ?? '60',
         calendarSyncConfigId: routine?.calendarSyncConfigId ?? '',
         startDate: routine?.startDate ?? '',
         ...ends,
     };
+}
+
+/**
+ * Pure helper that derives the `calendarItemTemplate` shape from the form's all-day toggle and
+ * time/duration inputs. Extracted so it can be unit-tested without mounting the full editor.
+ * Returns `undefined` for non-calendar routines so callers can spread it conditionally.
+ */
+export function buildRoutineTemplateFromForm(form: { routineType: 'nextAction' | 'calendar'; allDay: boolean; timeOfDay: string; duration: string }) {
+    if (form.routineType !== 'calendar') {
+        return undefined;
+    }
+    if (form.allDay) {
+        return { allDay: true } as const;
+    }
+    return { timeOfDay: form.timeOfDay, duration: parseInt(form.duration, 10) || 60 };
 }
 
 /** Resolves calendarSyncConfigId + calendarIntegrationId from the form's selected config. */
@@ -155,7 +174,8 @@ export function buildRoutineEditPatch(args: {
     rrule: string;
     routineType: 'nextAction' | 'calendar';
     template: { workContextIds?: string[]; peopleIds?: string[]; energy?: EnergyLevel; time?: number; focus?: boolean; urgent?: boolean; notes?: string };
-    calendarItemTemplate?: { timeOfDay: string; duration: number };
+    /** All-day routines carry `{ allDay: true }`; timed routines carry `{ timeOfDay, duration }`. */
+    calendarItemTemplate?: { allDay: true } | { timeOfDay: string; duration: number };
     startDate?: string;
     /**
      * True when the editor was opened on a paused routine and Save should also resume it.
@@ -187,6 +207,27 @@ export function buildRoutineEditPatch(args: {
         patch.active = true;
     }
     return patch;
+}
+
+/**
+ * Narrowing helpers for the discriminated calendarItemTemplate union. The all-day variant has only
+ * `allDay`; the timed variant has `timeOfDay`/`duration`. Returning `undefined` from the wrong-side
+ * accessor keeps the edit-intent shape compatible with `RoutineEditIntent`.
+ */
+function getTemplateAllDay(template: { allDay: true } | { timeOfDay: string; duration: number } | undefined): boolean {
+    return template !== undefined && 'allDay' in template && template.allDay === true;
+}
+function getTemplateTimeOfDay(template: { allDay: true } | { timeOfDay: string; duration: number } | undefined): string | undefined {
+    if (template === undefined || 'allDay' in template) {
+        return undefined;
+    }
+    return template.timeOfDay;
+}
+function getTemplateDuration(template: { allDay: true } | { timeOfDay: string; duration: number } | undefined): number | undefined {
+    if (template === undefined || 'allDay' in template) {
+        return undefined;
+    }
+    return template.duration;
 }
 
 function buildTemplate(form: FormState) {
@@ -264,15 +305,16 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         if (!trimmedTitle || !form.rrule || isSaving) {
             return;
         }
-        if (form.routineType === 'calendar' && !form.timeOfDay) {
+        // All-day routines don't require a time-of-day input — the timeOfDay value is hidden
+        // and ignored. Only enforce the time-of-day requirement on timed calendar routines.
+        if (form.routineType === 'calendar' && !form.allDay && !form.timeOfDay) {
             return;
         }
 
         startSaving(async () => {
             const finalRrule = buildFinalRrule(form.rrule, form.endsMode, form.endsDate, form.endsCount);
             const template = buildTemplate(form);
-            const calendarItemTemplate =
-                form.routineType === 'calendar' ? { timeOfDay: form.timeOfDay, duration: parseInt(form.duration, 10) || 60 } : undefined;
+            const calendarItemTemplate = buildRoutineTemplateFromForm(form);
             const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
 
             if (isEdit) {
@@ -297,8 +339,11 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 const editIntent = {
                     routineType: form.routineType,
                     rrule: finalRrule,
-                    timeOfDay: calendarItemTemplate?.timeOfDay,
-                    duration: calendarItemTemplate?.duration,
+                    // All-day calendarItemTemplate has neither timeOfDay nor duration. The narrow
+                    // helper below disambiguates both shapes safely without an `as` cast.
+                    timeOfDay: getTemplateTimeOfDay(calendarItemTemplate),
+                    duration: getTemplateDuration(calendarItemTemplate),
+                    allDay: getTemplateAllDay(calendarItemTemplate),
                     startDate: form.startDate || undefined,
                 };
                 const scheduleChanged = isCalendarScheduleChanged(routine, editIntent);
@@ -442,7 +487,8 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         rrule: string;
         routineType: 'nextAction' | 'calendar';
         template: ReturnType<typeof buildTemplate>;
-        calendarItemTemplate?: { timeOfDay: string; duration: number };
+        // All-day routines carry only `{ allDay: true }`; timed routines carry `{ timeOfDay, duration }`.
+        calendarItemTemplate?: { allDay: true } | { timeOfDay: string; duration: number };
         startDate?: string;
         resumeOnSave?: boolean;
         targetIntegrationId?: string;
@@ -624,32 +670,43 @@ function CalendarFields({
             >
                 Calendar event settings
             </Typography>
-            <Stack
-                direction="row"
-                sx={{
-                    gap: 2,
-                    alignItems: 'center',
-                }}
-            >
-                <TextField
-                    label="Start time"
-                    type="time"
-                    value={form.timeOfDay}
-                    onChange={(e) => onPatch({ timeOfDay: e.target.value })}
-                    size="small"
-                    required
-                    slotProps={{ inputLabel: { shrink: true } }}
-                />
-                <TextField
-                    label="Duration (min)"
-                    type="number"
-                    value={form.duration}
-                    onChange={(e) => onPatch({ duration: e.target.value })}
-                    size="small"
-                    className={styles.narrowInput}
-                    slotProps={{ htmlInput: { min: 1 } }}
-                />
-            </Stack>
+            {/* All-day toggle hides the time + duration inputs below (they're meaningless for
+                all-day events). Saving with allDay=true emits `{ allDay: true }` as the template. */}
+            <FormControlLabel
+                control={
+                    <Switch checked={form.allDay} onChange={(e) => onPatch({ allDay: e.target.checked })} slotProps={{ input: { 'aria-label': 'All day' } }} />
+                }
+                label={<Typography variant="body2">All day</Typography>}
+                data-testid="routineAllDayToggle"
+            />
+            {!form.allDay && (
+                <Stack
+                    direction="row"
+                    sx={{
+                        gap: 2,
+                        alignItems: 'center',
+                    }}
+                >
+                    <TextField
+                        label="Start time"
+                        type="time"
+                        value={form.timeOfDay}
+                        onChange={(e) => onPatch({ timeOfDay: e.target.value })}
+                        size="small"
+                        required
+                        slotProps={{ inputLabel: { shrink: true } }}
+                    />
+                    <TextField
+                        label="Duration (min)"
+                        type="number"
+                        value={form.duration}
+                        onChange={(e) => onPatch({ duration: e.target.value })}
+                        size="small"
+                        className={styles.narrowInput}
+                        slotProps={{ htmlInput: { min: 1 } }}
+                    />
+                </Stack>
+            )}
             {/* Only show picker when user has 2+ calendars — with 0-1 there's nothing to choose. */}
             {showPicker && (
                 <CalendarPicker calendarOptions={calendarOptions} value={form.calendarSyncConfigId} onChange={(v) => onPatch({ calendarSyncConfigId: v })} />

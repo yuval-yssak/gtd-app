@@ -52,14 +52,24 @@ function getValidFutureOccurrences(routine: RoutineInterface): Date[] {
 
 /**
  * GCal instance event id for a recurring-series occurrence — matches what Google returns in
- * `event.id` for instances of a recurring event. Format: `<masterEventId>_<YYYYMMDDTHHMMSSZ>`
- * where the date/time portion is the original occurrence start converted to UTC (basic ISO 8601,
- * no separators). Computed deterministically from the routine's local-time template + the calendar
- * timezone so exception sync can locate the item by `calendarInstanceEventId` even after a prior
- * exception has shifted its `timeStart`.
+ * `event.id` for instances of a recurring event.
+ *
+ * Format depends on whether the series is all-day or timed:
+ *  - Timed:   `<masterEventId>_<YYYYMMDDTHHMMSSZ>` — date/time portion is the original occurrence
+ *             start converted to UTC (basic ISO 8601, no separators). Pass the routine's local
+ *             `timeOfDay` + the calendar `timeZone`.
+ *  - All-day: `<masterEventId>_<YYYYMMDD>` — date only, no T component. Pass `timeOfDay = undefined`;
+ *             `timeZone` is ignored.
+ *
+ * Computed deterministically from the routine template so exception sync can locate the item by
+ * `calendarInstanceEventId` even after a prior exception has shifted its `timeStart`.
  */
-export function buildCalendarInstanceEventId(masterEventId: string, occurrenceDate: Date, timeOfDay: string, timeZone: string): string {
+export function buildCalendarInstanceEventId(masterEventId: string, occurrenceDate: Date, timeOfDay: string | undefined, timeZone: string): string {
     const dateStr = occurrenceDate.toISOString().slice(0, 10);
+    if (timeOfDay === undefined) {
+        // All-day instance suffix: YYYYMMDD only — matches what GCal returns for all-day series instances.
+        return `${masterEventId}_${dateStr.replace(/-/g, '')}`;
+    }
     // The routine's `timeOfDay` is a wall-clock time in the calendar's TZ. Reconstruct the original
     // instance start as UTC and emit in the YYYYMMDDTHHMMSSZ basic-ISO form GCal uses for instance ids.
     const utcStart = dayjs.tz(`${dateStr}T${timeOfDay}:00`, timeZone).utc().format('YYYYMMDDTHHmmss[Z]');
@@ -82,13 +92,8 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
     if (!template) {
         throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
     }
-    const { timeOfDay, duration } = template;
-    if (timeOfDay === undefined || duration === undefined) {
-        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration (all-day not yet wired here)`);
-    }
     const dateStr = occurrenceDate.toISOString().slice(0, 10);
-    const timeStart = `${dateStr}T${timeOfDay}:00`;
-    const timeEnd = dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
+    const timing = buildItemTiming(routine, template, dateStr);
 
     const contentException = (routine.routineExceptions ?? []).find((e) => e.type === 'modified' && e.date === dateStr);
     const title = contentException?.title ?? routine.title;
@@ -101,8 +106,12 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
     // calendarInstanceEventId)` unique partial index catches concurrent duplicates within a sync
     // window, but a stale exception batch arriving after regen is its own narrow window we can't
     // close from here — the next full inbound resolves it.
+    // All-day uses YYYYMMDD only; timed uses YYYYMMDDTHHMMSSZ via the calendar TZ. The caller
+    // skips timeZone for in-app routines so we never emit an instance id without a real link.
     const instanceEventId =
-        routine.calendarEventId && timeZone ? buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, timeOfDay, timeZone) : undefined;
+        routine.calendarEventId && (template.allDay === true || timeZone)
+            ? buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, template.timeOfDay, timeZone ?? 'UTC')
+            : undefined;
 
     return {
         _id: randomUUID(),
@@ -110,8 +119,9 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
         status: 'calendar',
         title,
         routineId: routine._id,
-        timeStart,
-        timeEnd,
+        timeStart: timing.timeStart,
+        timeEnd: timing.timeEnd,
+        ...(template.allDay === true ? { allDay: true as const } : {}),
         ...(notes ? { notes } : {}),
         ...(routine.calendarIntegrationId ? { calendarIntegrationId: routine.calendarIntegrationId } : {}),
         ...(routine.calendarSyncConfigId ? { calendarSyncConfigId: routine.calendarSyncConfigId } : {}),
@@ -119,6 +129,27 @@ function buildCalendarItem(userId: string, routine: RoutineInterface, occurrence
         createdTs: now,
         updatedTs: now,
     };
+}
+
+/**
+ * Build timeStart/timeEnd for a generated calendar item. Branches on the template's `allDay` flag:
+ *  - all-day: timeStart = YYYY-MM-DD, timeEnd = next day (GCal exclusive-end convention).
+ *  - timed:   timeStart = `${date}T${timeOfDay}:00`, timeEnd = +duration minutes.
+ */
+function buildItemTiming(
+    routine: RoutineInterface,
+    template: NonNullable<RoutineInterface['calendarItemTemplate']>,
+    dateStr: string,
+): { timeStart: string; timeEnd: string } {
+    if (template.allDay === true) {
+        return { timeStart: dateStr, timeEnd: dayjs(dateStr).add(1, 'day').format('YYYY-MM-DD') };
+    }
+    const { timeOfDay, duration } = template;
+    if (timeOfDay === undefined || duration === undefined) {
+        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration for a timed routine`);
+    }
+    const timeStart = `${dateStr}T${timeOfDay}:00`;
+    return { timeStart, timeEnd: dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss') };
 }
 
 /**

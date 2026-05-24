@@ -92,6 +92,16 @@ export function recoverOriginalOccurrenceDate(item: ItemInterface, routine: Rout
     if (!template) {
         return undefined;
     }
+    // All-day routines: timeStart is YYYY-MM-DD (no T-suffix). If the item still parses as a bare
+    // date and isn't in the moved-by-exception list, the date itself IS the original.
+    if (template.allDay === true) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(itemStart)) {
+            return itemStart;
+        }
+        // Off-schedule all-day (shouldn't happen, but defensively check the exception list).
+        const exMatch = (routine.routineExceptions ?? []).find((e) => e.type === 'modified' && e.newTimeStart === itemStart);
+        return exMatch?.date;
+    }
     // Schedule-match: `timeStart` is the format `${date}T${timeOfDay}:00`. If the time-of-day suffix
     // matches the routine, the item is sitting on its original schedule and the date IS the original.
     const expectedSuffix = `T${template.timeOfDay}:00`;
@@ -132,13 +142,11 @@ function planUpdate(resolved: ResolvedRow): { update: AnyBulkWriteOperation<Item
     if (!template || !routine.calendarEventId) {
         throw new Error(`planUpdate called with routine ${routine._id} missing template or calendarEventId`);
     }
-    const { timeOfDay } = template;
-    if (timeOfDay === undefined) {
-        throw new Error(`planUpdate: routine ${routine._id} has all-day template; backfill not applicable (instance ids differ for all-day)`);
-    }
     // dayjs.utc treats `YYYY-MM-DD` as midnight UTC; converting back to a JS Date is safe here.
     const occurrenceDate = dayjs.utc(originalDate).toDate();
-    const instanceEventId = buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, timeOfDay, timeZone);
+    // All-day routines emit YYYYMMDD-only instance ids; pass timeOfDay=undefined so the builder
+    // takes its all-day branch. Timed routines pass the template's timeOfDay as before.
+    const instanceEventId = buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, template.timeOfDay, timeZone);
     const nowIso = dayjs().toISOString();
     const snapshot: ItemInterface & { _id: string } = { ...item, calendarInstanceEventId: instanceEventId, updatedTs: nowIso };
     const update: AnyBulkWriteOperation<ItemInterface> = {

@@ -39,7 +39,11 @@ export interface ReassignRoutineEditPatch {
     startDate?: string;
     routineType?: 'nextAction' | 'calendar';
     template?: Record<string, unknown>;
-    calendarItemTemplate?: { timeOfDay: string; duration: number };
+    /**
+     * Calendar item template. All-day routines carry only `{ allDay: true }`; timed routines carry
+     * `{ timeOfDay, duration }`. Shape mirrors RoutineInterface.calendarItemTemplate on the server.
+     */
+    calendarItemTemplate?: { allDay: true } | { timeOfDay: string; duration: number };
     active?: boolean;
 }
 

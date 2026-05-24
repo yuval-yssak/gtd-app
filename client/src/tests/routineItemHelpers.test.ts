@@ -363,6 +363,29 @@ describe('generateCalendarItemsToHorizon', () => {
         expect(onTrashDate[0]?.status).toBe('trash');
     });
 
+    // ── all-day routines ──────────────────────────────────────────────────────
+
+    it('generates all-day items with date-only timeStart/timeEnd and allDay: true', async () => {
+        const routine = buildCalendarRoutine({
+            // Replace the default timed template with the all-day shape — the generator's allDay
+            // branch is independent of timeOfDay/duration, so omitting them must be safe.
+            calendarItemTemplate: { allDay: true },
+        });
+        await generateCalendarItemsToHorizon(db, USER_ID, routine);
+
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === 'cal-routine-1' && i.status === 'calendar');
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) {
+            expect(item.allDay).toBe(true);
+            // timeStart is YYYY-MM-DD (no T component)
+            expect(item.timeStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+            // timeEnd is exactly +1 day (GCal exclusive-end convention for single-day all-day)
+            expect(item.timeEnd).toBe(dayjs(item.timeStart).add(1, 'day').format('YYYY-MM-DD'));
+            // Items still land on Mondays per BYDAY=MO
+            expect(dayjs(item.timeStart).day()).toBe(1);
+        }
+    });
+
     it('throws RruleExhaustedError when only done/trash items remain and rrule has no future occurrences', async () => {
         // Without gating exhaustion on live `calendar`-status items, historical done items would
         // suppress the exhausted signal and the routine would never be deactivated.

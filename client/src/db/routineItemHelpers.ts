@@ -161,35 +161,15 @@ export async function createNextCalendarItem(db: IDBPDatabase<MyDB>, userId: str
     if (!calendarItemTemplate) {
         throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
     }
-    const { timeOfDay, duration } = calendarItemTemplate;
-    if (timeOfDay === undefined || duration === undefined) {
-        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration (all-day not yet wired here)`);
-    }
 
     const exceptions = (routine.routineExceptions ?? []).map((e) => e.date);
     const dtstart = parseAnchorToUtcDate(routine.startDate ?? routine.createdTs);
     const nextDate = computeNextCalendarDate(routine.rrule, dtstart, refDate, exceptions);
 
-    // timeOfDay is a user-local time (HH:MM), so both timeStart and timeEnd are stored as naive
-    // local-time strings (no Z suffix) to avoid an implicit UTC conversion via .toISOString().
-    // nextDate is at 00:00:00Z (from computeNextCalendarDate), so .toISOString().slice(0,10)
-    // gives the correct UTC calendar date regardless of the local timezone.
-    const timeStart = `${nextDate.toISOString().slice(0, 10)}T${timeOfDay}:00`;
-    const timeEnd = dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
-
     const now = dayjs().toISOString();
-    const item = {
-        _id: crypto.randomUUID(),
-        userId,
-        status: 'calendar' as const,
-        title: routine.title,
-        routineId: routine._id,
-        timeStart,
-        timeEnd,
-        ...(routine.template.notes ? { notes: routine.template.notes } : {}),
-        createdTs: now,
-        updatedTs: now,
-    };
+    // Share `buildCalendarItem` with the horizon generator so both paths produce identical
+    // shapes, including the all-day branch.
+    const item = buildCalendarItem(userId, routine, nextDate, now, calendarItemTemplate);
 
     await putItem(db, item);
     await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
@@ -200,30 +180,58 @@ export async function createNextCalendarItem(db: IDBPDatabase<MyDB>, userId: str
 
 // ── Horizon-based batch generation ───────────────────────────────────────────
 
-/** Build a calendar item for a single rrule occurrence date. */
+/**
+ * Build a calendar item for a single rrule occurrence date. Branches on the template's `allDay`
+ * flag — all-day items carry `allDay: true` and `YYYY-MM-DD` strings; timed items carry the
+ * existing `${date}T${timeOfDay}:00` format with a +duration timeEnd.
+ *
+ * NOTE — `calendarInstanceEventId` is intentionally NOT set here, regardless of allDay. The
+ * server-side mirror (`api-server/src/lib/routineItemRegeneration.ts`) sets it because exception
+ * sync uses it as the preferred lookup key. The client mirror would also benefit from setting it,
+ * but the client doesn't currently sync the calendar TZ (StoredCalendarSyncConfig has no timeZone
+ * field), so deriving the timed-id deterministically is not possible here. (All-day ids could
+ * technically be derived without a TZ, but keeping client and server symmetric is simpler.)
+ * Items born from this path fall back to the date-keyed exception lookup (which works for
+ * first-move scenarios) and are picked up by the backfill script once they round-trip through
+ * the server.
+ */
 function buildCalendarItem(
     userId: string,
     routine: StoredRoutine,
     occurrenceDate: Date,
     now: string,
-    template: { timeOfDay: string; duration: number },
+    template: NonNullable<StoredRoutine['calendarItemTemplate']>,
 ): StoredItem {
     const dateStr = occurrenceDate.toISOString().slice(0, 10);
-    const timeStart = `${dateStr}T${template.timeOfDay}:00`;
-    const timeEnd = dayjs(timeStart).add(template.duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
 
     // Check for content overrides from GCal single-occurrence edits
     const contentException = (routine.routineExceptions ?? []).find((e) => e.type === 'modified' && e.date === dateStr);
     const title = contentException?.title ?? routine.title;
     const notes = contentException?.notes ?? routine.template.notes;
 
-    // NOTE — `calendarInstanceEventId` is intentionally NOT set here. The server-side mirror
-    // (`api-server/src/lib/routineItemRegeneration.ts`) sets it because exception sync uses it as
-    // the preferred lookup key. The client mirror would also benefit from setting it, but the
-    // client doesn't currently sync the calendar TZ (StoredCalendarSyncConfig has no timeZone
-    // field), so deriving the id deterministically is not possible here. Items born from this
-    // path fall back to the date-keyed exception lookup (which works for first-move scenarios)
-    // and are picked up by the backfill script once they round-trip through the server.
+    if (template.allDay === true) {
+        const timeEnd = dayjs(dateStr).add(1, 'day').format('YYYY-MM-DD');
+        return {
+            _id: crypto.randomUUID(),
+            userId,
+            status: 'calendar' as const,
+            title,
+            routineId: routine._id,
+            timeStart: dateStr,
+            timeEnd,
+            allDay: true,
+            ...(notes ? { notes } : {}),
+            createdTs: now,
+            updatedTs: now,
+        };
+    }
+
+    const { timeOfDay, duration } = template;
+    if (timeOfDay === undefined || duration === undefined) {
+        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration for a timed routine`);
+    }
+    const timeStart = `${dateStr}T${timeOfDay}:00`;
+    const timeEnd = dayjs(timeStart).add(duration, 'minute').format('YYYY-MM-DDTHH:mm:ss');
     return {
         _id: crypto.randomUUID(),
         userId,
@@ -294,11 +302,14 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
     if (!calendarItemTemplate) {
         throw new Error(`[routine] calendar routine ${routine._id} is missing calendarItemTemplate`);
     }
-    const { timeOfDay, duration } = calendarItemTemplate;
-    if (timeOfDay === undefined || duration === undefined) {
-        throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration (all-day not yet wired here)`);
+    // Validate the template up front so a misconfigured timed routine fails fast instead of
+    // mid-loop. All-day templates only need the `allDay: true` flag — no further validation.
+    if (calendarItemTemplate.allDay !== true) {
+        const { timeOfDay, duration } = calendarItemTemplate;
+        if (timeOfDay === undefined || duration === undefined) {
+            throw new Error(`[routine] calendar routine ${routine._id} template missing timeOfDay/duration for a timed routine`);
+        }
     }
-    const narrowedTemplate = { timeOfDay, duration };
 
     const validOccurrences = getValidFutureOccurrences(routine);
     // Dedupe against any item tied to this routine regardless of status — a `done`/`trash` item on
@@ -321,7 +332,7 @@ export async function generateCalendarItemsToHorizon(db: IDBPDatabase<MyDB>, use
 
     const now = dayjs().toISOString();
     for (const date of newDates) {
-        const item = buildCalendarItem(userId, routine, date, now, narrowedTemplate);
+        const item = buildCalendarItem(userId, routine, date, now, calendarItemTemplate);
         await putItem(db, item);
         await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
     }

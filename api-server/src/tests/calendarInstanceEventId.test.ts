@@ -103,6 +103,22 @@ describe('buildCalendarInstanceEventId — format', () => {
         const id = buildCalendarInstanceEventId(MASTER, date, '00:30', 'Pacific/Auckland');
         expect(id).toBe(`${MASTER}_20261214T113000Z`);
     });
+
+    // ── all-day instance ids ──────────────────────────────────────────────────
+
+    it('emits <masterEventId>_<YYYYMMDD> for an all-day routine (timeOfDay undefined)', () => {
+        // GCal returns `<masterId>_<YYYYMMDD>` (no T component) for all-day series instances.
+        const date = dayjs.utc('2026-05-19').toDate();
+        const id = buildCalendarInstanceEventId(MASTER, date, undefined, 'UTC');
+        expect(id).toBe(`${MASTER}_20260519`);
+    });
+
+    it("all-day instance id ignores the timeZone argument (date is the calendar owner's local date)", () => {
+        // Passing a different TZ must not shift the date — GCal anchors all-day to the owner's local day.
+        const date = dayjs.utc('2026-05-19').toDate();
+        expect(buildCalendarInstanceEventId(MASTER, date, undefined, 'Pacific/Auckland')).toBe(`${MASTER}_20260519`);
+        expect(buildCalendarInstanceEventId(MASTER, date, undefined, 'America/Los_Angeles')).toBe(`${MASTER}_20260519`);
+    });
 });
 
 describe('regenerateFutureRoutineItems — sets calendarInstanceEventId', () => {
@@ -144,6 +160,42 @@ describe('regenerateFutureRoutineItems — sets calendarInstanceEventId', () => 
 
         const items = await itemsDAO.findArray({ user: USER, routineId: routine._id });
         for (const item of items) {
+            expect(item.calendarInstanceEventId).toBeUndefined();
+        }
+    });
+
+    it('all-day routine: generates items with allDay=true and YYYYMMDD-suffixed instance ids', async () => {
+        // Phase 8: the regen path now branches on allDay. Items must carry the all-day flag and
+        // their instance-id suffix must be date-only (no T component) to match what GCal returns.
+        const routine = makeRoutine({ calendarItemTemplate: { allDay: true } });
+        await routinesDAO.insertOne(routine);
+
+        await regenerateFutureRoutineItems(routine, USER, dayjs().toISOString(), 'UTC');
+
+        const items = await itemsDAO.findArray({ user: USER, routineId: routine._id });
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) {
+            expect(item.allDay).toBe(true);
+            // timeStart is YYYY-MM-DD only (no T component)
+            expect(item.timeStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+            // timeEnd is start + 1 day (GCal exclusive-end convention for single-day all-day)
+            expect(item.timeEnd).toBe(dayjs(item.timeStart).add(1, 'day').format('YYYY-MM-DD'));
+            // Instance id format: <master>_<YYYYMMDD> with no T component
+            const datePart = (item.timeStart ?? '').replace(/-/g, '');
+            expect(item.calendarInstanceEventId).toBe(`${MASTER}_${datePart}`);
+        }
+    });
+
+    it('all-day routine without calendarEventId: items get allDay=true but no instance id', async () => {
+        const routine = makeRoutine({ calendarItemTemplate: { allDay: true }, calendarEventId: undefined });
+        await routinesDAO.insertOne(routine);
+
+        await regenerateFutureRoutineItems(routine, USER, dayjs().toISOString(), 'UTC');
+
+        const items = await itemsDAO.findArray({ user: USER, routineId: routine._id });
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) {
+            expect(item.allDay).toBe(true);
             expect(item.calendarInstanceEventId).toBeUndefined();
         }
     });

@@ -1655,10 +1655,8 @@ async function relinkRoutineToEvent(
 async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
     // All-day routines skip the time/duration extraction — GCal emits `start.date` (YYYY-MM-DD)
     // with no time component, so `extractLocalTime` and the `diff('minute')` math would both yield
-    // junk. Downstream item generation reads `template.allDay` to switch to the all-day shape.
-    // The existing `buildCalendarItem` guard (`throw 'all-day not yet wired here'`) still trips
-    // until Phase 8 — that's intentional, since this routine carrying `template = { allDay: true }`
-    // is what signals which reader needs the all-day branch.
+    // junk. Downstream item generation reads `template.allDay` to switch to the all-day shape
+    // (`routineItemRegeneration.buildCalendarItem` + the client's `buildCalendarItem`).
     const calendarItemTemplate = event.allDay ? { allDay: true as const } : buildTimedTemplate(event, source.config.timeZone ?? 'UTC');
 
     // Use the GCal event's start date as createdTs so the rrule DTSTART is anchored
@@ -2557,6 +2555,7 @@ async function createItemForOrphanedException(routine: RoutineInterface, ex: GCa
         title: ex.title ?? routine.title,
         timeStart: derived.timeStart,
         timeEnd: derived.timeEnd,
+        ...(derived.allDay === true ? { allDay: true as const } : {}),
         ...(routine.calendarIntegrationId ? { calendarIntegrationId: routine.calendarIntegrationId } : {}),
         ...(routine.calendarSyncConfigId ? { calendarSyncConfigId: routine.calendarSyncConfigId } : {}),
         ...(ex.googleEventId ? { calendarInstanceEventId: ex.googleEventId } : {}),
@@ -2607,7 +2606,7 @@ async function applyExceptionAfterDuplicate(routine: RoutineInterface, ex: GCalE
 }
 
 /** Picks `timeStart`/`timeEnd` for an orphan-create from the exception's move times, falling back to the routine's regular schedule. */
-function deriveExceptionItemTimes(routine: RoutineInterface, ex: GCalException): { timeStart: string; timeEnd: string } | undefined {
+function deriveExceptionItemTimes(routine: RoutineInterface, ex: GCalException): { timeStart: string; timeEnd: string; allDay?: boolean } | undefined {
     if (ex.newTimeStart && ex.newTimeEnd) {
         return { timeStart: ex.newTimeStart, timeEnd: ex.newTimeEnd };
     }
@@ -2615,9 +2614,13 @@ function deriveExceptionItemTimes(routine: RoutineInterface, ex: GCalException):
     if (!template) {
         return undefined;
     }
+    if (template.allDay === true) {
+        // All-day fallback: synthesize a single-day range from the rrule date. GCal exclusive-end → +1 day.
+        return { timeStart: ex.originalDate, timeEnd: dayjs(ex.originalDate).add(1, 'day').format('YYYY-MM-DD'), allDay: true };
+    }
     const { timeOfDay, duration } = template;
     if (timeOfDay === undefined || duration === undefined) {
-        // all-day routine — orphan-create derivation is handled by the all-day branch (Phase 8); skip here.
+        // Misconfigured timed template — nothing to fall back to.
         return undefined;
     }
     const timeStart = `${ex.originalDate}T${timeOfDay}:00`;
