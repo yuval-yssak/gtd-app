@@ -71,8 +71,10 @@ export class OperationValidationError extends Error {
  */
 export async function applyAndPublishOperation(userId: string, raw: RawOperation, opts: ApplyOptions): Promise<OperationInterface> {
     // Step 1 — validation. Logged in permissive mode so the audit script (and runtime warnings)
-    // surface client violations before strict-mode is flipped.
-    if (raw.opType !== 'delete' && raw.snapshot) {
+    // surface client violations before strict-mode is flipped. Validate snapshot-carrying ops AND
+    // rsvp ops (rsvp has snapshot:null but carries a structured `rsvp` payload that must conform
+    // — without this gate a malformed responseStatus would land on the persisted op and push to GCal).
+    if ((raw.opType !== 'delete' && raw.snapshot) || raw.opType === 'rsvp') {
         const validation = validateOperation(raw);
         if (!validation.ok) {
             if (opts.strict) {
@@ -153,7 +155,9 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     // Validate all up front so strict-mode rejects the whole batch atomically.
     if (opts.strict) {
         for (const raw of raws) {
-            if (raw.opType === 'delete' || !raw.snapshot) {
+            // Validate snapshot-carrying ops AND rsvp ops (rsvp's rsvp payload is validated even
+            // though snapshot is null). Skip pure deletes (no payload to validate).
+            if (raw.opType === 'delete' || (!raw.snapshot && raw.opType !== 'rsvp')) {
                 continue;
             }
             const validation = validateOperation(raw);
@@ -163,7 +167,9 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
         }
     } else {
         for (const raw of raws) {
-            if (raw.opType === 'delete' || !raw.snapshot) {
+            // Validate snapshot-carrying ops AND rsvp ops (rsvp's rsvp payload is validated even
+            // though snapshot is null). Skip pure deletes (no payload to validate).
+            if (raw.opType === 'delete' || (!raw.snapshot && raw.opType !== 'rsvp')) {
                 continue;
             }
             const validation = validateOperation(raw);

@@ -19,14 +19,13 @@ export async function retryWithBackoff<T>(fn: () => Promise<T>, isTransient: (er
             return await fn();
         } catch (err) {
             // Out of retries OR error is not retryable → propagate. The caller bucketizes via
-            // categorizeGCalError to decide how the SyncIssuesPanel should remediate.
+            // categorizeGCalError to decide how the SyncIssuesPanel should remediate. `.at()` is
+            // out-of-bounds-safe and removes the dead `delay === undefined` branch that confused
+            // the type narrower (the `attempt >= delays.length` guard above already covers it).
             if (attempt >= delays.length || !isTransient(err)) {
                 throw err;
             }
-            const delay = delays[attempt];
-            if (delay === undefined) {
-                throw err;
-            }
+            const delay = delays.at(attempt) ?? 0;
             await new Promise((resolve) => setTimeout(resolve, delay));
             attempt++;
         }

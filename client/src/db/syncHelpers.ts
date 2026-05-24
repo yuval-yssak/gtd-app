@@ -23,32 +23,43 @@ import { deletePersonById, putPerson } from './personHelpers';
 import { deleteRoutineById, putRoutine } from './routineHelpers';
 import { deleteWorkContextById, putWorkContext } from './workContextHelpers';
 
-export interface SyncOpParams {
-    opType: OpType;
+interface BaseSyncOpParams {
     entityType: EntityType;
     entityId: string;
-    // Snapshot of the entity at the moment of the change; null for deletes.
-    // Stored at queue-time so flush can send it directly without re-reading IndexedDB.
-    snapshot: StoredEntity | null;
     /**
      * Owning user id. Optional — defaults to the active account so existing call sites that
      * always queue under the active session don't need to be updated. Pass explicitly when
      * the entity belongs to a non-active session (e.g. the future reassign flow).
      */
     userId?: string;
+}
+
+interface EntityWriteOpParams extends BaseSyncOpParams {
+    opType: Exclude<OpType, 'rsvp'>;
+    // Snapshot of the entity at the moment of the change; null for deletes.
+    // Stored at queue-time so flush can send it directly without re-reading IndexedDB.
+    snapshot: StoredEntity | null;
     /**
      * Optional GCal sidecar captured at edit time from SendUpdatesDialog. When present the value
      * is stored on the queued op and replayed through pushback when the queue flushes so the
      * organizer-notification decision survives offline → reconnect.
      */
     gcalMeta?: { sendUpdates: 'all' | 'none' };
-    /**
-     * RSVP payload — required when `opType === 'rsvp'`, absent otherwise. Stored as a sidecar
-     * (not in `snapshot`) so the server replay can drive `events.patch` without rebuilding
-     * entity state from the op log.
-     */
-    rsvp?: StoredRsvpOpPayload;
 }
+
+interface RsvpOpParams extends BaseSyncOpParams {
+    opType: 'rsvp';
+    /** rsvp ops carry no entity snapshot — the rsvp sidecar drives the server-side replay. */
+    snapshot: null;
+    /**
+     * RSVP payload — required when `opType === 'rsvp'`. Stored as a sidecar (not in `snapshot`)
+     * so the server replay can drive `events.patch` without rebuilding entity state from the op log.
+     */
+    rsvp: StoredRsvpOpPayload;
+}
+
+/** Discriminated union on opType: rsvp ops must carry a `rsvp` payload; all others carry a snapshot. */
+export type SyncOpParams = EntityWriteOpParams | RsvpOpParams;
 
 function remapUser<T extends Record<string, unknown>>(doc: T & { user: string }) {
     const { user, ...rest } = doc;
@@ -65,6 +76,9 @@ async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOpera
     if (!hasAtLeastOne(pendingCreates)) return;
     const [queued] = pendingCreates;
     await db.delete('syncOperations', queued.id);
+    // Only entity-write ops carry gcalMeta — `mergeUpdateIntoCreate` is the create/update collapse path,
+    // not the rsvp stream, so this branch never sees `opType: 'rsvp'`.
+    const gcalMeta = op.opType !== 'rsvp' ? op.gcalMeta : undefined;
     await db.add('syncOperations', {
         userId,
         opType: 'create',
@@ -74,7 +88,7 @@ async function mergeUpdateIntoCreate(db: IDBPDatabase<MyDB>, existing: SyncOpera
         snapshot: op.snapshot,
         // gcalMeta is meaningful for calendar edits, not for the create itself, but if a caller
         // ever attaches it here we forward it onto the merged op so nothing is silently dropped.
-        ...(op.gcalMeta ? { gcalMeta: op.gcalMeta } : {}),
+        ...(gcalMeta ? { gcalMeta } : {}),
     });
 }
 
@@ -96,7 +110,7 @@ function registerBackgroundSync(): void {
 }
 
 export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Promise<void> {
-    const { opType, entityType, entityId, snapshot, gcalMeta, rsvp } = op;
+    const { opType, entityType, entityId, snapshot } = op;
     const userId = await resolveQueueUserId(db, op.userId);
     // RSVP ops are their own coalescing stream — per plan they NEVER collapse with each other
     // (the organizer gets every state change so the email log matches what the user did) and they
@@ -127,8 +141,9 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
         snapshot,
         // Forward the GCal sidecars verbatim. Without this the destructure at the top silently
         // dropped sendUpdates / rsvp payloads, which was the bug Phase 1a's reviewer flagged.
-        ...(gcalMeta ? { gcalMeta } : {}),
-        ...(rsvp ? { rsvp } : {}),
+        // The discriminated union ensures rsvp is present iff opType === 'rsvp', and gcalMeta is
+        // only readable on the entity-write arm.
+        ...(op.opType === 'rsvp' ? { rsvp: op.rsvp } : op.gcalMeta ? { gcalMeta: op.gcalMeta } : {}),
     });
 
     // Attempt an immediate flush. Safari and Firefox don't support the Background Sync API,

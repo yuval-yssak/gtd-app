@@ -85,6 +85,11 @@ async function pushRsvpToGCal(args: PushArgs): Promise<void> {
     const { userId, op, rsvp, item, integration, config, buildProvider } = args;
     const provider = buildProvider(integration, userId);
     const priorResponseStatus = item.responseStatus;
+    // Stamp `now` BEFORE the GCal call (including retries). The online endpoint does the same;
+    // stamping after the await lets slow PATCH + webhook latency exceed ECHO_WINDOW_SECONDS, and
+    // the webhook-arrived inbound is then mis-classified as an external change and re-applied.
+    // With retries this gap can reach ~30s; pre-stamping anchors on push-initiation time.
+    const now = dayjs().toISOString();
     try {
         const myEmail = await provider.getMyEmail();
         const nextAttendees = applyRsvpToAttendees(item.attendees ?? [], myEmail, rsvp.responseStatus);
@@ -92,7 +97,7 @@ async function pushRsvpToGCal(args: PushArgs): Promise<void> {
             () => provider.patchEventAttendees(config.calendarId, rsvp.calendarEventId, nextAttendees, { sendUpdates: 'all' }),
             (err) => categorizeGCalError(err) === 'transient_exhausted',
         );
-        await commitRsvpLocally(item, nextAttendees, rsvp.responseStatus);
+        await commitRsvpLocally(item, nextAttendees, rsvp.responseStatus, now);
     } catch (err) {
         const reason = categorizeGCalError(err);
         const detail = err instanceof Error ? err.message.slice(0, FAILURE_DETAIL_MAX_LEN) : 'unknown error';
@@ -101,17 +106,16 @@ async function pushRsvpToGCal(args: PushArgs): Promise<void> {
         // prior op, revert it so the panel-dismiss UX is honest ("Your RSVP wasn't saved"). Skipped
         // for recoverable reasons since the user may retry and we don't want to flip the chip twice.
         if (reason === 'terminal') {
-            await revertLocalResponseStatus(userId, item._id, priorResponseStatus);
+            await revertLocalResponseStatus(userId, item._id, priorResponseStatus, rsvp.responseStatus);
         }
     }
 }
 
 /** Persists the post-push item state. Mirrors the online-fast-path endpoint's replaceById call. */
-async function commitRsvpLocally(item: ItemInterface, attendees: ItemInterface['attendees'], responseStatus: GCalResponseStatus): Promise<void> {
+async function commitRsvpLocally(item: ItemInterface, attendees: ItemInterface['attendees'], responseStatus: GCalResponseStatus, now: string): Promise<void> {
     if (!item._id) {
         return;
     }
-    const now = dayjs().toISOString();
     // lastPushedToGCalTs lets the inbound webhook skip echoing this attendee patch back as an
     // external change (see calendar.ts ECHO_WINDOW_SECONDS guard).
     const updated: ItemInterface = {
@@ -128,9 +132,25 @@ async function commitRsvpLocally(item: ItemInterface, attendees: ItemInterface['
  * Reverts the item's `responseStatus` to its pre-replay value and bumps `updatedTs` so the next
  * pull picks it up. Per the plan, we don't emit a dedicated revert op — the bumped updatedTs is
  * enough for the standard pull diff to surface the rollback to all devices.
+ *
+ * No-op when prior and attempted statuses are equal: this happens in the rare update-then-rsvp
+ * interleaving where an interleaved `update` op already wrote the new responseStatus to the item
+ * before this rsvp replay ran, so the "prior" stash equals the new value. Logged so we can
+ * observe the silent no-op in the field if users report a stuck chip after a terminal failure.
  */
-async function revertLocalResponseStatus(userId: string, itemId: string | undefined, priorResponseStatus: GCalResponseStatus | undefined): Promise<void> {
+async function revertLocalResponseStatus(
+    userId: string,
+    itemId: string | undefined,
+    priorResponseStatus: GCalResponseStatus | undefined,
+    attemptedResponseStatus: GCalResponseStatus,
+): Promise<void> {
     if (!itemId) {
+        return;
+    }
+    if (priorResponseStatus === attemptedResponseStatus) {
+        console.debug(
+            `[rsvp-replay] revert is a no-op | itemId=${itemId} priorResponseStatus=${priorResponseStatus} attempted=${attemptedResponseStatus} (likely an interleaved update op overwrote the prior state)`,
+        );
         return;
     }
     const now = dayjs().toISOString();

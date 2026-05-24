@@ -304,6 +304,34 @@ describe('update opType with gcalMeta sidecar', () => {
     });
 });
 
+describe('rsvp op validation', () => {
+    it('strict-mode rejects an rsvp op carrying an invalid responseStatus before any GCal call', async () => {
+        await seedAll();
+        const patchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockResolvedValue(undefined);
+
+        // 'BOGUS' is not in the {accepted, declined, tentative} enum — the Zod RsvpOpPayloadSchema must reject it.
+        await expect(
+            applyAndPublishOperations(
+                USER_ID,
+                [
+                    {
+                        entityType: 'item',
+                        entityId: 'item-rsvp-1',
+                        opType: 'rsvp',
+                        snapshot: null,
+                        // biome-ignore lint/suspicious/noExplicitAny: deliberately bypassing the type guard to simulate a malformed client payload
+                        rsvp: { itemId: 'item-rsvp-1', calendarEventId: 'gcal-rsvp-event', calendarIntegrationId: 'int-rsvp', responseStatus: 'BOGUS' as any },
+                    },
+                ],
+                { deviceId: DEVICE_ID, strict: true },
+            ),
+        ).rejects.toThrow();
+
+        // No GCal push fired — the validator short-circuited before the replay path ran.
+        expect(patchSpy).not.toHaveBeenCalled();
+    });
+});
+
 describe('integration: maybePushToGCal ignores rsvp ops with null snapshot', () => {
     // Sanity test that the legacy pushback path stays a no-op for rsvp — the new replay path owns
     // the GCal side-effect, and double-pushing would emit two organizer emails.

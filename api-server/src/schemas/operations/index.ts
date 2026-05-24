@@ -1,13 +1,13 @@
 import type { z } from 'zod';
 import { z as zod } from 'zod';
 import type { EntitySnapshot, EntityType, OpType } from '../../types/entities.js';
-import { assertStatusFieldRules, ItemCreateSchema, ItemDeleteSchema, ItemUpdateSchema } from './item.js';
+import { assertStatusFieldRules, ItemCreateSchema, ItemDeleteSchema, ItemRsvpSchema, ItemUpdateSchema } from './item.js';
 import { PersonCreateSchema, PersonDeleteSchema, PersonUpdateSchema } from './person.js';
 import { RoutineCreateSchema, RoutineDeleteSchema, RoutineUpdateSchema } from './routine.js';
 import { WorkContextCreateSchema, WorkContextDeleteSchema, WorkContextUpdateSchema } from './workContext.js';
 
 export type { ItemSnapshot, StatusFieldViolation } from './item.js';
-export { assertStatusFieldRules, ItemSnapshotSchema } from './item.js';
+export { assertStatusFieldRules, ItemSnapshotSchema, RsvpOpPayloadSchema } from './item.js';
 export { PersonSnapshotSchema } from './person.js';
 export { RoutineSnapshotSchema } from './routine.js';
 export { WorkContextSnapshotSchema } from './workContext.js';
@@ -15,8 +15,9 @@ export { WorkContextSnapshotSchema } from './workContext.js';
 // Discriminated union over (entityType, opType) so a malformed op gets a structured Zod error
 // pointing at the offending field. We discriminate manually because Zod's discriminatedUnion
 // only supports a single key and we want an exact (entityType, opType) match.
+// Item arms include the rsvp opType (item-only — no other entity carries an rsvp shape).
 export const OperationSchema = zod.discriminatedUnion('entityType', [
-    zod.discriminatedUnion('opType', [ItemCreateSchema, ItemUpdateSchema, ItemDeleteSchema]),
+    zod.discriminatedUnion('opType', [ItemCreateSchema, ItemUpdateSchema, ItemDeleteSchema, ItemRsvpSchema]),
     zod.discriminatedUnion('opType', [RoutineCreateSchema, RoutineUpdateSchema, RoutineDeleteSchema]),
     zod.discriminatedUnion('opType', [PersonCreateSchema, PersonUpdateSchema, PersonDeleteSchema]),
     zod.discriminatedUnion('opType', [WorkContextCreateSchema, WorkContextUpdateSchema, WorkContextDeleteSchema]),
@@ -63,7 +64,9 @@ export function validateOperation(raw: unknown): ValidationOutcome {
         };
     }
     const op = parsed.data;
-    if (op.entityType === 'item' && op.opType !== 'delete') {
+    // status×field matrix only applies to create/update ops carrying a snapshot — rsvp ops have
+    // snapshot:null (their payload is validated by RsvpOpPayloadSchema as part of the discriminator).
+    if (op.entityType === 'item' && op.opType !== 'delete' && op.opType !== 'rsvp') {
         const violation = assertStatusFieldRules(op.snapshot);
         if (violation) {
             return {

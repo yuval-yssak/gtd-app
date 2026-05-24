@@ -2,6 +2,29 @@ import { z } from 'zod';
 import type { ItemInterface } from '../../types/entities.js';
 import { energySchema, floatingDateTime, isoDateOrDateTime, isoDateTime, itemStatusSchema, nonEmptyString } from './shared.js';
 
+/** GCal-mirror types validated on snapshot. Server-overwritten on inbound pulls, but `update` ops
+ *  that round-trip through /sync/push carry the parsed values; strict-mode rejection here would
+ *  block any calendar-item edit that includes meeting metadata. Mirrors entities.ts. */
+const gcalResponseStatusSchema = z.enum(['needsAction', 'accepted', 'declined', 'tentative']);
+const gcalPersonSchema = z
+    .object({
+        email: nonEmptyString,
+        displayName: z.string().optional(),
+        self: z.boolean().optional(),
+    })
+    .strict();
+const gcalAttendeeSchema = z
+    .object({
+        email: nonEmptyString,
+        displayName: z.string().optional(),
+        self: z.boolean().optional(),
+        responseStatus: gcalResponseStatusSchema,
+        organizer: z.boolean().optional(),
+        optional: z.boolean().optional(),
+    })
+    .strict();
+const gcalEventTypeSchema = z.enum(['default', 'outOfOffice', 'focusTime', 'workingLocation']);
+
 // Item snapshot schema — every persistable field. The status→field matrix runs as a separate
 // pass (`assertStatusFieldRules`) so violation messages can pinpoint the offending status×field
 // cell instead of a generic "extra key" error.
@@ -23,6 +46,7 @@ export const ItemSnapshotSchema = z
         expectedBy: isoDateOrDateTime.optional(),
         ignoreBefore: isoDateOrDateTime.optional(),
         // Floating wall-clock — paired with calendar timeZone when sent to GCal. See shared.ts.
+        // For all-day items, these are YYYY-MM-DD strings (also accepted by floatingDateTime).
         timeStart: floatingDateTime.optional(),
         timeEnd: floatingDateTime.optional(),
         calendarEventId: nonEmptyString.optional(),
@@ -46,6 +70,15 @@ export const ItemSnapshotSchema = z
         urgent: z.boolean().optional(),
         externalId: nonEmptyString.optional(),
         contentHash: nonEmptyString.optional(),
+        // GCal-mirror fields (Phase 1a). Server-overwritten on inbound pulls; update ops that
+        // round-trip through /sync/push include these so the strict schema must accept them.
+        allDay: z.boolean().optional(),
+        organizer: gcalPersonSchema.optional(),
+        creator: gcalPersonSchema.optional(),
+        attendees: z.array(gcalAttendeeSchema).optional(),
+        responseStatus: gcalResponseStatusSchema.optional(),
+        eventType: gcalEventTypeSchema.optional(),
+        cancelledByGCal: z.boolean().optional(),
     })
     .strict();
 
@@ -70,6 +103,25 @@ export const ItemDeleteSchema = z.object({
     opType: z.literal('delete'),
     entityId: nonEmptyString,
     snapshot: z.null(),
+});
+
+/** Payload validator for `opType: 'rsvp'` ops. responseStatus is constrained to the three values
+ *  the RSVP UI can emit — `needsAction` is reserved for inbound parsing and is not a valid push. */
+export const RsvpOpPayloadSchema = z
+    .object({
+        itemId: nonEmptyString,
+        calendarEventId: nonEmptyString,
+        calendarIntegrationId: nonEmptyString,
+        responseStatus: z.enum(['accepted', 'declined', 'tentative']),
+    })
+    .strict();
+
+export const ItemRsvpSchema = z.object({
+    entityType: z.literal('item'),
+    opType: z.literal('rsvp'),
+    entityId: nonEmptyString,
+    snapshot: z.null(),
+    rsvp: RsvpOpPayloadSchema,
 });
 
 // Status → allowed status-specific optional fields. Universal fields (title, notes, _id, user,
