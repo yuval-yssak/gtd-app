@@ -3,12 +3,15 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
+import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { useEffect, useRef, useState } from 'react';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-item.$itemId.module.css';
 
@@ -72,6 +75,30 @@ function ItemPage() {
 
     const item = items.find((i) => i._id === itemId) ?? null;
 
+    // Page mode doesn't use useItemEditor, so we own a tiny local snackbar slot to surface the
+    // fromGmail-read-only warning when the body's done-transition save fires the callback.
+    // Declared before the not-found early return so the hook order stays stable across renders.
+    const [toast, setToast] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
+    // Set inside `onFromGmailReadOnly` so the post-save navigation in `goBack` can defer the
+    // route-change long enough for the user to actually read the snackbar before the page tears
+    // down. Without this, the Snackbar's `open` state is set ~1 tick before navigate unmounts the
+    // route — the toast never paints.
+    const fromGmailJustFiredRef = useRef(false);
+    // Tracks the deferred-navigation timer so unmount and re-entry can cancel it (see goBack +
+    // the cleanup effect below). Without cancellation, the timer fires into a stale `navigate`
+    // closure after the user has already left the page (or stacks with a second goBack click).
+    const deferredNavigateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(
+        () => () => {
+            if (deferredNavigateTimerRef.current !== null) {
+                clearTimeout(deferredNavigateTimerRef.current);
+                deferredNavigateTimerRef.current = null;
+            }
+        },
+        [],
+    );
+
     if (!item) {
         return (
             <Box className={styles.page}>
@@ -92,7 +119,33 @@ function ItemPage() {
         );
     }
 
-    const goBack = () => void navigate({ to: backRouteForStatus(item.status) });
+    const goBack = () => {
+        // Cancel any pending deferred navigation so a double-tap Back doesn't stack two navigates
+        // and so a normal-path goBack after a fromGmail save doesn't fire alongside the deferred one.
+        if (deferredNavigateTimerRef.current !== null) {
+            clearTimeout(deferredNavigateTimerRef.current);
+            deferredNavigateTimerRef.current = null;
+        }
+        if (fromGmailJustFiredRef.current) {
+            // Defer just long enough for the user to read the snackbar before the route unmounts.
+            // Matches the Snackbar's autoHideDuration so the toast finishes its visible cycle on
+            // this page, not after the unrelated destination route has mounted. Cleanup effect
+            // above cancels the timer on unmount; double-tap is guarded by the clear at the top
+            // of this function.
+            fromGmailJustFiredRef.current = false;
+            deferredNavigateTimerRef.current = setTimeout(() => {
+                deferredNavigateTimerRef.current = null;
+                void navigate({ to: backRouteForStatus(item.status) });
+            }, 3000);
+            return;
+        }
+        void navigate({ to: backRouteForStatus(item.status) });
+    };
+
+    const onFromGmailReadOnly = () => {
+        fromGmailJustFiredRef.current = true;
+        setToast({ open: true, message: FROM_GMAIL_READONLY_MESSAGE });
+    };
 
     return (
         <Box className={styles.page} data-testid="itemPageWrapper">
@@ -106,10 +159,12 @@ function ItemPage() {
                     workContexts={workContexts}
                     onClose={goBack}
                     onSaved={refreshItems}
+                    onFromGmailReadOnly={onFromGmailReadOnly}
                     chrome="page"
                     {...(initialStatus ? { initialStatus } : {})}
                 />
             </Paper>
+            <Snackbar open={toast.open} autoHideDuration={3000} onClose={() => setToast((s) => ({ ...s, open: false }))} message={toast.message} />
         </Box>
     );
 }

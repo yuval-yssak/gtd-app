@@ -121,6 +121,13 @@ async function handleItemDelete(snapshot: ItemInterface | null, userId: string, 
         return;
     }
     if (snapshot.calendarEventId) {
+        // fromGmail events are read-only via Calendar API — same rationale as pushExistingItemToGCal.
+        if (snapshot.eventType === 'fromGmail') {
+            console.log(
+                `[gcal-pushback] skipping fromGmail event delete (read-only via Calendar API) | eventId=${snapshot.calendarEventId} itemId=${snapshot._id}`,
+            );
+            return;
+        }
         const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
         // Hard-delete: the item row is already gone by the time pushback runs, so heal can't write
         // it back. Skip the heal context — the fallback inside resolvePushContext still kicks in.
@@ -191,6 +198,14 @@ async function pushRoutineInstanceOverride(
     sendUpdates: 'all' | 'none',
 ): Promise<void> {
     if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
+        return;
+    }
+    // Defensive parity with pushExistingItemToGCal: a routine-instance shouldn't carry fromGmail
+    // in practice (Google never produces recurring events from Gmail), but the type-system reachability
+    // is non-zero (routineExceptions can mirror eventType via GCAL_OWNED_ROUTINE_KEYS), and a 400 from
+    // GCal would be silent and confusing. Cheaper to skip uniformly than to discover it in prod.
+    if (snapshot.eventType === 'fromGmail') {
+        console.log(`[gcal-pushback] skipping routine-instance override for fromGmail item | itemId=${snapshot._id}`);
         return;
     }
     const routine = await routinesDAO.findByOwnerAndId(snapshot.routineId, userId);
@@ -265,6 +280,11 @@ async function pushRoutineInstanceCancellation(
     if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
         return;
     }
+    // See pushRoutineInstanceOverride for the fromGmail rationale.
+    if (snapshot.eventType === 'fromGmail') {
+        console.log(`[gcal-pushback] skipping routine-instance cancellation for fromGmail item | itemId=${snapshot._id}`);
+        return;
+    }
     const routine = await routinesDAO.findByOwnerAndId(snapshot.routineId, userId);
     if (!routine?.calendarEventId) {
         return;
@@ -313,6 +333,15 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
     const eventId = snapshot.calendarEventId;
     const itemId = snapshot._id;
     if (!eventId || !itemId) {
+        return;
+    }
+
+    // `fromGmail` events are auto-created by Google from email attachments and are read-only via
+    // the Calendar API — Google's contract is "modify via Gmail." Attempts to PATCH/DELETE return
+    // 400 Bad Request. Skip pushback entirely; the in-app status change still persists locally.
+    // The client surfaces this to the user via a snackbar at the moment of the gesture.
+    if (snapshot.eventType === 'fromGmail') {
+        console.log(`[gcal-pushback] skipping fromGmail event (read-only via Calendar API) | eventId=${eventId} itemId=${itemId} status=${snapshot.status}`);
         return;
     }
 
@@ -845,8 +874,14 @@ export async function pushRoutineToGCalWithContext(snapshot: RoutineInterface, c
  */
 async function resolvePushContext(link: CalendarLink, userId: string, buildProvider: ProviderFactory, heal?: HealContext): Promise<PushContext | null> {
     if (!link.integrationId) {
-        console.warn(`[calendar-pushback] resolvePushContext: no integrationId — skipping`);
-        return null;
+        // Symmetric to the "integration row was deleted" branch: a snapshot can also arrive with
+        // `calendarIntegrationId` entirely absent (e.g. a client mutation that drops link fields
+        // when staging the snapshot). Caller has a `heal` context AND a calendarEventId, so we
+        // can repoint the entity to the user's default active integration just like the stale-id
+        // case. The fallback resolves through `tryHealStaleLink → resolveDefaultPushContext` and
+        // persists the new ids back onto the entity row.
+        console.warn(`[calendar-pushback] resolvePushContext: no integrationId — attempting heal fallback`);
+        return await tryHealStaleLink(link, userId, buildProvider, heal, 'integration-absent');
     }
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(link.integrationId, userId);
     if (!integration) {
@@ -886,7 +921,7 @@ async function tryHealStaleLink(
     userId: string,
     buildProvider: ProviderFactory,
     heal: HealContext | undefined,
-    reason: 'integration-missing' | 'config-missing',
+    reason: 'integration-missing' | 'config-missing' | 'integration-absent',
 ): Promise<PushContext | null> {
     const fallback = await resolveDefaultPushContext(userId, buildProvider);
     if (!fallback) {

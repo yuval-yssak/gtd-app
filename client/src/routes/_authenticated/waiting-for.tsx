@@ -47,7 +47,7 @@ function WaitingForPage() {
     }, {});
 
     async function onReceived(item: StoredItem) {
-        await clarifyToDone(db, item);
+        await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
         await refreshItems();
     }
 

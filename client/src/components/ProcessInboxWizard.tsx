@@ -6,10 +6,12 @@ import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
+import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
 import { useCallback, useState } from 'react';
 import { usePendingReassign } from '../contexts/PendingReassignProvider';
+import { FROM_GMAIL_READONLY_MESSAGE } from '../db/itemMutations';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 import { CopyIdButton } from './itemEditor/CopyIdButton';
 import { type ItemEditorActionsApi, ItemEditorBody, type ItemEditorChrome } from './itemEditor/ItemEditorBody';
@@ -58,6 +60,8 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
     const [index, setIndex] = useState(0);
     const step = nextWizardStep(items, index);
     const { isPending } = usePendingReassign();
+    // Local snackbar slot for the fromGmail-read-only warning — wizard doesn't use useItemEditor.
+    const [toast, setToast] = useState<{ open: boolean; message: string }>({ open: false, message: '' });
 
     const advance = useCallback(() => {
         setIndex((i) => i + 1);
@@ -78,9 +82,19 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
         advance();
     }, [advance]);
 
+    const closeToast = () => setToast((s) => ({ ...s, open: false }));
+    const toastSnackbar = <Snackbar open={toast.open} autoHideDuration={3000} onClose={closeToast} message={toast.message} />;
+
     if (step.kind === 'done') {
         const total = items.length;
-        return chrome === 'dialog' ? <DoneDialog total={total} onClose={onClose} /> : <DonePage total={total} onClose={onClose} />;
+        // Wrap the done-view in a fragment so a fromGmail snackbar from the just-saved last item
+        // remains visible after the wizard switches off the editor branch.
+        return (
+            <>
+                {chrome === 'dialog' ? <DoneDialog total={total} onClose={onClose} /> : <DonePage total={total} onClose={onClose} />}
+                {toastSnackbar}
+            </>
+        );
     }
 
     const currentItem = items[step.index];
@@ -107,6 +121,7 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
             workContexts={workContexts}
             onClose={onCloseItem}
             onSaved={onSavedItem}
+            onFromGmailReadOnly={() => setToast({ open: true, message: FROM_GMAIL_READONLY_MESSAGE })}
             renderActions={renderActions}
             chrome={bodyChrome}
         />
@@ -114,20 +129,26 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
 
     if (chrome === 'page') {
         return (
-            <Box className={styles.pageRoot}>
-                <WizardHeader index={step.index} total={items.length} itemId={currentItem._id} chrome="page" />
-                <Box className={styles.pageBody}>{inFlightContent ?? editorBody('page')}</Box>
-            </Box>
+            <>
+                <Box className={styles.pageRoot}>
+                    <WizardHeader index={step.index} total={items.length} itemId={currentItem._id} chrome="page" />
+                    <Box className={styles.pageBody}>{inFlightContent ?? editorBody('page')}</Box>
+                </Box>
+                {toastSnackbar}
+            </>
         );
     }
 
     return (
-        <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
-            <DialogTitle className={styles.dialogTitle}>
-                <WizardHeader index={step.index} total={items.length} itemId={currentItem._id} chrome="dialog" />
-            </DialogTitle>
-            <DialogContent dividers>{inFlightContent ?? editorBody('dialog')}</DialogContent>
-        </Dialog>
+        <>
+            <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+                <DialogTitle className={styles.dialogTitle}>
+                    <WizardHeader index={step.index} total={items.length} itemId={currentItem._id} chrome="dialog" />
+                </DialogTitle>
+                <DialogContent dividers>{inFlightContent ?? editorBody('dialog')}</DialogContent>
+            </Dialog>
+            {toastSnackbar}
+        </>
     );
 }
 

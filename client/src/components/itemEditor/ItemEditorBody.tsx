@@ -51,6 +51,7 @@ import {
 import { WaitingForFields } from '../clarify/WaitingForFields';
 import {
     applyCalendarPatch,
+    buildClarifyToDoneOpts,
     buildEditPatch,
     decideSavePath,
     type EditableStatus,
@@ -109,6 +110,12 @@ export interface ItemEditorBodyProps {
     workContexts: StoredWorkContext[];
     onClose: () => void;
     onSaved: () => Promise<void>;
+    /**
+     * Fired post-save when the user transitions a `fromGmail` calendar item to a status the server
+     * would normally push to GCal. The body has no Snackbar of its own — the host (useItemEditor)
+     * wires this to `setInstantToast` so the warning surfaces through the page's existing toast.
+     */
+    onFromGmailReadOnly?: () => void;
     /** Pre-selects the status chip on open. When omitted, defaults to item.status. */
     initialStatus?: EditableStatus;
     /** Determines which actions container is rendered and visual padding. Dialog wrapper sets 'dialog'. */
@@ -166,7 +173,18 @@ function bodyClassFor(chrome: ItemEditorChrome): string {
  * Wrappers MUST set `key={item._id}` so React remounts the body when the editor opens on a
  * different item — otherwise local form state would seed from the wrong item.
  */
-export function ItemEditorBody({ item, db, people, workContexts, onClose, onSaved, initialStatus, chrome, renderActions }: ItemEditorBodyProps) {
+export function ItemEditorBody({
+    item,
+    db,
+    people,
+    workContexts,
+    onClose,
+    onSaved,
+    onFromGmailReadOnly,
+    initialStatus,
+    chrome,
+    renderActions,
+}: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
     const { loggedInAccounts } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
@@ -398,7 +416,9 @@ export function ItemEditorBody({ item, db, people, workContexts, onClose, onSave
                 await clarifyToSomedayMaybe(db, baseItem);
                 break;
             case 'done':
-                await clarifyToDone(db, baseItem);
+                // `buildClarifyToDoneOpts` is a named helper so a refactor that drops the
+                // prop-forwarding can't silently kill the fromGmail toast; see its doc comment.
+                await clarifyToDone(db, baseItem, buildClarifyToDoneOpts(onFromGmailReadOnly));
                 break;
             case 'trash':
                 await clarifyToTrash(db, baseItem);

@@ -420,3 +420,15 @@ export function shouldAutoFocusTitle(chrome: ItemEditorChrome, initialStatus: Ed
 export function notesAreEmpty(notes: string): boolean {
     return notes.trim().length === 0;
 }
+
+/**
+ * Builds the optional `opts` argument for `clarifyToDone` so the spread in `ItemEditorBody`'s
+ * status-transition dispatch is a named helper instead of an inline ternary. `exactOptionalPropertyTypes`
+ * forbids passing `{ onReadOnlyGCal: undefined }`, so when no callback is supplied we must pass
+ * `undefined` for the entire opts arg. Extracted into a pure helper so a future refactor that
+ * accidentally drops the prop-forwarding has to also delete a named, tested call — much harder
+ * to do silently than removing an inline ternary spread.
+ */
+export function buildClarifyToDoneOpts(onReadOnly: (() => void) | undefined): { onReadOnlyGCal: () => void } | undefined {
+    return onReadOnly ? { onReadOnlyGCal: onReadOnly } : undefined;
+}

@@ -4910,6 +4910,56 @@ describe('calendar push-back — routine instance overrides', () => {
 
         expect(cancelSpy).not.toHaveBeenCalled();
     });
+
+    it('skips per-instance override for a fromGmail routine-generated item', async () => {
+        // Defensive: routine masters from Gmail don't exist in practice, but if eventType ever
+        // mirrors through the GCal-owned routine keys, we don't want a 400 from GCal.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-inst-fromgmail',
+            routineId: 'routine-1',
+            title: 'Gmail mirror instance',
+            timeStart: '2026-05-04T11:00:00.000Z',
+            timeEnd: '2026-05-04T11:30:00.000Z',
+            eventType: 'fromGmail',
+            status: 'done',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips per-instance cancellation for a fromGmail routine-generated item', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-cancel-fromgmail',
+            routineId: 'routine-1',
+            title: 'Gmail mirror cancel',
+            timeStart: '2026-05-04T11:00:00.000Z',
+            timeEnd: '2026-05-04T11:30:00.000Z',
+            eventType: 'fromGmail',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
 });
 
 describe('calendar push-back — routines', () => {
@@ -8320,6 +8370,154 @@ describe('pushback self-heal — stale calendarIntegrationId falls back to user 
         });
         expect(serverHealOps).toHaveLength(0);
     });
+
+    it('heals when snapshot.calendarIntegrationId is entirely absent (client wiped the link)', async () => {
+        // Production symptom: a client mutation can stage a snapshot with no calendarIntegrationId
+        // at all (not stale, absent). Pre-fix the "no integrationId — skipping" early-return bailed
+        // before the heal could attempt fallback. Now the absent-integration path also reroutes
+        // through tryHealStaleLink, picks the user's default active integration, and proceeds.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-absent-int',
+            calendarEventId: 'gcal-absent-int',
+            status: 'done',
+            title: 'Push me anyway',
+        });
+        // Intentionally omit calendarIntegrationId/calendarSyncConfigId — this is the bug shape.
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        // GCal call landed via the fallback integration.
+        expect(updateSpy).toHaveBeenCalledOnce();
+        const [calendarId, eventId] = updateSpy.mock.calls[0]!;
+        expect(calendarId).toBe('primary');
+        expect(eventId).toBe('gcal-absent-int');
+
+        // The row was healed in place — next push won't re-pay the fallback lookup.
+        const healed = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(healed!.calendarIntegrationId).toBe('int-1');
+        expect(healed!.calendarSyncConfigId).toBe('sync-config-1');
+
+        // Heal op was recorded so other devices learn about the healed link on their next sync pull.
+        const ops = await operationsDAO.findArray({ user: userId, entityId: item._id! });
+        const healOp = ops.find((o) => {
+            const snap = o.snapshot as ItemInterface | null;
+            return o.opType === 'update' && snap?.calendarIntegrationId === 'int-1' && snap?.calendarSyncConfigId === 'sync-config-1';
+        });
+        expect(healOp).toBeTruthy();
+    });
+
+    it('absent-integration heal: still bails when no active integration exists for the user', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // No insertIntegrationWithConfig — user is currently disconnected.
+
+        const item = makeItem(userId, {
+            _id: 'item-absent-int-no-fb',
+            calendarEventId: 'gcal-absent-int-no-fb',
+            status: 'done',
+            title: 'No fallback',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        // Nothing to fall back to → no GCal call, no row mutation, no spurious heal op.
+        expect(updateSpy).not.toHaveBeenCalled();
+        const after = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(after!.calendarIntegrationId).toBeUndefined();
+        const ops = await operationsDAO.findArray({ user: userId, entityId: item._id! });
+        const serverHealOps = ops.filter((o) => o.deviceId === 'server' && o.opType === 'update');
+        expect(serverHealOps).toHaveLength(0);
+    });
+});
+
+// ─── pushback skips fromGmail items (read-only via Calendar API) ─────────────────
+
+describe('pushback skip — fromGmail events are Calendar-API-read-only', () => {
+    it('done transition on a fromGmail item: no provider call, local status stays done', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-fromgmail-done',
+            calendarEventId: 'gcal-fromgmail-done',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            status: 'done',
+            title: 'Visit doctor (Gmail-created)',
+            eventType: 'fromGmail',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        // Google rejects writes to fromGmail events with 400. We skip the attempt entirely.
+        expect(updateSpy).not.toHaveBeenCalled();
+        expect(deleteSpy).not.toHaveBeenCalled();
+
+        // Local state unchanged — the GTD-side status flip persists regardless of GCal skip.
+        const after = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(after!.status).toBe('done');
+    });
+
+    it('trash transition on a fromGmail item: no provider call', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-fromgmail-trash',
+            calendarEventId: 'gcal-fromgmail-trash',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            status: 'trash',
+            title: 'Cancel doctor visit',
+            eventType: 'fromGmail',
+        });
+        await itemsDAO.insertOne(item);
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('hard-delete op on a fromGmail item: no provider call', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const snapshot = makeItem(userId, {
+            _id: 'item-fromgmail-hard-delete',
+            calendarEventId: 'gcal-fromgmail-hard-delete',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            status: 'trash',
+            title: 'Hard delete me',
+            eventType: 'fromGmail',
+        });
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: snapshot._id!, snapshot, opType: 'delete' }), mockBuildProvider());
+
+        // handleItemDelete must skip the delete call for fromGmail (Google would 400/403).
+        expect(deleteSpy).not.toHaveBeenCalled();
+    });
 });
 
 // ─── applyExceptionToItems — instance-id lookup, fallback, and create-on-miss ──────────────
@@ -8673,10 +8871,18 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
     it('legacy row moved twice (no calendarInstanceEventId): first move via fallback, second move converges with no duplicate', async () => {
         // Pre-rollout shape: routine-generated item has NO `calendarInstanceEventId`. The first
         // move hits the date-keyed fallback OK. The second move would historically miss (item's
-        // timeStart already shifted off May 19) — assert we end up with one item, not two.
+        // timeStart already shifted off the originalDate) — assert we end up with one item, not two.
+        // Dates are computed relative to "today" so the past-event guard doesn't filter them out
+        // when the suite is run on a future calendar day.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await setupRoutineAndIntegration(userId);
+
+        const originalDate = dayjs().add(3, 'day').format('YYYY-MM-DD');
+        const move1Date = dayjs().add(5, 'day').format('YYYY-MM-DD');
+        const move2Date = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        const originalTimeStart = `${originalDate}T06:00:00Z`;
+        const originalTimeEnd = `${originalDate}T06:30:00Z`;
 
         await itemsDAO.insertOne({
             _id: 'item-legacy-moved',
@@ -8685,39 +8891,39 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
             title: 'Standup',
             routineId: 'routine-1',
             // No calendarInstanceEventId — this is the legacy shape.
-            timeStart: '2026-05-19T06:00:00Z',
-            timeEnd: '2026-05-19T06:30:00Z',
+            timeStart: originalTimeStart,
+            timeEnd: originalTimeEnd,
             createdTs: dayjs().toISOString(),
             updatedTs: dayjs().toISOString(),
         });
 
-        const instanceEventId = 'gcal-evt-master_20260519T060000Z';
+        const instanceEventId = `gcal-evt-master_${originalDate.replace(/-/g, '')}T060000Z`;
         const getExceptionsSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions');
 
-        // Move 1: May 19 → May 24. Fallback (routineId + date) finds the row on May 19.
+        // Move 1: originalDate → move1Date. Fallback (routineId + date) finds the row on originalDate.
         getExceptionsSpy.mockResolvedValueOnce([
             {
-                originalDate: '2026-05-19',
+                originalDate,
                 type: 'modified',
                 googleEventId: instanceEventId,
-                newTimeStart: '2026-05-24T09:30:00Z',
-                newTimeEnd: '2026-05-24T10:30:00Z',
+                newTimeStart: `${move1Date}T09:30:00Z`,
+                newTimeEnd: `${move1Date}T10:30:00Z`,
             },
         ]);
         await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
 
-        // Move 2 of the SAME instance: May 24 → May 25. Date-keyed fallback misses (item's
-        // timeStart is now May 24). Without `calendarInstanceEventId`, the preferred lookup also
+        // Move 2 of the SAME instance: move1Date → move2Date. Date-keyed fallback misses (item's
+        // timeStart is now move1Date). Without `calendarInstanceEventId`, the preferred lookup also
         // misses — the create-on-miss branch fires and the unique partial index on
         // calendarInstanceEventId admits it (legacy row has none, no collision). Net behavior:
         // one item remains via create-on-miss carrying the instance id.
         getExceptionsSpy.mockResolvedValueOnce([
             {
-                originalDate: '2026-05-19',
+                originalDate,
                 type: 'modified',
                 googleEventId: instanceEventId,
-                newTimeStart: '2026-05-25T11:00:00Z',
-                newTimeEnd: '2026-05-25T12:00:00Z',
+                newTimeStart: `${move2Date}T11:00:00Z`,
+                newTimeEnd: `${move2Date}T12:00:00Z`,
             },
         ]);
         await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });

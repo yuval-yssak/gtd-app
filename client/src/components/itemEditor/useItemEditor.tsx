@@ -1,7 +1,7 @@
 import { useNavigate } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
 import { type ReactNode, useCallback, useEffect, useRef, useState, useTransition } from 'react';
-import { clarifyToNextAction } from '../../db/itemMutations';
+import { clarifyToNextAction, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { EditItemDialog } from '../EditItemDialog';
@@ -39,6 +39,14 @@ export interface ItemEditorAPI {
     /** Toast state for instant mode. The hook owns it; the page should mount one Snackbar driven by these. */
     instantToast: { open: boolean; message: string };
     closeInstantToast: () => void;
+    /**
+     * Pre-wired callback that emits the canonical fromGmail-readonly snackbar. Route handlers
+     * pass this into `clarifyToDone({ onReadOnlyGCal: editor.onFromGmailReadOnly })` so the
+     * message string lives in exactly one place (the mutation module) and routes don't need to
+     * import it. Editor-internal save paths (dialog/popover/expand) consume the same handler
+     * via the editor wrappers, so all surfaces share one source of truth.
+     */
+    onFromGmailReadOnly: () => void;
 }
 
 export type EditorState =
@@ -151,6 +159,9 @@ export function useItemEditor({
         setState(resolved.state);
     }
 
+    // Stable handler so editor wrappers don't see a fresh function identity every render.
+    const onFromGmailReadOnly = useCallback(() => setInstantToast({ open: true, message: FROM_GMAIL_READONLY_MESSAGE }), []);
+
     const renderGlobal = useCallback((): ReactNode => {
         if (state.kind === 'dialog') {
             // initialStatus is part of the key so a chip click on an already-open editor (same
@@ -166,6 +177,7 @@ export function useItemEditor({
                     workContexts={workContexts}
                     onClose={close}
                     onSaved={refreshItems}
+                    onFromGmailReadOnly={onFromGmailReadOnly}
                     {...(state.initialStatus ? { initialStatus: state.initialStatus } : {})}
                 />
             );
@@ -181,12 +193,13 @@ export function useItemEditor({
                     workContexts={workContexts}
                     onClose={close}
                     onSaved={refreshItems}
+                    onFromGmailReadOnly={onFromGmailReadOnly}
                     {...(state.initialStatus ? { initialStatus: state.initialStatus } : {})}
                 />
             );
         }
         return null;
-    }, [state, db, people, workContexts, refreshItems, close]);
+    }, [state, db, people, workContexts, refreshItems, close, onFromGmailReadOnly]);
 
     const renderExpandFor = useCallback(
         (itemId: string): ReactNode => {
@@ -202,11 +215,12 @@ export function useItemEditor({
                     workContexts={workContexts}
                     onClose={close}
                     onSaved={refreshItems}
+                    onFromGmailReadOnly={onFromGmailReadOnly}
                     {...(state.initialStatus ? { initialStatus: state.initialStatus } : {})}
                 />
             );
         },
-        [state, db, people, workContexts, refreshItems, close],
+        [state, db, people, workContexts, refreshItems, close, onFromGmailReadOnly],
     );
 
     return {
@@ -216,5 +230,6 @@ export function useItemEditor({
         isMutating,
         instantToast,
         closeInstantToast: () => setInstantToast({ open: false, message: '' }),
+        onFromGmailReadOnly,
     };
 }

@@ -60,7 +60,7 @@ function CalendarPage() {
     const isPast = (dateKey: string) => dateKey !== NO_DATE_KEY && dayjs(dateKey).isBefore(dayjs(), 'day');
 
     async function onDone(item: StoredItem) {
-        await clarifyToDone(db, item);
+        await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
         await refreshItems();
     }
 

@@ -263,6 +263,110 @@ describe('clarifyToDone', () => {
     // date X" via timeStart) keep working. The server-side matrix mirrors this allowance for the
     // `done` and `trash` statuses; new statuses like `nextAction` and `calendar` enforce field
     // gating actively.
+    it('invokes onReadOnlyGCal when transitioning a fromGmail calendar item with a calendarEventId to done', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Gmail-created meeting' });
+        const fromGmailItem: StoredItem = {
+            ...item,
+            status: 'calendar',
+            timeStart: '2026-05-09T10:00:00.000Z',
+            timeEnd: '2026-05-09T11:00:00.000Z',
+            calendarEventId: 'evt-fromgmail',
+            calendarIntegrationId: 'integ-1',
+            eventType: 'fromGmail',
+        };
+        await db.clear('syncOperations');
+
+        const onReadOnlyGCal = vi.fn();
+        const done = await clarifyToDone(db, fromGmailItem, { onReadOnlyGCal });
+
+        expect(done.status).toBe('done');
+        expect(onReadOnlyGCal).toHaveBeenCalledOnce();
+    });
+
+    it('does not invoke onReadOnlyGCal for non-fromGmail calendar items', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Regular meeting' });
+        const calItem: StoredItem = {
+            ...item,
+            status: 'calendar',
+            timeStart: '2026-05-09T10:00:00.000Z',
+            timeEnd: '2026-05-09T11:00:00.000Z',
+            calendarEventId: 'evt-regular',
+            calendarIntegrationId: 'integ-1',
+            eventType: 'default',
+        };
+        await db.clear('syncOperations');
+
+        const onReadOnlyGCal = vi.fn();
+        await clarifyToDone(db, calItem, { onReadOnlyGCal });
+
+        expect(onReadOnlyGCal).not.toHaveBeenCalled();
+    });
+
+    it('does not invoke onReadOnlyGCal when calendarEventId is missing (no GCal-side push would have fired)', async () => {
+        // eventType could be 'fromGmail' on a row that was never linked to GCal (e.g. local-only
+        // mutation that copied the field). Without a calendarEventId the server would never push,
+        // so the warning would be misleading.
+        const item = await collectItem(db, USER_ID, { title: 'Orphan' });
+        const orphanFromGmail: StoredItem = {
+            ...item,
+            status: 'calendar',
+            timeStart: '2026-05-09T10:00:00.000Z',
+            timeEnd: '2026-05-09T11:00:00.000Z',
+            eventType: 'fromGmail',
+        };
+        await db.clear('syncOperations');
+
+        const onReadOnlyGCal = vi.fn();
+        await clarifyToDone(db, orphanFromGmail, { onReadOnlyGCal });
+
+        expect(onReadOnlyGCal).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when onReadOnlyGCal is omitted for a fromGmail item', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Gmail no-callback' });
+        const fromGmailItem: StoredItem = {
+            ...item,
+            status: 'calendar',
+            timeStart: '2026-05-09T10:00:00.000Z',
+            timeEnd: '2026-05-09T11:00:00.000Z',
+            calendarEventId: 'evt-no-cb',
+            eventType: 'fromGmail',
+        };
+        await db.clear('syncOperations');
+
+        // No opts at all — must not throw.
+        await expect(clarifyToDone(db, fromGmailItem)).resolves.toMatchObject({ status: 'done' });
+    });
+
+    it('fires onReadOnlyGCal AFTER the local IDB write persists', async () => {
+        // Locks in the doc-comment contract: by the time the callback runs, the IDB row is
+        // already 'done'. The callback enqueues an async read of the row; we drain the microtask
+        // queue with `setTimeout(0)` before asserting so the queued read settles.
+        const item = await collectItem(db, USER_ID, { title: 'order-of-ops' });
+        const fromGmailItem: StoredItem = {
+            ...item,
+            status: 'calendar',
+            timeStart: '2026-05-09T10:00:00.000Z',
+            timeEnd: '2026-05-09T11:00:00.000Z',
+            calendarEventId: 'evt-order',
+            eventType: 'fromGmail',
+        };
+        await db.clear('syncOperations');
+
+        let storedAtCallback: StoredItem | undefined;
+        const onReadOnlyGCal = vi.fn(() => {
+            void db.get('items', fromGmailItem._id).then((stored) => {
+                storedAtCallback = stored;
+            });
+        });
+        await clarifyToDone(db, fromGmailItem, { onReadOnlyGCal });
+        // Drain the microtask queued inside the callback before asserting.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(onReadOnlyGCal).toHaveBeenCalledOnce();
+        expect(storedAtCallback?.status).toBe('done');
+    });
+
     it('preserves prior status-specific fields when transitioning to done (audit trail)', async () => {
         const item = await collectItem(db, USER_ID, { title: 'Calendar to done' });
         const calItem: StoredItem = {

@@ -106,7 +106,7 @@ function NextActionsPage() {
         });
 
     async function onDone(item: StoredItem) {
-        await clarifyToDone(db, item);
+        await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
         await refreshItems();
     }
 

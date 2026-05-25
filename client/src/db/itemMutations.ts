@@ -11,6 +11,14 @@ function nowIso(): string {
     return dayjs().toISOString();
 }
 
+/**
+ * Snackbar text shown when a user transitions a `fromGmail` calendar item to a status the server
+ * would normally push to GCal (e.g. `done`). Google's Calendar API treats fromGmail events as
+ * read-only — the GTD-side change persists, but the server skips pushback. Surfaced as a single
+ * shared constant so every done-transition surface emits identical wording.
+ */
+export const FROM_GMAIL_READONLY_MESSAGE = 'GCal events from Gmail can only be edited in Gmail.';
+
 function buildBaseItem(userId: string, title: string): StoredItem {
     const now = nowIso();
     return {
@@ -185,11 +193,26 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
     return updated;
 }
 
-export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
+/**
+ * `clarifyToDone` accepts an optional `onReadOnlyGCal` callback — fired AFTER the local write
+ * persists, when the server would normally try to push this transition to a GCal event the API
+ * treats as read-only (`eventType: 'fromGmail'` events Google auto-creates from email attachments).
+ * Gated on `calendarEventId` so the warning only fires for items that actually have a GCal-side
+ * representation; otherwise the user would see a "can't edit in Gmail" warning for an item that
+ * was never linked to GCal in the first place.
+ *
+ * Callers wire it to their Snackbar surface so the user learns "this won't sync to GCal" the moment
+ * they click done, instead of the GCal-side change silently failing. The mutation itself proceeds
+ * regardless — only GCal pushback is skipped server-side; the GTD state still flips to done.
+ */
+export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, opts?: { onReadOnlyGCal?: () => void }): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     await maybeCreateNextRoutineItem(db, item, 'done');
+    if (item.eventType === 'fromGmail' && item.calendarEventId && opts?.onReadOnlyGCal) {
+        opts.onReadOnlyGCal();
+    }
     return updated;
 }
 
