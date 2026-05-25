@@ -63,6 +63,17 @@ interface CalendarLink {
 }
 
 /**
+ * Identifies the entity whose stale link should be healed when `resolvePushContext` falls back to
+ * the user's default integration. Threaded through every callsite that holds an entity in hand —
+ * the heal rewrites `calendarIntegrationId`/`calendarSyncConfigId` on the row in place and records
+ * an op so other devices converge.
+ */
+interface HealContext {
+    entityType: 'item' | 'routine';
+    entityId: string;
+}
+
+/**
  * Inspects a server operation and pushes calendar-relevant changes back to Google Calendar.
  * Called fire-and-forget from the sync push handler — errors are logged, not thrown to the caller.
  * Picks up `op.gcalMeta.sendUpdates` (populated by the client's SendUpdatesDialog choice) and
@@ -111,6 +122,8 @@ async function handleItemDelete(snapshot: ItemInterface | null, userId: string, 
     }
     if (snapshot.calendarEventId) {
         const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
+        // Hard-delete: the item row is already gone by the time pushback runs, so heal can't write
+        // it back. Skip the heal context — the fallback inside resolvePushContext still kicks in.
         const ctx = await resolvePushContext(link, userId, buildProvider);
         if (!ctx) {
             return;
@@ -185,7 +198,8 @@ async function pushRoutineInstanceOverride(
         return;
     }
     const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
+    // Heal targets the routine — the routine owns the integration link for all generated items.
+    const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: routine._id });
     if (!ctx) {
         return;
     }
@@ -259,7 +273,8 @@ async function pushRoutineInstanceCancellation(
         return;
     }
     const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
+    // Heal targets the routine — see pushRoutineInstanceOverride.
+    const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: routine._id });
     if (!ctx) {
         return;
     }
@@ -302,7 +317,7 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
     }
 
     const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
+    const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'item', entityId: itemId });
     if (!ctx) {
         return;
     }
@@ -586,7 +601,7 @@ async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buil
         return;
     }
     const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
+    const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: snapshot._id });
     if (!ctx) {
         return;
     }
@@ -619,11 +634,17 @@ async function pushRoutineResume(snapshot: RoutineInterface, userId: string, bui
             console.error(`[calendar-pushback] resume: failed to push updated series for routine ${snapshot._id}:`, err);
         }
     }
+    // Re-read after the GCal push: if resolvePushContext healed a stale calendarIntegrationId on
+    // the routine row, the in-memory `snapshot` still carries the dead ids. Without this re-read,
+    // `regenerateFutureRoutineItems` would stamp the dead ids onto every freshly-inserted item
+    // (which copies from `routine.calendarIntegrationId`/`calendarSyncConfigId` per
+    // routineItemRegeneration.ts), defeating the point of the heal.
+    const refreshed = (await routinesDAO.findByOwnerAndId(snapshot._id, userId)) ?? snapshot;
     // Need the calendar TZ to compute `calendarInstanceEventId` on generated items. Resolution can
     // fail (integration revoked, no config link); when it does we still regenerate, just without the
     // instance id — the backfill script covers those rows later.
-    const tz = await resolveTimeZoneForRoutine(snapshot, userId, buildProvider);
-    await regenerateFutureRoutineItems(snapshot, userId, now, tz);
+    const tz = await resolveTimeZoneForRoutine(refreshed, userId, buildProvider);
+    await regenerateFutureRoutineItems(refreshed, userId, now, tz);
 }
 
 /** Returns the calendar TZ for a routine's pushback context, or undefined if unresolvable. */
@@ -632,7 +653,9 @@ async function resolveTimeZoneForRoutine(snapshot: RoutineInterface, userId: str
         return undefined;
     }
     const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
+    // Heal the routine here too — the resume path probes for timezone, and if the link is stale
+    // the heal also fixes pause+resume's downstream pushes via the same routine row.
+    const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: snapshot._id });
     return ctx?.timeZone;
 }
 
@@ -660,7 +683,10 @@ export async function pushRoutineDeletion(
         return;
     }
     const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
+    // Routine-delete: row is about to disappear, but the heal write inside resolvePushContext is
+    // a no-op against a deleted row — safe to pass the heal context regardless. The fallback
+    // resolution is what matters here so the GCal delete actually fires.
+    const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: snapshot._id });
     if (!ctx) {
         return;
     }
@@ -708,7 +734,7 @@ async function pushExistingRoutineToGCal(snapshot: RoutineInterface, userId: str
         return;
     }
     const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
+    const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: snapshot._id });
     if (!ctx) {
         return;
     }
@@ -728,7 +754,7 @@ async function pushNewRoutineToGCal(snapshot: RoutineInterface, userId: string, 
         return;
     }
     const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
-    const ctx = await resolvePushContext(link, userId, buildProvider);
+    const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: snapshot._id });
     if (!ctx) {
         return;
     }
@@ -804,8 +830,20 @@ export async function pushRoutineToGCalWithContext(snapshot: RoutineInterface, c
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Resolves the push context for an entity that already has integration/config IDs. */
-async function resolvePushContext(link: CalendarLink, userId: string, buildProvider: ProviderFactory): Promise<PushContext | null> {
+/**
+ * Resolves the push context for an entity that already has integration/config IDs.
+ *
+ * Self-heal: when the named integration row is gone (typical after disconnect+reconnect, which
+ * creates a brand-new integration with a different `_id`) or the named sync config is gone, fall
+ * back to the user's default active integration/config. The heal also rewrites the stale link on
+ * the entity row in place and records an op for cross-device convergence — so subsequent ops on
+ * the same entity don't re-pay this lookup. `(user, provider)` is unique on `calendarIntegrations`,
+ * so the fallback target is unambiguous when an active integration exists.
+ *
+ * `heal` is the entity identity. Required for heal to engage — callsites that don't have an entity
+ * in hand (`resolveTimeZoneForRoutine`'s timezone-only probe) pass undefined and behave as before.
+ */
+async function resolvePushContext(link: CalendarLink, userId: string, buildProvider: ProviderFactory, heal?: HealContext): Promise<PushContext | null> {
     if (!link.integrationId) {
         console.warn(`[calendar-pushback] resolvePushContext: no integrationId — skipping`);
         return null;
@@ -813,7 +851,7 @@ async function resolvePushContext(link: CalendarLink, userId: string, buildProvi
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(link.integrationId, userId);
     if (!integration) {
         console.warn(`[calendar-pushback] resolvePushContext: integration ${link.integrationId} not found for user ${userId}`);
-        return null;
+        return await tryHealStaleLink(link, userId, buildProvider, heal, 'integration-missing');
     }
     // Suspended/revoked integrations: pushback is a no-op. The auth-escalation flow owns their
     // lifecycle and hitting Google again would re-trigger the same invalid_grant.
@@ -826,11 +864,73 @@ async function resolvePushContext(link: CalendarLink, userId: string, buildProvi
         : ((await calendarSyncConfigsDAO.findEnabledByIntegration(link.integrationId)).find((c) => c.isDefault) ?? null);
     if (!config) {
         console.warn(`[calendar-pushback] resolvePushContext: no sync config found (configId=${link.configId ?? 'none'}, integrationId=${link.integrationId})`);
-        return null;
+        return await tryHealStaleLink(link, userId, buildProvider, heal, 'config-missing');
     }
     const provider = buildProvider(integration, userId);
     const timeZone = await withAuthFailureHandling(integration._id, () => ensureTimeZone(config, provider));
     return { integration, config, provider, timeZone };
+}
+
+/**
+ * Heals a stale `calendarIntegrationId` / `calendarSyncConfigId` on the entity row by repointing
+ * it to the user's current default active integration. Returns the healed push context, or null
+ * when no fallback exists (e.g. user is currently disconnected). Records an op so other devices
+ * converge to the healed link without going through their own pushback path first.
+ *
+ * Skips the persist step when `heal` is undefined — that means the caller is doing a read-only
+ * probe (`resolveTimeZoneForRoutine`) and doesn't own a single entity to rewrite. The fallback
+ * context is still returned so the probe gets a usable timezone.
+ */
+async function tryHealStaleLink(
+    link: CalendarLink,
+    userId: string,
+    buildProvider: ProviderFactory,
+    heal: HealContext | undefined,
+    reason: 'integration-missing' | 'config-missing',
+): Promise<PushContext | null> {
+    const fallback = await resolveDefaultPushContext(userId, buildProvider);
+    if (!fallback) {
+        return null;
+    }
+    if (!heal) {
+        return fallback;
+    }
+    // Skip persist if the fallback ids match the stale ids — happens when the config row exists
+    // but the integration row was filtered out by status, etc. We log + return the fallback ctx
+    // but don't waste a write or an op when nothing about the link actually changed.
+    if (fallback.integration._id === link.integrationId && fallback.config._id === link.configId) {
+        return fallback;
+    }
+    const now = dayjs().toISOString();
+    const newIntegrationId = fallback.integration._id;
+    const newConfigId = fallback.config._id;
+    console.log(
+        `[calendar-pushback] healing stale link | reason=${reason} entity=${heal.entityType}:${heal.entityId} oldIntegrationId=${link.integrationId ?? 'none'} newIntegrationId=${newIntegrationId} oldConfigId=${link.configId ?? 'none'} newConfigId=${newConfigId}`,
+    );
+    const updated = await persistHealedLink(heal, userId, newIntegrationId, newConfigId);
+    if (updated) {
+        await recordOperation(userId, { entityType: heal.entityType, entityId: heal.entityId, snapshot: updated, opType: 'update', now });
+    }
+    return fallback;
+}
+
+/**
+ * Writes the healed link onto the entity row and returns the updated snapshot (or null if the row vanished).
+ * Intentionally does NOT bump `updatedTs` — these are plumbing-only id rewrites, not user-meaningful
+ * changes. Mirrors the `stampItemLastPushed` precedent: bumping the LWW anchor for a server-internal
+ * write would let a heal that races a concurrent offline client edit silently lock that edit out on
+ * replay (existing.updatedTs would be artificially newer than the legitimate client snapshot.updatedTs).
+ * The recorded op carries the entity's unchanged `updatedTs`, so cross-device LWW stays correct.
+ */
+async function persistHealedLink(
+    heal: HealContext,
+    userId: string,
+    newIntegrationId: string,
+    newConfigId: string,
+): Promise<ItemInterface | RoutineInterface | null> {
+    const dao = heal.entityType === 'item' ? itemsDAO : routinesDAO;
+    await dao.updateOne({ _id: heal.entityId, user: userId }, { $set: { calendarIntegrationId: newIntegrationId, calendarSyncConfigId: newConfigId } });
+    return await dao.findByOwnerAndId(heal.entityId, userId);
 }
 
 /** Resolves the push context using the user's default sync config (for new app-created items). */

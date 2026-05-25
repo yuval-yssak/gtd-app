@@ -507,6 +507,9 @@ async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promis
     // `trash` server-side is via `/v1/operations/batch` (replay of a client-originated trash op),
     // and triggering routine advancement on replay would double-create a tail item — the client
     // already ran its own `maybeCreateNextRoutineItem` when it staged the trash op locally.
+    // Bracket access is required by `noPropertyAccessFromIndexSignature` on the `Record` type;
+    // suppress Biome's dot-notation preference, which would conflict with tsc.
+    // biome-ignore lint/complexity/useLiteralKeys: see above.
     if (raw['status'] === 'trash') {
         return {
             ok: false,

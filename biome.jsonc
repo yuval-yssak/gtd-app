@@ -3,7 +3,7 @@
     "files": {
         "includes": [
             "**",
-            "!build",
+            "!**/build",
             "!**/dist",
             "!**/coverage",
             "!**/test-results", // exclude common output directories

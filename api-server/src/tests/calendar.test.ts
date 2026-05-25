@@ -9,6 +9,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { applyEntityOp } from '../lib/applyEntityOp.js';
 import { gcalCreationInFlight, maybePushToGCal } from '../lib/calendarPushback.js';
 import * as sseConnections from '../lib/sseConnections.js';
 import * as webPush from '../lib/webPush.js';
@@ -7245,6 +7246,70 @@ describe('routine pause', () => {
         // against the cap caused GCal to drop UNTIL from the master.
         expect(cancelSpy).not.toHaveBeenCalled();
     });
+
+    it('resume heals stale link AND regenerated items inherit the healed integration ids (not the dead snapshot ids)', async () => {
+        // Regression for the resume-side mirror of the disconnect/reconnect bug:
+        // pushRoutineResume calls pushExistingRoutineToGCal first → resolvePushContext heals the
+        // routine row in place. Without the in-resume re-read, regenerateFutureRoutineItems uses
+        // the stale in-memory snapshot and stamps the gone integration ids onto every fresh item.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // Current (post-reconnect) integration + default config.
+        await insertIntegrationWithConfig(userId);
+
+        // Paused routine pointing at the gone integration. Daily rrule + 09:00 timed template so
+        // resume regenerates at least one occurrence inside the 2-month horizon.
+        const pausedRoutine = makeRoutine(userId, {
+            _id: 'routine-stale-resume',
+            calendarEventId: 'gcal-master-stale-resume',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            active: false,
+            rrule: 'FREQ=DAILY',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            updatedTs: '2026-01-10T09:00:00.000Z',
+        });
+        await routinesDAO.insertOne(pausedRoutine);
+        await operationsDAO.insertOne({
+            _id: 'op-paused-stale-prior',
+            user: userId,
+            deviceId: 'device-1',
+            ts: '2026-01-10T09:00:00.000Z',
+            entityType: 'routine',
+            entityId: pausedRoutine._id,
+            opType: 'update',
+            snapshot: pausedRoutine,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockResolvedValue(undefined);
+
+        const resumedSnapshot: RoutineInterface = { ...pausedRoutine, active: true, updatedTs: '2026-01-10T11:00:00.000Z' };
+        await routinesDAO.replaceById(pausedRoutine._id, resumedSnapshot);
+        await maybePushToGCal(
+            makeOp(userId, {
+                _id: 'op-resume-stale-current',
+                entityType: 'routine',
+                entityId: resumedSnapshot._id,
+                snapshot: resumedSnapshot,
+                ts: '2026-01-10T11:00:00.000Z',
+            }),
+            mockBuildProvider(),
+        );
+
+        // Routine row itself was healed by pushExistingRoutineToGCal.
+        const healedRoutine = await routinesDAO.findByOwnerAndId(pausedRoutine._id, userId);
+        expect(healedRoutine!.calendarIntegrationId).toBe('int-1');
+        expect(healedRoutine!.calendarSyncConfigId).toBe('sync-config-1');
+
+        // The actual regression: every regenerated calendar item must reference the HEALED ids,
+        // not the dead snapshot ids. Pre-fix, they would all be stamped 'int-old' / 'sync-config-old'.
+        const generated = await itemsDAO.findArray({ user: userId, routineId: pausedRoutine._id, status: 'calendar' });
+        expect(generated.length).toBeGreaterThan(0);
+        for (const item of generated) {
+            expect(item.calendarIntegrationId).toBe('int-1');
+            expect(item.calendarSyncConfigId).toBe('sync-config-1');
+        }
+    });
 });
 
 // ─── invalid_grant escalation ────────────────────────────────────────────────
@@ -7872,6 +7937,388 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
 
         expect(createRecurringSpy).not.toHaveBeenCalled();
         expect(updateRecurringSpy).not.toHaveBeenCalled();
+    });
+});
+
+// ─── reconnect — heals stale calendarIntegrationId on items ────────────────
+
+describe('reconnect — inbound sync heals stale calendarIntegrationId', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('rewrites calendarIntegrationId from old to current when GCal sends a newer update', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // Current (post-reconnect) integration — id `int-1`, default config `sync-config-1`.
+        await insertIntegrationWithConfig(userId);
+
+        // Item points at a DELETED prior integration (`int-old`) — the disconnect+reconnect dance
+        // never rewrote it because no inbound update touched the item between reconnects.
+        const oldTs = dayjs().subtract(1, 'hour').toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        const newUpdatedTs = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-stale',
+            user: userId,
+            status: 'calendar',
+            title: 'Old title',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-stale',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-stale', title: 'New title', timeStart: futureTs, timeEnd: futureTs, updated: newUpdatedTs, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updated = await itemsDAO.findByOwnerAndId('item-stale', userId);
+        expect(updated).toBeTruthy();
+        expect(updated!.title).toBe('New title');
+        // Both link fields must be refreshed — if calendarIntegrationId stayed `int-old`, the next
+        // local push would silently no-op in resolvePushContext.
+        expect(updated!.calendarIntegrationId).toBe('int-1');
+        expect(updated!.calendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('notes-only inbound update still refreshes both link ids', async () => {
+        // Regression guard for the structurallyNewer gate: a notes-only inbound payload (no
+        // title/time change) must still bring `calendarIntegrationId` + `calendarSyncConfigId`
+        // forward — otherwise an item whose only post-reconnect inbound is a notes edit stays
+        // pinned to the dead integration.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const t1 = dayjs().subtract(2, 'hour').toISOString();
+        const t2 = dayjs().subtract(30, 'minute').toISOString();
+        const t3 = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-stale-notesonly',
+            user: userId,
+            status: 'calendar',
+            title: 'Title at T3',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-stale-notesonly',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            lastSyncedNotes: '<p>old desc</p>',
+            createdTs: t1,
+            updatedTs: t1,
+            lastSyncedFromGCalTs: t3,
+        });
+
+        // event.updated = T2 sits between local updatedTs (T1) and anchor (T3) → notes apply,
+        // structural fields don't (`structurallyNewer = false`).
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-stale-notesonly',
+                    title: 'Title at T3',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: t2,
+                    status: 'confirmed',
+                    description: '<p>new desc</p>',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stale-notesonly', userId);
+        expect(item!.notes).toBe('new desc');
+        // Link must be healed even though no structural change occurred.
+        expect(item!.calendarIntegrationId).toBe('int-1');
+        expect(item!.calendarSyncConfigId).toBe('sync-config-1');
+        // Anchor stays at T3 — same guard as the existing notes-only-no-regress test.
+        expect(item!.lastSyncedFromGCalTs).toBe(t3);
+    });
+
+    it('reviveTrashedCalendarItem also brings calendarIntegrationId forward', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Item is trashed (e.g. by disconnect-with-remove cascade) and references the gone integration.
+        const oldTs = dayjs().subtract(2, 'hour').toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        const newUpdatedTs = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-revive',
+            user: userId,
+            status: 'trash',
+            title: 'Will revive',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-revive',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-revive', title: 'Will revive', timeStart: futureTs, timeEnd: futureTs, updated: newUpdatedTs, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updated = await itemsDAO.findByOwnerAndId('item-revive', userId);
+        expect(updated).toBeTruthy();
+        expect(updated!.status).toBe('calendar');
+        expect(updated!.calendarIntegrationId).toBe('int-1');
+        expect(updated!.calendarSyncConfigId).toBe('sync-config-1');
+    });
+});
+
+// ─── pushback — self-heals stale calendarIntegrationId ────────────────────
+
+describe('pushback self-heal — stale calendarIntegrationId falls back to user default', () => {
+    it('trash push deletes the GCal event via the active integration when stored integrationId is gone', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // User has exactly one active integration (`int-1`) — the prior `int-old` row is gone.
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-stale-trash',
+            calendarEventId: 'gcal-stale-trash',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(deleteSpy).toHaveBeenCalledOnce();
+        expect(deleteSpy).toHaveBeenCalledWith('primary', 'gcal-stale-trash');
+
+        // Row was healed in place — the next pushback won't re-pay the fallback lookup.
+        const healed = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(healed!.calendarIntegrationId).toBe('int-1');
+        expect(healed!.calendarSyncConfigId).toBe('sync-config-1');
+
+        // An op was recorded for cross-device convergence (separate from the lastPushedToGCalTs stamp).
+        const ops = await operationsDAO.findArray({ user: userId, entityId: item._id! });
+        const healOp = ops.find((o) => {
+            const snap = o.snapshot as ItemInterface | null;
+            return o.opType === 'update' && snap?.calendarIntegrationId === 'int-1' && snap?.calendarSyncConfigId === 'sync-config-1';
+        });
+        expect(healOp).toBeTruthy();
+    });
+
+    it('done push marks the GCal event via the active integration when stored integrationId is gone', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-stale-done',
+            calendarEventId: 'gcal-stale-done',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            status: 'done',
+            title: 'Visit the doctor',
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        const [calendarId, eventId, updates] = updateSpy.mock.calls[0]!;
+        expect(calendarId).toBe('primary');
+        expect(eventId).toBe('gcal-stale-done');
+        expect(updates).toMatchObject({ title: '✓ Visit the doctor', colorId: '2' });
+
+        const healed = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(healed!.calendarIntegrationId).toBe('int-1');
+        expect(healed!.calendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('reschedule push updates the GCal event via the active integration when stored integrationId is gone', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-stale-move',
+            calendarEventId: 'gcal-stale-move',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            status: 'calendar',
+            title: 'Field trip',
+            timeStart: dayjs().add(7, 'day').toISOString(),
+            timeEnd: dayjs().add(7, 'day').add(1, 'hour').toISOString(),
+        });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        const [calendarId, eventId] = updateSpy.mock.calls[0]!;
+        expect(calendarId).toBe('primary');
+        expect(eventId).toBe('gcal-stale-move');
+
+        const healed = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(healed!.calendarIntegrationId).toBe('int-1');
+        expect(healed!.calendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('no-ops when there is no active integration to fall back to', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // User has NO active integration — the prior one was disconnected and no reconnect happened.
+
+        const item = makeItem(userId, {
+            _id: 'item-stale-nofb',
+            calendarEventId: 'gcal-stale-nofb',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        // No fallback → no GCal call, no heal, no op pollution.
+        expect(deleteSpy).not.toHaveBeenCalled();
+        const healed = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(healed!.calendarIntegrationId).toBe('int-old');
+        expect(healed!.calendarSyncConfigId).toBe('sync-config-old');
+    });
+
+    it('heal write does not clobber a concurrent client edit with older updatedTs', async () => {
+        // Regression for the LWW trap: the heal write is plumbing-only (calendarIntegrationId +
+        // calendarSyncConfigId rewrite) and must NOT bump the entity's updatedTs anchor. If it did,
+        // a concurrent offline client edit with updatedTs T2 (T1 < T2 < T_heal) would be silently
+        // rejected on replay by `existing.updatedTs <= snapshot.updatedTs` — the heal would have
+        // artificially advanced the anchor past the legitimate user edit.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const t1 = dayjs().subtract(1, 'hour').toISOString();
+        const t2 = dayjs().subtract(10, 'second').toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-heal-vs-lww',
+            user: userId,
+            status: 'calendar',
+            title: 'Original title',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'gcal-heal-vs-lww',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            createdTs: t1,
+            updatedTs: t1,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+
+        // Step 1: pushback fires for a (notional) client op against the stale-linked item — heal runs.
+        const triggerSnapshot: ItemInterface = {
+            _id: 'item-heal-vs-lww',
+            user: userId,
+            status: 'calendar',
+            title: 'Original title',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'gcal-heal-vs-lww',
+            calendarIntegrationId: 'int-old',
+            calendarSyncConfigId: 'sync-config-old',
+            createdTs: t1,
+            updatedTs: t1,
+        };
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: 'item-heal-vs-lww', snapshot: triggerSnapshot, ts: t1 }), mockBuildProvider());
+
+        // After heal: row carries new link ids but the LWW anchor is still T1.
+        const postHeal = await itemsDAO.findByOwnerAndId('item-heal-vs-lww', userId);
+        expect(postHeal!.calendarIntegrationId).toBe('int-1');
+        expect(postHeal!.calendarSyncConfigId).toBe('sync-config-1');
+        expect(postHeal!.updatedTs).toBe(t1);
+
+        // Step 2: a real client edit with updatedTs T2 (newer than T1) replays via applyEntityOp.
+        const clientEdit: ItemInterface = {
+            ...postHeal!,
+            title: 'User edited title',
+            updatedTs: t2,
+        };
+        await applyEntityOp(userId, {
+            _id: 'op-client-edit',
+            user: userId,
+            deviceId: 'device-client',
+            ts: t2,
+            entityType: 'item',
+            entityId: 'item-heal-vs-lww',
+            opType: 'update',
+            snapshot: clientEdit,
+        });
+
+        // The user's edit must win — the heal must not have locked it out by bumping the anchor.
+        const final = await itemsDAO.findByOwnerAndId('item-heal-vs-lww', userId);
+        expect(final!.title).toBe('User edited title');
+        expect(final!.updatedTs).toBe(t2);
+        // Healed link ids carry through into the client snapshot (the client already saw the healed
+        // values via the recorded heal op before staging its own edit).
+        expect(final!.calendarIntegrationId).toBe('int-1');
+        expect(final!.calendarSyncConfigId).toBe('sync-config-1');
+    });
+
+    it('happy path: item already references the active integration → no heal op written', async () => {
+        // Guards against accidental over-eager heals — when the link is valid, resolvePushContext
+        // must succeed on its first DAO lookup, tryHealStaleLink never runs, and the op log gets
+        // no server-origin heal op for this item.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-no-drift',
+            calendarEventId: 'gcal-no-drift',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            status: 'trash',
+        });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        const ops = await operationsDAO.findArray({ user: userId, entityId: item._id! });
+        const serverHealOps = ops.filter((o) => {
+            if (o.deviceId !== 'server' || o.opType !== 'update') {
+                return false;
+            }
+            const snap = o.snapshot as ItemInterface | null;
+            return snap?.calendarIntegrationId === 'int-1';
+        });
+        expect(serverHealOps).toHaveLength(0);
     });
 });
 

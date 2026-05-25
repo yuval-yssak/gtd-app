@@ -2394,6 +2394,8 @@ async function reviveTrashedCalendarItem(existing: ItemInterface, event: Calenda
         title: event.title,
         timeStart: event.timeStart,
         timeEnd: event.timeEnd,
+        // Re-stamp BOTH link fields — see updateExistingCalendarItem for the disconnect+reconnect rationale.
+        calendarIntegrationId: source.integration._id,
         calendarSyncConfigId: source.config._id,
         ...(event.allDay ? { allDay: true } : {}),
         ...pickGCalOwnedFields(event),
@@ -2512,12 +2514,17 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
     //    (e.g. attendees emptied, eventType reset to default).
     const merged: ItemInterface = {
         ...existing,
+        // Always refresh link ids from the live source — symmetric with the always-overwritten
+        // gcal-owned fields below. Gating this on `structurallyNewer` would leave a stale
+        // `calendarIntegrationId` after a disconnect+reconnect when only notes or gcal-owned
+        // fields changed; pushback would then silently no-op in resolvePushContext.
+        calendarIntegrationId: source.integration._id,
+        calendarSyncConfigId: source.config._id,
         ...(structurallyNewer
             ? {
                   title: incomingTitle,
                   timeStart: event.timeStart,
                   timeEnd: event.timeEnd,
-                  calendarSyncConfigId: source.config._id,
                   ...(event.allDay ? { allDay: true } : {}),
               }
             : {}),
