@@ -29,7 +29,11 @@ export interface GCalAttendee extends GCalPerson {
     organizer?: boolean;
     optional?: boolean;
 }
-export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation';
+// `fromGmail` is Google's eventType for events auto-created from Gmail (e.g. an event attached to
+// an email). It surfaces in normal sync payloads — we must accept it on inbound and on echo writes
+// from the client; rejecting it at the strict-mode Zod gate broke every sync push for items
+// auto-imported from Gmail.
+export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation' | 'fromGmail';
 
 /** Keys overwritten verbatim from inbound GCal — replaceById must clear these when absent. */
 export const GCAL_OWNED_ITEM_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType'] as const;
@@ -154,7 +158,7 @@ export interface ItemInterface {
     attendees?: GCalAttendee[];
     /** Denormalized from `attendees.find(a => a.self)?.responseStatus`. GCal-owned with RSVP write exception. */
     responseStatus?: GCalResponseStatus;
-    /** GCal event type — usually `'default'`; outOfOffice/focusTime/workingLocation are special. Server-overwritten. */
+    /** GCal event type — usually `'default'`; outOfOffice/focusTime/workingLocation/fromGmail are special. Server-overwritten. */
     eventType?: GCalEventType;
     /** Server-set to true when an inbound GCal cancellation pushed this item to trash. UI surfaces it as a badge. */
     cancelledByGCal?: boolean;

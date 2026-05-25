@@ -17,7 +17,9 @@ export interface GCalAttendee extends GCalPerson {
     organizer?: boolean;
     optional?: boolean;
 }
-export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation';
+// Mirrors `GCalEventType` in api-server/src/types/entities.ts — `fromGmail` is Google's value
+// for events auto-created from Gmail attachments. Keep in lockstep with the server.
+export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation' | 'fromGmail';
 
 export interface StoredAccount {
     id: string; // Better Auth user ID (UUID)

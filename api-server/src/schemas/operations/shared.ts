@@ -72,4 +72,7 @@ export const gcalAttendeeSchema = z
         optional: z.boolean().optional(),
     })
     .strict();
-export const gcalEventTypeSchema = z.enum(['default', 'outOfOffice', 'focusTime', 'workingLocation']);
+// Keep in lockstep with `GCalEventType` in entities.ts. `fromGmail` is Google's value for
+// events auto-created from Gmail attachments — it appears in real GCal payloads, so rejecting
+// it here would 400 every sync push that echoes such an item back.
+export const gcalEventTypeSchema = z.enum(['default', 'outOfOffice', 'focusTime', 'workingLocation', 'fromGmail']);

@@ -70,7 +70,7 @@ export interface GCalEvent {
     attendees?: GCalAttendee[];
     /** Denormalized from the `self` attendee's responseStatus. RSVP is the one local-write exception. */
     responseStatus?: GCalResponseStatus;
-    /** GCal event type — usually `'default'`; outOfOffice/focusTime/workingLocation are special. */
+    /** GCal event type — usually `'default'`; outOfOffice/focusTime/workingLocation/fromGmail are special. */
     eventType?: GCalEventType;
 }
 

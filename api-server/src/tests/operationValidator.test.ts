@@ -71,6 +71,25 @@ describe('validateOperation — happy path', () => {
         const result = validateOperation({ entityType: 'item', opType: 'delete', entityId: 'x', snapshot: null });
         expect(result.ok).toBe(true);
     });
+
+    // Regression: events Google auto-creates from Gmail attachments arrive with
+    // `eventType: 'fromGmail'`. The strict enum used to reject this, so every sync push that
+    // echoed such an item back to the server 400'd at the validator and never produced an op
+    // — the user's done/trash/move never landed. Keep one test per accepted value so a future
+    // Google-side addition is caught explicitly here, not in production.
+    for (const eventType of ['default', 'outOfOffice', 'focusTime', 'workingLocation', 'fromGmail'] as const) {
+        it(`accepts a calendar item with eventType='${eventType}'`, () => {
+            const snapshot = baseItem({
+                status: 'calendar',
+                timeStart: '2026-05-09T10:00:00Z',
+                timeEnd: '2026-05-09T11:00:00Z',
+                calendarEventId: 'gcal-evt',
+                eventType,
+            });
+            const result = validateOperation(baseOp({}, snapshot));
+            expect(result.ok).toBe(true);
+        });
+    }
 });
 
 describe('validateOperation — status×field matrix', () => {
