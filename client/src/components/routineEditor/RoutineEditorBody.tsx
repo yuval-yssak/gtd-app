@@ -242,6 +242,215 @@ function buildTemplate(form: FormState) {
     };
 }
 
+/** Shape of the calendarSyncConfigId / calendarIntegrationId pair attached to a routine. */
+interface CalendarLink {
+    calendarSyncConfigId?: string;
+    calendarIntegrationId?: string;
+}
+
+/**
+ * Pre-computed values shared by every save branch (reassign / edit-with-startDate-change /
+ * edit-without-startDate-change / create). Built once at the top of `onSave` so each branch
+ * helper operates at a single level of abstraction.
+ */
+export interface SaveContext {
+    trimmedTitle: string;
+    finalRrule: string;
+    routineType: 'nextAction' | 'calendar';
+    template: ReturnType<typeof buildTemplate>;
+    calendarItemTemplate: ReturnType<typeof buildRoutineTemplateFromForm>;
+    calendarLink: CalendarLink;
+    /** Undefined when the form's startDate is empty (treated as "unset" everywhere). */
+    formStartDate: string | undefined;
+}
+
+/**
+ * Decisions derived from comparing the edit form to the stored routine. Bundles
+ * `scheduleChanged` and `resumeOnSave` so the no-startDate-change branch can pass a single
+ * domain value instead of two booleans (CLAUDE.md ≤3 args rule).
+ */
+export interface EditDecision {
+    scheduleChanged: boolean;
+    resumeOnSave: boolean;
+}
+
+/**
+ * Builds the in-place `StoredRoutine` update payload that both edit branches write to IDB.
+ * Centralises the conditional spread plumbing for calendarItemTemplate / calendarLink / startDate
+ * plus the "delete startDate when unset" tweak — previously inlined in two places.
+ *
+ * Exported for unit-testing.
+ */
+export function buildUpdatedRoutine(routine: StoredRoutine, ctx: SaveContext, active: boolean | undefined): StoredRoutine {
+    const updated: StoredRoutine = {
+        ...routine,
+        routineType: ctx.routineType,
+        title: ctx.trimmedTitle,
+        rrule: ctx.finalRrule,
+        template: ctx.template,
+        ...(active !== undefined ? { active } : {}),
+        ...(ctx.calendarItemTemplate !== undefined ? { calendarItemTemplate: ctx.calendarItemTemplate } : {}),
+        ...ctx.calendarLink,
+        ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
+    };
+    if (!ctx.formStartDate) {
+        delete updated.startDate;
+    }
+    return updated;
+}
+
+/**
+ * Builds the `editedFields` payload passed to `splitRoutine` for both the donePast-split and the
+ * scheduleChanged-split call sites. The shape is `Omit<StoredRoutine, '_id'|'userId'|'createdTs'|'updatedTs'|'active'>`
+ * — `splitRoutine` synthesises those itself for the tail routine.
+ *
+ * Exported for unit-testing.
+ */
+export function buildSplitPatch(ctx: SaveContext): Omit<StoredRoutine, '_id' | 'userId' | 'createdTs' | 'updatedTs' | 'active'> {
+    return {
+        routineType: ctx.routineType,
+        title: ctx.trimmedTitle,
+        rrule: ctx.finalRrule,
+        template: ctx.template,
+        ...(ctx.calendarItemTemplate !== undefined ? { calendarItemTemplate: ctx.calendarItemTemplate } : {}),
+        ...ctx.calendarLink,
+        ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
+    };
+}
+
+/** True when `startDate` is set AND strictly after today. The boot-tick will materialise the routine on the day. */
+function isFutureStartDate(startDate: string | undefined): boolean {
+    if (startDate === undefined) {
+        return false;
+    }
+    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+    return startDate > todayStr;
+}
+
+/**
+ * Edit branch: routine.startDate changed. If any past items are done we split (preserve their
+ * schedule); otherwise hard-delete the open past items and update in place, then either
+ * regenerate future calendar items or seed the first nextAction item (skipping when the new
+ * startDate is in the future — the boot-tick will materialise it).
+ *
+ * Exported for unit-testing.
+ */
+export async function saveEditWithStartDateChange(db: IDBPDatabase<MyDB>, routine: StoredRoutine, ctx: SaveContext): Promise<void> {
+    const { donePast, nonDonePast } = await partitionPastItemsByDoneness(db, routine.userId, routine._id);
+    if (donePast.length > 0) {
+        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        await splitRoutine(db, routine.userId, routine, buildSplitPatch(ctx), yesterday);
+        return;
+    }
+    await hardDeletePastItems(db, nonDonePast);
+    const updatedRoutine = buildUpdatedRoutine(routine, ctx, true);
+    await updateRoutine(db, updatedRoutine);
+    await seedAfterStartDateChange(db, updatedRoutine, ctx);
+}
+
+/** Regenerates calendar items or seeds the first nextAction item after a startDate-change update. */
+async function seedAfterStartDateChange(db: IDBPDatabase<MyDB>, updatedRoutine: StoredRoutine, ctx: SaveContext): Promise<void> {
+    if (ctx.routineType === 'calendar') {
+        await deleteAndRegenerateFutureItems(db, updatedRoutine.userId, updatedRoutine);
+        return;
+    }
+    if (isFutureStartDate(ctx.formStartDate)) {
+        return;
+    }
+    await createFirstRoutineItem(db, updatedRoutine.userId, updatedRoutine);
+}
+
+/**
+ * Edit branch: routine.startDate unchanged. When the schedule changed AND past items already
+ * exist for this routine, split at the computed split date. Otherwise update in place and
+ * regenerate calendar items only when needed (schedule changed or resuming from pause).
+ *
+ * Exported for unit-testing.
+ */
+export async function saveEditWithoutStartDateChange(db: IDBPDatabase<MyDB>, routine: StoredRoutine, ctx: SaveContext): Promise<void> {
+    const decision = deriveEditDecision(routine, ctx);
+    const hasPastItems = decision.scheduleChanged ? await routineHasPastItems(db, routine.userId, routine._id) : false;
+    const splitDate = hasPastItems ? computeSplitDate(routine.rrule, routine.createdTs) : null;
+    if (splitDate) {
+        await splitRoutine(db, routine.userId, routine, buildSplitPatch(ctx), splitDate);
+        return;
+    }
+    const updatedRoutine = buildUpdatedRoutine(routine, ctx, decision.resumeOnSave ? true : undefined);
+    await updateRoutine(db, updatedRoutine);
+    if (routine.routineType !== 'calendar' || ctx.routineType !== 'calendar') {
+        return;
+    }
+    await regenerateCalendarItemsForSameTypeEdit(db, updatedRoutine, decision);
+}
+
+/** Computes the `EditDecision` for an edit (schedule-changed + paused→resume). Pure. */
+function deriveEditDecision(routine: StoredRoutine, ctx: SaveContext): EditDecision {
+    return {
+        scheduleChanged: isCalendarScheduleChanged(routine, buildEditIntentFromContext(ctx)),
+        resumeOnSave: !routine.active,
+    };
+}
+
+/** Pure helper: shapes a `SaveContext` into the `RoutineEditIntent` consumed by the decision predicates. */
+function buildEditIntentFromContext(ctx: SaveContext) {
+    return {
+        routineType: ctx.routineType,
+        rrule: ctx.finalRrule,
+        timeOfDay: getTemplateTimeOfDay(ctx.calendarItemTemplate),
+        duration: getTemplateDuration(ctx.calendarItemTemplate),
+        allDay: getTemplateAllDay(ctx.calendarItemTemplate),
+        startDate: ctx.formStartDate,
+    };
+}
+
+/**
+ * Already inside a confirmed calendar→calendar edit. Picks between full regen and notes-only
+ * regen based on the decision. Caller has already checked both type sides are calendar.
+ */
+async function regenerateCalendarItemsForSameTypeEdit(db: IDBPDatabase<MyDB>, updatedRoutine: StoredRoutine, decision: EditDecision): Promise<void> {
+    if (decision.scheduleChanged || decision.resumeOnSave) {
+        await deleteAndRegenerateFutureItems(db, updatedRoutine.userId, updatedRoutine);
+        return;
+    }
+    await regenerateFutureItemContent(db, updatedRoutine.userId, updatedRoutine);
+}
+
+/**
+ * Create branch: persist the new routine and seed its first item(s). Errors are logged, not thrown.
+ *
+ * Exported for unit-testing.
+ */
+export async function saveCreate(db: IDBPDatabase<MyDB>, userId: string, ctx: SaveContext): Promise<void> {
+    const created = await createRoutine(db, {
+        userId,
+        routineType: ctx.routineType,
+        rrule: ctx.finalRrule,
+        template: ctx.template,
+        title: ctx.trimmedTitle,
+        active: true,
+        ...(ctx.calendarItemTemplate !== undefined ? { calendarItemTemplate: ctx.calendarItemTemplate } : {}),
+        ...ctx.calendarLink,
+        ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
+    });
+    try {
+        await seedNewRoutineFirstItems(db, created, ctx);
+    } catch (err) {
+        console.error('[routine] failed to create items:', err);
+    }
+}
+
+/** Seeds the first item for a newly-created routine — calendar fills the horizon; nextAction seeds one (unless future). */
+async function seedNewRoutineFirstItems(db: IDBPDatabase<MyDB>, created: StoredRoutine, ctx: SaveContext): Promise<void> {
+    if (ctx.routineType === 'calendar') {
+        await generateCalendarItemsToHorizon(db, created.userId, created);
+        return;
+    }
+    if (isFutureStartDate(ctx.formStartDate)) {
+        return;
+    }
+    await createFirstRoutineItem(db, created.userId, created);
+}
+
 /** Resolves the body-class for the chrome variant. */
 function bodyClassFor(chrome: RoutineEditorChrome): string {
     if (chrome === 'expand') return styles.bodyExpand;
@@ -312,167 +521,61 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         }
 
         startSaving(async () => {
-            const finalRrule = buildFinalRrule(form.rrule, form.endsMode, form.endsDate, form.endsCount);
-            const template = buildTemplate(form);
-            const calendarItemTemplate = buildRoutineTemplateFromForm(form);
-            const calendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
-
-            if (isEdit) {
-                if (ownerUserId !== routine.userId) {
-                    startRoutineReassignInBackground({
-                        routine,
-                        toUserId: ownerUserId,
-                        title: trimmedTitle,
-                        rrule: finalRrule,
-                        routineType: form.routineType,
-                        template,
-                        ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                        ...(form.startDate ? { startDate: form.startDate } : {}),
-                        ...(calendarLink.calendarIntegrationId !== undefined ? { targetIntegrationId: calendarLink.calendarIntegrationId } : {}),
-                        ...(calendarLink.calendarSyncConfigId !== undefined ? { targetSyncConfigId: calendarLink.calendarSyncConfigId } : {}),
-                        resumeOnSave: !routine.active,
-                    });
-                    onClose();
-                    return;
-                }
-                const isCalendarEdit = form.routineType === 'calendar';
-                const editIntent = {
-                    routineType: form.routineType,
-                    rrule: finalRrule,
-                    // All-day calendarItemTemplate has neither timeOfDay nor duration. The narrow
-                    // helper below disambiguates both shapes safely without an `as` cast.
-                    timeOfDay: getTemplateTimeOfDay(calendarItemTemplate),
-                    duration: getTemplateDuration(calendarItemTemplate),
-                    allDay: getTemplateAllDay(calendarItemTemplate),
-                    startDate: form.startDate || undefined,
-                };
-                const scheduleChanged = isCalendarScheduleChanged(routine, editIntent);
-                const startDateChanged = isStartDateChanged(routine, editIntent);
-                const formStartDate = form.startDate || undefined;
-                const resumeOnSave = !routine.active;
-
-                if (startDateChanged) {
-                    const { donePast, nonDonePast } = await partitionPastItemsByDoneness(db, routine.userId, routine._id);
-                    if (donePast.length > 0) {
-                        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
-                        await splitRoutine(
-                            db,
-                            routine.userId,
-                            routine,
-                            {
-                                routineType: form.routineType,
-                                title: trimmedTitle,
-                                rrule: finalRrule,
-                                template,
-                                ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                                ...calendarLink,
-                                ...(formStartDate ? { startDate: formStartDate } : {}),
-                            },
-                            yesterday,
-                        );
-                    } else {
-                        await hardDeletePastItems(db, nonDonePast);
-                        const updatedRoutine: StoredRoutine = {
-                            ...routine,
-                            routineType: form.routineType,
-                            title: trimmedTitle,
-                            rrule: finalRrule,
-                            template,
-                            active: true,
-                            ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                            ...calendarLink,
-                            ...(formStartDate ? { startDate: formStartDate } : {}),
-                        };
-                        if (!formStartDate) {
-                            delete updatedRoutine.startDate;
-                        }
-                        await updateRoutine(db, updatedRoutine);
-                        if (isCalendarEdit) {
-                            await deleteAndRegenerateFutureItems(db, routine.userId, updatedRoutine);
-                        } else {
-                            const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
-                            const futureStart = formStartDate !== undefined && formStartDate > todayStr;
-                            if (!futureStart) {
-                                await createFirstRoutineItem(db, routine.userId, updatedRoutine);
-                            }
-                        }
-                    }
-                } else {
-                    const hasPastItems = scheduleChanged ? await routineHasPastItems(db, routine.userId, routine._id) : false;
-                    const splitDate = hasPastItems ? computeSplitDate(routine.rrule, routine.createdTs) : null;
-
-                    if (splitDate) {
-                        await splitRoutine(
-                            db,
-                            routine.userId,
-                            routine,
-                            {
-                                routineType: form.routineType,
-                                title: trimmedTitle,
-                                rrule: finalRrule,
-                                template,
-                                ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                                ...calendarLink,
-                                ...(formStartDate ? { startDate: formStartDate } : {}),
-                            },
-                            splitDate,
-                        );
-                    } else {
-                        const updatedRoutine: StoredRoutine = {
-                            ...routine,
-                            routineType: form.routineType,
-                            title: trimmedTitle,
-                            rrule: finalRrule,
-                            template,
-                            ...(resumeOnSave ? { active: true } : {}),
-                            ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                            ...calendarLink,
-                            ...(formStartDate ? { startDate: formStartDate } : {}),
-                        };
-                        if (!formStartDate) {
-                            delete updatedRoutine.startDate;
-                        }
-                        await updateRoutine(db, updatedRoutine);
-
-                        if (isCalendarEdit && routine.routineType === 'calendar') {
-                            if (scheduleChanged || resumeOnSave) {
-                                await deleteAndRegenerateFutureItems(db, routine.userId, updatedRoutine);
-                            } else {
-                                await regenerateFutureItemContent(db, routine.userId, updatedRoutine);
-                            }
-                        }
-                    }
-                }
-            } else {
-                const formStartDate = form.startDate || undefined;
-                const created = await createRoutine(db, {
-                    userId,
-                    routineType: form.routineType,
-                    rrule: finalRrule,
-                    template,
-                    title: trimmedTitle,
-                    active: true,
-                    ...(calendarItemTemplate !== undefined ? { calendarItemTemplate } : {}),
-                    ...calendarLink,
-                    ...(formStartDate ? { startDate: formStartDate } : {}),
-                });
-
-                const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
-                const futureStart = formStartDate !== undefined && formStartDate > todayStr;
-                try {
-                    if (form.routineType === 'calendar') {
-                        await generateCalendarItemsToHorizon(db, userId, created);
-                    } else if (!futureStart) {
-                        await createFirstRoutineItem(db, userId, created);
-                    }
-                } catch (err) {
-                    console.error('[routine] failed to create items:', err);
-                }
+            const ctx = buildSaveContext();
+            // Reassign is fire-and-forget: it owns its own onSaved() via runReassignWithOverlay's
+            // .then(). Bailing here keeps the outer postlude from double-firing onSaved/onClose
+            // before the reassign has actually committed.
+            if (routine && ownerUserId !== routine.userId) {
+                dispatchReassign(routine, ctx);
+                return;
             }
-
+            if (routine) {
+                await dispatchEditSameOwner(routine, ctx);
+            } else {
+                await saveCreate(db, userId, ctx);
+            }
             await onSaved();
             onClose();
         });
+
+        function buildSaveContext(): SaveContext {
+            const finalRrule = buildFinalRrule(form.rrule, form.endsMode, form.endsDate, form.endsCount);
+            const calendarLink: CalendarLink = form.routineType === 'calendar' ? resolveCalendarLink(form.calendarSyncConfigId, calendarOptions) : {};
+            return {
+                trimmedTitle,
+                finalRrule,
+                routineType: form.routineType,
+                template: buildTemplate(form),
+                calendarItemTemplate: buildRoutineTemplateFromForm(form),
+                calendarLink,
+                formStartDate: form.startDate || undefined,
+            };
+        }
+
+        async function dispatchEditSameOwner(currentRoutine: StoredRoutine, ctx: SaveContext): Promise<void> {
+            if (isStartDateChanged(currentRoutine, buildEditIntentFromContext(ctx))) {
+                await saveEditWithStartDateChange(db, currentRoutine, ctx);
+                return;
+            }
+            await saveEditWithoutStartDateChange(db, currentRoutine, ctx);
+        }
+
+        function dispatchReassign(currentRoutine: StoredRoutine, ctx: SaveContext): void {
+            startRoutineReassignInBackground({
+                routine: currentRoutine,
+                toUserId: ownerUserId,
+                title: ctx.trimmedTitle,
+                rrule: ctx.finalRrule,
+                routineType: ctx.routineType,
+                template: ctx.template,
+                ...(ctx.calendarItemTemplate !== undefined ? { calendarItemTemplate: ctx.calendarItemTemplate } : {}),
+                ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
+                ...(ctx.calendarLink.calendarIntegrationId !== undefined ? { targetIntegrationId: ctx.calendarLink.calendarIntegrationId } : {}),
+                ...(ctx.calendarLink.calendarSyncConfigId !== undefined ? { targetSyncConfigId: ctx.calendarLink.calendarSyncConfigId } : {}),
+                resumeOnSave: !currentRoutine.active,
+            });
+            onClose();
+        }
     }
 
     /**
