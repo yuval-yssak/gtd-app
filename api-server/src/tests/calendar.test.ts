@@ -3901,6 +3901,55 @@ describe('GoogleCalendarProvider.getExceptions — rebased-master id normalizati
     });
 });
 
+// Belt-and-suspenders for the past-cutoff fix: the provider also clamps `timeMin` so a fresh
+// reconnect with `since` defaulted to epoch doesn't drag back every modified instance since 1970.
+// The consumer-side guard in `applyExceptionToItems` would still catch ancient orphans, but the
+// clamp keeps the GCal API payload bounded.
+describe('GoogleCalendarProvider.getExceptions — timeMin clamping', () => {
+    function spyOnEventsList() {
+        const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
+        type ListCall = (params: unknown) => Promise<{ data: { items?: unknown[] } }>;
+        const listSpy = vi.spyOn(eventsProto, 'list' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ListCall>>;
+        listSpy.mockResolvedValue({ data: { items: [] } });
+        return listSpy;
+    }
+
+    it('clamps `since = epoch` up to ~30 days before now (fresh reconnect path)', async () => {
+        const listSpy = spyOnEventsList();
+        const provider = new GoogleCalendarProvider(makeIntegration('user-1'));
+        await provider.getExceptions('master-1', 'cal-1', dayjs(0).toISOString());
+
+        expect(listSpy).toHaveBeenCalledTimes(1);
+        const callArg = listSpy.mock.calls[0]?.[0] as { timeMin: string };
+        const expectedFloor = dayjs().subtract(30, 'day');
+        // Within a couple seconds tolerance to absorb test runtime between the call and our assertion.
+        expect(dayjs(callArg.timeMin).diff(expectedFloor, 'second')).toBeGreaterThanOrEqual(-2);
+        expect(dayjs(callArg.timeMin).diff(expectedFloor, 'second')).toBeLessThanOrEqual(2);
+    });
+
+    it('preserves a recent `since` (within the 30-day window) — no clamping', async () => {
+        const listSpy = spyOnEventsList();
+        const provider = new GoogleCalendarProvider(makeIntegration('user-1'));
+        const recent = dayjs().subtract(7, 'day').toISOString();
+        await provider.getExceptions('master-1', 'cal-1', recent);
+
+        const callArg = listSpy.mock.calls[0]?.[0] as { timeMin: string };
+        expect(callArg.timeMin).toBe(recent);
+    });
+
+    it('clamps a `since` just past the 30-day floor — guards against off-by-one regressions in the comparison direction', async () => {
+        const listSpy = spyOnEventsList();
+        const provider = new GoogleCalendarProvider(makeIntegration('user-1'));
+        const justOverFloor = dayjs().subtract(31, 'day').toISOString();
+        await provider.getExceptions('master-1', 'cal-1', justOverFloor);
+
+        const callArg = listSpy.mock.calls[0]?.[0] as { timeMin: string };
+        expect(callArg.timeMin).not.toBe(justOverFloor);
+        const expectedFloor = dayjs().subtract(30, 'day');
+        expect(Math.abs(dayjs(callArg.timeMin).diff(expectedFloor, 'second'))).toBeLessThanOrEqual(2);
+    });
+});
+
 // ─── updateTokens ──────────────────────────────────────────────────────────
 
 describe('calendarIntegrationsDAO.updateTokens', () => {
@@ -8039,6 +8088,139 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         // directly catches the path having been reached at all.)
         const createOps = await operationsDAO.findArray({ user: userId, entityType: 'item', opType: 'create' });
         expect(createOps).toHaveLength(0);
+    });
+
+    it('past-cutoff guard (REGRESSION): orphan-create is skipped for exceptions whose date is years in the past', async () => {
+        // Repro for the fresh-reconnect bug: a yearly-birthday routine has `* […]` modified
+        // exceptions from 2021/2022. On first reconnect, `getExceptions` returns them (since
+        // lastSyncedTs is unset → epoch). Without the past-cutoff guard, each one materializes
+        // as an ancient `calendar` item via `createItemForOrphanedException`.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+        // No item seeded for the 2021 occurrence — orphan-create branch would normally fire.
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2021-09-24',
+                type: 'modified',
+                googleEventId: 'gcal-evt-master_20210924',
+                title: '* [Yael’s Birthday]',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // No ancient `calendar` item materialized.
+        const items = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(items).toHaveLength(0);
+
+        // Positive assertion: no item-create op was recorded either.
+        const createOps = await operationsDAO.findArray({ user: userId, entityType: 'item', opType: 'create' });
+        expect(createOps).toHaveLength(0);
+    });
+
+    it('past exception is still applied to an existing item (modify path is not blocked by the cutoff)', async () => {
+        // The cutoff only short-circuits orphan-create. If an item already exists for the past
+        // occurrence (e.g. a routine generated it before today), a modified exception must still
+        // be applied so historical edits aren't silently dropped.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20210924';
+        await itemsDAO.insertOne({
+            _id: 'item-past-existing',
+            user: userId,
+            status: 'calendar',
+            title: 'Yael’s Birthday',
+            routineId: 'routine-1',
+            calendarInstanceEventId: instanceEventId,
+            timeStart: '2021-09-24',
+            timeEnd: '2021-09-25',
+            allDay: true,
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: '2021-09-24', type: 'modified', googleEventId: instanceEventId, title: '* [Yael’s Birthday]' },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Existing item picked up the title edit.
+        const updated = await itemsDAO.findByOwnerAndId('item-past-existing', userId);
+        expect(updated?.title).toBe('* [Yael’s Birthday]');
+        // No phantom duplicate created.
+        const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(allForRoutine).toHaveLength(1);
+    });
+
+    it('past-cutoff does NOT mis-flag a today, all-day exception in a west-of-UTC zone (LA)', async () => {
+        // Regression for the date-vs-datetime comparison bug. The bug only fires in zones west of
+        // UTC: `originalDate = today_LA` parses to `today_LA T00:00:00Z`, while
+        // `startOfTodayInTz('America/Los_Angeles') = today_LA T07:00:00Z` (PDT). Pre-fix:
+        // `T00:00:00Z < T07:00:00Z` → true → mis-flagged as past → orphan-create silently dropped.
+        // Post-fix: YYYY-MM-DD string comparison in the calendar's timezone returns false.
+        //
+        // Call applyExceptionToItems directly so we control `ctx.timeZone` cleanly without having
+        // to override the globally-mocked `getCalendarTimeZone` for a single test.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const routine = await setupRoutineAndIntegration(userId);
+
+        const todayInLA = dayjs().tz('America/Los_Angeles').format('YYYY-MM-DD');
+        const instanceEventId = `gcal-evt-master_${todayInLA.replaceAll('-', '')}`;
+        const { applyExceptionToItems } = await import('../routes/calendar.js');
+        const ctx: Parameters<typeof applyExceptionToItems>[2] = {
+            userId,
+            now: dayjs().toISOString(),
+            ops: [],
+            timeZone: 'America/Los_Angeles',
+        };
+        await applyExceptionToItems(
+            routine,
+            { originalDate: todayInLA, type: 'modified', googleEventId: instanceEventId, title: 'Today (all-day, edited)' },
+            ctx,
+        );
+
+        const created = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(created).toHaveLength(1);
+    });
+
+    it('past-cutoff does NOT block a move FROM the past INTO the future', async () => {
+        // newTimeStart wins over originalDate when present: a series instance whose original date
+        // was in the past but has been moved to a future date should still materialize via
+        // orphan-create. Otherwise users would lose calendar items they explicitly rescheduled.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        const instanceEventId = 'gcal-evt-master_20210924';
+        const futureStart = dayjs().add(60, 'day').format('YYYY-MM-DDTHH:mm:ss');
+        const futureEnd = dayjs().add(60, 'day').add(30, 'minute').format('YYYY-MM-DDTHH:mm:ss');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2021-09-24',
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: futureStart,
+                newTimeEnd: futureEnd,
+                title: 'Yael’s Birthday (rescheduled)',
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const created = await itemsDAO.findArray({ user: userId, routineId: 'routine-1', calendarInstanceEventId: instanceEventId } as never);
+        expect(created).toHaveLength(1);
+        const [item] = created;
+        if (!item) throw new Error('expected the rescheduled occurrence to materialize');
+        expect(item.timeStart).toBe(futureStart);
     });
 
     it('legacy row moved twice (no calendarInstanceEventId): first move via fallback, second move converges with no duplicate', async () => {

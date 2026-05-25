@@ -66,8 +66,8 @@ function parseUnlinkAction(raw: string | undefined): UnlinkAction | null {
     }
     return null;
 }
-export type SyncContext = { userId: string; now: string; ops: OperationInterface[] };
-type RoutineSyncCtx = { userId: string; since: string; now: string; calendarId: string; ops: OperationInterface[] };
+export type SyncContext = { userId: string; now: string; ops: OperationInterface[]; timeZone?: string };
+type RoutineSyncCtx = { userId: string; since: string; now: string; calendarId: string; ops: OperationInterface[]; timeZone?: string };
 type UnlinkSideEffectCtx = { userId: string; now: string };
 /** Groups the integration + sync config identity needed by import/upsert functions. */
 export type CalendarSource = { integration: CalendarIntegrationInterface; config: CalendarSyncConfigInterface };
@@ -1316,7 +1316,14 @@ async function syncSingleCalendar(
         $or: [{ calendarSyncConfigId: config._id }, { calendarSyncConfigId: { $exists: false } }],
     });
 
-    const syncCtx: RoutineSyncCtx = { userId: ctx.userId, since, now: ctx.now, calendarId: config.calendarId, ops: ctx.ops };
+    const syncCtx: RoutineSyncCtx = {
+        userId: ctx.userId,
+        since,
+        now: ctx.now,
+        calendarId: config.calendarId,
+        ops: ctx.ops,
+        ...(config.timeZone ? { timeZone: config.timeZone } : {}),
+    };
     await Promise.all(linkedRoutines.map((routine) => syncRoutineExceptions(routine, provider, syncCtx)));
 
     const source: CalendarSource = { integration, config };
@@ -2622,6 +2629,30 @@ async function updateItemsAndRecordOps(ctx: SyncContext, query: { filter: Record
     ctx.ops.push(...ops);
 }
 
+/**
+ * Returns true if a `modified` exception's effective date is strictly before today in the
+ * calendar's timezone. Used to short-circuit orphan-create for ancient exceptions surfaced by a
+ * fresh reconnect.
+ *
+ * Compares `YYYY-MM-DD` strings rather than parsed timestamps. `ex.originalDate` is a date-only
+ * `YYYY-MM-DD` (`dayjs(date)` parses it as `T00:00:00Z` regardless of zone), so an ISO datetime
+ * comparison against `startOfDay` for a TZ east of UTC would mis-flag a "today, all-day in TZ"
+ * exception as past. `newTimeStart` falls back to `newTimeEnd` so a reschedule that carried only
+ * the new end (theoretically possible per the `GCalException` type, even though the current parser
+ * always sets both) isn't dropped.
+ */
+function isExceptionBeforeToday(ex: GCalException, ctx: SyncContext): boolean {
+    const tz = ctx.timeZone ?? 'UTC';
+    const todayInTz = dayjs(ctx.now).tz(tz).format('YYYY-MM-DD');
+    // Both date-only and date-time values normalize to YYYY-MM-DD via `slice(0, 10)` — using
+    // `dayjs.format` on a UTC-suffixed datetime would shift the calendar date when the runner's
+    // local zone differs. GCal returns instance `start.dateTime` in the event's own offset, so
+    // its first 10 chars match the calendar's wall-clock date for that occurrence.
+    const effective = ex.newTimeStart ?? ex.newTimeEnd ?? ex.originalDate;
+    const effectiveDate = effective.length >= 10 ? effective.slice(0, 10) : effective;
+    return effectiveDate < todayInTz;
+}
+
 /** Applies a single GCal exception's side effects to the items collection. */
 export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): Promise<void> {
     if (!ISO_DATE_RE.test(ex.originalDate)) {
@@ -2653,6 +2684,14 @@ export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalE
         };
         if (hasAtLeastOne(target.matches)) {
             await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
+            return;
+        }
+        // Past-cutoff guard: on a fresh reconnect (lastSyncedTs unset), GCal returns every modified
+        // instance since 1970 — yearly-birthday routines with old `* […]` exceptions would otherwise
+        // materialize as ancient calendar items via the orphan path. Mirrors the
+        // `startOfTodayInTz`/`isPastEvent` guard used for standalone events in `upsertCalendarItem`.
+        if (isExceptionBeforeToday(ex, ctx)) {
+            console.log(`[gcal-sync] applyExceptionToItems: skipped past-cutoff exception | routineId=${routine._id} date=${ex.originalDate}`);
             return;
         }
         // Create-on-miss closes the gap where applyExceptionToItems silently dropped moves —
@@ -2961,7 +3000,7 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
     const updatedExceptions = exceptions.reduce((acc, ex) => mergeExceptions(acc, ex), [...(routine.routineExceptions ?? [])]);
     // Apply item side-effects in parallel — each exception targets a different date so there
     // are no write conflicts between them.
-    const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops };
+    const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops, ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}) };
     await Promise.all(exceptions.map((ex) => applyExceptionToItems(routine, ex, syncCtx)));
 
     // Preserve `updatedTs`: exception writes are sync bookkeeping, not user/app edits. Bumping

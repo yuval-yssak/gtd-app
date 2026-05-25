@@ -703,10 +703,16 @@ export class GoogleCalendarProvider implements CalendarProvider {
         // orderBy: 'startTime' requires singleEvents: true.
         // timeMax caps the window to 1 year ahead of NOW — anchoring to `since` would give a useless
         // window on the first sync (since defaults to 1970-01-01 when lastSyncedTs is unset).
+        // timeMin is clamped to at most 30 days before now, even when `since` is epoch. Without the
+        // floor, a fresh reconnect (`lastSyncedTs` unset) would return every modified instance from
+        // 1970 onward — for yearly-birthday routines that's dozens of `* […]` past exceptions that
+        // the orphan-create path would otherwise materialize as ancient calendar items.
+        const floor = dayjs().subtract(30, 'day').toISOString();
+        const timeMin = dayjs(since).isAfter(dayjs(floor)) ? since : floor;
         const timeMax = dayjs().add(1, 'year').toISOString();
         const response = await cal.events.list({
             calendarId,
-            timeMin: since,
+            timeMin,
             timeMax,
             singleEvents: true,
             showDeleted: true,
