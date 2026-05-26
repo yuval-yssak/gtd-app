@@ -124,28 +124,60 @@ test.describe('reassign — Step 5', () => {
         });
     });
 
-    test('person: reassign a→b moves the person; referencing items keep the cross-user reference', async ({ browser }) => {
+    test('person reassign is rejected — person stays under fromUserId, referencing item is untouched', async ({ browser }) => {
         const stamp = dayjs().valueOf();
         const emailA = `reassign-p-a-${stamp}@example.com`;
         const emailB = `reassign-p-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
             const personId = await seedPersonOnServer(active.userId, 'Sam');
-            const itemId = await seedItemOnServer(active.userId, 'Lunch with Sam', { peopleIds: [personId] });
+            const itemId = await seedItemOnServer(active.userId, 'Lunch with Sam', { status: 'nextAction', peopleIds: [personId] });
             await reloadInbox(page);
             await flushDevice(page);
 
             const result = await gtd.reassign(page, { entityType: 'person', entityId: personId, fromUserId: active.userId, toUserId: secondary.userId });
-            expect(result.ok).toBe(true);
-            if (result.ok) {
-                expect(result.crossUserReferences?.peopleIds).toContain(itemId);
+            expect(result.ok).toBe(false);
+            if (!result.ok) {
+                expect(result.status).toBe(400);
             }
 
-            // Person moved to secondary; the referencing item stays under active and still references the moved person.
-            await expect.poll(async () => (await fetchServerEntity('people', personId))?.user, { timeout: 5_000 }).toBe(secondary.userId);
+            // Nothing moved: person stays under active, referencing item stays under active.
+            const person = await fetchServerEntity('people', personId);
+            expect(person?.user).toBe(active.userId);
             const referencingItem = await fetchServerEntity('items', itemId);
             expect(referencingItem?.user).toBe(active.userId);
             expect(referencingItem?.peopleIds).toContain(personId);
+        });
+    });
+
+    test('item reassign with peopleIds: auto-relinks ref into secondary by creating a mirror person', async ({ browser }) => {
+        const stamp = dayjs().valueOf();
+        const emailA = `relink-a-${stamp}@example.com`;
+        const emailB = `relink-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
+        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
+            // Seed Sam under active, plus a nextAction item that references Sam.
+            const samUnderActive = await seedPersonOnServer(active.userId, 'Sam');
+            const itemId = await seedItemOnServer(active.userId, 'Lunch with Sam', { status: 'nextAction', peopleIds: [samUnderActive] });
+            await reloadInbox(page);
+            await flushDevice(page);
+
+            const result = await gtd.reassign(page, { entityType: 'item', entityId: itemId, fromUserId: active.userId, toUserId: secondary.userId });
+            expect(result.ok).toBe(true);
+
+            // Item moved to secondary.
+            await expect.poll(async () => (await fetchServerEntity('items', itemId))?.user, { timeout: 5_000 }).toBe(secondary.userId);
+            const moved = await fetchServerEntity('items', itemId);
+            // peopleIds has been rewritten — the new id is NOT the original samUnderActive id (it's a fresh mirror under secondary).
+            expect(moved?.peopleIds).toBeDefined();
+            expect(moved?.peopleIds).toHaveLength(1);
+            const newPersonId = moved?.peopleIds?.[0];
+            expect(newPersonId).not.toBe(samUnderActive);
+            // The mirror person is owned by secondary; the original sam under active is untouched.
+            const mirror = await fetchServerEntity('people', newPersonId ?? '');
+            expect(mirror?.user).toBe(secondary.userId);
+            const original = await fetchServerEntity('people', samUnderActive);
+            expect(original?.user).toBe(active.userId);
         });
     });
 

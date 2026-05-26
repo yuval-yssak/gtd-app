@@ -360,9 +360,16 @@ Routines are recurring task templates. They have a richer shape than items / peo
 
 ### `POST /v1/reassign` — move an entity to another user
 
-Moves an item / routine / person / workContext from the calling token's user (`fromUserId`) to a different user. **Two-token consent gesture**: the caller's `reassign`-scoped token signs the request, AND the recipient's `reassign.accept`-scoped token rides along in `X-Reassign-Recipient-Token`. Both tokens must be live, distinct, and the recipient must belong to `toUserId`.
+Moves an **item** or **routine** from the calling token's user (`fromUserId`) to a different user. **Two-token consent gesture**: the caller's `reassign`-scoped token signs the request, AND the recipient's `reassign.accept`-scoped token rides along in `X-Reassign-Recipient-Token`. Both tokens must be live, distinct, and the recipient must belong to `toUserId`.
 
 This is the bearer-token analog of `/sync/reassign`'s device-multi-session check. A stolen `reassign` token cannot dump items into an arbitrary account — the attacker would also need a live `reassign.accept` token from the destination user.
+
+**People and workContexts are not reassignable.** When the moved item/routine carries `peopleIds`, `workContextIds`, or `waitingForPersonId`, the server resolves each ref into the recipient's account:
+
+1. Reuse an existing record where it can — person matched email-first then name (both exact, case-sensitive); workContext matched by exact, case-sensitive name.
+2. Otherwise, create a new mirror record under the recipient with the source row's display fields (`name`, plus `email`/`phone`/`notes`/`externalCalendarId` for people).
+
+The source user's people and workContexts are never modified or deleted by a reassign — they keep their address book and context list intact. Stale ids (refs pointing at records the source user no longer owns) are passed through unchanged.
 
 **Request**
 
@@ -382,7 +389,7 @@ Content-Type: application/json
 
 | Field | Required | Notes |
 |---|---|---|
-| `entityType` | yes | `item`, `routine`, `person`, or `workContext`. |
+| `entityType` | yes | `item` or `routine`. (`person` / `workContext` are intentionally rejected — see auto-relink above.) |
 | `entityId` | yes | Target row, must belong to the calling user. |
 | `toUserId` | yes | Must differ from the calling user; must equal `X-Reassign-Recipient-Token`'s user. |
 | `editPatch` | no | Whitelisted edits applied atomically (item path); see `ReassignItemEditPatch` in `api-server/src/lib/reassignEntity.ts`. |
@@ -397,7 +404,7 @@ Content-Type: application/json
 | `400` | `same_user` | `toUserId` equals the calling token's user. |
 | `400` | `recipient_consent_required` | `X-Reassign-Recipient-Token` header is missing. |
 | `400` | `same_token` | Recipient header carries the same token row as the caller. |
-| `400` | `validation_failed` | The reassigned snapshot fails strict-mode Zod / status×field validation. The source row is preserved (no torn move). |
+| `400` | `validation_failed` | The reassigned snapshot fails strict-mode Zod / status×field validation, OR `entityType` is `person`/`workContext` (these are not reassignable). The source row is preserved (no torn move). |
 | `401` | `invalid_recipient_token` | Recipient header value did not resolve to a live token. |
 | `403` | `forbidden_scope` | Caller token lacks `reassign`. |
 | `403` | `recipient_token_mismatch` | Recipient token's user does not equal `toUserId`. |

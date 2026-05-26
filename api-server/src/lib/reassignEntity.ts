@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import type { CalendarProvider } from '../calendarProviders/CalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
@@ -98,7 +99,17 @@ export async function reassignEntity(params: ReassignParams, buildProvider: Reas
     }
 }
 
-/** Pure dispatcher — kept separate so reassignEntity can wrap the whole switch in one try/catch. */
+/**
+ * Pure dispatcher — kept separate so reassignEntity can wrap the whole switch in one try/catch.
+ *
+ * People and workContexts are intentionally NOT reassignable. The previous "move the entity, leave
+ * dangling cross-user refs, surface them in `crossUserReferences`" gesture put the burden on
+ * callers to either strip or synthesize the broken pointers. The new model inverts that: when an
+ * item or routine carrying `peopleIds`/`workContextIds` is moved, the orchestrator resolves each
+ * referenced entity into the target user's account (find-or-create by email/name), so the moved
+ * item lands with valid local references and the source user keeps an unchanged copy of the person
+ * or workContext they originally owned.
+ */
 async function dispatchByEntityType(params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<ReassignResult> {
     switch (params.entityType) {
         case 'item':
@@ -106,9 +117,13 @@ async function dispatchByEntityType(params: ReassignParams, buildProvider: Reass
         case 'routine':
             return reassignRoutine(params, buildProvider);
         case 'person':
-            return reassignPerson(params);
         case 'workContext':
-            return reassignWorkContext(params);
+            return {
+                ok: false,
+                status: 400,
+                error: 'persons and workContexts cannot be reassigned — items/routines that reference them are auto-relinked into the target user on move',
+                code: 'validation_failed',
+            };
     }
 }
 
@@ -125,19 +140,29 @@ async function reassignItem(params: ReassignParams, buildProvider: ReassignProvi
     // Apply the user's edits to the in-memory item before any GCal call so create-on-target
     // reflects the updated title/time, and persistItemMove writes the patched snapshot.
     const patchedItem = applyItemEditPatch(item, params.editPatch);
+    // Run all early-rejection preconditions BEFORE relinking — once we commit mirror people /
+    // workContexts under the target user there's no rollback path, so a 400 returned after the
+    // relink would leave orphan records in the recipient's address book.
     const isCalendarLinked = Boolean(patchedItem.calendarEventId);
     if (isCalendarLinked && !params.targetCalendar) {
         return { ok: false, status: 400, error: 'targetCalendar is required for calendar-linked items' };
     }
+    // Reference relinking runs after the edit patch so values the user explicitly typed in the
+    // dialog still flow through find-or-create against the target user's people / workContext space.
+    // Calendar-linked failures past this point can still orphan mirrors (GCal create-on-target,
+    // for example) — that's an accepted limitation since the recipient simply gains an extra
+    // contact/context they can keep or delete; the alternative would be a multi-step rollback
+    // dance that doesn't pay for itself given how rare those failures are.
+    const relinkedItem = await relinkItemReferences(patchedItem, buildRelinkContext(params));
     if (isCalendarLinked && params.targetCalendar) {
-        const moved = await moveItemAcrossCalendars(patchedItem, params, buildProvider);
+        const moved = await moveItemAcrossCalendars(relinkedItem, params, buildProvider);
         if (!moved.ok) {
             return moved;
         }
         await persistItemMove(moved.item, params);
         return { ok: true };
     }
-    await persistItemMove(patchedItem, params);
+    await persistItemMove(relinkedItem, params);
     return { ok: true };
 }
 
@@ -482,25 +507,29 @@ async function reassignRoutine(params: ReassignParams, _buildProvider: ReassignP
  * recurring-event re-linking is deferred.
  */
 async function persistRoutineMove(routine: RoutineInterface, params: ReassignParams): Promise<void> {
-    const now = dayjs().toISOString();
-    const deviceId = params.deviceId ?? 'server';
     // Destructure to drop the keys entirely (rather than assigning undefined) to keep
     // exactOptionalPropertyTypes happy.
     const { calendarEventId: _ce, calendarIntegrationId: _ci, calendarSyncConfigId: _cs, ...routineWithoutCalLinks } = routine;
     const patched = applyRoutineEditPatch(routineWithoutCalLinks as RoutineInterface, params.editRoutinePatch);
-    const newSnapshot: RoutineInterface = { ...patched, user: params.toUserId, updatedTs: now };
+    // Relink template.workContextIds / peopleIds AFTER the edit patch — same rationale as the item
+    // path: explicit dialog edits flow through the same find-or-create as snapshot-inherited refs.
+    // buildRelinkContext also provides the per-batch dedup caches that keep two ids sharing an
+    // email/name from racing duplicate mirror creates.
+    const ctx = buildRelinkContext(params);
+    const relinked = await relinkRoutineReferences(patched, ctx);
+    const newSnapshot: RoutineInterface = { ...relinked, user: params.toUserId, updatedTs: ctx.now };
     preValidateTargetSnapshot({ entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot });
     // Same source-delete-then-target-create discipline as persistItemMove — see that helper for
     // the rationale on why each leg flows through applyAndPublishOperation rather than the DAO.
     await applyAndPublishOperation(
         params.fromUserId,
         { entityType: 'routine', entityId: params.entityId, snapshot: null, opType: 'delete' },
-        { deviceId, now, strict: true },
+        { deviceId: ctx.deviceId, now: ctx.now, strict: true },
     );
     await applyAndPublishOperation(
         params.toUserId,
         { entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot, opType: 'create' },
-        { deviceId, now, strict: true },
+        { deviceId: ctx.deviceId, now: ctx.now, strict: true },
     );
 }
 
@@ -537,76 +566,219 @@ function applyRoutineEditPatch(routine: RoutineInterface, patch: ReassignRoutine
     return next;
 }
 
-// ── Person / WorkContext ─────────────────────────────────────────────────────
-
-async function reassignPerson(params: ReassignParams): Promise<ReassignResult> {
-    const person = await peopleDAO.findByOwnerAndId(params.entityId, params.fromUserId);
-    if (!person) {
-        return { ok: false, status: 404, error: 'Person not found under fromUserId' };
-    }
-    const referencingItemIds = await findItemsReferencingPerson(params.fromUserId, params.entityId);
-    await persistSimpleEntityMove<PersonInterface>(person, params, 'person');
-    return referencingItemIds.length ? { ok: true, crossUserReferences: { peopleIds: referencingItemIds } } : { ok: true };
-}
-
-async function reassignWorkContext(params: ReassignParams): Promise<ReassignResult> {
-    const workContext = await workContextsDAO.findByOwnerAndId(params.entityId, params.fromUserId);
-    if (!workContext) {
-        return { ok: false, status: 404, error: 'WorkContext not found under fromUserId' };
-    }
-    const referencingItemIds = await findItemsReferencingWorkContext(params.fromUserId, params.entityId);
-    await persistSimpleEntityMove<WorkContextInterface>(workContext, params, 'workContext');
-    return referencingItemIds.length ? { ok: true, crossUserReferences: { workContextIds: referencingItemIds } } : { ok: true };
-}
+// ── Cross-user reference relinking ───────────────────────────────────────────
 
 /**
- * Items under `userId` that reference `personId` via either shape: the array `peopleIds` or the
- * scalar `waitingForPersonId`. Both must be reported — otherwise a `waitingFor` item under
- * fromUser whose target person was reassigned would be silently left dangling, with the caller
- * never knowing the cross-user pointer exists.
- */
-async function findItemsReferencingPerson(userId: string, personId: string): Promise<string[]> {
-    const items = await itemsDAO.findArray({
-        user: userId,
-        $or: [{ peopleIds: personId }, { waitingForPersonId: personId }],
-    } as never);
-    return items.map((i) => i._id).filter((id): id is string => Boolean(id));
-}
-
-/** WorkContext refs only flow through `workContextIds[]` — no scalar counterpart on the item. */
-async function findItemsReferencingWorkContext(userId: string, contextId: string): Promise<string[]> {
-    const items = await itemsDAO.findArray({ user: userId, workContextIds: contextId });
-    return items.map((i) => i._id).filter((id): id is string => Boolean(id));
-}
-
-/**
- * Person + workContext share a pure delete-then-create-with-new-user path. Both legs flow
- * through applyAndPublishOperation so the persistence + log + fan-out runs through the same
- * pipeline as every other write surface.
+ * Resolves source-user `peopleIds` / `workContextIds` / `waitingForPersonId` to ids that exist
+ * under `toUserId`, creating mirror entities when the target user has no matching record. Used by
+ * both the item and routine reassign paths so a moved entity lands with valid local references
+ * instead of dangling cross-user pointers.
  *
- * `suppressReferenceCascade: true` on the source-delete leg: a reassign is a change of owner,
- * not a true deletion, so referencing items under fromUserId must keep the cross-user id intact
- * — the caller surfaces those via `crossUserReferences` instead of stripping them silently.
- * Without this, the cascade would `$pull` the personId / workContextId from every referencing
- * item and append a `[person removed: …]` breadcrumb, corrupting the audit trail.
+ * Matching policy:
+ *   - workContext: exact, case-sensitive `name`.
+ *   - person: email-first (when both source and a target candidate have an email and it matches
+ *     exactly), then fall back to exact `name`. Email wins because it's more unique than a name —
+ *     two people can share a first name far more easily than they share an inbox.
+ *
+ * When no match is found, a new entity is created under `toUserId` mirroring the source entity's
+ * display fields (name + email/phone/notes/externalCalendarId for people; just name for
+ * workContexts). The new entity is persisted via `applyAndPublishOperation` so the standard
+ * fan-out (SSE / web push / webhooks / op log) fires on the target user's channel.
+ *
+ * Source-user entities are NEVER mutated or deleted by this helper — the user reassigning an
+ * item doesn't lose the contact / context they originally owned.
+ *
+ * Ids referencing entities the source user no longer owns (e.g. a stale ref from a previously
+ * trashed person) are passed through unchanged: the strict-mode snapshot validator would already
+ * accept the row, and the new owner inherits the same dangling state the source had.
  */
-async function persistSimpleEntityMove<T extends PersonInterface | WorkContextInterface>(
-    entity: T,
-    params: ReassignParams,
-    entityType: 'person' | 'workContext',
-): Promise<void> {
-    const now = dayjs().toISOString();
-    const deviceId = params.deviceId ?? 'server';
-    const newSnapshot: T = { ...entity, user: params.toUserId, updatedTs: now };
-    preValidateTargetSnapshot({ entityType, entityId: params.entityId, snapshot: newSnapshot });
+/**
+ * Per-relink-batch state. The two `*Cache` maps dedupe within a single reassign call so two refs
+ * sharing an email/name (or the same id repeated) reuse the first resolution instead of racing
+ * to insert duplicate mirror rows under the recipient. Keyed by:
+ *   - peopleCache: `email:<value>` when source person has email; `name:<value>` otherwise.
+ *   - contextsCache: `name:<value>`.
+ * `null` means "we already looked and there's no match under the recipient yet" — but since the
+ * very next branch creates one and writes the new id back into the cache, that null is only ever
+ * read by re-entry of the same id within the same array (relink runs sequentially, so by the
+ * time the second hit sees the cache the first hit has already replaced null with the new id).
+ */
+interface RelinkContext {
+    fromUserId: string;
+    toUserId: string;
+    deviceId: string;
+    now: string;
+    peopleCache: Map<string, string>;
+    contextsCache: Map<string, string>;
+}
+
+/** Sequential walk + per-batch dedup. Promise.all would race two same-key creates into duplicates. */
+async function relinkPeopleIds(ids: string[] | undefined, ctx: RelinkContext): Promise<string[] | undefined> {
+    if (!ids || ids.length === 0) {
+        return ids;
+    }
+    const out: string[] = [];
+    for (const id of ids) {
+        out.push(await relinkPersonId(id, ctx));
+    }
+    return out;
+}
+
+async function relinkPersonId(id: string, ctx: RelinkContext): Promise<string> {
+    const sourcePerson = await peopleDAO.findByOwnerAndId(id, ctx.fromUserId);
+    // No source-side record: stale id (entity no longer owned by source user, or never was).
+    // Pass through unchanged — the new owner inherits the same dangling state the source had.
+    if (!sourcePerson) {
+        return id;
+    }
+    const cacheKey = personCacheKey(sourcePerson);
+    const cached = ctx.peopleCache.get(cacheKey);
+    if (cached !== undefined) {
+        return cached;
+    }
+    const existing = await findPersonByEmailOrName(ctx.toUserId, sourcePerson);
+    if (existing) {
+        ctx.peopleCache.set(cacheKey, existing._id);
+        return existing._id;
+    }
+    const created = await createPersonForUser(sourcePerson, ctx);
+    ctx.peopleCache.set(cacheKey, created._id);
+    return created._id;
+}
+
+/** Same priority as the find: email-first when present, name otherwise. */
+function personCacheKey(source: PersonInterface): string {
+    return source.email ? `email:${source.email}` : `name:${source.name}`;
+}
+
+/** Email-first match, then name. Both comparisons are case-sensitive exact (no normalization). */
+async function findPersonByEmailOrName(userId: string, source: PersonInterface): Promise<PersonInterface | null> {
+    if (source.email) {
+        const byEmail = await peopleDAO.findOne({ user: userId, email: source.email });
+        if (byEmail) {
+            return byEmail;
+        }
+    }
+    return peopleDAO.findOne({ user: userId, name: source.name });
+}
+
+async function createPersonForUser(source: PersonInterface, ctx: RelinkContext): Promise<PersonInterface> {
+    const newId = randomUUID();
+    const snapshot: PersonInterface = {
+        _id: newId,
+        user: ctx.toUserId,
+        name: source.name,
+        // Mirror only display fields — never copy `_id`, `user`, or timestamps from the source row.
+        ...(source.email !== undefined ? { email: source.email } : {}),
+        ...(source.phone !== undefined ? { phone: source.phone } : {}),
+        ...(source.externalCalendarId !== undefined ? { externalCalendarId: source.externalCalendarId } : {}),
+        ...(source.notes !== undefined ? { notes: source.notes } : {}),
+        createdTs: ctx.now,
+        updatedTs: ctx.now,
+    };
     await applyAndPublishOperation(
-        params.fromUserId,
-        { entityType, entityId: params.entityId, snapshot: null, opType: 'delete' },
-        { deviceId, now, strict: true, suppressReferenceCascade: true },
+        ctx.toUserId,
+        { entityType: 'person', entityId: newId, snapshot, opType: 'create' },
+        { deviceId: ctx.deviceId, now: ctx.now, strict: true },
     );
+    return snapshot;
+}
+
+async function relinkWorkContextIds(ids: string[] | undefined, ctx: RelinkContext): Promise<string[] | undefined> {
+    if (!ids || ids.length === 0) {
+        return ids;
+    }
+    const out: string[] = [];
+    for (const id of ids) {
+        out.push(await relinkWorkContextId(id, ctx));
+    }
+    return out;
+}
+
+async function relinkWorkContextId(id: string, ctx: RelinkContext): Promise<string> {
+    const source = await workContextsDAO.findByOwnerAndId(id, ctx.fromUserId);
+    if (!source) {
+        return id;
+    }
+    const cacheKey = `name:${source.name}`;
+    const cached = ctx.contextsCache.get(cacheKey);
+    if (cached !== undefined) {
+        return cached;
+    }
+    const existing = await workContextsDAO.findOne({ user: ctx.toUserId, name: source.name });
+    if (existing) {
+        ctx.contextsCache.set(cacheKey, existing._id);
+        return existing._id;
+    }
+    const created = await createWorkContextForUser(source, ctx);
+    ctx.contextsCache.set(cacheKey, created._id);
+    return created._id;
+}
+
+async function createWorkContextForUser(source: WorkContextInterface, ctx: RelinkContext): Promise<WorkContextInterface> {
+    const newId = randomUUID();
+    const snapshot: WorkContextInterface = {
+        _id: newId,
+        user: ctx.toUserId,
+        name: source.name,
+        createdTs: ctx.now,
+        updatedTs: ctx.now,
+    };
     await applyAndPublishOperation(
-        params.toUserId,
-        { entityType, entityId: params.entityId, snapshot: newSnapshot, opType: 'create' },
-        { deviceId, now, strict: true },
+        ctx.toUserId,
+        { entityType: 'workContext', entityId: newId, snapshot, opType: 'create' },
+        { deviceId: ctx.deviceId, now: ctx.now, strict: true },
     );
+    return snapshot;
+}
+
+/** Returns a relink context with one wall-clock + deviceId + dedup caches shared across every helper call. */
+function buildRelinkContext(params: ReassignParams): RelinkContext {
+    return {
+        fromUserId: params.fromUserId,
+        toUserId: params.toUserId,
+        deviceId: params.deviceId ?? 'server',
+        now: dayjs().toISOString(),
+        peopleCache: new Map(),
+        contextsCache: new Map(),
+    };
+}
+
+/**
+ * Rewrites an item's `peopleIds`, `waitingForPersonId`, and `workContextIds` in-place against the
+ * target user's people / workContext space. Called from `reassignItem` after `applyItemEditPatch`
+ * so explicitly-edited references still flow through the same find-or-create resolution as
+ * snapshot-inherited ones.
+ */
+async function relinkItemReferences(item: ItemInterface, ctx: RelinkContext): Promise<ItemInterface> {
+    const next: ItemInterface = { ...item };
+    const relinkedPeople = await relinkPeopleIds(next.peopleIds, ctx);
+    if (relinkedPeople !== undefined) {
+        next.peopleIds = relinkedPeople;
+    }
+    const relinkedContexts = await relinkWorkContextIds(next.workContextIds, ctx);
+    if (relinkedContexts !== undefined) {
+        next.workContextIds = relinkedContexts;
+    }
+    if (next.waitingForPersonId) {
+        next.waitingForPersonId = await relinkPersonId(next.waitingForPersonId, ctx);
+    }
+    return next;
+}
+
+/** Routine template carries the same shape of refs; applied to the routine in-place. */
+async function relinkRoutineReferences(routine: RoutineInterface, ctx: RelinkContext): Promise<RoutineInterface> {
+    if (!routine.template) {
+        return routine;
+    }
+    const template = { ...routine.template };
+    const relinkedPeople = await relinkPeopleIds(template.peopleIds, ctx);
+    if (relinkedPeople !== undefined) {
+        template.peopleIds = relinkedPeople;
+    }
+    const relinkedContexts = await relinkWorkContextIds(template.workContextIds, ctx);
+    if (relinkedContexts !== undefined) {
+        template.workContextIds = relinkedContexts;
+    }
+    return { ...routine, template };
 }

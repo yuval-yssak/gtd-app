@@ -9,7 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
-import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import routinesDAO from '../dataAccess/routinesDAO.js';
 import * as sseConnections from '../lib/sseConnections.js';
 import * as webPush from '../lib/webPush.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
@@ -180,15 +180,19 @@ describe('POST /v1/reassign', () => {
         expect(res.status).toBe(403);
     });
 
-    it('returns 404 when the entity is not owned by the calling token user', async () => {
+    it('returns 404 when the entity is not owned by the calling token user (routine path)', async () => {
         const aliceId = await login();
         const token = await tokenWith(aliceId, ['reassign']);
         const recipient = await recipientTokenFor('carol-id');
-        // Seed Bob's item — Alice cannot reassign it because reassignEntity reads by fromUserId.
-        await workContextsDAO.insertOne({
-            _id: 'wc-bob',
+        // Seed Bob's routine — Alice cannot reassign it because reassignEntity reads by fromUserId.
+        await routinesDAO.insertOne({
+            _id: 'rt-bob',
             user: 'bob-id',
-            name: 'bobs',
+            title: 'bobs routine',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
             createdTs: '2026-01-01T00:00:00.000Z',
             updatedTs: '2026-01-01T00:00:00.000Z',
         });
@@ -196,10 +200,43 @@ describe('POST /v1/reassign', () => {
             new Request('http://localhost:4000/v1/reassign', {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${token}`, 'X-Reassign-Recipient-Token': recipient, 'Content-Type': 'application/json' },
-                body: JSON.stringify({ entityType: 'workContext', entityId: 'wc-bob', toUserId: 'carol-id' }),
+                body: JSON.stringify({ entityType: 'routine', entityId: 'rt-bob', toUserId: 'carol-id' }),
             }),
         );
         expect(res.status).toBe(404);
+    });
+
+    // The body parser rejects person/workContext at the validation layer — they cannot be
+    // reassigned. The orchestrator's auto-relink logic handles cross-user refs on item/routine
+    // moves; direct person/workContext reassigns are intentionally not part of the surface.
+    it('rejects entityType=person with 400 invalid_entityType', async () => {
+        const aliceId = await login();
+        const token = await tokenWith(aliceId, ['reassign']);
+        const recipient = await recipientTokenFor('carol-id');
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/reassign', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'X-Reassign-Recipient-Token': recipient, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entityType: 'person', entityId: 'p-1', toUserId: 'carol-id' }),
+            }),
+        );
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('invalid_entityType');
+    });
+
+    it('rejects entityType=workContext with 400 invalid_entityType', async () => {
+        const aliceId = await login();
+        const token = await tokenWith(aliceId, ['reassign']);
+        const recipient = await recipientTokenFor('carol-id');
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/reassign', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'X-Reassign-Recipient-Token': recipient, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entityType: 'workContext', entityId: 'wc-1', toUserId: 'carol-id' }),
+            }),
+        );
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('invalid_entityType');
     });
 
     // Tenant isolation: Alice cannot reassign Bob's item even via the items path. Pins the

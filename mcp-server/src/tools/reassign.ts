@@ -4,9 +4,15 @@ import type { ApiClient } from '../apiClient.js';
 import { defineTool, idSchema, registerOne } from './types.js';
 
 /**
- * Cross-account reassign — move an item / routine / person / workContext from the calling
- * token's user to another user via the new two-token consent gesture (caller's `reassign`
- * scope plus the recipient's `reassign.accept` scope).
+ * Cross-account reassign — move an item or routine from the calling token's user to another
+ * user via the two-token consent gesture (caller's `reassign` scope plus the recipient's
+ * `reassign.accept` scope).
+ *
+ * People and workContexts cannot be reassigned. When the moved item/routine carries
+ * `peopleIds`/`workContextIds` (or `waitingForPersonId`), the server resolves each ref into the
+ * recipient's account: an existing person with the same email or name is reused; otherwise a
+ * new mirror record is created under the recipient. The source user keeps an untouched copy of
+ * the person/workContext they originally owned.
  *
  * The model never spells out a `toUserId`: the tool calls `GET /v1/me` against the recipient
  * account's token to resolve it server-side. This keeps raw Better Auth UUIDs out of the
@@ -23,13 +29,15 @@ interface MeResponse {
 const reassign = defineTool({
     name: 'gtd_reassign',
     description:
-        'Move an entity from one account to another. The MCP attaches both bearers automatically: ' +
-        '`fromAccount` signs the call with `reassign`; `toAccount` is sent as the recipient consent ' +
-        'token (`X-Reassign-Recipient-Token`) and must hold `reassign.accept`. Account labels are ' +
-        'the slugs configured via `GTD_API_TOKEN_<LABEL>` env vars; `default` is reserved for `GTD_API_TOKEN`. ' +
-        'Use this for "move this task into my work account" gestures across the same person\'s accounts.',
+        'Move an item or routine from one account to another. People and workContexts cannot be reassigned; ' +
+        'if the moved entity carries peopleIds/workContextIds, the server auto-relinks them into the recipient ' +
+        '(reusing an existing person by email/name or creating a mirror record). The MCP attaches both bearers ' +
+        'automatically: `fromAccount` signs the call with `reassign`; `toAccount` is sent as the recipient consent ' +
+        'token (`X-Reassign-Recipient-Token`) and must hold `reassign.accept`. Account labels are the slugs configured ' +
+        'via `GTD_API_TOKEN_<LABEL>` env vars; `default` is reserved for `GTD_API_TOKEN`. Use this for "move this task ' +
+        'into my work account" gestures across the same person\'s accounts.',
     inputSchema: {
-        entityType: z.enum(['item', 'routine', 'person', 'workContext']),
+        entityType: z.enum(['item', 'routine']),
         entityId: idSchema,
         fromAccount: z.string().min(1).default('default').describe('Account label whose token initiates the move. Defaults to "default".'),
         toAccount: z.string().min(1).describe('Account label whose token consents to receive the move. Must differ from fromAccount.'),

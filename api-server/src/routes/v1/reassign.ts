@@ -21,7 +21,12 @@ import type { ApiTokenInterface, EntityType } from '../../types/entities.js';
  * arbitrary user — the attacker would also need a live `reassign.accept` token from that user.
  */
 
-const VALID_ENTITY_TYPES = new Set<EntityType>(['item', 'routine', 'person', 'workContext']);
+// Only items and routines can be reassigned via the public API. People and workContexts are
+// intentionally NOT reassignable — when an item/routine carrying refs to them is moved, the
+// orchestrator auto-relinks each ref into the target user's account (find-or-create by
+// email/name). Rejecting at the body-parse layer keeps the error close to the caller; the
+// orchestrator also rejects defensively to cover the in-app /sync/reassign path.
+const VALID_ENTITY_TYPES = new Set<EntityType>(['item', 'routine']);
 
 interface ReassignBody {
     entityType?: unknown;

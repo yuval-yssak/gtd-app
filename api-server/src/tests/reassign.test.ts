@@ -346,124 +346,430 @@ describe('POST /sync/reassign', () => {
         });
     });
 
-    describe('person / workContext', () => {
-        it('moves a person and reports cross-user references for items still under the source user', async () => {
+    describe('person / workContext are not reassignable', () => {
+        // The previous "move the entity + report dangling refs" gesture has been replaced by
+        // automatic find-or-create on the item/routine reassign path. People and workContexts
+        // are intentionally NOT directly reassignable — the source user keeps their address
+        // book and context list intact when handing off an item.
+        it('rejects entityType=person with 400 validation_failed and leaves the person under fromUserId', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
             const person = makePerson(alice.userId);
             await peopleDAO.insertOne(person);
-            // An item under alice references the person — after the move, the item still references the same _id but
-            // the person now lives under bob's account.
-            const referencingItem = makeItem(alice.userId, { peopleIds: [person._id] });
-            await itemsDAO.insertOne(referencingItem);
 
             const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
             const res = await postReassign(cookie, { entityType: 'person', entityId: person._id, fromUserId: alice.userId, toUserId: bob.userId });
 
-            expect(res.status).toBe(200);
-            const body = (await res.json()) as { ok: boolean; crossUserReferences?: { peopleIds?: string[] } };
-            expect(body.ok).toBe(true);
-            expect(body.crossUserReferences?.peopleIds).toEqual([referencingItem._id]);
-            expect(await peopleDAO.findByOwnerAndId(person._id, alice.userId)).toBeNull();
-            expect(await peopleDAO.findByOwnerAndId(person._id, bob.userId)).not.toBeNull();
-            // Reference cascade MUST NOT fire on reassign: the source-leg delete is just a change
-            // of owner, not a true deletion. The referencing item under alice keeps the personId
-            // (now pointing into bob's account) and keeps its original title — no `[person
-            // removed: …]` breadcrumb. The caller is expected to surface cross-user refs via
-            // `crossUserReferences` instead.
-            const refItemAfter = await itemsDAO.findByOwnerAndId(referencingItem._id!, alice.userId);
-            expect(refItemAfter).not.toBeNull();
-            expect(refItemAfter?.peopleIds).toEqual([person._id]);
-            expect(refItemAfter?.title).toBe(referencingItem.title);
-            // No phantom `update` op from the suppressed cascade. The cascade calls
-            // `recordOperation` per affected item — asserting zero is the strongest possible
-            // guarantee that the cascade truly didn't run on the source-delete leg.
-            const cascadeOps = await operationsDAO.findArray({
-                user: alice.userId,
-                entityType: 'item',
-                entityId: referencingItem._id,
-                opType: 'update',
-            });
-            expect(cascadeOps).toHaveLength(0);
+            expect(res.status).toBe(400);
+            const body = (await res.json()) as { error: string };
+            expect(body.error).toMatch(/cannot be reassigned/);
+            // Person is untouched on both sides.
+            expect(await peopleDAO.findByOwnerAndId(person._id, alice.userId)).not.toBeNull();
+            expect(await peopleDAO.findByOwnerAndId(person._id, bob.userId)).toBeNull();
         });
 
-        it('surfaces waitingForPersonId refs in crossUserReferences.peopleIds and preserves the scalar pointer', async () => {
-            const alice = await seedUserSession('alice@example.com');
-            const bob = await seedUserSession('bob@example.com');
-            const person = makePerson(alice.userId);
-            await peopleDAO.insertOne(person);
-            // A `waitingFor` item pointed at `person` via the scalar pointer (not the array).
-            // Pre-fix `findItemsReferencing` only scanned `peopleIds[]`, so the scalar ref was
-            // silently dropped from the response AND stripped by the cascade — double miss.
-            const waitingItem = makeItem(alice.userId, { status: 'waitingFor', waitingForPersonId: person._id });
-            await itemsDAO.insertOne(waitingItem);
-
-            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
-            const res = await postReassign(cookie, { entityType: 'person', entityId: person._id, fromUserId: alice.userId, toUserId: bob.userId });
-
-            expect(res.status).toBe(200);
-            const body = (await res.json()) as { ok: boolean; crossUserReferences?: { peopleIds?: string[] } };
-            expect(body.crossUserReferences?.peopleIds).toEqual([waitingItem._id]);
-            // Source-side item still carries the scalar pointer + original title (no `[was
-            // waiting for: …]` breadcrumb — cascade suppressed on reassign).
-            const waitingAfter = await itemsDAO.findByOwnerAndId(waitingItem._id!, alice.userId);
-            expect(waitingAfter).not.toBeNull();
-            expect(waitingAfter?.waitingForPersonId).toBe(person._id);
-            expect(waitingAfter?.title).toBe(waitingItem.title);
-        });
-
-        it('surfaces every item carrying the reassigned person across the source user (multi-item fan-out)', async () => {
-            const alice = await seedUserSession('alice@example.com');
-            const bob = await seedUserSession('bob@example.com');
-            const person = makePerson(alice.userId);
-            await peopleDAO.insertOne(person);
-            const item1 = makeItem(alice.userId, { peopleIds: [person._id] });
-            const item2 = makeItem(alice.userId, { peopleIds: [person._id, 'other-person'] });
-            const item3 = makeItem(alice.userId, { status: 'waitingFor', waitingForPersonId: person._id });
-            await Promise.all([itemsDAO.insertOne(item1), itemsDAO.insertOne(item2), itemsDAO.insertOne(item3)]);
-
-            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
-            const res = await postReassign(cookie, { entityType: 'person', entityId: person._id, fromUserId: alice.userId, toUserId: bob.userId });
-
-            expect(res.status).toBe(200);
-            const body = (await res.json()) as { ok: boolean; crossUserReferences?: { peopleIds?: string[] } };
-            expect(body.crossUserReferences?.peopleIds).toEqual(expect.arrayContaining([item1._id, item2._id, item3._id]));
-            expect(body.crossUserReferences?.peopleIds).toHaveLength(3);
-            // Every referencing item keeps its original ref + title.
-            const after1 = await itemsDAO.findByOwnerAndId(item1._id!, alice.userId);
-            const after2 = await itemsDAO.findByOwnerAndId(item2._id!, alice.userId);
-            const after3 = await itemsDAO.findByOwnerAndId(item3._id!, alice.userId);
-            expect(after1?.peopleIds).toEqual([person._id]);
-            expect(after2?.peopleIds).toEqual([person._id, 'other-person']);
-            expect(after3?.waitingForPersonId).toBe(person._id);
-        });
-
-        it('moves a workContext and reports cross-user references', async () => {
+        it('rejects entityType=workContext with 400 validation_failed and leaves the workContext under fromUserId', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
             const wc = makeWorkContext(alice.userId);
             await workContextsDAO.insertOne(wc);
-            const referencingItem = makeItem(alice.userId, { workContextIds: [wc._id] });
-            await itemsDAO.insertOne(referencingItem);
 
             const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
             const res = await postReassign(cookie, { entityType: 'workContext', entityId: wc._id, fromUserId: alice.userId, toUserId: bob.userId });
 
+            expect(res.status).toBe(400);
+            const body = (await res.json()) as { error: string };
+            expect(body.error).toMatch(/cannot be reassigned/);
+            expect(await workContextsDAO.findByOwnerAndId(wc._id, alice.userId)).not.toBeNull();
+            expect(await workContextsDAO.findByOwnerAndId(wc._id, bob.userId)).toBeNull();
+        });
+    });
+
+    describe('item reference relinking', () => {
+        // Every item-reassign that carries peopleIds / workContextIds / waitingForPersonId must
+        // resolve each ref into the target user's account: reuse an existing record by email or
+        // name, otherwise create a mirror. The source user's people/workContexts are NEVER
+        // mutated — they keep their address book intact across the move.
+
+        it('creates a mirror person under toUserId when the target has no match, rewrites peopleIds to the new id, and leaves the source person intact', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Sam', email: 'sam@example.com' });
+            await peopleDAO.insertOne(alicePerson);
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: [alicePerson._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
             expect(res.status).toBe(200);
-            const body = (await res.json()) as { ok: boolean; crossUserReferences?: { workContextIds?: string[] } };
-            expect(body.crossUserReferences?.workContextIds).toEqual([referencingItem._id]);
-            // Reference cascade MUST NOT fire on reassign — same rationale as the person test above.
-            const refItemAfter = await itemsDAO.findByOwnerAndId(referencingItem._id!, alice.userId);
-            expect(refItemAfter).not.toBeNull();
-            expect(refItemAfter?.workContextIds).toEqual([wc._id]);
-            expect(refItemAfter?.title).toBe(referencingItem.title);
-            const cascadeOps = await operationsDAO.findArray({
-                user: alice.userId,
-                entityType: 'item',
-                entityId: referencingItem._id,
-                opType: 'update',
+            // Source person is untouched.
+            const aliceSam = await peopleDAO.findByOwnerAndId(alicePerson._id, alice.userId);
+            expect(aliceSam).not.toBeNull();
+            expect(aliceSam?.email).toBe('sam@example.com');
+            // Bob has a new mirror person with the same name + email but a new _id.
+            const bobPeople = await peopleDAO.findArray({ user: bob.userId });
+            expect(bobPeople).toHaveLength(1);
+            const [bobSam] = bobPeople;
+            if (!bobSam) throw new Error('expected one mirror person under bob');
+            expect(bobSam._id).not.toBe(alicePerson._id);
+            expect(bobSam.name).toBe('Sam');
+            expect(bobSam.email).toBe('sam@example.com');
+            // Item under bob now points at the mirror.
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.peopleIds).toEqual([bobSam._id]);
+        });
+
+        it('reuses an existing person under toUserId when emails match exactly, no mirror created', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Sam', email: 'sam@example.com' });
+            // Bob already has a person with the same email — different name + different _id.
+            const bobPerson = makePerson(bob.userId, { name: 'Samuel', email: 'sam@example.com' });
+            await Promise.all([peopleDAO.insertOne(alicePerson), peopleDAO.insertOne(bobPerson)]);
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: [alicePerson._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobPeople = await peopleDAO.findArray({ user: bob.userId });
+            // No mirror created — bob still has exactly the one record he started with.
+            expect(bobPeople).toHaveLength(1);
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.peopleIds).toEqual([bobPerson._id]);
+        });
+
+        it('falls back to name match when source has no email but the target has a same-named person', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Sam' });
+            const bobPerson = makePerson(bob.userId, { name: 'Sam' });
+            await Promise.all([peopleDAO.insertOne(alicePerson), peopleDAO.insertOne(bobPerson)]);
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: [alicePerson._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobPeople = await peopleDAO.findArray({ user: bob.userId });
+            expect(bobPeople).toHaveLength(1);
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.peopleIds).toEqual([bobPerson._id]);
+        });
+
+        it('prefers email match over name match — different name same email beats same name different email', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Sam', email: 'sam@example.com' });
+            // Two candidates under bob: one by name (no email), one by email (different name).
+            // Email-first policy must pick the email match.
+            const bobByName = makePerson(bob.userId, { name: 'Sam' });
+            const bobByEmail = makePerson(bob.userId, { name: 'Samuel', email: 'sam@example.com' });
+            await Promise.all([peopleDAO.insertOne(alicePerson), peopleDAO.insertOne(bobByName), peopleDAO.insertOne(bobByEmail)]);
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: [alicePerson._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.peopleIds).toEqual([bobByEmail._id]);
+        });
+
+        it('relinks workContextIds — reuses by name match', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const aliceCtx = makeWorkContext(alice.userId, { name: 'at desk' });
+            const bobCtx = makeWorkContext(bob.userId, { name: 'at desk' });
+            await Promise.all([workContextsDAO.insertOne(aliceCtx), workContextsDAO.insertOne(bobCtx)]);
+            const item = makeItem(alice.userId, { status: 'nextAction', workContextIds: [aliceCtx._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobContexts = await workContextsDAO.findArray({ user: bob.userId });
+            // No mirror created — bob's existing context wins.
+            expect(bobContexts).toHaveLength(1);
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.workContextIds).toEqual([bobCtx._id]);
+        });
+
+        it('relinks workContextIds — creates mirror when bob has no match, leaves alice context intact', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const aliceCtx = makeWorkContext(alice.userId, { name: 'with family' });
+            await workContextsDAO.insertOne(aliceCtx);
+            const item = makeItem(alice.userId, { status: 'nextAction', workContextIds: [aliceCtx._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            // Alice still owns hers.
+            expect(await workContextsDAO.findByOwnerAndId(aliceCtx._id, alice.userId)).not.toBeNull();
+            // Bob has a brand-new mirror with the same name and a new _id.
+            const bobContexts = await workContextsDAO.findArray({ user: bob.userId });
+            expect(bobContexts).toHaveLength(1);
+            const [bobCtx] = bobContexts;
+            if (!bobCtx) throw new Error('expected one mirror context under bob');
+            expect(bobCtx._id).not.toBe(aliceCtx._id);
+            expect(bobCtx.name).toBe('with family');
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.workContextIds).toEqual([bobCtx._id]);
+        });
+
+        it('relinks waitingForPersonId on a waitingFor item — creates mirror under bob', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Wendy', email: 'wendy@example.com' });
+            await peopleDAO.insertOne(alicePerson);
+            const item = makeItem(alice.userId, { status: 'waitingFor', waitingForPersonId: alicePerson._id });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobPeople = await peopleDAO.findArray({ user: bob.userId });
+            expect(bobPeople).toHaveLength(1);
+            const [bobWendy] = bobPeople;
+            if (!bobWendy) throw new Error('expected one mirror person under bob');
+            expect(bobWendy.email).toBe('wendy@example.com');
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.waitingForPersonId).toBe(bobWendy._id);
+            expect(movedItem?.waitingForPersonId).not.toBe(alicePerson._id);
+        });
+
+        it('passes through ids that point at people the source user does not own (no spurious creates)', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            // peopleIds contains a stale id — neither alice nor bob owns this person.
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: ['stale-uuid-from-elsewhere'] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            // No mirror person created — there was no source row to mirror.
+            expect(await peopleDAO.findArray({ user: bob.userId })).toHaveLength(0);
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.peopleIds).toEqual(['stale-uuid-from-elsewhere']);
+        });
+
+        it('mixes reuse + create in a single item — one matching person, one missing context', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Sam', email: 'sam@example.com' });
+            const bobPerson = makePerson(bob.userId, { name: 'Sam', email: 'sam@example.com' });
+            const aliceCtx = makeWorkContext(alice.userId, { name: 'focused at laptop' });
+            await Promise.all([peopleDAO.insertOne(alicePerson), peopleDAO.insertOne(bobPerson), workContextsDAO.insertOne(aliceCtx)]);
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: [alicePerson._id], workContextIds: [aliceCtx._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            // Person reused.
+            expect(await peopleDAO.findArray({ user: bob.userId })).toHaveLength(1);
+            // Context mirror created.
+            const bobContexts = await workContextsDAO.findArray({ user: bob.userId });
+            expect(bobContexts).toHaveLength(1);
+            const [bobCtx] = bobContexts;
+            if (!bobCtx) throw new Error('expected one mirror context under bob');
+            const movedItem = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(movedItem?.peopleIds).toEqual([bobPerson._id]);
+            expect(movedItem?.workContextIds).toEqual([bobCtx._id]);
+        });
+    });
+
+    describe('item reference relinking — in-batch dedupe + precondition ordering', () => {
+        it('dedupes the same id repeated in peopleIds — creates one mirror, points both slots at it', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Dup', email: 'dup@example.com' });
+            await peopleDAO.insertOne(alicePerson);
+            // Same id appears twice — Promise.all would race two creates; sequential + cache returns the same new id.
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: [alicePerson._id, alicePerson._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobPeople = await peopleDAO.findArray({ user: bob.userId });
+            expect(bobPeople).toHaveLength(1);
+            const [bobDup] = bobPeople;
+            if (!bobDup) throw new Error('expected one mirror person');
+            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(moved?.peopleIds).toEqual([bobDup._id, bobDup._id]);
+        });
+
+        it('dedupes by email across two different source ids that share an email — single mirror, both refs point at it', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            // Two separate alice persons with the same email. After relink, bob should end up
+            // with ONE mirror person, not two.
+            const alice1 = makePerson(alice.userId, { name: 'Sam1', email: 'shared@example.com' });
+            const alice2 = makePerson(alice.userId, { name: 'Sam2', email: 'shared@example.com' });
+            await Promise.all([peopleDAO.insertOne(alice1), peopleDAO.insertOne(alice2)]);
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: [alice1._id, alice2._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobPeople = await peopleDAO.findArray({ user: bob.userId });
+            expect(bobPeople).toHaveLength(1);
+            const [bobShared] = bobPeople;
+            if (!bobShared) throw new Error('expected one mirror person from shared email');
+            expect(bobShared.email).toBe('shared@example.com');
+            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            // Both slots point at the same single mirror.
+            expect(moved?.peopleIds).toEqual([bobShared._id, bobShared._id]);
+        });
+
+        it('dedupes workContextIds by name across two distinct source ids', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const ctx1 = makeWorkContext(alice.userId, { name: 'shared-name' });
+            const ctx2 = makeWorkContext(alice.userId, { name: 'shared-name' });
+            await Promise.all([workContextsDAO.insertOne(ctx1), workContextsDAO.insertOne(ctx2)]);
+            const item = makeItem(alice.userId, { status: 'nextAction', workContextIds: [ctx1._id, ctx2._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobContexts = await workContextsDAO.findArray({ user: bob.userId });
+            expect(bobContexts).toHaveLength(1);
+        });
+
+        it('rejects calendar-linked item missing targetCalendar BEFORE creating any mirror entities', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            // Seed an alice person so we can detect any bug where mirrors are created during the
+            // doomed reassign — pins the precondition-before-relink ordering.
+            const alicePerson = makePerson(alice.userId, { name: 'Cal', email: 'cal@example.com' });
+            await peopleDAO.insertOne(alicePerson);
+            const item = makeItem(alice.userId, {
+                status: 'calendar',
+                calendarEventId: 'gcal-evt-x',
+                calendarIntegrationId: 'int-x',
+                calendarSyncConfigId: 'cfg-x',
+                timeStart: '2030-01-01T10:00:00Z',
+                timeEnd: '2030-01-01T11:00:00Z',
             });
-            expect(cascadeOps).toHaveLength(0);
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(400);
+            // Pinned guarantee: no mirror entities exist under bob.
+            expect(await peopleDAO.findArray({ user: bob.userId })).toHaveLength(0);
+            expect(await workContextsDAO.findArray({ user: bob.userId })).toHaveLength(0);
+        });
+    });
+
+    describe('routine reference relinking', () => {
+        it('relinks template.peopleIds + template.workContextIds when reassigning a routine', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Pat', email: 'pat@example.com' });
+            const aliceCtx = makeWorkContext(alice.userId, { name: 'at desk' });
+            await Promise.all([peopleDAO.insertOne(alicePerson), workContextsDAO.insertOne(aliceCtx)]);
+            const routine = makeRoutine(alice.userId, {
+                template: { peopleIds: [alicePerson._id], workContextIds: [aliceCtx._id] },
+            });
+            await routinesDAO.insertOne(routine);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'routine', entityId: routine._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            // Bob ends up with mirror person + mirror context.
+            const bobPeople = await peopleDAO.findArray({ user: bob.userId });
+            const bobContexts = await workContextsDAO.findArray({ user: bob.userId });
+            expect(bobPeople).toHaveLength(1);
+            expect(bobContexts).toHaveLength(1);
+            const [bobPat] = bobPeople;
+            const [bobCtx] = bobContexts;
+            if (!bobPat || !bobCtx) throw new Error('expected mirror records under bob');
+            // Routine template under bob points at the new ids.
+            const movedRoutine = await routinesDAO.findByOwnerAndId(routine._id, bob.userId);
+            expect(movedRoutine?.template.peopleIds).toEqual([bobPat._id]);
+            expect(movedRoutine?.template.workContextIds).toEqual([bobCtx._id]);
+            // Alice still owns hers.
+            expect(await peopleDAO.findByOwnerAndId(alicePerson._id, alice.userId)).not.toBeNull();
+            expect(await workContextsDAO.findByOwnerAndId(aliceCtx._id, alice.userId)).not.toBeNull();
+        });
+
+        it('dedupes the routine template.peopleIds + template.workContextIds (same name twice) to a single mirror each', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const aliceP1 = makePerson(alice.userId, { name: 'Pat', email: 'pat@example.com' });
+            const aliceP2 = makePerson(alice.userId, { name: 'Pat2', email: 'pat@example.com' });
+            const aliceCtx1 = makeWorkContext(alice.userId, { name: 'at desk' });
+            const aliceCtx2 = makeWorkContext(alice.userId, { name: 'at desk' });
+            await Promise.all([
+                peopleDAO.insertOne(aliceP1),
+                peopleDAO.insertOne(aliceP2),
+                workContextsDAO.insertOne(aliceCtx1),
+                workContextsDAO.insertOne(aliceCtx2),
+            ]);
+            const routine = makeRoutine(alice.userId, {
+                template: { peopleIds: [aliceP1._id, aliceP2._id], workContextIds: [aliceCtx1._id, aliceCtx2._id] },
+            });
+            await routinesDAO.insertOne(routine);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'routine', entityId: routine._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            // Single mirror for each kind — same email dedupes people, same name dedupes contexts.
+            expect(await peopleDAO.findArray({ user: bob.userId })).toHaveLength(1);
+            expect(await workContextsDAO.findArray({ user: bob.userId })).toHaveLength(1);
+        });
+    });
+
+    describe('item reference relinking — cross-field cache sharing', () => {
+        it('waitingForPersonId and peopleIds[0] pointing at the same source person resolve to one mirror', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const alicePerson = makePerson(alice.userId, { name: 'Wen', email: 'wen@example.com' });
+            await peopleDAO.insertOne(alicePerson);
+            // waitingForPersonId is a separate code path from peopleIds[] but shares the same
+            // relink cache via buildRelinkContext — pins that no duplicate mirror is created when
+            // the same id appears in both fields.
+            const item = makeItem(alice.userId, {
+                status: 'waitingFor',
+                waitingForPersonId: alicePerson._id,
+                peopleIds: [alicePerson._id],
+            });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobPeople = await peopleDAO.findArray({ user: bob.userId });
+            expect(bobPeople).toHaveLength(1);
+            const [bobWen] = bobPeople;
+            if (!bobWen) throw new Error('expected one mirror person');
+            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+            expect(moved?.peopleIds).toEqual([bobWen._id]);
+            expect(moved?.waitingForPersonId).toBe(bobWen._id);
         });
     });
 

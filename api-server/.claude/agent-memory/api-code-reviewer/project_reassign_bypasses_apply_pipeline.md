@@ -1,21 +1,22 @@
 ---
 name: /v1/reassign now uses applyAndPublishOperation pipeline
-description: reassignEntity has been migrated to applyAndPublishOperation for both legs of every entityType. SSE/web push/webhooks/GCal pushback now DO fire on reassign. Reference cascade is the one knob that must be suppressed on the source-leg delete.
-type: project
+description: reassignEntity routes both legs of every entity move through applyAndPublishOperation in strict mode. People/workContexts are not directly reassignable — moved items/routines auto-relink refs into the recipient. SSE/web push/webhooks/GCal pushback fire on every leg.
+metadata:
+  type: project
 ---
 
-`/v1/reassign` and `/sync/reassign` are thin wrappers around `lib/reassignEntity.ts`. The helper now routes BOTH the source-delete and target-create legs of every entity move through `applyAndPublishOperation` (in strict mode). Consequences for any reassign op as of the cascade-suppression fix (May 2026):
+`/v1/reassign` and `/sync/reassign` are thin wrappers around `lib/reassignEntity.ts`. The helper:
 
-- ✅ `notifyChange` fan-out fires on both legs — SSE, web push, webhook deliveries, GCal pushback all happen on each user channel.
-- ✅ Zod validation runs on the create-leg snapshot (via `preValidateTargetSnapshot` BEFORE the source delete fires, so a torn move is impossible).
-- ✅ `deviceId` is plumbed through — `/v1/reassign` passes `api:<tokenId>`, `/sync/reassign` defaults to `'server'`.
-- **NEW knob**: `suppressReferenceCascade: true` must be passed on the source-delete leg for `person` and `workContext` entity types — otherwise the cascade strips the reassigned id from every referencing item under fromUser and appends a `[person removed: …]` breadcrumb. The reassign contract surfaces cross-user refs via `crossUserReferences` instead.
-- `suppressGCalPushback: true` is passed on both legs of calendar-item moves because `moveItemAcrossCalendars` already drove the GCal create + delete inline. Routine reassign does NOT pass it — the routine cascade in `pushRoutineDeletion` is the desired source-side cleanup.
+- Rejects `entityType: 'person' | 'workContext'` at the dispatcher with `status:400, code:'validation_failed'`. The public-API body parser rejects earlier with `code:'invalid_entityType'`.
+- For item/routine moves: routes BOTH source-delete and target-create through `applyAndPublishOperation` (strict mode). `preValidateTargetSnapshot` runs the same Zod check ahead of the source delete so a torn snapshot can't produce a torn state.
+- Auto-relinks `peopleIds` / `workContextIds` / `waitingForPersonId` (items) and `template.peopleIds` / `template.workContextIds` (routines) into the recipient's account via find-or-create. Match policy: person email-first then name, workContext exact name. Source-user persons/contexts are NEVER mutated.
+- `deviceId` plumbed through: `/v1/reassign` passes `api:<tokenId>`, `/sync/reassign` defaults to `'server'`.
+- `suppressGCalPushback: true` on both legs of calendar-item moves because `moveItemAcrossCalendars` already drove the GCal create + delete inline. Routine reassign does NOT pass it — the routine cascade in `pushRoutineDeletion` is the desired source-side cleanup.
+- `suppressReferenceCascade: true` on the source-delete leg of item moves (the cascade would clobber sibling rows on the source).
 
-**Why this fix:** A previous cascade-leakage bug stripped peopleIds/workContextIds from items in fromUser's account on reassign, then appended audit-corrupting breadcrumbs. The reassign helper's own `findItemsReferencing*` already produces the correct `crossUserReferences` payload — the cascade was redundant and destructive.
+**Why the rejection branch matters:** the old "move the entity, surface dangling refs in `crossUserReferences`" gesture pushed the relink burden onto the caller. The new model inverts it — auto-relink is server-side, so the caller never needs to interpret `crossUserReferences` (which is now effectively dead surface area on item/routine moves too).
 
-**How to apply:** When reviewing reassign-touching PRs:
-1. Any NEW use of `suppressReferenceCascade` outside `persistSimpleEntityMove` source-leg is suspect — flag it.
-2. If a new entity type is added (beyond item / routine / person / workContext), check whether its delete-leg cascade needs the same suppression.
-3. `findItemsReferencingPerson` covers `peopleIds[]` AND `waitingForPersonId`; `findItemsReferencingWorkContext` covers only `workContextIds[]`. Adding a new person/workContext reference shape on items requires updating these helpers — see [[project_reassign_routine_template_blindspot]] for known limits.
-4. Reference cascade scans ONLY `items` — `routine.template.peopleIds[]`, `routine.template.workContextIds[]`, and routine-exception attendees are pre-existing blind spots (no cascade, no crossUserReferences entry).
+**Known landmines (flag on any reassign PR):**
+1. **Mirror create runs BEFORE pre-validation.** `relinkItemReferences` calls `applyAndPublishOperation` for each missing mirror. If a downstream precondition (`targetCalendar` missing, snapshot validation, GCal create-on-target fails) then aborts the move, the mirror persons/contexts orphan under toUserId. Fix is to move preconditions ahead of the relink. See [[project_reassign_mirror_orphan_on_failure]].
+2. **`Promise.all` over relink races mirror-create.** Two ids in the same `peopleIds` array that share an email/name (or are duplicates of each other) each find no target match in parallel, then each create a fresh mirror. No unique index backstops it. Fix is sequential iteration + per-match-key dedup. See [[project_reassign_promise_all_mirror_race]].
+3. **Dead `sourcePerson.user === toUserId` branch** in `relinkPersonId`/`relinkWorkContextId`: unreachable because `findByOwnerAndId(id, fromUserId)` already filters. Misleads readers about target-owned id handling.

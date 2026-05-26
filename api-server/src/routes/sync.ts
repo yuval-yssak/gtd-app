@@ -320,7 +320,10 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         }
         const result = await reassignEntity(params, buildCalendarProvider);
         if (!result.ok) {
-            return c.json({ error: result.error }, result.status);
+            // Surface the orchestrator's structured `code` (today: only set for `validation_failed`,
+            // which now includes person/workContext entityType rejections) so the in-app caller can
+            // discriminate validation failures from generic 4xx without parsing the message string.
+            return c.json({ error: result.error, ...(result.code ? { code: result.code } : {}) }, result.status);
         }
         // Notify both source and target SSE channels so each device-side consumer can pull the
         // delete and create ops respectively. Without these the user would have to wait for the
