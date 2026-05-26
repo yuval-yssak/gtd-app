@@ -544,7 +544,7 @@ async function reassignPerson(params: ReassignParams): Promise<ReassignResult> {
     if (!person) {
         return { ok: false, status: 404, error: 'Person not found under fromUserId' };
     }
-    const referencingItemIds = await findItemsReferencing(params.fromUserId, 'peopleIds', params.entityId);
+    const referencingItemIds = await findItemsReferencingPerson(params.fromUserId, params.entityId);
     await persistSimpleEntityMove<PersonInterface>(person, params, 'person');
     return referencingItemIds.length ? { ok: true, crossUserReferences: { peopleIds: referencingItemIds } } : { ok: true };
 }
@@ -554,14 +554,28 @@ async function reassignWorkContext(params: ReassignParams): Promise<ReassignResu
     if (!workContext) {
         return { ok: false, status: 404, error: 'WorkContext not found under fromUserId' };
     }
-    const referencingItemIds = await findItemsReferencing(params.fromUserId, 'workContextIds', params.entityId);
+    const referencingItemIds = await findItemsReferencingWorkContext(params.fromUserId, params.entityId);
     await persistSimpleEntityMove<WorkContextInterface>(workContext, params, 'workContext');
     return referencingItemIds.length ? { ok: true, crossUserReferences: { workContextIds: referencingItemIds } } : { ok: true };
 }
 
-/** Scans items under the source user for the given array reference field — used to surface cross-user refs in the response. */
-async function findItemsReferencing(userId: string, field: 'peopleIds' | 'workContextIds', refId: string): Promise<string[]> {
-    const items = await itemsDAO.findArray({ user: userId, [field]: refId });
+/**
+ * Items under `userId` that reference `personId` via either shape: the array `peopleIds` or the
+ * scalar `waitingForPersonId`. Both must be reported — otherwise a `waitingFor` item under
+ * fromUser whose target person was reassigned would be silently left dangling, with the caller
+ * never knowing the cross-user pointer exists.
+ */
+async function findItemsReferencingPerson(userId: string, personId: string): Promise<string[]> {
+    const items = await itemsDAO.findArray({
+        user: userId,
+        $or: [{ peopleIds: personId }, { waitingForPersonId: personId }],
+    } as never);
+    return items.map((i) => i._id).filter((id): id is string => Boolean(id));
+}
+
+/** WorkContext refs only flow through `workContextIds[]` — no scalar counterpart on the item. */
+async function findItemsReferencingWorkContext(userId: string, contextId: string): Promise<string[]> {
+    const items = await itemsDAO.findArray({ user: userId, workContextIds: contextId });
     return items.map((i) => i._id).filter((id): id is string => Boolean(id));
 }
 
@@ -569,6 +583,12 @@ async function findItemsReferencing(userId: string, field: 'peopleIds' | 'workCo
  * Person + workContext share a pure delete-then-create-with-new-user path. Both legs flow
  * through applyAndPublishOperation so the persistence + log + fan-out runs through the same
  * pipeline as every other write surface.
+ *
+ * `suppressReferenceCascade: true` on the source-delete leg: a reassign is a change of owner,
+ * not a true deletion, so referencing items under fromUserId must keep the cross-user id intact
+ * — the caller surfaces those via `crossUserReferences` instead of stripping them silently.
+ * Without this, the cascade would `$pull` the personId / workContextId from every referencing
+ * item and append a `[person removed: …]` breadcrumb, corrupting the audit trail.
  */
 async function persistSimpleEntityMove<T extends PersonInterface | WorkContextInterface>(
     entity: T,
@@ -582,7 +602,7 @@ async function persistSimpleEntityMove<T extends PersonInterface | WorkContextIn
     await applyAndPublishOperation(
         params.fromUserId,
         { entityType, entityId: params.entityId, snapshot: null, opType: 'delete' },
-        { deviceId, now, strict: true },
+        { deviceId, now, strict: true, suppressReferenceCascade: true },
     );
     await applyAndPublishOperation(
         params.toUserId,

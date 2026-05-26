@@ -41,6 +41,14 @@ export interface ApplyOptions {
      * webhook fan-out still fire — only `maybePushToGCal` is suppressed.
      */
     suppressGCalPushback?: boolean;
+    /**
+     * Skip the person/workContext → item reference cascade. Passed by the reassign path on its
+     * source-delete leg: the entity is not actually disappearing, it's just changing owner, so
+     * stripping references + appending `[person removed: …]` breadcrumbs from referencing items
+     * would be wrong. Cross-user references are reported back to the caller via
+     * `crossUserReferences` instead. No effect for item/routine deletes (cascade already no-ops).
+     */
+    suppressReferenceCascade?: boolean;
 }
 
 /**
@@ -139,7 +147,9 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     await notifyChange(op, notifyOpts);
 
     // Step 7 — reference cascades. See `runReferenceCascades` for the contract.
-    await runReferenceCascades([op]);
+    if (!opts.suppressReferenceCascade) {
+        await runReferenceCascades([op]);
+    }
 
     return op;
 }
@@ -242,7 +252,9 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     };
     await notifyChanges(ops, notifyOpts);
 
-    await runReferenceCascades(ops);
+    if (!opts.suppressReferenceCascade) {
+        await runReferenceCascades(ops);
+    }
 
     return ops;
 }

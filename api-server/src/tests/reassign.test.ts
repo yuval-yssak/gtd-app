@@ -366,6 +366,76 @@ describe('POST /sync/reassign', () => {
             expect(body.crossUserReferences?.peopleIds).toEqual([referencingItem._id]);
             expect(await peopleDAO.findByOwnerAndId(person._id, alice.userId)).toBeNull();
             expect(await peopleDAO.findByOwnerAndId(person._id, bob.userId)).not.toBeNull();
+            // Reference cascade MUST NOT fire on reassign: the source-leg delete is just a change
+            // of owner, not a true deletion. The referencing item under alice keeps the personId
+            // (now pointing into bob's account) and keeps its original title — no `[person
+            // removed: …]` breadcrumb. The caller is expected to surface cross-user refs via
+            // `crossUserReferences` instead.
+            const refItemAfter = await itemsDAO.findByOwnerAndId(referencingItem._id!, alice.userId);
+            expect(refItemAfter).not.toBeNull();
+            expect(refItemAfter?.peopleIds).toEqual([person._id]);
+            expect(refItemAfter?.title).toBe(referencingItem.title);
+            // No phantom `update` op from the suppressed cascade. The cascade calls
+            // `recordOperation` per affected item — asserting zero is the strongest possible
+            // guarantee that the cascade truly didn't run on the source-delete leg.
+            const cascadeOps = await operationsDAO.findArray({
+                user: alice.userId,
+                entityType: 'item',
+                entityId: referencingItem._id,
+                opType: 'update',
+            });
+            expect(cascadeOps).toHaveLength(0);
+        });
+
+        it('surfaces waitingForPersonId refs in crossUserReferences.peopleIds and preserves the scalar pointer', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const person = makePerson(alice.userId);
+            await peopleDAO.insertOne(person);
+            // A `waitingFor` item pointed at `person` via the scalar pointer (not the array).
+            // Pre-fix `findItemsReferencing` only scanned `peopleIds[]`, so the scalar ref was
+            // silently dropped from the response AND stripped by the cascade — double miss.
+            const waitingItem = makeItem(alice.userId, { status: 'waitingFor', waitingForPersonId: person._id });
+            await itemsDAO.insertOne(waitingItem);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'person', entityId: person._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { ok: boolean; crossUserReferences?: { peopleIds?: string[] } };
+            expect(body.crossUserReferences?.peopleIds).toEqual([waitingItem._id]);
+            // Source-side item still carries the scalar pointer + original title (no `[was
+            // waiting for: …]` breadcrumb — cascade suppressed on reassign).
+            const waitingAfter = await itemsDAO.findByOwnerAndId(waitingItem._id!, alice.userId);
+            expect(waitingAfter).not.toBeNull();
+            expect(waitingAfter?.waitingForPersonId).toBe(person._id);
+            expect(waitingAfter?.title).toBe(waitingItem.title);
+        });
+
+        it('surfaces every item carrying the reassigned person across the source user (multi-item fan-out)', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const person = makePerson(alice.userId);
+            await peopleDAO.insertOne(person);
+            const item1 = makeItem(alice.userId, { peopleIds: [person._id] });
+            const item2 = makeItem(alice.userId, { peopleIds: [person._id, 'other-person'] });
+            const item3 = makeItem(alice.userId, { status: 'waitingFor', waitingForPersonId: person._id });
+            await Promise.all([itemsDAO.insertOne(item1), itemsDAO.insertOne(item2), itemsDAO.insertOne(item3)]);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'person', entityId: person._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { ok: boolean; crossUserReferences?: { peopleIds?: string[] } };
+            expect(body.crossUserReferences?.peopleIds).toEqual(expect.arrayContaining([item1._id, item2._id, item3._id]));
+            expect(body.crossUserReferences?.peopleIds).toHaveLength(3);
+            // Every referencing item keeps its original ref + title.
+            const after1 = await itemsDAO.findByOwnerAndId(item1._id!, alice.userId);
+            const after2 = await itemsDAO.findByOwnerAndId(item2._id!, alice.userId);
+            const after3 = await itemsDAO.findByOwnerAndId(item3._id!, alice.userId);
+            expect(after1?.peopleIds).toEqual([person._id]);
+            expect(after2?.peopleIds).toEqual([person._id, 'other-person']);
+            expect(after3?.waitingForPersonId).toBe(person._id);
         });
 
         it('moves a workContext and reports cross-user references', async () => {
@@ -382,6 +452,18 @@ describe('POST /sync/reassign', () => {
             expect(res.status).toBe(200);
             const body = (await res.json()) as { ok: boolean; crossUserReferences?: { workContextIds?: string[] } };
             expect(body.crossUserReferences?.workContextIds).toEqual([referencingItem._id]);
+            // Reference cascade MUST NOT fire on reassign — same rationale as the person test above.
+            const refItemAfter = await itemsDAO.findByOwnerAndId(referencingItem._id!, alice.userId);
+            expect(refItemAfter).not.toBeNull();
+            expect(refItemAfter?.workContextIds).toEqual([wc._id]);
+            expect(refItemAfter?.title).toBe(referencingItem.title);
+            const cascadeOps = await operationsDAO.findArray({
+                user: alice.userId,
+                entityType: 'item',
+                entityId: referencingItem._id,
+                opType: 'update',
+            });
+            expect(cascadeOps).toHaveLength(0);
         });
     });
 
