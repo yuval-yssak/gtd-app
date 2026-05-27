@@ -4076,6 +4076,99 @@ describe('POST /calendar/webhooks/google', () => {
         expect(config!.syncToken).toBe('tok-wh');
     });
 
+    it('releases the channel lock when the sync throws, so the next webhook is not coalesced forever', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await calendarSyncConfigsDAO.upsertWebhookFields('sync-config-1', 'ch-throw', 'res-throw', dayjs().add(7, 'day').toISOString());
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        // First webhook delivery: listEventsFull throws — this used to leak the in-memory channel lock
+        // (channelStates stuck at 'running'), permanently jamming the channel until process restart.
+        const listEventsSpy = vi
+            .spyOn(GoogleCalendarProvider.prototype, 'listEventsFull')
+            .mockRejectedValueOnce(new Error('boom — simulated MongoDB E11000 inside sync'))
+            .mockResolvedValueOnce({ events: [], nextSyncToken: 'tok-after-throw' });
+
+        const makeWebhookRequest = () =>
+            app.fetch(
+                new Request('http://localhost:4000/calendar/webhooks/google', {
+                    method: 'POST',
+                    headers: { 'x-goog-channel-id': 'ch-throw', 'x-goog-resource-id': 'res-throw', 'x-goog-resource-state': 'exists' },
+                }),
+            );
+
+        const res1 = await makeWebhookRequest();
+        expect(res1.status).toBe(200);
+
+        // Wait for the first (throwing) sync to settle and release the lock.
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const res2 = await makeWebhookRequest();
+        expect(res2.status).toBe(200);
+
+        // Wait for the second sync to complete.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // The second webhook must have started a fresh sync (not been coalesced) — proving the lock was
+        // released even though the first sync threw. Both calls land on listEventsFull.
+        expect(listEventsSpy).toHaveBeenCalledTimes(2);
+
+        // And the second sync's syncToken was persisted, confirming end-to-end recovery.
+        const config = await calendarSyncConfigsDAO.findByOwnerAndId('sync-config-1', userId);
+        expect(config!.syncToken).toBe('tok-after-throw');
+    });
+
+    it('releases the channel lock even when a delivery was queued during the throwing sync', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await calendarSyncConfigsDAO.upsertWebhookFields('sync-config-1', 'ch-throw-q', 'res-throw-q', dayjs().add(7, 'day').toISOString());
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        // First listEventsFull: slow + throws. The second webhook arrives while this one is in flight,
+        // so the lock transitions running → queued before the throw. Naive cleanup (finishWebhookSync
+        // in the catch) would leave state at 'running' with no runner, jamming the channel until a
+        // second post-error delivery arrives. delete()-based cleanup recovers on the very next delivery.
+        const listEventsSpy = vi
+            .spyOn(GoogleCalendarProvider.prototype, 'listEventsFull')
+            .mockImplementationOnce(async () => {
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                throw new Error('boom — simulated MongoDB E11000 inside sync');
+            })
+            .mockResolvedValueOnce({ events: [], nextSyncToken: 'tok-after-throw-q' });
+
+        const makeWebhookRequest = () =>
+            app.fetch(
+                new Request('http://localhost:4000/calendar/webhooks/google', {
+                    method: 'POST',
+                    headers: { 'x-goog-channel-id': 'ch-throw-q', 'x-goog-resource-id': 'res-throw-q', 'x-goog-resource-state': 'exists' },
+                }),
+            );
+
+        // Fire deliveries 1 and 2 back-to-back so #2 arrives while #1's sync is still running.
+        const res1 = await makeWebhookRequest();
+        const res2 = await makeWebhookRequest();
+        expect(res1.status).toBe(200);
+        expect(res2.status).toBe(200);
+
+        // Wait for the first (throwing) sync to settle and clear the lock.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+
+        // Now fire delivery 3 — it must start a fresh sync, not be coalesced into a phantom queue.
+        const res3 = await makeWebhookRequest();
+        expect(res3.status).toBe(200);
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // Two spy calls: the throwing one (delivery 1) and the recovery one (delivery 3). Delivery 2
+        // is correctly dropped — its queued re-run never runs because we don't drain queues on error.
+        expect(listEventsSpy).toHaveBeenCalledTimes(2);
+
+        // Delivery 3 persisted its syncToken — end-to-end recovery confirmed.
+        const config = await calendarSyncConfigsDAO.findByOwnerAndId('sync-config-1', userId);
+        expect(config!.syncToken).toBe('tok-after-throw-q');
+    });
+
     it('coalesces concurrent notifications into one in-flight sync plus one queued re-run', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -9060,7 +9153,14 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         const userId = await getUserId(sessionCookie);
         const activeRoutine = await setupRoutineAndIntegration(userId);
 
-        const instanceEventId = 'gcal-evt-master_20260526T123000Z';
+        // Date must be strictly after today-in-config-TZ; the past-cutoff guard in applyExceptionToItems
+        // skips orphan-create otherwise. 7 days is well clear of any test-runner-vs-integration TZ skew.
+        const futureDay = dayjs().add(7, 'day');
+        const futureYmd = futureDay.format('YYYY-MM-DD');
+        const futureYmdCompact = futureDay.format('YYYYMMDD');
+        const instanceEventId = `gcal-evt-master_${futureYmdCompact}T123000Z`;
+        const newStart = `${futureYmd}T14:00:00Z`;
+        const newEnd = `${futureYmd}T15:00:00Z`;
         // Trashed twin on a DIFFERENT (paused) routine, still squatting the instance slot.
         await itemsDAO.insertOne({
             _id: 'item-trashed-twin',
@@ -9069,19 +9169,19 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
             title: 'All-Hands (old)',
             routineId: 'routine-paused',
             calendarInstanceEventId: instanceEventId,
-            timeStart: '2026-05-26T12:30:00Z',
-            timeEnd: '2026-05-26T13:30:00Z',
+            timeStart: `${futureYmd}T12:30:00Z`,
+            timeEnd: `${futureYmd}T13:30:00Z`,
             createdTs: dayjs().toISOString(),
             updatedTs: dayjs().toISOString(),
         });
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
             {
-                originalDate: '2026-05-26',
+                originalDate: futureYmd,
                 type: 'modified',
                 googleEventId: instanceEventId,
-                newTimeStart: '2026-05-26T14:00:00Z',
-                newTimeEnd: '2026-05-26T15:00:00Z',
+                newTimeStart: newStart,
+                newTimeEnd: newEnd,
                 title: 'All-Hands',
             },
         ]);
@@ -9100,7 +9200,7 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         const [item] = freshForActive;
         if (!item) throw new Error('expected one fresh calendar item');
         expect(item.calendarInstanceEventId).toBe(instanceEventId);
-        expect(item.timeStart).toBe('2026-05-26T14:00:00Z');
+        expect(item.timeStart).toBe(newStart);
         expect(item.title).toBe('All-Hands');
     });
 
@@ -9111,7 +9211,12 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         const userId = await getUserId(sessionCookie);
         const activeRoutine = await setupRoutineAndIntegration(userId);
 
-        const instanceEventId = 'gcal-evt-master_20260526T123000Z';
+        const futureDay = dayjs().add(7, 'day');
+        const futureYmd = futureDay.format('YYYY-MM-DD');
+        const futureYmdCompact = futureDay.format('YYYYMMDD');
+        const instanceEventId = `gcal-evt-master_${futureYmdCompact}T123000Z`;
+        const newStart = `${futureYmd}T14:00:00Z`;
+        const newEnd = `${futureYmd}T15:00:00Z`;
         await itemsDAO.insertOne({
             _id: 'item-done-twin',
             user: userId,
@@ -9119,19 +9224,19 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
             title: 'All-Hands (completed)',
             routineId: 'routine-paused',
             calendarInstanceEventId: instanceEventId,
-            timeStart: '2026-05-26T12:30:00Z',
-            timeEnd: '2026-05-26T13:30:00Z',
+            timeStart: `${futureYmd}T12:30:00Z`,
+            timeEnd: `${futureYmd}T13:30:00Z`,
             createdTs: dayjs().toISOString(),
             updatedTs: dayjs().toISOString(),
         });
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
             {
-                originalDate: '2026-05-26',
+                originalDate: futureYmd,
                 type: 'modified',
                 googleEventId: instanceEventId,
-                newTimeStart: '2026-05-26T14:00:00Z',
-                newTimeEnd: '2026-05-26T15:00:00Z',
+                newTimeStart: newStart,
+                newTimeEnd: newEnd,
                 title: 'All-Hands',
             },
         ]);
@@ -9148,7 +9253,7 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         const [item] = freshForActive;
         if (!item) throw new Error('expected one fresh calendar item');
         expect(item.calendarInstanceEventId).toBe(instanceEventId);
-        expect(item.timeStart).toBe('2026-05-26T14:00:00Z');
+        expect(item.timeStart).toBe(newStart);
     });
 
     it('dead-twin demote: live `calendar` row on the SAME routine is NOT demoted (existing race-loser path runs)', async () => {
@@ -9159,7 +9264,12 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         const userId = await getUserId(sessionCookie);
         const activeRoutine = await setupRoutineAndIntegration(userId);
 
-        const instanceEventId = 'gcal-evt-master_20260526T123000Z';
+        const futureDay = dayjs().add(7, 'day');
+        const futureYmd = futureDay.format('YYYY-MM-DD');
+        const futureYmdCompact = futureDay.format('YYYYMMDD');
+        const instanceEventId = `gcal-evt-master_${futureYmdCompact}T123000Z`;
+        const newStart = `${futureYmd}T14:00:00Z`;
+        const newEnd = `${futureYmd}T15:00:00Z`;
         // Live race-winner already inserted by some other path on the SAME routine.
         await itemsDAO.insertOne({
             _id: 'item-race-winner',
@@ -9168,8 +9278,8 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
             title: 'All-Hands (existing)',
             routineId: activeRoutine._id,
             calendarInstanceEventId: instanceEventId,
-            timeStart: '2026-05-26T12:30:00Z',
-            timeEnd: '2026-05-26T13:30:00Z',
+            timeStart: `${futureYmd}T12:30:00Z`,
+            timeEnd: `${futureYmd}T13:30:00Z`,
             createdTs: dayjs().toISOString(),
             updatedTs: dayjs().toISOString(),
         });
@@ -9182,11 +9292,11 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
             {
-                originalDate: '2026-05-26',
+                originalDate: futureYmd,
                 type: 'modified',
                 googleEventId: instanceEventId,
-                newTimeStart: '2026-05-26T14:00:00Z',
-                newTimeEnd: '2026-05-26T15:00:00Z',
+                newTimeStart: newStart,
+                newTimeEnd: newEnd,
                 title: 'All-Hands (updated)',
             },
         ]);
@@ -9198,7 +9308,7 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         const winner = await itemsDAO.findByOwnerAndId('item-race-winner', userId);
         expect(winner?.calendarInstanceEventId).toBe(instanceEventId);
         expect(winner?.title).toBe('All-Hands (updated)');
-        expect(winner?.timeStart).toBe('2026-05-26T14:00:00Z');
+        expect(winner?.timeStart).toBe(newStart);
 
         // No second item created — applyExceptionAfterDuplicate patched the winner instead.
         const allForActive = await itemsDAO.findArray({ user: userId, routineId: activeRoutine._id });

@@ -3274,7 +3274,19 @@ calendarRoutes.post('/webhooks/google', async (c) => {
 /** Runs runWebhookSync, then re-runs while another delivery has been queued during the current run. */
 async function runWebhookSyncLoop(config: CalendarSyncConfigInterface, channelId: string): Promise<void> {
     while (true) {
-        await runWebhookSync(config);
+        // If runWebhookSync throws, we must clear `channelStates` (or it stays stuck and every future
+        // delivery for this channel coalesces into a re-run that never fires for the lifetime of the
+        // process). We also stop the loop on error: a queued re-run would just re-trigger the same
+        // failure tightly; the next genuine webhook delivery will retry once the lock is free.
+        try {
+            await runWebhookSync(config);
+        } catch (err) {
+            // Hard delete rather than finishWebhookSync: if a delivery was queued during the throwing
+            // sync, finishWebhookSync would leave state at 'running' with no live runner — the next
+            // webhook would then coalesce into 'queued' and still not start a sync.
+            channelStates.delete(channelId);
+            throw err;
+        }
         const hasQueuedRerun = finishWebhookSync(channelId);
         if (!hasQueuedRerun) {
             return;
