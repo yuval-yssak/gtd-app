@@ -61,6 +61,34 @@ describe('validateOperation — happy path', () => {
         expect(result.ok).toBe(true);
     });
 
+    // Regression: all-day calendar items store a date-only `YYYY-MM-DD` for timeStart/timeEnd
+    // (the GCal `{ date }` form). The floatingDateTime schema used to require a `T`, so marking
+    // an all-day calendar item done 400'd on `snapshot.timeStart` and the completion never landed.
+    it('accepts date-only timeStart/timeEnd on a calendar item (all-day)', () => {
+        const snapshot = baseItem({
+            status: 'calendar',
+            timeStart: '2026-05-27',
+            timeEnd: '2026-05-28',
+            allDay: true,
+        });
+        const result = validateOperation(baseOp({}, snapshot));
+        expect(result.ok).toBe(true);
+    });
+
+    it('accepts date-only timeStart/timeEnd on a done item (all-day completion)', () => {
+        const snapshot = baseItem({ status: 'done', timeStart: '2026-05-27', timeEnd: '2026-05-28', allDay: true });
+        const result = validateOperation(baseOp({}, snapshot));
+        expect(result.ok).toBe(true);
+    });
+
+    // Guards the date-only branch of floatingDateTime: a malformed date (un-padded month) must still
+    // be rejected, so widening to YYYY-MM-DD didn't open the gate to arbitrary strings.
+    it('rejects a malformed date-only timeStart (un-padded month)', () => {
+        const snapshot = baseItem({ status: 'calendar', timeStart: '2026-5-9' });
+        const result = validateOperation(baseOp({}, snapshot));
+        expect(result.ok).toBe(false);
+    });
+
     it('rejects floating wall-clock for createdTs (server timestamps must be UTC)', () => {
         const snapshot = baseItem({ createdTs: '2026-05-08T10:00:00' });
         const result = validateOperation(baseOp({}, snapshot));
@@ -236,6 +264,31 @@ describe('validateOperation — non-item entities', () => {
             opType: 'delete',
             entityId: 'r-1',
             snapshot: null,
+        });
+        expect(result.ok).toBe(true);
+    });
+
+    // floatingDateTime is shared with routineExceptions[].newTimeStart/newTimeEnd. An all-day
+    // routine instance moved to another all-day date is date-only, so the widened schema must
+    // accept it here too — this pins the shared-schema coupling.
+    it('accepts a routine modified-exception with date-only newTimeStart/newTimeEnd', () => {
+        const result = validateOperation({
+            entityType: 'routine',
+            opType: 'update',
+            entityId: 'r-1',
+            snapshot: {
+                _id: 'r-1',
+                user: 'user-1',
+                title: 'water plants',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '00:00', duration: 1440 },
+                active: true,
+                createdTs: '2026-05-08T10:00:00Z',
+                updatedTs: '2026-05-08T10:00:00Z',
+                routineExceptions: [{ date: '2026-05-27', type: 'modified', newTimeStart: '2026-05-28', newTimeEnd: '2026-05-29' }],
+            },
         });
         expect(result.ok).toBe(true);
     });

@@ -14,13 +14,22 @@ export const isoDateTime = z
  * calendar items deliberately store a local wall-clock time (e.g. "10:30 every day") and pair it
  * with the calendar's `timeZone` when sent to Google Calendar. Stamping a UTC offset onto these
  * values would shift them by the user's offset on every read.
+ *
+ * All-day calendar items store a date-only `YYYY-MM-DD` for `timeStart` / `timeEnd` (the GCal
+ * `{ date }` form), so the date-only shape is accepted too — otherwise marking an all-day calendar
+ * item done would 400 on `snapshot.timeStart` validation.
  */
 export const floatingDateTime = z
     .string()
     .min(1)
-    .refine((s) => !Number.isNaN(Date.parse(s)) && (/T.*(Z|[+-]\d{2}:\d{2})$/.test(s) || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s)), {
-        message: 'must be an ISO datetime, with or without a timezone suffix',
-    });
+    .refine(
+        (s) =>
+            /^\d{4}-\d{2}-\d{2}$/.test(s) ||
+            (!Number.isNaN(Date.parse(s)) && (/T.*(Z|[+-]\d{2}:\d{2})$/.test(s) || /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(s))),
+        {
+            message: 'must be an ISO datetime (with or without timezone suffix) or a YYYY-MM-DD date',
+        },
+    );
 
 export const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'must be a YYYY-MM-DD date' });
 
