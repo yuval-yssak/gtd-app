@@ -8,6 +8,7 @@ import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
 import routinesDAO from '../../dataAccess/routinesDAO.js';
 import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
+import { isDuplicateKeyError } from '../../lib/mongoErrors.js';
 import { advanceRoutineAfterDisposal } from '../../lib/routineItemGeneration.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
 import { type ItemInterface, ItemStatus } from '../../types/entities.js';
@@ -77,11 +78,6 @@ async function findRecentDuplicate(userId: string, contentHash: string): Promise
 /** Looks up an existing item by user+externalId. Null if none. */
 async function findByExternalId(userId: string, externalId: string): Promise<ItemInterface | null> {
     return itemsDAO.findOne({ user: userId, externalId });
-}
-
-/** Mongo duplicate-key error code. Surfaces from inserts that violate the (user, externalId) unique index. */
-function isDuplicateKeyError(err: unknown): boolean {
-    return err instanceof Error && 'code' in err && (err as { code: number }).code === 11000;
 }
 
 /**

@@ -16,6 +16,7 @@ import webhookDeliveriesDAO from '../dataAccess/webhookDeliveriesDAO.js';
 import webhookSubscriptionsDAO from '../dataAccess/webhookSubscriptionsDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { migrateDeviceSyncStateToPerUserCursor } from './deviceSyncStateMigration.js';
+import { dedupeActiveRoutinesPerGCalSeries } from './routineDuplicateMigration.js';
 
 // Assigned in loadDataAccess(); kept as let so closeDataAccess() can close it
 let dbClient: MongoClient;
@@ -58,6 +59,10 @@ async function loadDataAccess(customDBName?: string) {
     // Convert any legacy single-cursor-per-device rows to per-(device, user) shape.
     // Idempotent + boot-only — see deviceSyncStateMigration.ts.
     await migrateDeviceSyncStateToPerUserCursor(db);
+    // Collapse any duplicate active routines on the same GCal series, THEN build the unique index that
+    // forbids them. Order matters: the index build would crash boot if violating data still existed.
+    await dedupeActiveRoutinesPerGCalSeries(db);
+    await routinesDAO.ensureUniqueActiveSeriesIndex();
     auth = createAuth(db);
 }
 

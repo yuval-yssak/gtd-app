@@ -2602,6 +2602,275 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         expect(routine.calendarEventId).toBe(bareMasterId);
     });
 
+    // Fix A regression: when duplicate routines linger on the same (user, calendarEventId, integration)
+    // triple, an inbound master update must resolve to the LIVE routine — never a dead duplicate. Pre-fix,
+    // findExistingRoutineForEvent returned the first arbitrary match, so the update could land on a
+    // paused/replaced routine while the active one drifted out of sync.
+    it('findExistingRoutineForEvent prefers the active routine when a dead duplicate shares the series', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const sharedEventId = 'shared-master-event';
+        const longAgo = dayjs().subtract(30, 'day').toISOString();
+        // Dead duplicate: more recently updated than the live one, so a naive "first/most-recent" pick
+        // would wrongly choose it. The active filter must override recency.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-dead',
+                title: 'Old name',
+                active: false,
+                calendarEventId: sharedEventId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                updatedTs: dayjs().subtract(1, 'day').toISOString(),
+            }),
+        );
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-live',
+                title: 'Old name',
+                active: true,
+                calendarEventId: sharedEventId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                updatedTs: longAgo,
+            }),
+        );
+
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: sharedEventId,
+                    title: 'New name',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-fixA-1',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // The inbound rename landed on the live routine; the dead duplicate is untouched.
+        const live = await routinesDAO.findByOwnerAndId('routine-live', userId);
+        const dead = await routinesDAO.findByOwnerAndId('routine-dead', userId);
+        expect(live?.title).toBe('New name');
+        expect(dead?.title).toBe('Old name');
+    });
+
+    it('findExistingRoutineForEvent falls back to most-recently-updated when every match is inactive', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const sharedEventId = 'all-dead-master-event';
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-older',
+                title: 'Old name',
+                active: false,
+                calendarEventId: sharedEventId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                updatedTs: dayjs().subtract(10, 'day').toISOString(),
+            }),
+        );
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-newer',
+                title: 'Old name',
+                active: false,
+                calendarEventId: sharedEventId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                updatedTs: dayjs().subtract(2, 'day').toISOString(),
+            }),
+        );
+
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: sharedEventId,
+                    title: 'New name',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-fixA-2',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // No active routine exists → deterministic fallback to the most-recently-updated dead one.
+        const newer = await routinesDAO.findByOwnerAndId('routine-newer', userId);
+        const older = await routinesDAO.findByOwnerAndId('routine-older', userId);
+        expect(newer?.title).toBe('New name');
+        expect(older?.title).toBe('Old name');
+        // No third routine was created — the existing match absorbed the update.
+        const routines = await routinesDAO.findArray({ user: userId, calendarEventId: sharedEventId });
+        expect(routines).toHaveLength(2);
+    });
+
+    it('findExistingRoutineForEvent resolves a single matching routine unchanged (regression guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const sharedEventId = 'single-master-event';
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-only',
+                title: 'Old name',
+                active: true,
+                calendarEventId: sharedEventId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                updatedTs: dayjs().subtract(30, 'day').toISOString(),
+            }),
+        );
+
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: sharedEventId,
+                    title: 'New name',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-fixA-3',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routines = await routinesDAO.findArray({ user: userId, calendarEventId: sharedEventId });
+        expect(routines).toHaveLength(1);
+        const only = await routinesDAO.findByOwnerAndId('routine-only', userId);
+        expect(only?.title).toBe('New name');
+    });
+
+    // Fix B2 regression: createRoutineFromGCal races a concurrent webhook that already created the live
+    // routine. The unique partial index makes our insert E11000. Pre-fix that threw out of the whole
+    // sync; now we re-resolve via findExistingRoutineForEvent and update the race winner — no duplicate,
+    // no throw. Mirrors the item-side naked-relink race test above.
+    it('createRoutineFromGCal that races an E11000 re-resolves and updates the existing routine (no duplicate, 200)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const sharedEventId = 'race-master-event';
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+
+        // Simulate the concurrent winner: the first time our insert runs for a routine bound to this
+        // series, slip a rival active routine into the DB first (so the real insert collides on the
+        // uniq_active_routine_per_gcal_series index), then forward to the real insertOne.
+        const realInsertOne = routinesDAO.insertOne.bind(routinesDAO);
+        let rivalInjected = false;
+        vi.spyOn(routinesDAO, 'insertOne').mockImplementation(async (doc, options) => {
+            const incoming = doc as Partial<RoutineInterface>;
+            if (!rivalInjected && incoming.calendarEventId === sharedEventId && incoming._id !== 'routine-rival') {
+                rivalInjected = true;
+                await realInsertOne(
+                    makeRoutine(userId, {
+                        _id: 'routine-rival',
+                        title: 'Rival winner',
+                        active: true,
+                        calendarEventId: sharedEventId,
+                        calendarIntegrationId: 'int-1',
+                        calendarSyncConfigId: 'sync-config-1',
+                        updatedTs: dayjs().subtract(1, 'hour').toISOString(),
+                    }),
+                );
+            }
+            return await realInsertOne(doc, options);
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: sharedEventId,
+                    title: 'Inbound name',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-race-routine',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const warnSpy = vi.spyOn(console, 'warn');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        // Sync survives the collision — no E11000 escapes.
+        expect(res.status).toBe(200);
+
+        // The E11000 catch path actually fired (guards against the test passing for the wrong reason,
+        // e.g. if Fix A resolved the rival before reaching createRoutineFromGCal).
+        expect(warnSpy.mock.calls.some(([msg]) => String(msg).includes('createRoutineFromGCal raced E11000'))).toBe(true);
+
+        // Exactly one routine on the series: the rival winner, updated to the inbound name (not duplicated).
+        const routines = await routinesDAO.findArray({ user: userId, calendarEventId: sharedEventId });
+        expect(routines).toHaveLength(1);
+        const [routine] = routines;
+        if (!routine) throw new Error('expected one routine');
+        expect(routine._id).toBe('routine-rival');
+        expect(routine.title).toBe('Inbound name');
+    });
+
+    // Fix B2 safety: a NON-duplicate error from the routine insert must NOT be swallowed by the E11000
+    // catch — it has to propagate so a real failure surfaces instead of silently dropping the routine.
+    it('createRoutineFromGCal re-throws a non-duplicate insert error (does not swallow real failures)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Non-E11000 failure on the create insert.
+        vi.spyOn(routinesDAO, 'insertOne').mockRejectedValueOnce(new Error('mongo blip — not a duplicate key'));
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'non-dup-error-event',
+                    title: 'Will fail',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-nondup',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        // The non-duplicate error escapes createRoutineFromGCal and is caught by the route's outer
+        // handler as a sync failure (502) — proving it was NOT swallowed by the E11000-only catch.
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(502);
+    });
+
     it('importCalendarEvents normalizes a suffixed recurringEventId on an instance so it is filtered as a series instance (not upserted as a standalone item)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

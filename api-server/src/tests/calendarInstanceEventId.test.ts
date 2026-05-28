@@ -200,6 +200,50 @@ describe('regenerateFutureRoutineItems — sets calendarInstanceEventId', () => 
         }
     });
 
+    it('skips an occurrence already owned by a sibling routine on the same GCal series, without throwing', async () => {
+        // Fix B3 regression: two routines bound to the SAME GCal series generate the same
+        // calendarInstanceEventId for the same date. Pre-fix, the second insert hit the
+        // (user, calendarInstanceEventId) unique index and the raw E11000 propagated out of the
+        // whole webhook sync. Now the colliding occurrence is skipped and the rest still insert.
+        const tz = 'UTC';
+        const now = dayjs().toISOString();
+
+        // Sibling routine (different _id) already owns tomorrow's instance on the shared master.
+        const tomorrow = dayjs().add(1, 'day').utc().startOf('day');
+        const tomorrowDatePart = tomorrow.format('YYYYMMDD');
+        const sharedInstanceId = `${MASTER}_${tomorrowDatePart}T090000Z`;
+        await itemsDAO.insertOne({
+            _id: 'sibling-item',
+            user: USER,
+            status: 'calendar',
+            title: 'Sibling-owned occurrence',
+            routineId: 'routine-sibling',
+            timeStart: `${tomorrow.format('YYYY-MM-DD')}T09:00:00`,
+            timeEnd: `${tomorrow.format('YYYY-MM-DD')}T09:30:00`,
+            calendarEventId: MASTER,
+            calendarInstanceEventId: sharedInstanceId,
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        // Routine-under-test: daily, same master → tomorrow collides, every later date is free.
+        const routine = makeRoutine({ _id: 'routine-under-test' });
+        await routinesDAO.insertOne(routine);
+
+        // Must not throw despite the guaranteed E11000 on tomorrow's instance.
+        const ops = await regenerateFutureRoutineItems(routine, USER, now, tz);
+
+        const ownItems = await itemsDAO.findArray({ user: USER, routineId: routine._id });
+        expect(ownItems.length).toBeGreaterThan(0);
+        // The colliding date was skipped: none of this routine's items carry the sibling's instance id.
+        expect(ownItems.every((i) => i.calendarInstanceEventId !== sharedInstanceId)).toBe(true);
+        // Op count matches inserted items (the skipped occurrence produced no op).
+        expect(ops.filter((op) => op.opType === 'create').length).toBe(ownItems.length);
+        // The sibling's item is untouched.
+        const sibling = await itemsDAO.findOne({ _id: 'sibling-item' });
+        expect(sibling?.title).toBe('Sibling-owned occurrence');
+    });
+
     it('complex rrule (WEEKLY+BYDAY): all generated items still get the instance id', async () => {
         // Anchor in the recent past so the next BYDAY match falls inside the horizon.
         const routine = makeRoutine({
@@ -256,5 +300,49 @@ describe('normalizeMasterEventId', () => {
         // GCal has not been observed to emit this form; if it ever does, the regex would need to widen
         // to `_R\d{8}(T\d{6})?Z?$`. This test pins the current behavior so future changes are intentional.
         expect(normalizeMasterEventId('abc_R20260519Z')).toBe('abc_R20260519Z');
+    });
+});
+
+describe('routines uniq_active_routine_per_gcal_series index (Fix B1)', () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    // Base in-app routine: NO calendarEventId/calendarIntegrationId keys at all (mirrors how real
+    // in-app routines are stored — the keys are omitted, not set to null). Linked routines add them.
+    const baseRoutine = (overrides: Partial<RoutineInterface>): RoutineInterface => ({
+        _id: 'r-default',
+        user: USER,
+        title: 'Standup',
+        routineType: 'calendar',
+        rrule: 'FREQ=DAILY',
+        template: {},
+        active: true,
+        createdTs: now,
+        updatedTs: now,
+        calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+        ...overrides,
+    });
+    const linkedRoutine = (overrides: Partial<RoutineInterface>): RoutineInterface =>
+        baseRoutine({ calendarEventId: 'series-x', calendarIntegrationId: 'int-x', ...overrides });
+
+    it('rejects a second ACTIVE routine on the same (user, calendarEventId, integration)', async () => {
+        await routinesDAO.insertOne(linkedRoutine({ _id: 'r-1' }));
+        await expect(routinesDAO.insertOne(linkedRoutine({ _id: 'r-2' }))).rejects.toMatchObject({ code: 11000 });
+    });
+
+    it('allows an INACTIVE duplicate alongside the active one (partial filter on active:true)', async () => {
+        await routinesDAO.insertOne(linkedRoutine({ _id: 'r-active' }));
+        await expect(routinesDAO.insertOne(linkedRoutine({ _id: 'r-dead', active: false }))).resolves.toBeDefined();
+    });
+
+    it('allows two in-app routines with no calendarEventId (constraint guarded by $type:string)', async () => {
+        await routinesDAO.insertOne(baseRoutine({ _id: 'r-inapp-1' }));
+        await expect(routinesDAO.insertOne(baseRoutine({ _id: 'r-inapp-2' }))).resolves.toBeDefined();
+    });
+
+    it('allows multiple in-app routines that store an explicit calendarEventId:null (real staging data shape)', async () => {
+        // Regression for an index-build crash: real in-app routines were observed storing
+        // calendarEventId:null (not omitted). With $exists:true they would all fold under one index
+        // key and collide on build; $type:'string' correctly excludes null-valued routines.
+        await routinesDAO.insertOne({ ...baseRoutine({ _id: 'r-null-1' }), calendarEventId: null } as never);
+        await expect(routinesDAO.insertOne({ ...baseRoutine({ _id: 'r-null-2' }), calendarEventId: null } as never)).resolves.toBeDefined();
     });
 });

@@ -30,6 +30,7 @@ import {
 } from '../lib/calendarPushback.js';
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
+import { isDuplicateKeyError } from '../lib/mongoErrors.js';
 import { recordOperation } from '../lib/operationHelpers.js';
 import { normalizeMasterEventId, propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
@@ -1568,13 +1569,17 @@ async function findExistingRoutineForEvent(
     source: CalendarSource,
     ctx: SyncContext,
 ): Promise<RoutineInterface | undefined> {
-    const [byEventId] = await routinesDAO.findArray({
+    const byEventId = await routinesDAO.findArray({
         user: ctx.userId,
         calendarEventId: event.id,
         calendarIntegrationId: source.integration._id,
     });
-    if (byEventId) {
-        return byEventId;
+    if (hasAtLeastOne(byEventId)) {
+        // When duplicate routines linger on the same series, an inbound master update must land on the
+        // live one — never on a paused/replaced dead duplicate. Among live routines (or, if none are
+        // live, among all), prefer the most-recently-updated so selection is deterministic.
+        const live = byEventId.filter((routine) => routine.active);
+        return pickMostRecentlyUpdated(hasAtLeastOne(live) ? live : byEventId);
     }
     // Skip restore for cancelled masters — there's nothing to restore TO, and the caller will
     // immediately deactivate. Restoring then deactivating would emit a redundant op + flap.
@@ -1711,7 +1716,23 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
         updatedTs: ctx.now,
     };
 
-    await routinesDAO.insertOne(routine);
+    try {
+        await routinesDAO.insertOne(routine);
+    } catch (err) {
+        // The unique partial index (uniq_active_routine_per_gcal_series) makes a second active routine
+        // on the same (user, calendarEventId, integration) impossible. A concurrent webhook that already
+        // created the live routine makes us the race loser — re-resolve and update that one instead of
+        // duplicating. Mirrors the item-side race-loser pattern in createItemForOrphanedException.
+        if (isDuplicateKeyError(err)) {
+            const existing = await findExistingRoutineForEvent(event, rrule, source, ctx);
+            if (existing) {
+                console.warn(`[gcal-sync] createRoutineFromGCal raced E11000 — updating existing routine | eventId=${event.id} routineId=${existing._id}`);
+                await updateRoutineFromGCal(existing, event, rrule, source, ctx);
+                return;
+            }
+        }
+        throw err;
+    }
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: routine, opType: 'create', now: ctx.now }));
 
     // Generate the tail's calendar items here. updateRoutineFromGCal regenerates items on schedule
@@ -2926,10 +2947,6 @@ async function demoteDeadTwinAndRetryInsert(conflicting: ItemInterface, pending:
     console.log(
         `[gcal-sync] applyExceptionToItems: demoted dead twin + created orphan-exception item | routineId=${item.routineId} itemId=${itemId} demotedItemId=${conflictingId}`,
     );
-}
-
-function isDuplicateKeyError(err: unknown): boolean {
-    return err instanceof Error && 'code' in err && (err as { code: number }).code === 11000;
 }
 
 /**

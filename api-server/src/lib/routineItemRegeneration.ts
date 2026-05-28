@@ -5,6 +5,7 @@ import utc from 'dayjs/plugin/utc.js';
 import rrule from 'rrule';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { GCAL_OWNED_ROUTINE_KEYS, type ItemInterface, type OperationInterface, type RoutineInterface } from '../types/entities.js';
+import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
 
 /**
@@ -283,17 +284,39 @@ async function trashExistingFutureItems(routine: RoutineInterface, userId: strin
 async function insertFreshFutureItems(routine: RoutineInterface, userId: string, now: string, timeZone?: string): Promise<OperationInterface[]> {
     const claimedDates = await dateSetClaimedByNonTrashItems(routine._id, userId);
     const occurrences = getValidFutureOccurrences(routine).filter((d) => !claimedDates.has(d.toISOString().slice(0, 10)));
-    const ops = await Promise.all(
-        occurrences.map(async (date) => {
-            const item = buildCalendarItem(userId, routine, date, now, timeZone);
-            await itemsDAO.insertOne(item);
-            if (!item._id) {
-                return null;
-            }
-            return recordOperation(userId, { entityType: 'item', entityId: item._id, snapshot: item, opType: 'create', now });
-        }),
-    );
+    const ops = await Promise.all(occurrences.map((date) => insertFreshOccurrence(routine, userId, now, date, timeZone)));
     return ops.filter((op): op is OperationInterface => op !== null);
+}
+
+/**
+ * Inserts a single occurrence's calendar item, returning its create op. A duplicate-key collision on
+ * the `(user, calendarInstanceEventId)` index — which happens when a sibling routine bound to the SAME
+ * GCal series already owns this instance date — is swallowed (logged, skipped) so one stray duplicate
+ * can never reject the whole regeneration and throw the webhook sync. The other occurrences still insert.
+ */
+async function insertFreshOccurrence(
+    routine: RoutineInterface,
+    userId: string,
+    now: string,
+    date: Date,
+    timeZone?: string,
+): Promise<OperationInterface | null> {
+    const item = buildCalendarItem(userId, routine, date, now, timeZone);
+    try {
+        await itemsDAO.insertOne(item);
+    } catch (err) {
+        if (isDuplicateKeyError(err)) {
+            console.warn(
+                `[routine] skipped duplicate instance — already owned by a sibling on this GCal series | routineId=${routine._id} calendarInstanceEventId=${item.calendarInstanceEventId} date=${date.toISOString().slice(0, 10)}`,
+            );
+            return null;
+        }
+        throw err;
+    }
+    if (!item._id) {
+        return null;
+    }
+    return recordOperation(userId, { entityType: 'item', entityId: item._id, snapshot: item, opType: 'create', now });
 }
 
 /** Dates still held by non-trash items of this routine — mirrors the client horizon generator's dedup. */
