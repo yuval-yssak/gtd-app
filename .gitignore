@@ -53,5 +53,8 @@ test-results/
 # Stop-hook sentinel — touched by PostToolUse, consumed by post-change-checks.sh
 .claude/.edited-this-turn
 
+# Scheduled-tasks singleton lock (per-session runtime state, machine-specific)
+.claude/scheduled_tasks.lock
+
 # GCal sync smoke test results (per-run, not shared)
 e2e/gcal-sync-smoke/session-*-results.md
