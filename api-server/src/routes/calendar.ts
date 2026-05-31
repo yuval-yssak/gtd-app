@@ -1838,8 +1838,16 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     };
     const updated = clearOmittedGCalOwnedRoutineFields(mergedWithGCalOwned, event);
 
-    await routinesDAO.replaceById(routineId, updated);
-    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
+    // No-op guard: `structurallyNewer` uses `>=` (GCal wins ties within the same second), so an
+    // *unchanged* GCal event whose `updated` equals the stored `lastSyncedFromGCalTs` still counts as
+    // "structurally newer" and falls through here every webhook fire. Without this, the routine was
+    // rewritten with an identical snapshot (only `updatedTs` differs) and a redundant `update` op was
+    // emitted each sync — bloating the op log and spamming web push. Skip only the routine-entity
+    // write when nothing but `updatedTs` changed; item-side propagation below has its own guards.
+    if (stableStringify({ ...updated, updatedTs: '' }) !== stableStringify({ ...fresh, updatedTs: '' })) {
+        await routinesDAO.replaceById(routineId, updated);
+        ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
+    }
 
     // When GCal adds UNTIL (series split via "this and all following"), trash items past the UNTIL date.
     if (newlyGainsUntil) {
@@ -2837,6 +2845,22 @@ async function applyModifiedExceptionToMatches(
     await Promise.all(matches.map((item) => applyModifiedExceptionToOne(item, ex, sharedFields, ctx)));
 }
 
+/**
+ * True iff applying `setFields` (minus the always-present `updatedTs` bump) and removing `unsetFields`
+ * leaves the item structurally unchanged. Lets the exception-apply path skip the write + op when an
+ * inbound modified-exception carries the same values the item already holds — the per-item analogue
+ * of the `routineExceptions` deep-equal guard in `syncRoutineExceptions`.
+ */
+function isItemUpdateNoop(item: ItemInterface, setFields: Record<string, unknown>, unsetFields: Record<string, ''>): boolean {
+    if (Object.keys(unsetFields).length > 0) {
+        // An unset only happens when the item currently carries that key (guarded at the call site),
+        // so any pending unset is by definition a real change.
+        return false;
+    }
+    const { updatedTs: _ignored, ...meaningfulSetFields } = setFields;
+    return Object.entries(meaningfulSetFields).every(([key, value]) => stableStringify(item[key as keyof ItemInterface]) === stableStringify(value));
+}
+
 async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalException, sharedFields: Record<string, unknown>, ctx: SyncContext): Promise<void> {
     const itemId = item._id;
     if (!itemId) {
@@ -2856,6 +2880,14 @@ async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalExceptio
         if (ex[key] === undefined && item[key] !== undefined) {
             unsetFields[key] = '';
         }
+    }
+    // No-op guard: `getExceptions` is a time-range (not incremental) query, so every webhook fire
+    // re-surfaces the same modified instances. Without this, each fire rewrote the matched item with
+    // an identical snapshot (only `updatedTs` differs) and emitted a redundant `update` op — flooding
+    // the operations log and spamming web push. Skip when the projected next-state equals the current
+    // item ignoring `updatedTs` (the routine `routineExceptions` write has the symmetric guard).
+    if (isItemUpdateNoop(item, setFields, unsetFields)) {
+        return;
     }
     const update = Object.keys(unsetFields).length > 0 ? { $set: setFields, $unset: unsetFields } : { $set: setFields };
     // Conditional on `updatedTs` — a concurrent /sync/push edit landing between resolve and apply

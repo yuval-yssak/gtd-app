@@ -601,6 +601,181 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(unchanged?.updatedTs).toBe('2026-01-01T00:00:00.000Z');
     });
 
+    it('skips the item write + op when a modified exception re-surfaces values the item already holds (no-op churn guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Routine already carries this exception, so syncRoutineExceptions' own guard short-circuits the
+        // routine write. The item below already holds the exact times the modified exception re-surfaces,
+        // so applyModifiedExceptionToOne must also skip — getExceptions is a time-range (not incremental)
+        // query, so each webhook fire would otherwise rewrite this item with an identical snapshot.
+        const newTimeStart = '2025-06-09T10:00:00Z';
+        const newTimeEnd = '2025-06-09T10:30:00Z';
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-itemnoop',
+            calendarIntegrationId: 'int-1',
+            routineExceptions: [{ date: '2025-06-09', type: 'modified', newTimeStart, newTimeEnd }],
+        });
+        await routinesDAO.insertOne(routine);
+
+        const itemTs = '2026-01-01T00:00:00.000Z';
+        await itemsDAO.insertOne({
+            _id: 'item-noop-ex',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'inst-noop',
+            timeStart: newTimeStart,
+            timeEnd: newTimeEnd,
+            createdTs: itemTs,
+            updatedTs: itemTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: '2025-06-09', googleEventId: 'inst-noop', type: 'modified', title: 'Standup', newTimeStart, newTimeEnd },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const itemOps = await operationsDAO.findArray({ entityId: 'item-noop-ex', entityType: 'item' });
+        expect(itemOps).toHaveLength(0);
+        // updatedTs untouched — the item was not rewritten.
+        const unchanged = await itemsDAO.findByOwnerAndId('item-noop-ex', userId);
+        expect(unchanged?.updatedTs).toBe(itemTs);
+    });
+
+    it('skips the routine master write + op when an unchanged GCal event re-syncs (no-op churn guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Steady state: the GCal master is untouched, so `event.updated` equals the routine's stored
+        // `lastSyncedFromGCalTs`. `structurallyNewer` uses `>=` (GCal wins same-second ties), so this
+        // still passes the structural-newer gate and falls through to the master merge — but the merged
+        // routine is byte-identical to what's stored, so no routine write and no `update` op should fire.
+        const gcalUpdated = '2026-01-01T00:00:00.000Z';
+        // 09:00 Jerusalem (UTC+3 in June) / 30-minute duration → matches makeRoutine's default template.
+        const masterTimeStart = '2025-06-09T09:00:00+03:00';
+        const masterTimeEnd = '2025-06-09T09:30:00+03:00';
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-master-noop',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                lastSyncedFromGCalTs: gcalUpdated,
+                updatedTs: '2026-02-01T00:00:00.000Z',
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-master-noop',
+                    title: 'Standup',
+                    timeStart: masterTimeStart,
+                    timeEnd: masterTimeEnd,
+                    updated: gcalUpdated,
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-master-noop',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routineOps = await operationsDAO.findArray({ entityId: 'routine-1', entityType: 'routine' });
+        expect(routineOps).toHaveLength(0);
+        // updatedTs untouched — the routine was not rewritten.
+        const unchanged = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(unchanged?.updatedTs).toBe('2026-02-01T00:00:00.000Z');
+    });
+
+    it('still writes the item when only notes change but times are unchanged (no-op guard lets real changes through)', async () => {
+        // Positive-direction guard check: same times as the item already holds, but a new notes value.
+        // The per-field comparison in isItemUpdateNoop must report "changed" so the write proceeds.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const timeStart = '2025-06-09T09:00:00Z';
+        const timeEnd = '2025-06-09T09:30:00Z';
+        await routinesDAO.insertOne(makeRoutine(userId, { calendarEventId: 'gcal-evt-notesonly', calendarIntegrationId: 'int-1' }));
+        await itemsDAO.insertOne({
+            _id: 'item-notes-change',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            notes: 'old agenda',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'inst-notes',
+            timeStart,
+            timeEnd,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: '2025-06-09',
+                googleEventId: 'inst-notes',
+                type: 'modified',
+                title: 'Standup',
+                notes: '<p>new agenda</p>',
+                newTimeStart: timeStart,
+                newTimeEnd: timeEnd,
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findByOwnerAndId('item-notes-change', userId);
+        expect(item?.notes).toBe('new agenda');
+        const itemOps = await operationsDAO.findArray({ entityId: 'item-notes-change', entityType: 'item' });
+        expect(itemOps.length).toBeGreaterThan(0);
+    });
+
+    it('still writes the item when a modified exception drops a GCal-owned override the item carried (unset branch)', async () => {
+        // Unset-branch guard check: the item carries an `attendees` override; the inbound exception omits
+        // it (instance reverted to master inheritance), so unsetFields is non-empty. isItemUpdateNoop must
+        // return false on any pending unset so the clearing write proceeds.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const timeStart = '2025-06-09T09:00:00Z';
+        const timeEnd = '2025-06-09T09:30:00Z';
+        await routinesDAO.insertOne(makeRoutine(userId, { calendarEventId: 'gcal-evt-unset', calendarIntegrationId: 'int-1' }));
+        await itemsDAO.insertOne({
+            _id: 'item-unset-attendees',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'inst-unset',
+            attendees: [{ email: 'extra@example.com', responseStatus: 'accepted' }],
+            timeStart,
+            timeEnd,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        // Exception omits `attendees` ⇒ instance inherits master ⇒ the override must be unset on the item.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: '2025-06-09', googleEventId: 'inst-unset', type: 'modified', title: 'Standup', newTimeStart: timeStart, newTimeEnd: timeEnd },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findByOwnerAndId('item-unset-attendees', userId);
+        expect(item?.attendees).toBeUndefined();
+        const itemOps = await operationsDAO.findArray({ entityId: 'item-unset-attendees', entityType: 'item' });
+        expect(itemOps.length).toBeGreaterThan(0);
+    });
+
     it('merges a modified exception and updates item times', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
