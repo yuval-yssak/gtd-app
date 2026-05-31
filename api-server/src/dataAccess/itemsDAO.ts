@@ -35,6 +35,32 @@ class ItemsDAO extends AbstractDAO<ItemInterface> {
             { key: { user: 1, waitingForPersonId: 1 } },
         ]);
     }
+
+    /**
+     * Builds the unique partial index that forbids two LIVE calendar items on the same standalone GCal
+     * event. Kept OUT of `init` and called only after `dedupeCalendarItemsPerEvent` has run, because
+     * `createIndexes` rejects (and would crash boot) if pre-existing data already violates it.
+     *
+     * The partial filter is `status: 'calendar'` AND `calendarEventId: { $type: 'string' }`:
+     *  - `status: 'calendar'` (equality — the only `status` predicate a partial filter permits; `$ne`
+     *    is not allowed) scopes the constraint to the live state. A `trash`/`done` row legitimately
+     *    keeps its `calendarEventId` (so `findCalendarItemByEventId` can revive a trashed item) and
+     *    must NOT collide with a freshly-recreated live row — e.g. cancel-then-recreate, move-to-past-
+     *    then-revive. Scoping to `'calendar'` lets those coexist while still forbidding two live rows.
+     *  - `calendarEventId: { $type: 'string' }` keeps everything but standalone calendar items out:
+     *    routine-generated instance items carry `calendarInstanceEventId` (not `calendarEventId`) and
+     *    in-app items omit the field. Mirrors the `calendarInstanceEventId` index above.
+     */
+    async ensureUniqueCalendarEventIndex() {
+        await this._collection.createIndexes([
+            {
+                key: { user: 1, calendarEventId: 1 },
+                unique: true,
+                partialFilterExpression: { status: 'calendar', calendarEventId: { $type: 'string' } },
+                name: 'uniq_calendar_item_per_event',
+            },
+        ]);
+    }
 }
 
 export default new ItemsDAO();

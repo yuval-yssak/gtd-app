@@ -4,6 +4,7 @@ import { authenticateRequest } from '../auth/middleware.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
+import { healDuplicateCalendarItems, healStuckGCalRoutines } from '../lib/calendarHeal.js';
 import { computePurgeFloor, type PurgeFloor } from '../lib/purgeFloor.js';
 import type { AuthVariables } from '../types/authTypes.js';
 
@@ -75,4 +76,28 @@ export const maintenanceRoutes = new Hono<{ Variables: AuthVariables }>()
         const { deletableIds, scannedEntities } = await operationsDAO.findRedundantOpIdsBelowFloor(user.id, floor);
         const deletedOps = await operationsDAO.deleteByIds(deletableIds, user.id);
         return c.json({ deletedOps, scannedEntities }, 200);
+    })
+
+    // ---------------------------------------------------------------------------
+    // POST /maintenance/heal-duplicate-calendar-items — collapse duplicate live items
+    // ---------------------------------------------------------------------------
+    // On-demand, op-recording analog of the boot dedupe migration: trashes all but the most-recent
+    // live `calendar` item per GCal event for the caller. Idempotent. Scoped to the session user.
+    .post('/heal-duplicate-calendar-items', authenticateRequest, async (c) => {
+        const { user } = c.get('session');
+        const ops = await healDuplicateCalendarItems(user.id, dayjs().toISOString());
+        return c.json({ trashedItems: ops.length }, 200);
+    })
+
+    // ---------------------------------------------------------------------------
+    // POST /maintenance/heal-stuck-gcal-routines — revive stranded recurring routines
+    // ---------------------------------------------------------------------------
+    // Reactivates the caller's GCal-linked routines stranded with a past UNTIL or active:false (the
+    // stale-UNTIL deadlock): strips the past UNTIL, sets active:true, regenerates future items. Records
+    // ops so other devices converge. Run AFTER the sync fix deploys, else churn could re-corrupt them.
+    .post('/heal-stuck-gcal-routines', authenticateRequest, async (c) => {
+        const { user } = c.get('session');
+        const ops = await healStuckGCalRoutines(user.id, dayjs().toISOString());
+        const revivedRoutines = ops.filter((op) => op.entityType === 'routine').length;
+        return c.json({ revivedRoutines, totalOps: ops.length }, 200);
     });

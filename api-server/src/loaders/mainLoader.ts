@@ -15,6 +15,7 @@ import sentEmailsDAO from '../dataAccess/sentEmailsDAO.js';
 import webhookDeliveriesDAO from '../dataAccess/webhookDeliveriesDAO.js';
 import webhookSubscriptionsDAO from '../dataAccess/webhookSubscriptionsDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { dedupeCalendarItemsPerEvent } from './calendarItemDuplicateMigration.js';
 import { migrateDeviceSyncStateToPerUserCursor } from './deviceSyncStateMigration.js';
 import { dedupeActiveRoutinesPerGCalSeries } from './routineDuplicateMigration.js';
 
@@ -63,6 +64,10 @@ async function loadDataAccess(customDBName?: string) {
     // forbids them. Order matters: the index build would crash boot if violating data still existed.
     await dedupeActiveRoutinesPerGCalSeries(db);
     await routinesDAO.ensureUniqueActiveSeriesIndex();
+    // Same dedupe-then-index ordering for standalone calendar items: collapse duplicate live items on
+    // the same GCal event before building the unique index that forbids them.
+    await dedupeCalendarItemsPerEvent(db);
+    await itemsDAO.ensureUniqueCalendarEventIndex();
     auth = createAuth(db);
 }
 

@@ -36,6 +36,7 @@ import { normalizeMasterEventId, propagateRoutineTitleToItems, regenerateFutureR
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { applyRsvpToAttendees, resolveSyncConfigForItem } from '../lib/rsvpHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
+import { stableStringify } from '../lib/stableStringify.js';
 import { hasAtLeastOne, type NonEmptyArray } from '../lib/typeUtils.js';
 import { notifyViaWebPush } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
@@ -1179,7 +1180,11 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
         // Sequential to avoid overwhelming Google's API with parallel requests per-account.
         const syncResults = await configs.reduce(async (prevPromise, config) => {
             const prev = await prevPromise;
-            const count = await withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, { userId, now, ops }));
+            // Acquire-and-await the per-calendar lock so this manual sync serializes behind any in-flight
+            // webhook sync (and vice-versa) instead of racing it — the caller still gets a fresh result.
+            const count = await withSyncLock(config, () =>
+                withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, { userId, now, ops })),
+            );
             // Keep webhook channel alive — renew if expired or expiring soon.
             await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
                 console.error(`[calendar] renewWebhookIfExpired failed for config ${config._id}:`, err);
@@ -1712,6 +1717,9 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
         // routine doc. `buildCalendarItem` copies these onto every generated occurrence so the
         // first sync after import already produces meeting-aware items.
         ...pickGCalOwnedFields(event),
+        // Anchor the GCal-truth timestamp on create so the first inbound update's structural gate
+        // compares against the real GCal payload, not the self-bumped updatedTs. Mirrors createNewCalendarItem.
+        lastSyncedFromGCalTs: event.updated,
         createdTs,
         updatedTs: ctx.now,
     };
@@ -1758,7 +1766,16 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     // For routines, GCal description maps to template.notes (not a top-level notes field).
     const notesUpdate = resolveInboundNotes(event.description, existing.lastSyncedNotes, event.updated, existing.updatedTs);
 
-    const structurallyNewer = isGCalAtLeastAsRecent(event.updated, existing.updatedTs);
+    // Gate structural changes on `lastSyncedFromGCalTs` (the GCal-side anchor of the last applied
+    // master payload), NOT `updatedTs`. Local-only writes and no-op exception churn bump `updatedTs`
+    // to "now", which would otherwise make `existing` always look newer than GCal's months-old
+    // `event.updated` and permanently lock GCal out of correcting a stale rrule/UNTIL. The epoch
+    // fallback makes any real GCal payload win when the anchor is unset (mirrors updateExistingCalendarItem;
+    // `dayjs('')` is NaN and would instead let GCal lose every comparison). NOTE the comparison operator
+    // differs from updateExistingCalendarItem by design: routines keep their existing `isGCalAtLeastAsRecent`
+    // (`>=`, second precision) convention; the item path uses raw string `>` (ms, strict). Only the anchor
+    // FIELD is unified across the two paths, not the comparison semantics.
+    const structurallyNewer = isGCalAtLeastAsRecent(event.updated, existing.lastSyncedFromGCalTs ?? '1970-01-01T00:00:00.000Z');
     // GCal-owned routine fields (organizer/creator/attendees/responseStatus/eventType) flow through
     // even when the event timestamp is older — these are server-authoritative regardless of LWW so
     // an attendee-only edit on GCal can't be locked out by a stale local update bumping updatedTs.
@@ -1776,6 +1793,12 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
     const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
     const newlyGainsUntil = structurallyNewer && !existing.rrule.includes('UNTIL=') && rrule.includes('UNTIL=');
+    // Symmetric inverse: GCal removed the UNTIL (series uncapped), so a routine previously capped-and-
+    // paused must reactivate. Without this, a routine stranded inactive with a stale past UNTIL stays
+    // invisible forever even after GCal re-extends the series. Only fires when the local routine was
+    // capped (had UNTIL) and is currently inactive — a user-paused routine on a still-uncapped series
+    // is untouched.
+    const newlyLosesUntil = structurallyNewer && existing.rrule.includes('UNTIL=') && !rrule.includes('UNTIL=') && !existing.active;
 
     // Re-fetch: routineExceptions may have been written by syncRoutineExceptions earlier in the same
     // sync cycle, and the `existing` snapshot we were passed predates that write. Using the stale
@@ -1792,10 +1815,15 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
                   rrule,
                   calendarSyncConfigId: source.config._id,
                   calendarItemTemplate: { timeOfDay, duration },
+                  // Advance the GCal-truth anchor only on a structurally-newer payload — symmetric with
+                  // updateExistingCalendarItem. An out-of-order older payload must not regress it.
+                  lastSyncedFromGCalTs: event.updated,
                   // Mirror client-side splitRoutine: capping the parent pauses it so the UI
                   // reflects that the segment is historical. Without this, a capped-in-the-past
                   // routine shows as "Active" even though it no longer generates instances.
                   ...(newlyGainsUntil ? { active: false } : {}),
+                  // Inverse: GCal uncapped the series → reactivate a previously capped+paused routine.
+                  ...(newlyLosesUntil ? { active: true } : {}),
               }
             : {}),
         ...(notesUpdate
@@ -2589,7 +2617,28 @@ async function createNewCalendarItem(event: CalendarEvent, source: CalendarSourc
         createdTs: ctx.now,
         updatedTs: ctx.now,
     };
-    await itemsDAO.insertOne(newItem);
+    try {
+        await itemsDAO.insertOne(newItem);
+    } catch (err) {
+        // The unique partial index (uniq_calendar_item_per_event) makes a second live calendar item on
+        // the same (user, calendarEventId) impossible. A concurrent inbound sync (manual racing a
+        // webhook) that already created the live item makes us the race loser — re-resolve and merge
+        // into that one instead of duplicating. Mirrors the routine-side pattern in createRoutineFromGCal.
+        if (isDuplicateKeyError(err)) {
+            // Re-resolve the LIVE winner specifically: the conflicting index is partial on
+            // status:'calendar', and a trash/done twin legitimately keeps its calendarEventId (for
+            // revive). `findCalendarItemByEventId` has no status filter and could return that dead twin,
+            // which updateExistingCalendarItem would no-op-merge into — silently dropping this event.
+            // Match the index predicate so we only ever merge into the row that actually holds the key.
+            const [winner] = await itemsDAO.findArray({ user: ctx.userId, calendarEventId: event.id, status: 'calendar' });
+            if (winner) {
+                console.warn(`[gcal-sync] createNewCalendarItem raced E11000 — updating existing item | eventId=${event.id} itemId=${winner._id}`);
+                await updateExistingCalendarItem(winner, event, source, ctx);
+                return;
+            }
+        }
+        throw err;
+    }
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: newItem, opType: 'create', now: ctx.now }));
 }
 
@@ -3027,6 +3076,15 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
     const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops, ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}) };
     await Promise.all(exceptions.map((ex) => applyExceptionToItems(routine, ex, syncCtx)));
 
+    // Skip the routine write + op when the merged exception set is byte-identical to what's stored.
+    // `getExceptions` is a time-range (not incremental) query, so every webhook fire re-surfaces the
+    // same exceptions and `mergeExceptions` reproduces an identical list — without this guard each
+    // fire rewrote the routine and emitted a redundant `update` op, bloating the operations log (one
+    // routine had 3000+ such ops). Item side-effects above are already idempotent on their own guards.
+    if (stableStringify(updatedExceptions) === stableStringify(routine.routineExceptions ?? [])) {
+        return;
+    }
+
     // Preserve `updatedTs`: exception writes are sync bookkeeping, not user/app edits. Bumping
     // `updatedTs` here would corrupt the `structurallyNewer` comparison in `updateRoutineFromGCal`
     // later in the same sync cycle (it would falsely look like local is newer than GCal). Clients
@@ -3215,6 +3273,43 @@ async function renewWebhookIfExpired(config: CalendarSyncConfigInterface, provid
 
 export { buildProvider, renewWebhookIfExpired };
 
+// ── Per-calendar sync serialization ──────────────────────────────────────────
+
+// Serializes the actual `syncSingleCalendar` execution per calendar so a webhook-triggered sync and a
+// manual `POST /integrations/:id/sync` cannot run concurrently and both create-on-miss for the same
+// inbound event (the unique indexes make duplicates impossible, but serializing avoids the wasted
+// insert→E11000→merge churn on every race). Keyed by `webhookChannelId` when present, else
+// `${user}:${calendarId}` so configs without a live channel still serialize. The chain is a single
+// in-process promise per key; callers `await` it, so this is a fair FIFO mutex within one process
+// (Cloud Run runs --max-instances=1, so one process is the whole story).
+const syncChains = new Map<string, Promise<unknown>>();
+
+/** A stable per-calendar key for the sync mutex. */
+function syncKeyFor(config: CalendarSyncConfigInterface): string {
+    return config.webhookChannelId ?? `${config.user}:${config.calendarId}`;
+}
+
+/** Runs `task` after any in-flight sync for the same calendar completes, chaining so concurrent callers serialize. */
+async function withSyncLock<T>(config: CalendarSyncConfigInterface, task: () => Promise<T>): Promise<T> {
+    const key = syncKeyFor(config);
+    const prior = syncChains.get(key) ?? Promise.resolve();
+    // Swallow the predecessor's rejection here so one failed sync doesn't reject every queued caller;
+    // each task's own result/rejection still propagates to its own awaiter below.
+    const run = prior.then(
+        () => task(),
+        () => task(),
+    );
+    // Keep the chain pointer current; clear it once this run settles IF no later caller has extended it.
+    syncChains.set(key, run);
+    try {
+        return await run;
+    } finally {
+        if (syncChains.get(key) === run) {
+            syncChains.delete(key);
+        }
+    }
+}
+
 // ── Webhook receiver ─────────────────────────────────────────────────────────
 
 // Coalesce concurrent webhook deliveries per channel. Google can fire multiple notifications
@@ -3329,7 +3424,8 @@ async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void
     const provider = buildProvider(integration, config.user);
     const now = dayjs().toISOString();
     const ctx: SyncContext = { userId: config.user, now, ops: [] };
-    await withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, ctx));
+    // Serialize against a concurrent manual sync for the same calendar — see withSyncLock.
+    await withSyncLock(config, () => withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, ctx)));
     console.log(`[gcal-webhook-sync] sync complete | configId=${config._id} ops=${ctx.ops.length}`);
     // Keep webhook channel alive — renew if close to expiring so the next change also triggers a webhook.
     await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {

@@ -28,6 +28,8 @@ beforeEach(async () => {
         db.collection('deviceSyncState').deleteMany({}),
         db.collection('pushSubscriptions').deleteMany({}),
         db.collection('deviceUsers').deleteMany({}),
+        db.collection('items').deleteMany({}),
+        db.collection('routines').deleteMany({}),
     ]);
     vi.restoreAllMocks();
 });
@@ -351,6 +353,235 @@ describe('POST /maintenance/dedup-operations', () => {
     it('rejects unauthenticated requests with 401', async () => {
         const res = await app.fetch(
             new Request('http://localhost:4000/maintenance/dedup-operations', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            }),
+        );
+        expect(res.status).toBe(401);
+    });
+});
+
+// ─── POST /maintenance/heal-duplicate-calendar-items ──────────────────────────
+
+// Duplicate live items violate uniq_calendar_item_per_event — the heal endpoint exists precisely to
+// clean data that predates the index. Drop it so the duplicate fixtures can be seeded; loadDataAccess
+// rebuilds it for the next test file.
+async function dropCalendarItemIndex() {
+    await db
+        .collection('items')
+        .dropIndex('uniq_calendar_item_per_event')
+        .catch(() => undefined);
+}
+
+async function seedItem(opts: { id: string; userId: string; calendarEventId?: string; status?: string; updatedTs: string }) {
+    await db.collection('items').insertOne({
+        _id: opts.id,
+        user: opts.userId,
+        status: opts.status ?? 'calendar',
+        title: 'Meeting',
+        timeStart: '2026-06-01T09:00:00Z',
+        timeEnd: '2026-06-01T09:30:00Z',
+        ...(opts.calendarEventId !== undefined ? { calendarEventId: opts.calendarEventId } : {}),
+        calendarIntegrationId: 'int-1',
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: opts.updatedTs,
+    });
+}
+
+describe('POST /maintenance/heal-duplicate-calendar-items', () => {
+    async function heal(sessionCookie: string) {
+        return authenticatedRequest(app, { method: 'POST', path: '/maintenance/heal-duplicate-calendar-items', sessionCookie, body: {} });
+    }
+
+    it('trashes all but the most-recent live item per event and records an op per loser', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await dropCalendarItemIndex();
+        await seedItem({ id: 'keep', userId, calendarEventId: 'evt-1', updatedTs: '2026-03-01T00:00:00.000Z' });
+        await seedItem({ id: 'loser', userId, calendarEventId: 'evt-1', updatedTs: '2026-01-01T00:00:00.000Z' });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { trashedItems: number };
+        expect(body.trashedItems).toBe(1);
+        expect((await db.collection('items').findOne({ _id: 'keep' }))?.status).toBe('calendar');
+        expect((await db.collection('items').findOne({ _id: 'loser' }))?.status).toBe('trash');
+        // The trash is recorded as an item update op so other devices converge.
+        const ops = await db.collection('operations').find({ entityId: 'loser', entityType: 'item' }).toArray();
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one trash op');
+        expect(op.opType).toBe('update');
+    });
+
+    it('is idempotent and leaves a single live item untouched', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await seedItem({ id: 'solo', userId, calendarEventId: 'evt-solo', updatedTs: '2026-01-01T00:00:00.000Z' });
+
+        await heal(cookie);
+        const second = (await heal(cookie)).clone();
+        const body = (await second.json()) as { trashedItems: number };
+        expect(body.trashedItems).toBe(0);
+        expect((await db.collection('items').findOne({ _id: 'solo' }))?.status).toBe('calendar');
+    });
+
+    it('only touches the calling user’s items', async () => {
+        const aliceCookie = await loginAsAlice();
+        vi.restoreAllMocks();
+        const bobCookie = await loginAsBob();
+        const bobId = await getUserId(bobCookie);
+        await dropCalendarItemIndex();
+        await seedItem({ id: 'b-keep', userId: bobId, calendarEventId: 'evt-b', updatedTs: '2026-03-01T00:00:00.000Z' });
+        await seedItem({ id: 'b-loser', userId: bobId, calendarEventId: 'evt-b', updatedTs: '2026-01-01T00:00:00.000Z' });
+
+        const res = await heal(aliceCookie);
+        const body = (await res.json()) as { trashedItems: number };
+        expect(body.trashedItems).toBe(0);
+        expect((await db.collection('items').findOne({ _id: 'b-loser' }))?.status).toBe('calendar');
+    });
+
+    it('rejects unauthenticated requests with 401', async () => {
+        const res = await app.fetch(
+            new Request('http://localhost:4000/maintenance/heal-duplicate-calendar-items', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            }),
+        );
+        expect(res.status).toBe(401);
+    });
+});
+
+// ─── POST /maintenance/heal-stuck-gcal-routines ───────────────────────────────
+
+async function seedRoutine(opts: { id: string; userId: string; rrule: string; active: boolean; calendarEventId?: string; updatedTs?: string }) {
+    await db.collection('routines').insertOne({
+        _id: opts.id,
+        user: opts.userId,
+        title: 'Daily sync',
+        routineType: 'calendar',
+        rrule: opts.rrule,
+        template: {},
+        active: opts.active,
+        calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+        ...(opts.calendarEventId !== undefined ? { calendarEventId: opts.calendarEventId, calendarIntegrationId: 'int-1' } : {}),
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: opts.updatedTs ?? '2026-05-30T00:00:00.000Z',
+    });
+}
+
+describe('POST /maintenance/heal-stuck-gcal-routines', () => {
+    async function heal(sessionCookie: string) {
+        return authenticatedRequest(app, { method: 'POST', path: '/maintenance/heal-stuck-gcal-routines', sessionCookie, body: {} });
+    }
+
+    it('strips a past UNTIL, reactivates, and records an op', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await seedRoutine({
+            id: 'r-stuck',
+            userId,
+            rrule: 'FREQ=WEEKLY;WKST=SU;UNTIL=20251210T215959Z;BYDAY=MO,TU,WE',
+            active: false,
+            calendarEventId: 'evt-r',
+        });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedRoutines: number };
+        expect(body.revivedRoutines).toBe(1);
+        const routine = await db.collection('routines').findOne({ _id: 'r-stuck' });
+        expect(routine?.rrule).toBe('FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE');
+        expect(routine?.active).toBe(true);
+        const ops = await db.collection('operations').find({ entityId: 'r-stuck', entityType: 'routine' }).toArray();
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one routine revive op');
+        expect(op.opType).toBe('update');
+        // Reviving an active routine regenerates future calendar items.
+        const itemOps = await db.collection('operations').find({ entityType: 'item' }).toArray();
+        expect(itemOps.length).toBeGreaterThan(0);
+        const liveItems = await db.collection('items').find({ user: userId, routineId: 'r-stuck', status: 'calendar' }).toArray();
+        expect(liveItems.length).toBeGreaterThan(0);
+    });
+
+    it('leaves a healthy active routine (future UNTIL, active) untouched', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await seedRoutine({ id: 'r-ok', userId, rrule: 'FREQ=WEEKLY;UNTIL=20990101T000000Z;BYDAY=MO', active: true, calendarEventId: 'evt-ok' });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedRoutines: number };
+        expect(body.revivedRoutines).toBe(0);
+        expect((await db.collection('routines').findOne({ _id: 'r-ok' }))?.active).toBe(true);
+    });
+
+    it('ignores in-app routines without a calendarEventId', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await seedRoutine({ id: 'r-inapp', userId, rrule: 'FREQ=DAILY', active: false });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedRoutines: number };
+        expect(body.revivedRoutines).toBe(0);
+        expect((await db.collection('routines').findOne({ _id: 'r-inapp' }))?.active).toBe(false);
+    });
+
+    it('revives only the most-recent row per series, leaving inactive duplicates inactive', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        // Two inactive rows on the same series (e.g. left by a prior dedupe) — only the most-recent
+        // should revive, so the unique-active-series invariant stays satisfiable.
+        const stuckRrule = 'FREQ=WEEKLY;UNTIL=20251210T215959Z;BYDAY=MO';
+        await seedRoutine({ id: 'r-old', userId, rrule: stuckRrule, active: false, calendarEventId: 'evt-dup', updatedTs: '2026-05-01T00:00:00.000Z' });
+        await seedRoutine({ id: 'r-new', userId, rrule: stuckRrule, active: false, calendarEventId: 'evt-dup', updatedTs: '2026-05-30T00:00:00.000Z' });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedRoutines: number };
+        expect(body.revivedRoutines).toBe(1);
+        // Only the most-recent row revives — keeps uniq_active_routine_per_gcal_series satisfiable.
+        expect((await db.collection('routines').findOne({ _id: 'r-new' }))?.active).toBe(true);
+        expect((await db.collection('routines').findOne({ _id: 'r-old' }))?.active).toBe(false);
+    });
+
+    it('does not double-activate a series that already has a healthy active sibling (no E11000, returns 200)', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        // The legitimate post-dedupe state: one ACTIVE routine + a NEWER stuck INACTIVE one on the same
+        // series. Reviving the most-recent (inactive) one would create a 2nd active row → E11000 against
+        // uniq_active_routine_per_gcal_series, 500ing the request and crashing the next boot. The heal
+        // must skip it: the active sibling stays the sole active row.
+        await seedRoutine({
+            id: 'r-active',
+            userId,
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            active: true,
+            calendarEventId: 'evt-mixed',
+            updatedTs: '2026-05-01T00:00:00.000Z',
+        });
+        await seedRoutine({
+            id: 'r-stuck-inactive',
+            userId,
+            rrule: 'FREQ=WEEKLY;UNTIL=20251210T215959Z;BYDAY=MO',
+            active: false,
+            calendarEventId: 'evt-mixed',
+            updatedTs: '2026-05-30T00:00:00.000Z',
+        });
+
+        const res = await heal(cookie);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { revivedRoutines: number };
+        expect(body.revivedRoutines).toBe(0);
+        expect((await db.collection('routines').findOne({ _id: 'r-active' }))?.active).toBe(true);
+        expect((await db.collection('routines').findOne({ _id: 'r-stuck-inactive' }))?.active).toBe(false);
+        // Exactly one active row on the series → the unique index stays satisfiable.
+        const active = await db.collection('routines').find({ user: userId, calendarEventId: 'evt-mixed', active: true }).toArray();
+        expect(active).toHaveLength(1);
+    });
+
+    it('rejects unauthenticated requests with 401', async () => {
+        const res = await app.fetch(
+            new Request('http://localhost:4000/maintenance/heal-stuck-gcal-routines', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({}),

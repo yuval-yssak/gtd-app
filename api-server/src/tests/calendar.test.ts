@@ -574,6 +574,33 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(updated?.routineExceptions).toContainEqual({ date: '2025-06-02', type: 'skipped' });
     });
 
+    it('skips the routine write + op when the merged exception set is unchanged (no-op churn guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Routine already carries the exact exception GCal will re-surface (getExceptions is a time-range,
+        // not incremental, query — every fire re-returns the same rows). The merge reproduces an identical
+        // list, so no routine write and no `update` op should be recorded for this routine.
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-noop',
+            calendarIntegrationId: 'int-1',
+            routineExceptions: [{ date: '2025-06-02', type: 'skipped' }],
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        await routinesDAO.insertOne(routine);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([{ originalDate: '2025-06-02', type: 'deleted' }]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const ops = await operationsDAO.findArray({ entityId: 'routine-1', entityType: 'routine' });
+        expect(ops).toHaveLength(0);
+        // updatedTs untouched — the routine was not rewritten.
+        const unchanged = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(unchanged?.updatedTs).toBe('2026-01-01T00:00:00.000Z');
+    });
+
     it('merges a modified exception and updates item times', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -1483,6 +1510,85 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
 
         const item = await itemsDAO.findOne({ _id: 'item-upd' });
         expect(item?.title).toBe('New title');
+    });
+
+    it('on a concurrent-create race for a new event, merges into the winner instead of duplicating (E11000 catch)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        const gcalUpdated = dayjs().toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-race', title: 'Raced event', timeStart: futureTs, timeEnd: futureTs, updated: gcalUpdated, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        // Simulate a rival inbound sync that wins the create: when createNewCalendarItem's insert fires,
+        // first insert a live calendar item carrying the same calendarEventId, then run the real insert
+        // (which now collides on uniq_calendar_item_per_event and throws E11000). The catch must
+        // re-resolve to the rival's row and merge, leaving exactly one live item.
+        const realInsertOne = itemsDAO.insertOne.bind(itemsDAO);
+        let rivalInserted = false;
+        vi.spyOn(itemsDAO, 'insertOne').mockImplementation(async (doc) => {
+            const candidate = doc as ItemInterface;
+            if (!rivalInserted && candidate.calendarEventId === 'evt-race' && candidate.status === 'calendar') {
+                rivalInserted = true;
+                await realInsertOne({ ...candidate, _id: 'item-race-rival' });
+            }
+            return realInsertOne(doc);
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const live = await itemsDAO.findArray({ user: userId, calendarEventId: 'evt-race', status: 'calendar' });
+        expect(live).toHaveLength(1);
+        const [winner] = live;
+        if (!winner) throw new Error('expected the rival-bound item to survive');
+        expect(winner._id).toBe('item-race-rival');
+    });
+
+    it('a trashed twin sharing the event id is revived in place — no duplicate live item, index stays buildable', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        const gcalUpdated = dayjs().toISOString();
+        // A trashed twin (prior cancel) keeps its calendarEventId for revive — it sits OUTSIDE the
+        // status:'calendar' unique index. When the event comes back, upsertCalendarItem must REVIVE that
+        // row (status→calendar), not create a second live row. This is the scenario that proves the
+        // status-scoped index design: a trashed twin and a live row can coexist without an E11000, and
+        // the inbound event converges to exactly one live item.
+        await itemsDAO.insertOne({
+            _id: 'item-dead-twin',
+            user: userId,
+            status: 'trash',
+            title: 'Old cancelled',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-twin',
+            calendarIntegrationId: 'int-1',
+            createdTs: gcalUpdated,
+            updatedTs: dayjs().subtract(1, 'hour').toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-twin', title: 'Live again', timeStart: futureTs, timeEnd: futureTs, updated: gcalUpdated, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Exactly one live item, and it's the revived twin (not a fresh duplicate).
+        const live = await itemsDAO.findArray({ user: userId, calendarEventId: 'evt-twin', status: 'calendar' });
+        expect(live).toHaveLength(1);
+        const [winner] = live;
+        if (!winner) throw new Error('expected the revived twin to be live');
+        expect(winner._id).toBe('item-dead-twin');
+        expect(winner.title).toBe('Live again');
     });
 
     it('skips a new past event from Google (no local item created)', async () => {
@@ -5878,19 +5984,23 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
         expect(routine!.calendarItemTemplate!.duration).toBe(45);
     });
 
-    it('skips update when existing routine is newer than GCal event', async () => {
+    it('skips update when inbound GCal payload is older than the last-synced GCal state', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
-        const recentTs = dayjs().toISOString();
+        // The structural gate compares against `lastSyncedFromGCalTs` (the GCal-side anchor of the last
+        // applied payload), NOT `updatedTs` — a self-bumped `updatedTs` must not lock GCal out. Seed an
+        // anchor newer than the inbound payload to assert genuine out-of-order protection.
+        const lastSyncedFromGCalTs = dayjs().toISOString();
         await routinesDAO.insertOne(
             makeRoutine(userId, {
                 calendarEventId: 'recurring-master-3',
                 calendarIntegrationId: 'int-1',
                 calendarSyncConfigId: 'sync-config-1',
                 title: 'Local title',
-                updatedTs: recentTs,
+                updatedTs: lastSyncedFromGCalTs,
+                lastSyncedFromGCalTs,
             }),
         );
 
@@ -5916,6 +6026,96 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
 
         const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-3' });
         expect(routine!.title).toBe('Local title');
+    });
+
+    it('corrects a stale-UNTIL routine even when updatedTs is newer than the GCal payload (anchor unset)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Reproduces the stale-UNTIL deadlock: a routine frozen with a past UNTIL + active:false whose
+        // `updatedTs` was bumped to "now" by churn, but with no `lastSyncedFromGCalTs` anchor. Gating on
+        // the anchor (epoch fallback) lets GCal re-assert the live (no-UNTIL) schedule and reactivate it.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'recurring-master-stuck',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Daily sync',
+                rrule: 'FREQ=WEEKLY;WKST=SU;UNTIL=20251210T215959Z;BYDAY=MO,TU,WE',
+                active: false,
+                updatedTs: dayjs().toISOString(),
+                lastSyncedFromGCalTs: undefined,
+            }),
+        );
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        const gcalUpdated = dayjs().subtract(2, 'hour').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-stuck',
+                    title: 'Daily sync',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: gcalUpdated,
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-stuck' });
+        expect(routine!.rrule).toBe('FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE');
+        expect(routine!.rrule).not.toContain('UNTIL=');
+        expect(routine!.active).toBe(true);
+        expect(routine!.lastSyncedFromGCalTs).toBe(gcalUpdated);
+    });
+
+    it('does NOT reactivate a user-paused routine on a still-uncapped series (newlyLosesUntil guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // User intentionally paused this routine. Neither the local rrule nor GCal's master carries an
+        // UNTIL — so `newlyLosesUntil` (which requires the LOCAL rrule to have had UNTIL) must NOT fire,
+        // leaving the user's pause intact even though the inbound payload is structurally newer.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'recurring-master-paused',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Paused daily',
+                rrule: 'FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE',
+                active: false,
+                lastSyncedFromGCalTs: dayjs().subtract(1, 'day').toISOString(),
+            }),
+        );
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-paused',
+                    title: 'Paused daily',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        expect((await routinesDAO.findOne({ calendarEventId: 'recurring-master-paused' }))?.active).toBe(false);
     });
 
     it('deactivates routine when GCal master event is cancelled', async () => {
@@ -8037,18 +8237,19 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
 
-        // The rival's restore wins → the loser's `tryRestoreFromLastKnownEventId` returns undefined
-        // and falls through to the naked-candidate / create path. The original `item-toctou` carries
-        // the live calendar* fields (rival's win); the loser produces a separate fresh item rather
-        // than silently overwriting the rival's binding (better duplicate than silent overwrite —
-        // same trade-off as `tryRelinkNakedCalendarItem`'s create-on-race fallback).
-        const all = await itemsDAO.findArray({ user: userId, title: 'TOCTOU me' });
-        expect(all).toHaveLength(2);
-        const restored = all.find((i) => i._id === 'item-toctou');
-        expect(restored?.calendarEventId).toBe('gcal-toctou-1');
-        expect(restored?.lastKnownCalendarEventId).toBeUndefined();
-        const fresh = all.find((i) => i._id !== 'item-toctou');
-        expect(fresh?.calendarEventId).toBe('gcal-toctou-1');
+        // The rival's restore wins → the loser's `tryRestoreFromLastKnownEventId` returns undefined and
+        // falls through to the create path. That insert now collides on the unique
+        // `(user, calendarEventId)` index (rival already bound the live row) → the E11000 catch in
+        // `createNewCalendarItem` re-resolves to the rival's row and merges into it instead of producing
+        // a duplicate. Net: exactly ONE live item carries the event — strictly better than the old
+        // "better duplicate than silent overwrite" fallback this test previously documented.
+        const all = await itemsDAO.findArray({ user: userId, title: 'TOCTOU me', status: 'calendar' });
+        expect(all).toHaveLength(1);
+        const [restored] = all;
+        if (!restored) throw new Error('expected the rival-bound item to survive');
+        expect(restored._id).toBe('item-toctou');
+        expect(restored.calendarEventId).toBe('gcal-toctou-1');
+        expect(restored.lastKnownCalendarEventId).toBeUndefined();
     });
 
     it('cancelled inbound event matching lastKnown* emits no restore op and no status flap', async () => {
