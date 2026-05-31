@@ -28,13 +28,18 @@ export function groupingKeyFor(item: StoredItem): string {
 /**
  * Comparator within a single day's bucket. All-day events sort before timed events; ties broken
  * by title (all-day) or `timeStart` (timed). Used directly by `Array.prototype.sort`.
+ *
+ * Timed events are compared as parsed instants, NOT raw strings: `timeStart` is stored
+ * inconsistently — GCal-synced items as UTC (`…Z`), in-app items as floating local (no offset).
+ * A lexical compare on those mixed formats orders them wrong (e.g. `05:45Z` < `08:30` as strings
+ * even though 08:45 local is the later instant). dayjs normalizes both to an epoch ms first.
  */
 export function compareWithinDay(a: StoredItem, b: StoredItem): number {
     const aAllDay = a.allDay === true;
     const bAllDay = b.allDay === true;
     if (aAllDay !== bAllDay) return aAllDay ? -1 : 1;
     if (aAllDay && bAllDay) return a.title.localeCompare(b.title);
-    return (a.timeStart ?? '').localeCompare(b.timeStart ?? '');
+    return dayjs(a.timeStart).valueOf() - dayjs(b.timeStart).valueOf();
 }
 
 /**

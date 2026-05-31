@@ -2,6 +2,7 @@
  * Unit tests for the calendar route's grouping + sort helpers. Render-free coverage — see
  * vitest.config.ts (no jsdom). The route itself just maps over the returned structure.
  */
+import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 import { compareWithinDay, groupCalendarItemsByDay, groupingKeyFor, isMultiDayAllDay, NO_DATE_KEY } from '../components/calendarRouteSort';
 import type { StoredItem } from '../types/MyDB';
@@ -57,6 +58,22 @@ describe('compareWithinDay', () => {
         const evening = makeItem({ timeStart: '2026-05-23T20:00:00.000Z' });
         expect(compareWithinDay(morning, evening)).toBeLessThan(0);
         expect(compareWithinDay(evening, morning)).toBeGreaterThan(0);
+    });
+
+    it('orders mixed UTC (…Z) and floating-local timeStart by parsed instant, not lexically', () => {
+        // Regression (staging): a GCal-synced item stored as UTC `…Z` ("Marketplace for google meet")
+        // and an in-app item stored as floating local time ("Get wipes and clementine juice") landed
+        // in the same day, but the old comparator did a string localeCompare. Lexically `05:45…Z` sorts
+        // before `08:30`, so the meet event rendered first even though — in any zone at/above UTC+3 —
+        // its instant is the later one. The comparator must match the parsed-instant order regardless
+        // of the machine's tz, so we derive the expected sign from dayjs rather than hardcoding it.
+        const chore = makeItem({ _id: 'chore', timeStart: '2026-05-31T08:30:00', title: 'Get wipes' }); // floating local
+        const meet = makeItem({ _id: 'meet', timeStart: '2026-05-31T05:45:00.000Z', title: 'Marketplace meet' }); // UTC
+        const expectedSign = Math.sign(dayjs(chore.timeStart).valueOf() - dayjs(meet.timeStart).valueOf());
+        // Sanity: the two timestamps are genuinely distinct instants (guards a degenerate 0-sign assertion).
+        expect(expectedSign).not.toBe(0);
+        expect(Math.sign(compareWithinDay(chore, meet))).toBe(expectedSign);
+        expect(Math.sign(compareWithinDay(meet, chore))).toBe(-expectedSign);
     });
 });
 
