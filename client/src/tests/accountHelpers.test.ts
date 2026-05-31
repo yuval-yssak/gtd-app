@@ -237,7 +237,7 @@ async function seedTwoUsersData() {
     await db.put('routines', makeRoutine('rA1', 'userA'));
     await db.put('people', makePerson('pA1', 'userA'));
     await db.put('workContexts', makeWorkContext('cA1', 'userA'));
-    await db.put('syncCursors', { userId: 'userA', lastSyncedTs: '2026-01-01T00:00:00.000Z' });
+    await db.put('syncCursors', { userId: 'userA', lastSyncedTs: '2026-01-01T00:00:00.000Z', lastSyncedId: '' });
     await db.add('syncOperations', makeSyncOp('userA', 'itemA1') as SyncOperation);
     await db.add('syncOperations', makeSyncOp('userA', 'itemA2') as SyncOperation);
     // user B (must survive the wipe of A)
@@ -245,7 +245,7 @@ async function seedTwoUsersData() {
     await db.put('routines', makeRoutine('rB1', 'userB'));
     await db.put('people', makePerson('pB1', 'userB'));
     await db.put('workContexts', makeWorkContext('cB1', 'userB'));
-    await db.put('syncCursors', { userId: 'userB', lastSyncedTs: '2026-01-02T00:00:00.000Z' });
+    await db.put('syncCursors', { userId: 'userB', lastSyncedTs: '2026-01-02T00:00:00.000Z', lastSyncedId: '' });
     await db.add('syncOperations', makeSyncOp('userB', 'itemB1') as SyncOperation);
     // device meta — must never be touched
     await db.put('deviceMeta', { _id: 'local', deviceId: 'device-1', flushingTs: null });
@@ -277,7 +277,7 @@ describe('wipeUserData', () => {
         await wipeUserData('userA', db);
 
         expect(await db.get('syncCursors', 'userA')).toBeUndefined();
-        expect(await db.get('syncCursors', 'userB')).toEqual({ userId: 'userB', lastSyncedTs: '2026-01-02T00:00:00.000Z' });
+        expect(await db.get('syncCursors', 'userB')).toEqual({ userId: 'userB', lastSyncedTs: '2026-01-02T00:00:00.000Z', lastSyncedId: '' });
     });
 
     it('drops only the target user rows from syncOperations', async () => {

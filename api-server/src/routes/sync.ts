@@ -15,7 +15,7 @@ import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/
 import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import { deviceSyncStateId, type EntitySnapshot, type EntityType, type OpType, type RsvpOpPayload } from '../types/entities.js';
+import { deviceSyncStateId, type EntitySnapshot, type EntityType, MAX_OP_ID, type OpType, type RsvpOpPayload } from '../types/entities.js';
 import { syncIssuesRoutes } from './syncIssues.js';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
@@ -59,11 +59,19 @@ async function purgeOldOperations(userId: string): Promise<void> {
     if (!deviceStates.length) return;
 
     // Only purge ops all registered devices have already pulled — the slowest device sets the floor.
-    // reduce without an initial value uses the first element as the accumulator seed; TypeScript
-    // types this as returning the element type (not T | undefined), safe since we guard length above.
-    const minLastSyncedTs = deviceStates.map((d) => d.lastSyncedTs).reduce((min, ts) => (ts < min ? ts : min));
+    // The floor is the lexicographic min of the COMPOUND pair (lastSyncedTs, lastSyncedId), not
+    // independent mins of each: independent mins could fabricate a (ts, id) no device actually
+    // reached, deleting ops a device still needs. Legacy rows lacking lastSyncedId read as '' (lowest
+    // id), so that device's boundary ms is never purged until it next pulls and writes a real id.
+    // reduce without a seed uses the first element; safe since we guard length above.
+    const floor = deviceStates.reduce((min, d) => {
+        if (d.lastSyncedTs !== min.lastSyncedTs) {
+            return d.lastSyncedTs < min.lastSyncedTs ? d : min;
+        }
+        return (d.lastSyncedId ?? '') < (min.lastSyncedId ?? '') ? d : min;
+    });
 
-    await operationsDAO.deleteOlderThan(userId, minLastSyncedTs);
+    await operationsDAO.deleteOlderThan(userId, floor.lastSyncedTs, floor.lastSyncedId ?? '');
 }
 
 /**
@@ -113,14 +121,17 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // can't drop the purge floor through the missing row (its pull would have computed
         // `min(lastSyncedTs)` excluding this device, potentially deleting ops this device needs).
         if (deviceId) {
+            // lastSyncedId = MAX_OP_ID: the snapshot already holds every op at exactly serverTs, so
+            // the compound floor (serverTs, MAX_OP_ID) honestly means "all ops ≤ serverTs delivered"
+            // and the first incremental pull won't re-deliver them.
             await deviceSyncStateDAO.updateOne(
                 { _id: deviceSyncStateId(deviceId, user.id) },
-                { $set: { lastSyncedTs: serverTs, deviceId, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
+                { $set: { lastSyncedTs: serverTs, lastSyncedId: MAX_OP_ID, deviceId, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
                 { upsert: true },
             );
         }
 
-        return c.json({ items, routines, people, workContexts, serverTs });
+        return c.json({ items, routines, people, workContexts, serverTs, serverId: MAX_OP_ID });
     })
 
     // ---------------------------------------------------------------------------
@@ -222,29 +233,37 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // that don't send `ackedTs` fall back to `since` — strictly safer than the previous
         // `serverTs`, since `since` is what those clients claimed they had before this fetch.
         const ackedTs = c.req.query('ackedTs');
+        // Compound-cursor id components. Missing (old clients) → '' (lowest id), which makes the
+        // pull query re-check the whole boundary ms and the cursor write land at the start of it —
+        // safe re-delivery, never a skip. See operationsDAO.findOpsAfter.
+        const sinceId = c.req.query('sinceId') ?? '';
+        const ackedId = c.req.query('ackedId');
         const deviceId = c.req.query('deviceId');
 
-        const ops = await operationsDAO.findArray({ user: user.id, ts: { $gt: since } }, { sort: { ts: 1 } });
+        const ops = await operationsDAO.findOpsAfter(user.id, since, sinceId);
 
-        // The response's `serverTs` marks the high-water mark of *what we just returned* — the
-        // client uses it as the next pull's `since`. It is NOT the purge floor. The purge floor
-        // lives in `deviceSyncState.lastSyncedTs`, which is now driven by `ackedTs` (below).
-        // Known limitation on `serverTs`: if another push commits ops at exactly `lastOp.ts` after
-        // this query ran, the next pull ($gt: lastOp.ts) will miss them. Acceptable for the
-        // low-throughput GTD use case; a monotonic sequence would eliminate the gap.
+        // `serverTs`/`serverId` mark the high-water mark of *what we just returned* — the client uses
+        // the pair as the next pull's `(since, sinceId)`. Paginating on the totally-ordered `(ts,_id)`
+        // pair (rather than a bare ms) means a same-`ts` batch split across two pulls loses nothing:
+        // the next pull resumes strictly after `lastOp._id`. Empty-ops → echo the incoming cursor.
         const lastOp = ops.at(-1);
         const serverTs = lastOp ? lastOp.ts : since;
+        const serverId = lastOp ? lastOp._id : sinceId;
 
         if (deviceId) {
             // Track per-(device, user) pull cursor so old operations can eventually be purged.
             // Composite _id keeps each user's cursor independent — see DeviceSyncStateInterface.
-            // We record `ackedTs` (what the client claims it has) rather than `serverTs` (what
-            // we're about to return). Pre-fix this wrote `serverTs` and a lost/partial response
-            // could cause the next purge to delete ops the client never received — the LinkedIn
-            // inbox bug. See plans/write-up-a-plan-zesty-pebble.md.
+            // We record `ackedTs`/`ackedId` (what the client claims it has durably persisted) rather
+            // than `serverTs`/`serverId` (what we're about to return): a lost/partial response must
+            // not advance the purge floor past ops the client never committed. Old clients send
+            // neither — `ackedId ?? sinceId` resolves to '' so their floor sits at the start of the
+            // boundary ms, keeping every same-ms op until they upgrade.
             await deviceSyncStateDAO.updateOne(
                 { _id: deviceSyncStateId(deviceId, user.id) },
-                { $set: { lastSyncedTs: ackedTs ?? since, deviceId, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
+                {
+                    $set: { lastSyncedTs: ackedTs ?? since, lastSyncedId: ackedId ?? sinceId, deviceId, user: user.id },
+                    $setOnInsert: { lastSeenTs: dayjs(0).toISOString() },
+                },
                 { upsert: true },
             );
 
@@ -253,7 +272,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             purgeOldOperations(user.id).catch(() => {});
         }
 
-        return c.json({ ops, serverTs });
+        return c.json({ ops, serverTs, serverId });
     })
 
     // ---------------------------------------------------------------------------

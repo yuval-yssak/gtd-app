@@ -13,6 +13,7 @@ vi.mock('../db/multiUserSync', () => ({
 
 import dayjs from 'dayjs';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import { MAX_OP_ID } from '../db/deviceId';
 import { syncSingleUser } from '../db/multiUserSync';
 import {
     bootstrapFromServer,
@@ -70,7 +71,7 @@ beforeEach(async () => {
     // Seed deviceMeta so flushSyncQueue can read the deviceId + acquire/release the flush lock,
     // plus a per-user cursor so pullFromServer has a value to read/advance.
     await db.put('deviceMeta', { _id: 'local', deviceId: 'device-test', flushingTs: null });
-    await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: '1970-01-01T00:00:00.000Z' });
+    await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: '1970-01-01T00:00:00.000Z', lastSyncedId: '' });
     // Seed the active account matching USER_ID so `assertActiveSessionMatches` (the guard inside
     // doPull/bootstrap) lets these tests through without each one having to set it up.
     await db.put('accounts', { id: USER_ID, email: 'u@example.com', name: 'U', image: null, provider: 'google', addedAt: 1 });
@@ -382,6 +383,7 @@ describe('pullFromServer — item ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'item', entityId: 'item-10', opType: 'create', snapshot: serverItem('item-10') }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -398,6 +400,7 @@ describe('pullFromServer — item ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'item', entityId: 'item-11', opType: 'update', snapshot: serverItem('item-11', '2025-06-01T00:00:00.000Z') }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -412,6 +415,7 @@ describe('pullFromServer — item ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'item', entityId: 'item-12', opType: 'update', snapshot: serverItem('item-12', '2025-01-01T00:00:00.000Z') }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -427,6 +431,7 @@ describe('pullFromServer — item ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'item', entityId: 'item-13', opType: 'delete', snapshot: null }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -447,6 +452,7 @@ describe('pullFromServer — item ops', () => {
             // The source user (USER_ID) pulls the delete op, but the row has already moved to user-target.
             ops: [{ entityType: 'item', entityId: 'item-reassigned', opType: 'delete', snapshot: null }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -456,14 +462,54 @@ describe('pullFromServer — item ops', () => {
         expect(item?.userId).toBe('user-target');
     });
 
-    it('updates the per-user cursor to serverTs after a successful pull', async () => {
+    it('advances the per-user compound cursor to (serverTs, serverId) after a successful pull', async () => {
         const serverTs = '2025-09-01T12:00:00.000Z';
-        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs });
+        const serverId = 'op-9f29';
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs, serverId });
 
         await pullFromServer(db, USER_ID);
 
         const cursor = await db.get('syncCursors', USER_ID);
         expect(cursor?.lastSyncedTs).toBe(serverTs);
+        // The id component must advance too — otherwise the next pull's sinceId would stay '' and
+        // re-fetch the whole serverTs ms on every pull.
+        expect(cursor?.lastSyncedId).toBe(serverId);
+    });
+
+    it('round-trip: the next pull sends the previously-stored serverId as sinceId', async () => {
+        // Closes the client cursor loop: after a pull advances to (T1, id1), the *following* pull must
+        // pass id1 as sinceId/ackedId so the server resumes strictly after that op — not re-scan T1's ms.
+        const t1 = '2025-09-01T12:00:00.000Z';
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: t1, serverId: 'op-1' });
+        await pullFromServer(db, USER_ID);
+
+        const t2 = '2025-09-02T12:00:00.000Z';
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: t2, serverId: 'op-2' });
+        await pullFromServer(db, USER_ID);
+
+        // Second call resumes from the first pull's (t1, op-1) for both the since and ack pairs.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(t1, 'op-1', t1, 'op-1', expect.any(String));
+    });
+
+    it('empty-id boundary re-delivery is idempotent: re-applying ops creates no duplicate', async () => {
+        // After migration/old-server fallback the cursor id is '', so the server re-delivers ops at
+        // the boundary ms. Re-applying a create the device already has must be a no-op (LWW), not a
+        // duplicate row. This guards the safety of leaning to '' over the MAX_OP_ID sentinel.
+        const updatedTs = '2025-05-01T00:00:00.000Z';
+        const op = { entityType: 'item' as const, entityId: 'dup-item', opType: 'create' as const, snapshot: serverItem('dup-item', updatedTs) };
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: updatedTs, serverId: 'op-a' });
+        await pullFromServer(db, USER_ID);
+
+        // Re-deliver the same op (boundary re-check) — LWW keeps a single row, unchanged.
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: updatedTs, serverId: 'op-a' });
+        await pullFromServer(db, USER_ID);
+
+        const all = await db.getAll('items');
+        const matching = all.filter((i) => i._id === 'dup-item');
+        expect(matching).toHaveLength(1);
+        const [only] = matching;
+        if (!only) throw new Error('expected the re-delivered item to be present');
+        expect(only.updatedTs).toBe(updatedTs);
     });
 
     it('throws and does not update the per-user cursor when server returns non-200', async () => {
@@ -476,9 +522,9 @@ describe('pullFromServer — item ops', () => {
     });
 
     it('per-user cursor independence: pulling for user A does not move user B’s cursor', async () => {
-        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '2024-01-01T00:00:00.000Z' });
+        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '2024-01-01T00:00:00.000Z', lastSyncedId: '' });
         const serverTs = '2025-09-01T12:00:00.000Z';
-        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs, serverId: '' });
 
         await pullFromServer(db, USER_ID);
 
@@ -491,7 +537,7 @@ describe('pullFromServer — item ops', () => {
     it('same-user dedup: two simultaneous pullFromServer calls for the same user collapse into one fetch', async () => {
         // The session gate's job is to serialize *across* users. Same-user dedup is a separate
         // property — two SSE events arriving for the same user shouldn't fire two fetches.
-        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: '2025-09-01T12:00:00.000Z' });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: '2025-09-01T12:00:00.000Z', serverId: '' });
         const a = pullFromServer(db, USER_ID);
         const b = pullFromServer(db, USER_ID);
         await Promise.all([a, b]);
@@ -507,7 +553,7 @@ describe('pullFromServer — item ops', () => {
     it('rejects when the active Better Auth session does not match the requested userId', async () => {
         // The IDB active account is USER_ID, but we ask for a pull on user-b. The guard must
         // refuse — pulling under the wrong session would attribute USER_ID's data to user-b.
-        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '1970-01-01T00:00:00.000Z' });
+        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '1970-01-01T00:00:00.000Z', lastSyncedId: '' });
         await expect(pullFromServer(db, 'user-b')).rejects.toThrow(/active Better Auth session is/);
     });
 
@@ -517,8 +563,8 @@ describe('pullFromServer — item ops', () => {
         // Under the old shared cursor + strict-$gt filter, user B would get nothing. Per-user
         // cursors mean user B pulls from user B's cursor (here epoch), independent of user A.
         const sharedTs = '2026-04-30T19:38:54.754Z';
-        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: sharedTs });
-        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '1970-01-01T00:00:00.000Z' });
+        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: sharedTs, lastSyncedId: '' });
+        await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '1970-01-01T00:00:00.000Z', lastSyncedId: '' });
         // The pull-for-user-B requires the active session to be user-b — pivot IDB activeAccount
         // (in real flow `multiUserSync.syncOneUser` does this after `multiSession.setActive`).
         await db.put('accounts', { id: 'user-b', email: 'b@example.com', name: 'B', image: null, provider: 'google', addedAt: 1 });
@@ -534,6 +580,7 @@ describe('pullFromServer — item ops', () => {
                 },
             ],
             serverTs: sharedTs,
+            serverId: '',
         });
 
         await pullFromServer(db, 'user-b');
@@ -549,14 +596,15 @@ describe('pullFromServer — item ops', () => {
     // durably committed). Together they prevent the server from purging ops the client never wrote.
     it('passes the IDB cursor as both since and ackedTs (explicit-ack protocol)', async () => {
         const cursor = '2026-01-15T00:00:00.000Z';
-        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: cursor });
+        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: cursor, lastSyncedId: '' });
 
-        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: cursor });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: cursor, serverId: '' });
 
         await pullFromServer(db, USER_ID);
 
-        // (since, ackedTs, deviceId) — both equal the current IDB cursor in steady state.
-        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledWith(cursor, cursor, expect.any(String));
+        // (since, sinceId, ackedTs, ackedId, deviceId) — the since pair and ack pair are equal in
+        // steady state. sinceId/ackedId are '' here because the seeded cursor has no id component.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledWith(cursor, '', cursor, '', expect.any(String));
     });
 
     it('lost-response replay: a retry after a failed pull re-sends the same ackedTs (cursor never advanced)', async () => {
@@ -564,11 +612,11 @@ describe('pullFromServer — item ops', () => {
         // the op, and the retry would return zero rows. Under explicit-ack the client keeps sending
         // ackedTs = its IDB cursor; the floor never advances past unacknowledged ops.
         const initialCursor = '1970-01-01T00:00:00.000Z';
-        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: initialCursor });
+        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: initialCursor, lastSyncedId: '' });
 
         // First call: server returns ops but applyServerOp throws — cursor stays at epoch.
         const op = { entityType: 'item' as const, entityId: 'lost-item', opType: 'create' as const, snapshot: serverItem('lost-item') };
-        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: '2026-02-01T00:00:00.000Z' });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: '2026-02-01T00:00:00.000Z', serverId: '' });
         // Force the first items-store put to fail so setLastSyncedTs never runs. The default
         // implementation delegates back to the real db.put so the second call (the retry) and
         // the cursor write inside setLastSyncedTs both succeed.
@@ -587,10 +635,10 @@ describe('pullFromServer — item ops', () => {
         expect(cursorAfterFailure?.lastSyncedTs).toBe(initialCursor);
 
         // Retry: the same op is still in the server's log; the client sends ackedTs=epoch again.
-        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: '2026-02-01T00:00:00.000Z' });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: '2026-02-01T00:00:00.000Z', serverId: '' });
         await pullFromServer(db, USER_ID);
 
-        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(initialCursor, initialCursor, expect.any(String));
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenLastCalledWith(initialCursor, '', initialCursor, '', expect.any(String));
         expect(await db.get('items', 'lost-item')).toBeDefined();
     });
 });
@@ -600,6 +648,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'routine', entityId: 'routine-1', opType: 'create', snapshot: serverRoutine('routine-1') }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -615,6 +664,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'routine', entityId: 'routine-2', opType: 'delete', snapshot: null }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -626,6 +676,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'person', entityId: 'person-1', opType: 'create', snapshot: serverPerson('person-1') }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -641,6 +692,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'person', entityId: 'person-2', opType: 'delete', snapshot: null }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -652,6 +704,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'workContext', entityId: 'wc-1', opType: 'create', snapshot: serverWorkContext('wc-1') }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -667,6 +720,7 @@ describe('pullFromServer — routine/person/workContext ops', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'workContext', entityId: 'wc-2', opType: 'delete', snapshot: null }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -699,6 +753,7 @@ describe('pullFromServer — calendar routine sync', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'routine', entityId: 'cal-r1', opType: 'create', snapshot: serverCalendarRoutine('cal-r1') }],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -712,6 +767,7 @@ describe('pullFromServer — calendar routine sync', () => {
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({
             ops: [{ entityType: 'routine', entityId: 'cal-r2', opType: 'update', snapshot: serverCalendarRoutine('cal-r2') }],
             serverTs: '2025-06-02T00:00:00.000Z',
+            serverId: '',
         });
 
         await pullFromServer(db, USER_ID);
@@ -724,7 +780,7 @@ describe('pullFromServer — calendar routine sync', () => {
 // ── bootstrapFromServer ────────────────────────────────────────────────────────
 
 describe('bootstrapFromServer', () => {
-    it('writes all entity types and sets the per-user cursor', async () => {
+    it('writes all entity types and sets the per-user compound cursor (ts + serverId)', async () => {
         const serverTs = '2025-07-01T00:00:00.000Z';
         vi.mocked(fetchBootstrap).mockResolvedValueOnce({
             items: [serverItem('item-b1')],
@@ -732,6 +788,7 @@ describe('bootstrapFromServer', () => {
             people: [serverPerson('person-b1')],
             workContexts: [serverWorkContext('wc-b1')],
             serverTs,
+            serverId: MAX_OP_ID,
         });
 
         await bootstrapFromServer(db, USER_ID);
@@ -743,6 +800,8 @@ describe('bootstrapFromServer', () => {
 
         const cursor = await db.get('syncCursors', USER_ID);
         expect(cursor?.lastSyncedTs).toBe(serverTs);
+        // serverId (MAX_OP_ID) stored so the first incremental pull won't re-deliver ops at serverTs.
+        expect(cursor?.lastSyncedId).toBe(MAX_OP_ID);
     });
 
     it('remaps user → userId on all entities', async () => {
@@ -752,6 +811,7 @@ describe('bootstrapFromServer', () => {
             people: [],
             workContexts: [],
             serverTs: '2025-07-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await bootstrapFromServer(db, USER_ID);

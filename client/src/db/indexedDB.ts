@@ -1,9 +1,9 @@
 import type { IDBPDatabase, IDBPTransaction, StoreNames } from 'idb';
 import { openDB } from 'idb';
-import type { MyDB, SyncOperation } from '../types/MyDB';
+import type { MyDB, StoredSyncCursor, SyncOperation } from '../types/MyDB';
 
 export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
-    return openDB<MyDB>('gtd-app', 5, {
+    return openDB<MyDB>('gtd-app', 6, {
         async upgrade(db, oldVersion, _newVersion, tx) {
             // Version 1: core stores
             if (oldVersion < 1) {
@@ -61,8 +61,34 @@ export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
             if (oldVersion < 5) {
                 await wipeCachedEntitiesAndSyncState(tx);
             }
+
+            // Version 6: the pull cursor became the compound pair (ts, _id) to stop the same-ms
+            // op-drop. Backfill `lastSyncedId: ''` onto every existing syncCursors row. '' is the
+            // LOWEST id, so the first post-migration pull re-checks the whole boundary ms (safe
+            // idempotent re-delivery) rather than skipping it — NEVER use MAX_OP_ID here, which would
+            // skip the rest of the boundary ms and re-introduce the exact bug this fixes.
+            if (oldVersion < 6) {
+                await backfillSyncCursorIds(tx);
+            }
         },
     });
+}
+
+/**
+ * v5 → v6 backfill: add the compound-cursor id component to legacy syncCursors rows. Existing rows
+ * were written with only `lastSyncedTs`; '' (lowest id) makes the next pull re-check that ms. Rows
+ * created fresh (post-wipe installs) don't exist yet, so this is usually a no-op.
+ */
+async function backfillSyncCursorIds(tx: IDBPTransaction<MyDB, Array<StoreNames<MyDB>>, 'versionchange'>): Promise<void> {
+    const store = tx.objectStore('syncCursors');
+    let cursor = await store.openCursor();
+    while (cursor) {
+        const legacyValue = cursor.value as Partial<StoredSyncCursor>;
+        if (legacyValue.lastSyncedId === undefined) {
+            await cursor.update({ ...cursor.value, lastSyncedId: '' });
+        }
+        cursor = await cursor.continue();
+    }
 }
 
 /**
@@ -159,7 +185,11 @@ async function migrateDeviceSyncStateToPerUserCursors(tx: IDBPTransaction<MyDB, 
     const active = await activeStore.get('active');
     if (active && legacy.lastSyncedTs) {
         const cursorsStore = tx.objectStore('syncCursors');
-        await cursorsStore.put({ userId: active.userId, lastSyncedTs: legacy.lastSyncedTs });
+        // lastSyncedId: '' — the legacy cursor predates the compound (ts, _id) scheme, so the next
+        // pull re-checks the boundary ms (safe). Set defensively to satisfy the required field; when
+        // a device upgrades v3→v6 in one open, the v5 step wipes syncCursors anyway, so this row does
+        // not survive — the v6 backfill then operates on whatever rows exist post-wipe (usually none).
+        await cursorsStore.put({ userId: active.userId, lastSyncedTs: legacy.lastSyncedTs, lastSyncedId: '' });
     }
 
     await (legacyStore as unknown as { delete(key: 'local'): Promise<void> }).delete('local');

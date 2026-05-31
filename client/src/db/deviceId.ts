@@ -18,19 +18,28 @@ export async function getOrCreateDeviceId(db: IDBPDatabase<MyDB>): Promise<strin
 }
 
 /**
- * Reads the per-user pull cursor. Returns epoch when no row exists — that matches the server's
- * `since = dayjs(0).toISOString()` default and ensures a brand-new account on this device pulls
- * everything since the start of time.
+ * Cursor id-component sentinel that sorts strictly above every operation `_id`. Mirrors the
+ * server's `MAX_OP_ID`. Used as the id component of a bootstrap cursor: the snapshot already holds
+ * every op at exactly `serverTs`, so `(serverTs, MAX_OP_ID)` means "all delivered ≤ serverTs" and
+ * the first incremental pull won't re-fetch them. Never use it for a mid-stream cursor — that would
+ * skip the rest of a same-`ts` tie-group (the bug the compound cursor prevents); use '' there.
  */
-export async function getLastSyncedTs(db: IDBPDatabase<MyDB>, userId: string): Promise<string> {
+export const MAX_OP_ID = '￿';
+
+/**
+ * Reads the per-user compound pull cursor `(ts, id)`. Returns `{ epoch, '' }` when no row exists —
+ * epoch matches the server's `since` default, and `''` (lowest id) makes the first pull re-check the
+ * whole boundary ms. Legacy rows lacking `lastSyncedId` (pre-v6) read as `''` for the same reason.
+ */
+export async function getSyncCursor(db: IDBPDatabase<MyDB>, userId: string): Promise<{ ts: string; id: string }> {
     const row = await db.get('syncCursors', userId);
-    return row?.lastSyncedTs ?? dayjs(0).toISOString();
+    return { ts: row?.lastSyncedTs ?? dayjs(0).toISOString(), id: row?.lastSyncedId ?? '' };
 }
 
 /**
- * Writes the per-user pull cursor. Each Better Auth session on this device tracks its own cursor
- * — a shared cursor would let one session's pull advance past another session's boundary op.
+ * Writes the per-user compound pull cursor. Each Better Auth session on this device tracks its own
+ * cursor — a shared cursor would let one session's pull advance past another session's boundary op.
  */
-export async function setLastSyncedTs(db: IDBPDatabase<MyDB>, userId: string, ts: string): Promise<void> {
-    await db.put('syncCursors', { userId, lastSyncedTs: ts });
+export async function setSyncCursor(db: IDBPDatabase<MyDB>, userId: string, ts: string, id: string): Promise<void> {
+    await db.put('syncCursors', { userId, lastSyncedTs: ts, lastSyncedId: id });
 }

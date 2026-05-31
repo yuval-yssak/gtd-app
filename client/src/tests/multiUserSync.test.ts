@@ -45,10 +45,10 @@ beforeEach(async () => {
     // Device meta + per-user cursors must exist so flushSyncQueue + pullFromServer can run; without
     // a cursor row `pullOrBootstrap` would call bootstrapFromServer (we test that path separately).
     await db.put('deviceMeta', { _id: 'local', deviceId: 'dev-test', flushingTs: null });
-    await db.put('syncCursors', { userId: 'user-a', lastSyncedTs: '2025-01-01T00:00:00.000Z' });
-    await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '2025-01-01T00:00:00.000Z' });
+    await db.put('syncCursors', { userId: 'user-a', lastSyncedTs: '2025-01-01T00:00:00.000Z', lastSyncedId: '' });
+    await db.put('syncCursors', { userId: 'user-b', lastSyncedTs: '2025-01-01T00:00:00.000Z', lastSyncedId: '' });
     // Default to an empty pull payload so the orchestrator can resolve cleanly.
-    vi.mocked(fetchSyncOps).mockResolvedValue({ ops: [], serverTs: '2025-01-02T00:00:00.000Z' });
+    vi.mocked(fetchSyncOps).mockResolvedValue({ ops: [], serverTs: '2025-01-02T00:00:00.000Z', serverId: '' });
 });
 
 afterEach(() => {
@@ -94,7 +94,7 @@ describe('syncAllLoggedInUsers', () => {
         // First pull (user-a) returns serverTs=T_A; second (user-b) returns T_B.
         const tA = '2025-04-30T19:38:54.754Z';
         const tB = '2025-05-01T08:00:00.000Z';
-        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: tA }).mockResolvedValueOnce({ ops: [], serverTs: tB });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: tA, serverId: '' }).mockResolvedValueOnce({ ops: [], serverTs: tB, serverId: '' });
 
         await syncAllLoggedInUsers(db);
 
@@ -119,6 +119,7 @@ describe('syncAllLoggedInUsers', () => {
             people: [],
             workContexts: [],
             serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
         });
 
         await syncAllLoggedInUsers(db);
@@ -150,7 +151,9 @@ describe('syncAllLoggedInUsers', () => {
         await db.put('activeAccount', { userId: 'user-a' }, 'active');
 
         // Make the second pull throw so the loop bails out mid-iteration.
-        vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: '2025-01-02T00:00:00.000Z' }).mockRejectedValueOnce(new Error('GET /sync/pull 502'));
+        vi.mocked(fetchSyncOps)
+            .mockResolvedValueOnce({ ops: [], serverTs: '2025-01-02T00:00:00.000Z', serverId: '' })
+            .mockRejectedValueOnce(new Error('GET /sync/pull 502'));
 
         await expect(syncAllLoggedInUsers(db)).rejects.toThrow('GET /sync/pull 502');
 

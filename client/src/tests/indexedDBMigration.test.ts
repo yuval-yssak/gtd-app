@@ -223,9 +223,50 @@ async function bootV4DBWithFullCache(): Promise<void> {
         snapshot: null,
     } as unknown as MyDB['syncOperations']['value']);
     await v4.put('deviceMeta', { _id: 'local', deviceId: 'dev-1', flushingTs: null });
-    await v4.put('syncCursors', { userId: 'user-1', lastSyncedTs: '2026-04-30T00:00:00.000Z' });
+    // Legacy v4 cursor shape (no lastSyncedId) — the v4→v5 wipe clears it anyway. Cast because the
+    // current type marks lastSyncedId required.
+    await v4.put('syncCursors', { userId: 'user-1', lastSyncedTs: '2026-04-30T00:00:00.000Z' } as unknown as MyDB['syncCursors']['value']);
     v4.close();
 }
+
+/**
+ * Boots a v5-shape DB (current store set) and seeds a legacy `syncCursors` row that predates the
+ * compound cursor — i.e. it has `lastSyncedTs` but no `lastSyncedId`. The v5→v6 path must backfill it.
+ */
+async function bootV5DBWithLegacyCursor(opts: { userId: string; lastSyncedTs: string }): Promise<void> {
+    const v5 = await openDB<MyDB>('gtd-app', 5, {
+        upgrade(db) {
+            db.createObjectStore('accounts', { keyPath: 'id' }).createIndex('email', 'email', { unique: true });
+            db.createObjectStore('activeAccount');
+            db.createObjectStore('items', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+            db.createObjectStore('syncOperations', { autoIncrement: true, keyPath: 'id' });
+            db.createObjectStore('routines', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+            db.createObjectStore('people', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+            db.createObjectStore('workContexts', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+            db.createObjectStore('deviceMeta', { keyPath: '_id' });
+            db.createObjectStore('syncCursors', { keyPath: 'userId' });
+        },
+    });
+    // Seed the legacy (no lastSyncedId) shape — cast because the v6 type marks the field required.
+    await v5.put('syncCursors', { userId: opts.userId, lastSyncedTs: opts.lastSyncedTs } as unknown as MyDB['syncCursors']['value']);
+    v5.close();
+}
+
+describe('indexedDB v5 → v6 migration (compound cursor backfill)', () => {
+    it("backfills lastSyncedId: '' onto legacy syncCursors rows (re-check the boundary ms, never skip)", async () => {
+        await withFreshIDB(async () => {
+            await bootV5DBWithLegacyCursor({ userId: 'user-1', lastSyncedTs: '2026-05-01T00:00:00.000Z' });
+
+            const upgraded = await openAppDB();
+            const cursor = await upgraded.get('syncCursors', 'user-1');
+            expect(cursor?.lastSyncedTs).toBe('2026-05-01T00:00:00.000Z');
+            // '' (lowest id), NOT the MAX_OP_ID sentinel — the latter would skip the boundary ms and
+            // re-introduce the same-ms op-drop this whole change exists to fix.
+            expect(cursor?.lastSyncedId).toBe('');
+            upgraded.close();
+        });
+    });
+});
 
 describe('indexedDB v4 → v5 migration (server-data wipe)', () => {
     it('clears every cached entity store + sync queue + cursors so the next bootstrap rebuilds from server', async () => {

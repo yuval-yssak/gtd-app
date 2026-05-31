@@ -18,11 +18,13 @@ export interface BootstrapPayload {
     people: (Record<string, unknown> & { user: string })[];
     workContexts: (Record<string, unknown> & { user: string })[];
     serverTs: string;
+    serverId: string; // MAX_OP_ID — the id component of the compound cursor for the first incremental pull
 }
 
 export interface PullPayload {
     ops: ServerOp[];
     serverTs: string;
+    serverId: string; // `_id` of the last returned op (or the echoed `sinceId` when no ops) — next pull's `sinceId`
 }
 
 // ── Network functions ─────────────────────────────────────────────────────────
@@ -55,13 +57,14 @@ export async function fetchBootstrap(deviceId: string): Promise<BootstrapPayload
     return res.json() as Promise<BootstrapPayload>;
 }
 
-// `ackedTs` is the highest ts the caller has *durably persisted to IndexedDB*. The server records
-// it as the device's purge floor (lastSyncedTs) — distinct from `since` so that a lost or partial
-// response never advances the floor past ops the client never committed. In steady state callers
-// pass `ackedTs === since`; they diverge only after a partial-apply recovery scenario.
-export async function fetchSyncOps(since: string, ackedTs: string, deviceId: string): Promise<PullPayload> {
-    const url = `${API_SERVER}/sync/pull?since=${encodeURIComponent(since)}&ackedTs=${encodeURIComponent(ackedTs)}&deviceId=${encodeURIComponent(deviceId)}`;
-    const res = await fetch(url, {
+// The cursor is the compound pair `(since, sinceId)` — ops are paginated on `(ts, _id)` so a same-`ts`
+// batch can't be split across pulls and lose ops. `(ackedTs, ackedId)` is the highest pair the caller
+// has *durably persisted to IndexedDB*; the server records it as the device's purge floor — distinct
+// from `(since, sinceId)` so a lost or partial response never advances the floor past ops the client
+// never committed. In steady state callers pass the ack pair equal to the since pair.
+export async function fetchSyncOps(since: string, sinceId: string, ackedTs: string, ackedId: string, deviceId: string): Promise<PullPayload> {
+    const params = new URLSearchParams({ since, sinceId, ackedTs, ackedId, deviceId });
+    const res = await fetch(`${API_SERVER}/sync/pull?${params}`, {
         credentials: 'include',
         headers: { [DEVICE_ID_HEADER]: deviceId },
     });

@@ -8,15 +8,41 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
     override async init(client: MongoClient, dbName: string) {
         await super.init(client, dbName);
         await this._collection.createIndexes([
+            // Compound (ts, _id) so incremental pull paginates on the totally-ordered pair, not a
+            // bare millisecond — a same-`ts` batch can't be split across two pulls and lose ops.
+            { key: { user: 1, ts: 1, _id: 1 } },
+            // Kept (now a strict prefix of the compound index): dropping costs more operational risk
+            // than the redundant index saves on this low-throughput workload.
             { key: { user: 1, ts: 1 } }, // incremental pull: all ops for user since a given ts
             { key: { user: 1, entityType: 1, entityId: 1, ts: 1 } }, // entity history lookup
         ]);
     }
 
-    async deleteOlderThan(userId: string, ts: string): Promise<void> {
-        // $lte: all devices have advanced their cursor to at least `ts`, meaning they've
-        // received every op at that timestamp. Safe to delete ops at and before `ts`.
-        await this._collection.deleteMany({ user: userId, ts: { $lte: ts } } as never);
+    /**
+     * Incremental-pull query on the compound cursor `(since, sinceId)`: returns ops strictly greater
+     * than that pair under `(ts, _id)` ordering. MongoDB has no native tuple `$gt`, so we express it
+     * as an `$or` of "newer ms" plus "same ms, higher id". The same-ms clause MUST be `$gt` (not
+     * `$gte`) — `$gte` would re-emit the cursor op every pull, an endless re-delivery loop.
+     * A missing/empty `sinceId` ('' sorts below every id) degrades to `$gte since` semantics, which
+     * re-checks the whole boundary ms — safe (applies are idempotent) and strictly better than the
+     * old `$gt ts` that skipped it.
+     */
+    async findOpsAfter(userId: string, since: string, sinceId: string): Promise<OperationInterface[]> {
+        return await this.findArray(
+            { user: userId, $or: [{ ts: { $gt: since } }, { ts: since, _id: { $gt: sinceId } } as never] },
+            { sort: { ts: 1, _id: 1 } },
+        );
+    }
+
+    async deleteOlderThan(userId: string, minTs: string, minId: string): Promise<void> {
+        // Delete only ops at-or-below the compound floor `(minTs, minId)` — the exact position the
+        // slowest device has provably received. The same-ms clause MUST be `_id: { $lte: minId }`,
+        // NOT `ts: { $lte: minTs }`: a bare `$lte ts` would delete same-ms ops *past* the slowest
+        // device's acked position that it hasn't pulled yet, the purge-side dual of the pull bug.
+        await this._collection.deleteMany({
+            user: userId,
+            $or: [{ ts: { $lt: minTs } }, { ts: minTs, _id: { $lte: minId } }],
+        } as never);
     }
 
     /**

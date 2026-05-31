@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
-import type { EntityType, OpType } from '../types/entities.js';
+import { type EntityType, MAX_OP_ID, type OpType } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/sync', syncRoutes);
@@ -83,10 +83,12 @@ async function push(sessionCookie: string, deviceId: string, ops: ReturnType<typ
     return authenticatedRequest(app, { method: 'POST', path: '/sync/push', sessionCookie, body: { deviceId, ops } });
 }
 
-async function pull(sessionCookie: string, opts: { since?: string; ackedTs?: string; deviceId?: string } = {}) {
+async function pull(sessionCookie: string, opts: { since?: string; sinceId?: string; ackedTs?: string; ackedId?: string; deviceId?: string } = {}) {
     const params = new URLSearchParams();
     if (opts.since !== undefined) params.set('since', opts.since);
+    if (opts.sinceId !== undefined) params.set('sinceId', opts.sinceId);
     if (opts.ackedTs !== undefined) params.set('ackedTs', opts.ackedTs);
+    if (opts.ackedId !== undefined) params.set('ackedId', opts.ackedId);
     if (opts.deviceId !== undefined) params.set('deviceId', opts.deviceId);
     const query = params.toString() ? `?${params}` : '';
     return authenticatedRequest(app, { method: 'GET', path: `/sync/pull${query}`, sessionCookie });
@@ -297,25 +299,48 @@ describe('GET /sync/pull', () => {
         expect(ops[0]!.entityId).toBe(entityId);
     });
 
-    it('since filter: only returns ops with ts > since', async () => {
+    it('compound cursor: returns ops strictly after (since, sinceId)', async () => {
         const cookie = await loginAsAlice();
         const id1 = crypto.randomUUID();
         const id2 = crypto.randomUUID();
 
         await push(cookie, 'dev-1', [makeClientOp('item', id1, 'create', makeItemSnapshot(id1, '2024-01-01T00:00:00.000Z'))]);
-        // Record the ts of the first op to use as the `since` cursor
+        // Record the (ts, _id) of the first op to use as the compound cursor
         const firstOp = await db.collection('operations').findOne({ entityId: id1 });
         const t1 = firstOp!.ts as string;
+        const opId1 = firstOp!._id as string;
 
         // Small delay ensures the second push gets a strictly later server ts
         await tick();
         await push(cookie, 'dev-1', [makeClientOp('item', id2, 'create', makeItemSnapshot(id2, '2024-01-02T00:00:00.000Z'))]);
 
-        const res = await pull(cookie, { since: t1, deviceId: 'dev-2' });
+        // Passing the first op's _id as sinceId excludes it (we already have it) and returns only op2.
+        const res = await pull(cookie, { since: t1, sinceId: opId1, deviceId: 'dev-2' });
         const { ops } = (await res.json()) as { ops: { entityId: string }[] };
 
         expect(ops).toHaveLength(1);
         expect(ops[0]!.entityId).toBe(id2);
+    });
+
+    it('old-client compat: missing sinceId re-checks the whole boundary ms ($gte since)', async () => {
+        const cookie = await loginAsAlice();
+        const id1 = crypto.randomUUID();
+        const id2 = crypto.randomUUID();
+
+        await push(cookie, 'dev-1', [makeClientOp('item', id1, 'create', makeItemSnapshot(id1, '2024-01-01T00:00:00.000Z'))]);
+        const firstOp = await db.collection('operations').findOne({ entityId: id1 });
+        const t1 = firstOp!.ts as string;
+        await tick();
+        await push(cookie, 'dev-1', [makeClientOp('item', id2, 'create', makeItemSnapshot(id2, '2024-01-02T00:00:00.000Z'))]);
+
+        // Old client sends only `since` (no `sinceId`). Server treats missing id as '' (lowest) →
+        // the op AT exactly t1 is re-included. Re-delivery is safe; never a skip. This is the
+        // behavior that protects pre-upgrade clients from the same-ms drop the fix targets.
+        const res = await pull(cookie, { since: t1, deviceId: 'dev-2' });
+        const { ops } = (await res.json()) as { ops: { entityId: string }[] };
+
+        expect(ops).toHaveLength(2);
+        expect(ops.map((o) => o.entityId)).toEqual([id1, id2]);
     });
 
     it('pull with deviceId updates deviceSyncState lastSyncedTs to ackedTs (composite per-user _id)', async () => {
@@ -448,6 +473,43 @@ describe('GET /sync/pull', () => {
         expect(ops).toHaveLength(0);
     });
 
+    it('same-ms tie-group split across two pulls loses no op (compound cursor regression)', async () => {
+        const cookie = await loginAsAlice();
+
+        // One push batch → applyAndPublishOperations stamps every op with one identical `ts`. This is
+        // the exact shape that stranded the OOO item under the old `$gt ts` cursor.
+        const ids = Array.from({ length: 15 }, () => crypto.randomUUID());
+        await push(
+            cookie,
+            'dev-1',
+            ids.map((id) => makeClientOp('item', id, 'create', makeItemSnapshot(id, '2024-01-01T00:00:00.000Z'))),
+        );
+
+        // The persisted ops, in the exact (ts, _id) order the server paginates by.
+        const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
+        expect(persisted).toHaveLength(15);
+        const allTs = new Set(persisted.map((op) => op.ts));
+        expect(allTs.size).toBe(1); // confirm they truly share one millisecond
+
+        // First device pulls everything; simulate a response boundary that splits the tie-group at K
+        // by advancing the cursor to the K-th op and pulling again from there.
+        const K = 6;
+        const boundary = persisted[K - 1];
+        const second = (await (await pull(cookie, { since: boundary!.ts as string, sinceId: boundary!._id as string, deviceId: 'dev-2' })).json()) as {
+            ops: { entityId: string }[];
+        };
+
+        // The second pull returns exactly the survivors after the boundary — none skipped.
+        const firstHalf = persisted.slice(0, K).map((op) => op.entityId);
+        const survivors = persisted.slice(K).map((op) => op.entityId);
+        expect(second.ops.map((o) => o.entityId)).toEqual(survivors);
+
+        // Union over both pulls = all 15, no gaps, no dups.
+        const union = new Set([...firstHalf, ...second.ops.map((o) => o.entityId)]);
+        expect(union.size).toBe(15);
+        expect(ids.every((id) => union.has(id))).toBe(true);
+    });
+
     it('unauthenticated pull returns 401', async () => {
         const res = await app.fetch(new Request('http://localhost:4000/sync/pull'));
         expect(res.status).toBe(401);
@@ -545,6 +607,29 @@ describe('GET /sync/bootstrap', () => {
         expect(state?.deviceId).toBe('dev-boot');
         expect(state?.user).toBe(userId);
         expect(state?.lastSeenTs).toBe(dayjs(0).toISOString());
+    });
+
+    it('returns serverId = MAX_OP_ID and a follow-up pull does not re-deliver ops at serverTs', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        // An op exists from before bootstrap; the snapshot already contains its entity.
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot', sessionCookie: cookie });
+        const { serverTs, serverId } = (await res.json()) as { serverTs: string; serverId: string };
+        expect(serverId).toBe(MAX_OP_ID);
+
+        // The compound floor (serverTs, MAX_OP_ID) must be written so purge treats everything ≤
+        // serverTs as delivered (the snapshot has it).
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
+        expect(state?.lastSyncedId).toBe(MAX_OP_ID);
+
+        // First incremental pull from the bootstrap cursor: the op created at exactly serverTs is in
+        // the snapshot, so it must NOT be re-delivered. MAX_OP_ID excludes the whole serverTs ms.
+        const pullBody = (await (await pull(cookie, { since: serverTs, sinceId: serverId, deviceId: 'dev-boot' })).json()) as { ops: unknown[] };
+        expect(pullBody.ops).toHaveLength(0);
     });
 
     it('does NOT register a device when ?deviceId= is absent (back-compat for old clients)', async () => {
@@ -646,16 +731,32 @@ describe('Purge logic', () => {
         //   2) Second pull sends ackedTs = first.serverTs; server advances lastSyncedTs to op.ts.
         const dev1First = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' })).json()) as {
             serverTs: string;
+            serverId: string;
         };
         await tick();
-        await pull(cookie, { since: dev1First.serverTs, ackedTs: dev1First.serverTs, deviceId: 'dev-1' });
+        // Ack BOTH cursor components: without ackedId the floor's id stays '' and the boundary-ms
+        // clause (_id <= '') matches no op, so the op would never purge.
+        await pull(cookie, {
+            since: dev1First.serverTs,
+            sinceId: dev1First.serverId,
+            ackedTs: dev1First.serverTs,
+            ackedId: dev1First.serverId,
+            deviceId: 'dev-1',
+        });
         await tick();
 
         const dev2First = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-2' })).json()) as {
             serverTs: string;
+            serverId: string;
         };
         await tick();
-        await pull(cookie, { since: dev2First.serverTs, ackedTs: dev2First.serverTs, deviceId: 'dev-2' });
+        await pull(cookie, {
+            since: dev2First.serverTs,
+            sinceId: dev2First.serverId,
+            ackedTs: dev2First.serverTs,
+            ackedId: dev2First.serverId,
+            deviceId: 'dev-2',
+        });
 
         // Purge is fire-and-forget — poll until it converges instead of guessing a fixed delay.
         await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
@@ -671,12 +772,98 @@ describe('Purge logic', () => {
         // First pull receives the op but records ackedTs=epoch (client hasn't committed yet).
         const first = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' })).json()) as {
             serverTs: string;
+            serverId: string;
         };
-        // Second pull acknowledges the previous response — server advances lastSyncedTs.
-        await pull(cookie, { since: first.serverTs, ackedTs: first.serverTs, deviceId: 'dev-1' });
+        // Second pull acknowledges the previous response (both components) — server advances the floor.
+        await pull(cookie, { since: first.serverTs, sinceId: first.serverId, ackedTs: first.serverTs, ackedId: first.serverId, deviceId: 'dev-1' });
 
         await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
+    });
+
+    it('boundary safety: same-ms ops past the acked _id are NOT purged prematurely', async () => {
+        const cookie = await loginAsAlice();
+
+        // One batch of 3 ops sharing a single millisecond ts.
+        const ids = Array.from({ length: 3 }, () => crypto.randomUUID());
+        await push(
+            cookie,
+            'dev-1',
+            ids.map((id) => makeClientOp('item', id, 'create', makeItemSnapshot(id, '2024-01-01T00:00:00.000Z'))),
+        );
+        const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
+        expect(persisted).toHaveLength(3);
+        const [op1, , op3] = persisted;
+
+        // Device acks only through op1 (the first of the tie-group). The floor is (T, op1._id).
+        // deleteOlderThan must delete only op1 (_id <= op1._id at ts T), leaving op2/op3 — the dual
+        // of the pull bug: a naive `ts <= T` purge would wipe the unacked survivors.
+        await pull(cookie, { ackedTs: op1!.ts as string, ackedId: op1!._id as string, deviceId: 'dev-1' });
+        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 2);
+        expect(await db.collection('operations').countDocuments()).toBe(2);
+        expect(await db.collection('operations').countDocuments({ _id: op1!._id })).toBe(0);
+
+        // Once the device acks through op3, the rest of the ms purges.
+        await pull(cookie, { ackedTs: op3!.ts as string, ackedId: op3!._id as string, deviceId: 'dev-1' });
+        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
+        expect(await db.collection('operations').countDocuments()).toBe(0);
+    });
+
+    it('compound-min floor: two devices at the same ts, different _id → floor is the lower _id', async () => {
+        const cookie = await loginAsAlice();
+
+        // 3 ops in one batch → one shared ms; devices ack to different positions within it. Push from
+        // dev-A so the only deviceSyncState rows are the two acking devices (a separate pushing
+        // device would hold the floor at epoch via its $setOnInsert cursor and mask the comparison).
+        const ids = Array.from({ length: 3 }, () => crypto.randomUUID());
+        await push(
+            cookie,
+            'dev-A',
+            ids.map((id) => makeClientOp('item', id, 'create', makeItemSnapshot(id, '2024-01-01T00:00:00.000Z'))),
+        );
+        const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
+        const [op1, , op3] = persisted;
+        const T = op1!.ts as string;
+
+        // dev-A acks through op1 (lower _id), dev-B acks through op3 (higher _id). The compound-min
+        // floor must be (T, op1._id) — the LOWER pair — not independent mins that would fabricate a
+        // floor no device reached. So only op1 may purge; op2/op3 survive (dev-A hasn't received them).
+        await pull(cookie, { ackedTs: T, ackedId: op1!._id as string, deviceId: 'dev-A' });
+        await pull(cookie, { ackedTs: T, ackedId: op3!._id as string, deviceId: 'dev-B' });
+
+        await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 2);
+        expect(await db.collection('operations').countDocuments()).toBe(2);
+        expect(await db.collection('operations').countDocuments({ _id: op1!._id })).toBe(0);
+    });
+
+    it('legacy device row without lastSyncedId blocks purge of its boundary ms (conservative)', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        // Push from dev-active so the only non-legacy cursor is the one we fully ack below — a
+        // separate pushing device would sit at an epoch floor and mask the legacy row's effect.
+        const ids = Array.from({ length: 2 }, () => crypto.randomUUID());
+        await push(
+            cookie,
+            'dev-active',
+            ids.map((id) => makeClientOp('item', id, 'create', makeItemSnapshot(id, '2024-01-01T00:00:00.000Z'))),
+        );
+        const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
+        const [op1, op2] = persisted;
+        const T = op1!.ts as string;
+
+        // A legacy (pre-fix) row: lastSyncedTs set to the boundary ms, but no lastSyncedId field.
+        // Read as '' (lowest id) → floor (T, '') → boundary clause `_id <= ''` matches nothing.
+        await db
+            .collection('deviceSyncState')
+            .insertOne({ _id: `dev-legacy::${userId}`, deviceId: 'dev-legacy', user: userId, lastSeenTs: T, lastSyncedTs: T });
+
+        // The active device fully acks past the whole batch — were it the only device, both ops would
+        // purge. The legacy row is what holds them: floor = min((T, ''), (T, op2._id)) = (T, ''), whose
+        // boundary clause deletes nothing at T. Confirms the `?? ''` legacy path is strictly conservative.
+        await pull(cookie, { ackedTs: T, ackedId: op2!._id as string, deviceId: 'dev-active' });
+        await waitForPurge(async () => (await db.collection('operations').countDocuments()) < 2, 300);
+        expect(await db.collection('operations').countDocuments()).toBe(2);
     });
 
     it('pull response is returned before purge completes (purge is non-blocking)', async () => {
@@ -761,8 +948,9 @@ describe('Stale device cleanup', () => {
         // confirms it so the device's lastSyncedTs advances past op.ts and the purge can fire.
         const first = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-active' })).json()) as {
             serverTs: string;
+            serverId: string;
         };
-        await pull(cookie, { since: first.serverTs, ackedTs: first.serverTs, deviceId: 'dev-active' });
+        await pull(cookie, { since: first.serverTs, sinceId: first.serverId, ackedTs: first.serverTs, ackedId: first.serverId, deviceId: 'dev-active' });
 
         // Purge runs in two phases: first the abandoned device row is removed, then the now-
         // unblocked operations purge fires. Wait for the second phase since it's the slower one.
@@ -854,7 +1042,15 @@ describe('Multi-device round-trip', () => {
 
         // Device-2 pulls — should receive the create op
         const pullRes1 = await pull(dev2Cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-2' });
-        const { ops: opsForDev2, serverTs: dev2ServerTs1 } = (await pullRes1.json()) as { ops: { entityId: string; opType: string }[]; serverTs: string };
+        const {
+            ops: opsForDev2,
+            serverTs: dev2ServerTs1,
+            serverId: dev2ServerId1,
+        } = (await pullRes1.json()) as {
+            ops: { entityId: string; opType: string }[];
+            serverTs: string;
+            serverId: string;
+        };
         expect(opsForDev2).toHaveLength(1);
         expect(opsForDev2[0]!.entityId).toBe(itemId);
         expect(opsForDev2[0]!.opType).toBe('create');
@@ -868,8 +1064,23 @@ describe('Multi-device round-trip', () => {
         // Device-1 pulls — should receive the update op. Explicit-ack: dev-1 acknowledges epoch
         // (it has nothing committed yet) and asks for ops > createOp.ts.
         const dev1LastOp = await db.collection('operations').findOne({ entityId: itemId, opType: 'create' });
-        const pullRes2 = await pull(dev1Cookie, { since: dev1LastOp!.ts as string, ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' });
-        const { ops: opsForDev1, serverTs: dev1ServerTs1 } = (await pullRes2.json()) as { ops: { entityId: string; opType: string }[]; serverTs: string };
+        // Pass the create op's _id as sinceId so the compound cursor excludes it (dev-1 already has
+        // it) and returns only the later update — without it, '' would re-include the create ($gte).
+        const pullRes2 = await pull(dev1Cookie, {
+            since: dev1LastOp!.ts as string,
+            sinceId: dev1LastOp!._id as string,
+            ackedTs: dayjs(0).toISOString(),
+            deviceId: 'dev-1',
+        });
+        const {
+            ops: opsForDev1,
+            serverTs: dev1ServerTs1,
+            serverId: dev1ServerId1,
+        } = (await pullRes2.json()) as {
+            ops: { entityId: string; opType: string }[];
+            serverTs: string;
+            serverId: string;
+        };
         expect(opsForDev1).toHaveLength(1);
         expect(opsForDev1[0]!.opType).toBe('update');
 
@@ -877,15 +1088,26 @@ describe('Multi-device round-trip', () => {
         const item = await db.collection('items').findOne({ _id: itemId });
         expect(item?.title).toBe('Updated by dev-2');
 
-        // For purge to fire, each device's lastSyncedTs (= recorded ackedTs) must reach updateOp.ts.
-        // Each device needs a follow-up pull whose ackedTs equals the previous response's serverTs.
+        // For purge to fire, each device's compound floor (= recorded ackedTs/ackedId) must reach
+        // updateOp's (ts, _id). Each follow-up pull acks the previous response's (serverTs, serverId).
         await tick();
-        await pull(dev1Cookie, { since: dev1ServerTs1, ackedTs: dev1ServerTs1, deviceId: 'dev-1' });
+        await pull(dev1Cookie, { since: dev1ServerTs1, sinceId: dev1ServerId1, ackedTs: dev1ServerTs1, ackedId: dev1ServerId1, deviceId: 'dev-1' });
         // dev-2 hasn't yet acked the create op it received in pullRes1 — and now the update is also
-        // visible in its query window. Two follow-up pulls bring dev-2's floor up to updateOp.ts:
-        // first ackedTs=createOp.ts (its first response's serverTs), then ackedTs=updateOp.ts.
-        const dev2Second = (await (await pull(dev2Cookie, { since: dev2ServerTs1, ackedTs: dev2ServerTs1, deviceId: 'dev-2' })).json()) as { serverTs: string };
-        await pull(dev2Cookie, { since: dev2Second.serverTs, ackedTs: dev2Second.serverTs, deviceId: 'dev-2' });
+        // visible in its query window. Two follow-up pulls bring dev-2's floor up to updateOp:
+        // first acks createOp, then updateOp.
+        const dev2Second = (await (
+            await pull(dev2Cookie, { since: dev2ServerTs1, sinceId: dev2ServerId1, ackedTs: dev2ServerTs1, ackedId: dev2ServerId1, deviceId: 'dev-2' })
+        ).json()) as {
+            serverTs: string;
+            serverId: string;
+        };
+        await pull(dev2Cookie, {
+            since: dev2Second.serverTs,
+            sinceId: dev2Second.serverId,
+            ackedTs: dev2Second.serverTs,
+            ackedId: dev2Second.serverId,
+            deviceId: 'dev-2',
+        });
 
         // Both devices have now pulled past all ops → purge fires → operations collection empty
         await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);

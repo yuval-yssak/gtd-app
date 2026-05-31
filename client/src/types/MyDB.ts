@@ -213,6 +213,10 @@ export interface StoredDeviceMeta {
 export interface StoredSyncCursor {
     userId: string;
     lastSyncedTs: string; // ISO datetime of the last successful pull for this (device, user) pair
+    // `_id` of the last pulled op, paired with `lastSyncedTs` so the cursor advances on the totally-
+    // ordered `(ts, _id)` pair — a same-`ts` batch can't be split across two pulls and lose ops.
+    // Backfilled to '' by the v6 migration on rows written before this field existed.
+    lastSyncedId: string;
 }
 
 /** RSVP payload mirrored from RsvpOpPayload on the server side. */

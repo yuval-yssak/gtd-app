@@ -16,7 +16,7 @@ import type {
     SyncOperation,
 } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
-import { getLastSyncedTs, getOrCreateDeviceId, setLastSyncedTs } from './deviceId';
+import { getOrCreateDeviceId, getSyncCursor, MAX_OP_ID, setSyncCursor } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
 import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
 import { deletePersonById, putPerson } from './personHelpers';
@@ -325,7 +325,7 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
     await assertActiveSessionMatches(db, userId, 'bootstrapFromServer');
     const deviceId = await getOrCreateDeviceId(db);
 
-    const { items, routines, people, workContexts, serverTs } = await fetchBootstrap(deviceId);
+    const { items, routines, people, workContexts, serverTs, serverId } = await fetchBootstrap(deviceId);
 
     const mappedItems = items.map((doc) => remapUser(doc) as unknown as StoredItem);
     const mappedRoutines = routines.map((doc) => remapUser(doc) as unknown as StoredRoutine);
@@ -343,9 +343,10 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
     const workContextsTx = db.transaction('workContexts', 'readwrite');
     await Promise.all([...mappedWorkContexts.map((wc) => workContextsTx.store.put(wc)), workContextsTx.done]);
 
-    // Per-user cursor at serverTs — skips replaying historical ops because bootstrap already
-    // delivered the current snapshot; incremental pull takes over from here.
-    await setLastSyncedTs(db, userId, serverTs);
+    // Per-user compound cursor at (serverTs, serverId) — the snapshot already delivered the current
+    // state, so incremental pull starts from here. serverId is MAX_OP_ID (suppresses re-delivery of
+    // ops at exactly serverTs); fall back to that sentinel if an old server omits it.
+    await setSyncCursor(db, userId, serverTs, serverId ?? MAX_OP_ID);
 }
 
 // Active-session-dependent operations (pulls, orchestrator passes) all read or mutate the global
@@ -452,16 +453,16 @@ export function pullFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string):
 async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     await assertActiveSessionMatches(db, userId, 'doPull');
     const deviceId = await getOrCreateDeviceId(db);
-    // The IDB cursor doubles as `since` (what ops to fetch) AND `ackedTs` (what we've durably
-    // persisted). They're equal in steady state — they only diverge after a partial-apply failure
-    // where setLastSyncedTs ran but applyServerOp didn't (a state we don't reach today; this
-    // protocol makes the contract explicit so we can split them later if needed). Crucially we
-    // never advance the server's purge floor past what we've actually written to IDB.
-    const cursor = await getLastSyncedTs(db, userId);
-    const { ops, serverTs } = await fetchSyncOps(cursor, cursor, deviceId);
+    // The IDB cursor `(ts, id)` doubles as `(since, sinceId)` (what ops to fetch) AND `(ackedTs,
+    // ackedId)` (what we've durably persisted). They're equal in steady state — they only diverge
+    // after a partial-apply failure where setSyncCursor ran but applyServerOp didn't (a state we
+    // don't reach today; this protocol makes the contract explicit so we can split them later if
+    // needed). Crucially we never advance the server's purge floor past what we've written to IDB.
+    const cursor = await getSyncCursor(db, userId);
+    const { ops, serverTs, serverId } = await fetchSyncOps(cursor.ts, cursor.id, cursor.ts, cursor.id, deviceId);
 
     console.log(
-        `[debug-gcal-sync][client] doPull | userId=${userId} since=${cursor} serverTs=${serverTs} opCount=${ops.length}`,
+        `[debug-gcal-sync][client] doPull | userId=${userId} since=${cursor.ts}/${cursor.id} serverTs=${serverTs}/${serverId} opCount=${ops.length}`,
         ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}@${(op.snapshot as { updatedTs?: string } | null)?.updatedTs ?? 'n/a'}`),
     );
 
@@ -469,7 +470,8 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
         await applyServerOp(db, userId, op);
     }
 
-    await setLastSyncedTs(db, userId, serverTs);
+    // serverId ?? '' guards against an old server that omits it — '' keeps $gte boundary re-check semantics (safe).
+    await setSyncCursor(db, userId, serverTs, serverId ?? '');
 }
 
 // Handlers for each entity type used by applyEntityOp to stay DRY across entity types.

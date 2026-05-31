@@ -387,6 +387,17 @@ export interface OperationInterface {
     failedTs?: string;
 }
 
+/**
+ * Cursor sentinel that sorts strictly above every operation `_id` (UUIDs and the public-API's
+ * base62 ids alike — all printable ASCII, which sorts below U+FFFF). Used as the `serverId`
+ * component of a bootstrap cursor: the bootstrap snapshot already contains every op at exactly
+ * `serverTs`, so the floor `(serverTs, MAX_OP_ID)` correctly means "everything ≤ serverTs is
+ * delivered" without re-delivering those ops on the first incremental pull. NEVER use this for a
+ * mid-stream incremental cursor — it would skip the rest of a same-`ts` tie-group (the very bug the
+ * compound `(ts, _id)` cursor exists to prevent); use `''` (lowest id) there to re-check the ms.
+ */
+export const MAX_OP_ID = '￿';
+
 export interface DeviceSyncStateInterface {
     /**
      * Composite id `${deviceId}::${userId}`. One row per (device, user) pair so two
@@ -408,6 +419,14 @@ export interface DeviceSyncStateInterface {
      * (device, user) rows for a user can be purged.
      */
     lastSyncedTs: string;
+    /**
+     * `_id` of the most recent operation this (device, user) pair has pulled, paired with
+     * `lastSyncedTs` to form the compound `(ts, _id)` purge floor. Two ops in one push batch share
+     * an identical `lastSyncedTs`, so the `_id` component is what lets the purge delete only the
+     * same-`ts` ops at-or-below this exact position and keep the unacked survivors. Legacy rows
+     * written before this field existed are read as `''` (lowest id) — see purgeOldOperations.
+     */
+    lastSyncedId: string;
     /**
      * ISO datetime of the most recent operation this (device, user) pair has pushed
      * to the server.
