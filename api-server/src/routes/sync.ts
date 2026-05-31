@@ -10,6 +10,7 @@ import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { applyAndPublishOperations, OperationValidationError, type RawOperation } from '../lib/applyOperation.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
+import { computePurgeFloor } from '../lib/purgeFloor.js';
 import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
 import { vapidPublicKey } from '../lib/webPush.js';
@@ -56,22 +57,12 @@ async function purgeOldOperations(userId: string): Promise<void> {
     await purgeStaleDevices(userId);
 
     const deviceStates = await deviceSyncStateDAO.findArray({ user: userId });
-    if (!deviceStates.length) return;
-
     // Only purge ops all registered devices have already pulled — the slowest device sets the floor.
-    // The floor is the lexicographic min of the COMPOUND pair (lastSyncedTs, lastSyncedId), not
-    // independent mins of each: independent mins could fabricate a (ts, id) no device actually
-    // reached, deleting ops a device still needs. Legacy rows lacking lastSyncedId read as '' (lowest
-    // id), so that device's boundary ms is never purged until it next pulls and writes a real id.
-    // reduce without a seed uses the first element; safe since we guard length above.
-    const floor = deviceStates.reduce((min, d) => {
-        if (d.lastSyncedTs !== min.lastSyncedTs) {
-            return d.lastSyncedTs < min.lastSyncedTs ? d : min;
-        }
-        return (d.lastSyncedId ?? '') < (min.lastSyncedId ?? '') ? d : min;
-    });
+    // The compound (ts, _id) floor computation is shared with the on-demand maintenance endpoint.
+    const floor = computePurgeFloor(deviceStates);
+    if (!floor) return;
 
-    await operationsDAO.deleteOlderThan(userId, floor.lastSyncedTs, floor.lastSyncedId ?? '');
+    await operationsDAO.deleteOlderThan(userId, floor.ts, floor.id);
 }
 
 /**

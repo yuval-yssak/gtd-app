@@ -7,6 +7,7 @@ import { v1RequestLogger } from './lib/v1Logger.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
 import { deviceRoutes } from './routes/devices.js';
+import { maintenanceRoutes } from './routes/maintenance.js';
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
 import { tokensRoutes } from './routes/tokens.js';
@@ -37,6 +38,8 @@ const app = new Hono()
     .route('/push', pushRoutes)
     .use('/devices/*', strictCors())
     .route('/devices', deviceRoutes)
+    .use('/maintenance/*', strictCors())
+    .route('/maintenance', maintenanceRoutes)
     .use('/calendar/*', strictCors())
     .route('/calendar', calendarRoutes)
     // /v1 is the public bearer-authed surface — relaxed CORS so external integrations can call it
