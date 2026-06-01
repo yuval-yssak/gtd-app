@@ -2966,6 +2966,180 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         }
     });
 
+    // Regression: updateRoutineFromGCal previously recomputed `calendarItemTemplate` as
+    // `{ timeOfDay, duration }` unconditionally, so a structurally-newer all-day master clobbered the
+    // routine's `{ allDay: true }` template — for an all-day event timeStart is a YYYY-MM-DD string, so
+    // extractLocalTime/diff produce junk (timeOfDay '03:00', duration 1440), and the banner renders
+    // as 03:00–03:00. The update path now mirrors the create path's all-day branch.
+    it('updateRoutineFromGCal keeps template = { allDay: true } when a newer all-day master arrives (no clobber to timed)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const startDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const endDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+
+        // Existing all-day routine with a STALE GCal-truth anchor so the inbound master is structurally newer.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-allday',
+                calendarEventId: 'recurring-allday-master',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'cfg-1',
+                rrule: 'FREQ=DAILY',
+                calendarItemTemplate: { allDay: true },
+                lastSyncedFromGCalTs: '2020-01-01T00:00:00.000Z',
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-allday-master',
+                    title: 'Daily walk (renamed)',
+                    timeStart: startDate,
+                    timeEnd: endDate,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    allDay: true,
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        // Seed an existing future all-day item so propagateMasterScheduleChanges has a target — the
+        // assertion loop below is then non-vacuous.
+        await itemsDAO.insertOne({
+            _id: 'item-allday-future',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily walk',
+            routineId: 'routine-allday',
+            calendarInstanceEventId: `recurring-allday-master_${startDate.replace(/-/g, '')}`,
+            allDay: true,
+            timeStart: startDate,
+            timeEnd: endDate,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-allday-master' });
+        expect(routine?.title).toBe('Daily walk (renamed)');
+        // The structural update applied (title changed) but the template stayed all-day — not { timeOfDay, duration }.
+        // Pre-fix this would have been { timeOfDay: '03:00', duration: 1440 } (junk from parsing a YYYY-MM-DD string).
+        expect(routine?.calendarItemTemplate).toEqual({ allDay: true });
+
+        // Existing future items keep date-only time strings (never 03:00 datetimes) after propagation.
+        const items = await itemsDAO.findArray({ user: userId, routineId: routine?._id ?? '' });
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) {
+            expect(item.allDay).toBe(true);
+            expect(item.timeStart).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        }
+    });
+
+    // Replacement (not merge) semantics: a routine previously TIMED that becomes all-day on GCal must
+    // have its `{ timeOfDay, duration }` fully replaced by `{ allDay: true }` — no stale timed fields left.
+    it('updateRoutineFromGCal replaces a timed template with { allDay: true } on a timed→all-day transition', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const startDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const endDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-was-timed',
+                calendarEventId: 'master-timed-to-allday',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'cfg-1',
+                rrule: 'FREQ=DAILY',
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 60 },
+                lastSyncedFromGCalTs: '2020-01-01T00:00:00.000Z',
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-timed-to-allday',
+                    title: 'Now all-day',
+                    timeStart: startDate,
+                    timeEnd: endDate,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    allDay: true,
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'master-timed-to-allday' });
+        // Whole object replaced — timeOfDay/duration are gone, not merged alongside allDay.
+        expect(routine?.calendarItemTemplate).toEqual({ allDay: true });
+        expect(routine?.calendarItemTemplate?.timeOfDay).toBeUndefined();
+        expect(routine?.calendarItemTemplate?.duration).toBeUndefined();
+    });
+
+    // Companion to the write-path fix: findExistingRoutineForEvent must relink a NAKED all-day routine
+    // to its re-imported all-day master. Pre-fix the naked query matched on timeOfDay/duration derived
+    // from a YYYY-MM-DD string, which a { allDay: true } routine lacks → zero match → duplicate routine.
+    it('findExistingRoutineForEvent relinks a naked all-day routine instead of creating a duplicate', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const startDate = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        const endDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+
+        // Naked all-day routine: no calendarEventId/calendarIntegrationId (link dropped on disconnect-with-keep).
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-naked-allday',
+                title: 'Anniversary',
+                rrule: 'FREQ=YEARLY',
+                calendarItemTemplate: { allDay: true },
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'master-naked-allday',
+                    title: 'Anniversary',
+                    timeStart: startDate,
+                    timeEnd: endDate,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    allDay: true,
+                    recurrence: ['RRULE:FREQ=YEARLY'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Exactly one routine for this title — the naked one was relinked, not duplicated.
+        const matching = await routinesDAO.findArray({ user: userId, title: 'Anniversary' });
+        expect(matching).toHaveLength(1);
+        const [relinked] = matching;
+        if (!relinked) throw new Error('expected the naked routine to survive');
+        expect(relinked._id).toBe('routine-naked-allday');
+        expect(relinked.calendarEventId).toBe('master-naked-allday');
+        expect(relinked.calendarItemTemplate).toEqual({ allDay: true });
+    });
+
     // Regression: pre-fix, GCal returning a rebased-master id (`<master>_R<YYYYMMDDTHHmmss>`) led to
     // a doubly-suffixed `calendarInstanceEventId` on every generated item, causing reconcile to
     // orphan-create a duplicate item per occurrence. The import path now normalizes `event.id` at

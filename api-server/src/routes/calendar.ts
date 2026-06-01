@@ -1799,8 +1799,6 @@ async function findExistingRoutineForEvent(
     if (restored || !rrule) {
         return restored;
     }
-    const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
-    const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
     const naked = await routinesDAO.findArray({
         user: ctx.userId,
         active: true,
@@ -1809,8 +1807,10 @@ async function findExistingRoutineForEvent(
         calendarIntegrationId: { $exists: false },
         title: event.title,
         rrule,
-        'calendarItemTemplate.timeOfDay': timeOfDay,
-        'calendarItemTemplate.duration': duration,
+        // All-day-aware: a naked all-day routine's template is { allDay: true } with no timeOfDay/duration,
+        // so matching on the timed fields would never find it and the caller would orphan-create a
+        // duplicate on reconnect. Mirrors buildCalendarItemTemplate's all-day branch.
+        ...buildNakedTemplateMatch(event, source.config.timeZone ?? 'UTC'),
     });
     if (!hasAtLeastOne(naked)) {
         return undefined;
@@ -1899,7 +1899,7 @@ async function createRoutineFromGCal(
     // with no time component, so `extractLocalTime` and the `diff('minute')` math would both yield
     // junk. Downstream item generation reads `template.allDay` to switch to the all-day shape
     // (`routineItemRegeneration.buildCalendarItem` + the client's `buildCalendarItem`).
-    const calendarItemTemplate = event.allDay ? { allDay: true as const } : buildTimedTemplate(event, source.config.timeZone ?? 'UTC');
+    const calendarItemTemplate = buildCalendarItemTemplate(event, source.config.timeZone ?? 'UTC');
 
     // Use the GCal event's start date as createdTs so the rrule DTSTART is anchored
     // to the first occurrence. This is critical for split tails ("this and following"):
@@ -1976,6 +1976,35 @@ function buildTimedTemplate(event: GCalEvent, timeZone: string): { timeOfDay: st
     return { timeOfDay, duration };
 }
 
+/**
+ * Builds a routine's `calendarItemTemplate` from a GCal master, branching on `event.allDay`.
+ * Shared by both the create (`createRoutineFromGCal`) and update (`updateRoutineFromGCal`) paths so
+ * an all-day master never gets a `{ timeOfDay, duration }` template — for an all-day event
+ * `event.timeStart` is a `YYYY-MM-DD` string, so `extractLocalTime`/`diff` would yield junk
+ * (e.g. timeOfDay="03:00" in UTC+3, the all-day banner rendering as 03:00–03:00). The update path
+ * previously recomputed the timed template unconditionally, silently clobbering `allDay`.
+ */
+function buildCalendarItemTemplate(event: GCalEvent, timeZone: string): NonNullable<RoutineInterface['calendarItemTemplate']> {
+    return event.allDay ? { allDay: true as const } : buildTimedTemplate(event, timeZone);
+}
+
+/**
+ * Builds the `calendarItemTemplate.*` sub-document filter used by `findExistingRoutineForEvent` to
+ * relink a naked routine to its re-imported GCal master. Branches on `event.allDay` for the same
+ * reason as `buildCalendarItemTemplate`: an all-day naked routine stores `{ allDay: true }` (no
+ * timeOfDay/duration), so matching on the timed fields derived from a YYYY-MM-DD string would find
+ * nothing and the caller would orphan-create a duplicate routine on reconnect.
+ */
+function buildNakedTemplateMatch(event: GCalEvent, timeZone: string) {
+    if (event.allDay) {
+        return { 'calendarItemTemplate.allDay': true };
+    }
+    return {
+        'calendarItemTemplate.timeOfDay': extractLocalTime(event.timeStart, timeZone),
+        'calendarItemTemplate.duration': dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute'),
+    };
+}
+
 async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const routineId = existing._id;
 
@@ -2007,8 +2036,9 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
         return;
     }
 
-    const timeOfDay = extractLocalTime(event.timeStart, source.config.timeZone ?? 'UTC');
-    const duration = dayjs(event.timeEnd).diff(dayjs(event.timeStart), 'minute');
+    // All-day-aware: an all-day master must keep `{ allDay: true }`, not be recomputed as a timed
+    // `{ timeOfDay, duration }` template (which would render the banner as 03:00–03:00). Mirrors createRoutineFromGCal.
+    const calendarItemTemplate = buildCalendarItemTemplate(event, source.config.timeZone ?? 'UTC');
     const newlyGainsUntil = structurallyNewer && !existing.rrule.includes('UNTIL=') && rrule.includes('UNTIL=');
     // Symmetric inverse: GCal removed the UNTIL (series uncapped), so a routine previously capped-and-
     // paused must reactivate. Without this, a routine stranded inactive with a stale past UNTIL stays
@@ -2031,7 +2061,7 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
                   title: event.title,
                   rrule,
                   calendarSyncConfigId: source.config._id,
-                  calendarItemTemplate: { timeOfDay, duration },
+                  calendarItemTemplate,
                   // Advance the GCal-truth anchor only on a structurally-newer payload — symmetric with
                   // updateExistingCalendarItem. An out-of-order older payload must not regress it.
                   lastSyncedFromGCalTs: event.updated,
