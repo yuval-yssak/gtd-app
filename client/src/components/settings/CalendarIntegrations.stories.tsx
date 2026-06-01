@@ -23,6 +23,8 @@ const mockAppData: AppData = {
     refreshRoutines: fn().mockResolvedValue(undefined),
     refreshAccounts: fn().mockResolvedValue(undefined),
     syncAndRefresh: fn().mockResolvedValue(undefined),
+    isInitialSyncing: false,
+    isCalendarSyncing: false,
 };
 
 const MockAppDataDecorator: Decorator = (Story) => (

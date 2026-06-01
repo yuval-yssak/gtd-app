@@ -15,6 +15,7 @@ import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { prefetchCalendarOptions } from '../hooks/useCalendarOptions';
 import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
+import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 import { applyOverrideToItem, applyOverrideToRoutine, usePendingReassignMaps } from './PendingReassignProvider';
 import { dispatchSyncIssuesRefresh } from './syncIssuesEvents';
@@ -41,6 +42,18 @@ export interface AppData {
     /** Re-reads accounts from IDB after a sign-in/out. Triggers refreshes for unified-view consumers. */
     refreshAccounts: () => Promise<void>;
     syncAndRefresh: () => Promise<void>;
+    /**
+     * True while the very first bootstrap for this device is in flight — the ~20s window where the
+     * server is shipping the full entity snapshot and IDB is empty. List pages render a skeleton
+     * during this window instead of a misleading "empty" state. Flips to false once any sync has
+     * established a cursor (subsequent incremental pulls don't re-raise it).
+     */
+    isInitialSyncing: boolean;
+    /**
+     * True while a Google Calendar integration sync is in flight. Only the calendar + routines
+     * pages surface this (those are the only views GCal data affects).
+     */
+    isCalendarSyncing: boolean;
 }
 
 // Exported so Storybook stories can provide a mock AppData value directly.
@@ -69,6 +82,8 @@ interface AuthBundle {
     refreshRoutines: () => Promise<void>;
     refreshAccounts: () => Promise<void>;
     syncAndRefresh: () => Promise<void>;
+    isInitialSyncing: boolean;
+    isCalendarSyncing: boolean;
 }
 
 export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDatabase<MyDB> }>) {
@@ -81,6 +96,14 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // page reload (see useAccounts), so a setter would be dead code here.
     const account = initial.account;
     const [loggedInAccounts, setLoggedInAccounts] = useState<StoredAccount[]>(initial.loggedInAccounts);
+    // Drives the list-page skeletons. Raised in loadAll() only when the active account has no sync
+    // cursor yet (first launch on this device), and cleared once the first sync settles. Returning
+    // devices already have cached items + a cursor, so they never see the skeleton.
+    const [isInitialSyncing, setIsInitialSyncing] = useState(false);
+    // Raised around syncCalendarIntegrationsForActiveSession so the calendar + routines pages can
+    // show a "Syncing calendar…" chip. Independent of isInitialSyncing — a GCal sync runs on every
+    // syncAndRefresh, not just the first.
+    const [isCalendarSyncing, setIsCalendarSyncing] = useState(false);
     const isOnline = useOnline();
     const isFirstOnlineRender = useRef(true); // Skips the first render of the isOnline effect — mount-time handling is done in loadAll()
 
@@ -158,23 +181,39 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     // React Strict Mode double-mount, or fast navigation away during a network round-trip).
     const unmountedRef = useRef(false);
 
+    // When an SSE/push event arrives mid-sync, runs a single lightweight orchestrated pull rather
+    // than a full syncAndRefresh (which would re-run calendar integration + extra pulls and race
+    // concurrent pushes). Clears isInitialSyncing here too: when the boot syncAndRefresh lost the
+    // isSyncingRef race and bailed early, this catch-up is the run that actually populates IDB.
+    const runCatchUpPull = useCallback(() => {
+        syncAllLoggedInUsers(db)
+            .then(() => {
+                if (unmountedRef.current) {
+                    return;
+                }
+                setIsInitialSyncing(false);
+                triggerAppResourceRefresh('all');
+                dispatchSyncIssuesRefresh();
+            })
+            .catch((err) => console.error('[sync] catch-up pull failed:', err));
+    }, [db]);
+
     // Extracted so both the mount effect and the isOnline effect can call it.
     const syncAndRefresh = useCallback(async () => {
-        console.log('[debug-gcal-sync][client] syncAndRefresh called', { isSyncing: isSyncingRef.current });
         if (isSyncingRef.current) {
             syncRequestedWhileBusy.current = true;
-            console.log('[debug-gcal-sync][client] syncAndRefresh deferred — already syncing, will catch up');
             return;
         }
         isSyncingRef.current = true;
+        // Wrap the whole orchestrator (not the per-user onUserSynced hook) so the calendar chip
+        // doesn't flicker off-then-on between accounts on a multi-account device. The chip is "on"
+        // for the full sync, which the "Syncing calendar…" label still reads correctly.
+        setIsCalendarSyncing(true);
         try {
             const acct = await getActiveAccount(db);
             if (!acct) {
-                console.log('[debug-gcal-sync][client] syncAndRefresh aborted — no active account');
                 return;
             }
-
-            console.log('[debug-gcal-sync][client] syncAndRefresh: per-user flush + pull + calendar sync');
             // Multi-account orchestrator: pivots active session per logged-in user, flushes that
             // user's queue, pulls (or bootstraps), then runs that user's calendar integrations.
             await syncAllLoggedInUsers(db, { onUserSynced: async () => syncCalendarIntegrationsForActiveSession() });
@@ -185,7 +224,6 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
 
             // Guard after the async work — component may have unmounted while awaiting network.
             if (unmountedRef.current) {
-                console.log('[debug-gcal-sync][client] syncAndRefresh: unmounted — skipping refresh');
                 return;
             }
             triggerAppResourceRefresh('all');
@@ -194,24 +232,18 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             dispatchSyncIssuesRefresh();
         } finally {
             isSyncingRef.current = false;
-            // If an SSE/push event arrived while we were syncing, do a lightweight catch-up
-            // pull instead of a full syncAndRefresh. A full sync would run calendar integration
-            // and two more pulls, creating race conditions with concurrent pushes. A single
-            // multi-account orchestrated pull is sufficient — pulling only for the active user
-            // would silently miss ops on other accounts' channels.
+            if (!unmountedRef.current) {
+                setIsCalendarSyncing(false);
+                // The first sync (bootstrap or pull) has now populated IDB — drop the skeleton. No-op on
+                // every later sync since loadAll only raises it on a cursor-less first launch.
+                setIsInitialSyncing(false);
+            }
             if (syncRequestedWhileBusy.current) {
                 syncRequestedWhileBusy.current = false;
-                console.log('[debug-gcal-sync][client] running catch-up pull (event arrived during sync)');
-                syncAllLoggedInUsers(db)
-                    .then(() => {
-                        if (unmountedRef.current) return;
-                        triggerAppResourceRefresh('all');
-                        dispatchSyncIssuesRefresh();
-                    })
-                    .catch((err) => console.error('[sync] catch-up pull failed:', err));
+                runCatchUpPull();
             }
         }
-    }, [db]);
+    }, [db, runCatchUpPull]);
 
     // SSE callback receives the userId of the channel that fired. We trigger a per-user pull only —
     // re-syncing every account on every event would multiply network round-trips by N for no
@@ -268,8 +300,20 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         if (!navigator.onLine) {
             return;
         }
+        // No cursor for the active account ⇒ this is a first-time bootstrap (the ~20s empty window).
+        // Raise the skeleton flag before kicking off the sync; syncAndRefresh's finally clears it.
+        // Mirrors pullOrBootstrap's cursor check so the flag tracks the same bootstrap decision.
+        const hasCursor = Boolean(await db.get('syncCursors', initial.account.id));
+        if (shouldRaiseInitialSync({ isOnline: navigator.onLine, hasCursor })) {
+            setIsInitialSyncing(true);
+        }
+        // If syncAndRefresh runs the bootstrap directly, its finally clears the flag. If it loses the
+        // isSyncingRef race and bails early (an SSE/push sync already in flight), it sets
+        // syncRequestedWhileBusy, and that in-flight sync's runCatchUpPull is the run that populates
+        // IDB and clears the flag. Either way the clear is tied to the run that actually has the data
+        // — never cleared eagerly while a bootstrap is still mid-flight.
         await syncAndRefresh();
-    }, [initial.account, refreshAccountsInternal, syncAndRefresh]);
+    }, [initial.account, refreshAccountsInternal, syncAndRefresh, db]);
 
     const refreshAccounts = useCallback(async () => {
         await refreshAccountsInternal();
@@ -286,8 +330,22 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             refreshRoutines,
             refreshAccounts,
             syncAndRefresh,
+            isInitialSyncing,
+            isCalendarSyncing,
         }),
-        [account, loggedInAccounts, loggedInUserIds, refreshItems, refreshWorkContexts, refreshPeople, refreshRoutines, refreshAccounts, syncAndRefresh],
+        [
+            account,
+            loggedInAccounts,
+            loggedInUserIds,
+            refreshItems,
+            refreshWorkContexts,
+            refreshPeople,
+            refreshRoutines,
+            refreshAccounts,
+            syncAndRefresh,
+            isInitialSyncing,
+            isCalendarSyncing,
+        ],
     );
 
     /**

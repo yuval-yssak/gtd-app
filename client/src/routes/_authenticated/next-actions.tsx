@@ -21,6 +21,7 @@ import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
@@ -70,7 +71,7 @@ function makeToggle<T>(setter: React.Dispatch<React.SetStateAction<T | null>>) {
 
 function NextActionsPage() {
     const { db } = Route.useRouteContext();
-    const { items, workContexts, people, routines, refreshItems } = useAppData();
+    const { items, workContexts, people, routines, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
@@ -180,15 +181,21 @@ function NextActionsPage() {
                 </Stack>
             </Box>
             {nextActions.length === 0 ? (
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
-                    No next actions match the current filters.
-                </Typography>
+                // isInitialSyncing is only true during first-launch bootstrap, when IDB is empty —
+                // so an empty result then is "not loaded", not "filtered out". Show the skeleton.
+                isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Typography
+                        sx={{
+                            color: 'text.secondary',
+                            textAlign: 'center',
+                            mt: 6,
+                        }}
+                    >
+                        No next actions match the current filters.
+                    </Typography>
+                )
             ) : (
                 <List disablePadding className={styles.list}>
                     {nextActions.map((item, idx) => (

@@ -25,7 +25,9 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { useRoutineEditor } from '../../components/routineEditor/useRoutineEditor';
+import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
 import { formatCalendarRrule, formatRrule } from '../../lib/rruleUtils';
@@ -38,7 +40,7 @@ export const Route = createFileRoute('/_authenticated/routines')({
 
 function RoutinesPage() {
     const { db } = Route.useRouteContext();
-    const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh } = useAppData();
+    const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh, isInitialSyncing, isCalendarSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useRoutineEditor({
@@ -92,15 +94,21 @@ function RoutinesPage() {
     return (
         <Box>
             <Box className={styles.pageHeader}>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
-                    Routines
-                    {routines.length > 0 && <Chip label={routines.length} size="small" className={styles.countChip} />}
-                </Typography>
+                {/* Title + sync chip grouped so the chip stays beside the title; the parent's
+                    space-between keeps the create button on the right. */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography
+                        variant="h5"
+                        sx={{
+                            fontWeight: 600,
+                        }}
+                    >
+                        Routines
+                        {routines.length > 0 && <Chip label={routines.length} size="small" className={styles.countChip} />}
+                    </Typography>
+                    {/* Routines surface GCal-linked recurring series, so a calendar sync can change them. */}
+                    {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
+                </Box>
                 <Tooltip title="Create routine">
                     <IconButton onClick={() => editor.openEditor({})} data-testid="newRoutineButton">
                         <AddIcon />
@@ -108,15 +116,20 @@ function RoutinesPage() {
                 </Tooltip>
             </Box>
             {routines.length === 0 ? (
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
-                    No routines yet. Routines auto-generate next actions on a schedule.
-                </Typography>
+                // First-launch bootstrap: skeleton while IDB loads; "no routines" copy only once loaded.
+                isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Typography
+                        sx={{
+                            color: 'text.secondary',
+                            textAlign: 'center',
+                            mt: 6,
+                        }}
+                    >
+                        No routines yet. Routines auto-generate next actions on a schedule.
+                    </Typography>
+                )
             ) : (
                 <List disablePadding className={styles.list}>
                     {routines.map((routine, idx) => (

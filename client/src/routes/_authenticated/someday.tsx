@@ -23,6 +23,7 @@ dayjs.extend(relativeTime);
 import { AccountChip } from '../../components/AccountChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import styles from './-someday.module.css';
@@ -33,7 +34,7 @@ export const Route = createFileRoute('/_authenticated/someday')({
 
 function SomedayPage() {
     const { db } = Route.useRouteContext();
-    const { items, people, workContexts, routines, refreshItems } = useAppData();
+    const { items, people, workContexts, routines, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
@@ -52,26 +53,31 @@ function SomedayPage() {
                 >
                     Someday / Maybe
                 </Typography>
-                <Paper variant="outlined" className={styles.emptyCard}>
-                    <BookmarkAddIcon className={styles.icon} />
-                    <Typography
-                        variant="subtitle1"
-                        sx={{
-                            fontWeight: 600,
-                            mb: 1,
-                        }}
-                    >
-                        Nothing parked yet
-                    </Typography>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                        }}
-                    >
-                        Move items here from the edit dialog when you want to hold onto an idea without committing to it.
-                    </Typography>
-                </Paper>
+                {/* First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading. */}
+                {isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Paper variant="outlined" className={styles.emptyCard}>
+                        <BookmarkAddIcon className={styles.icon} />
+                        <Typography
+                            variant="subtitle1"
+                            sx={{
+                                fontWeight: 600,
+                                mb: 1,
+                            }}
+                        >
+                            Nothing parked yet
+                        </Typography>
+                        <Typography
+                            variant="body2"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
+                            Move items here from the edit dialog when you want to hold onto an idea without committing to it.
+                        </Typography>
+                    </Paper>
+                )}
             </Box>
         );
     }

@@ -18,6 +18,7 @@ import dayjs from 'dayjs';
 import { AccountChip } from '../../components/AccountChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updateItem } from '../../db/itemMutations';
@@ -30,7 +31,7 @@ export const Route = createFileRoute('/_authenticated/tickler')({
 
 function TicklerPage() {
     const { db } = Route.useRouteContext();
-    const { items, routines, people, workContexts, refreshItems } = useAppData();
+    const { items, routines, people, workContexts, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
@@ -75,15 +76,20 @@ function TicklerPage() {
                 >
                     Tickler
                 </Typography>
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
-                    No items are snoozed. Items hidden with "ignore before" will appear here.
-                </Typography>
+                {/* First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading. */}
+                {isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Typography
+                        sx={{
+                            color: 'text.secondary',
+                            textAlign: 'center',
+                            mt: 6,
+                        }}
+                    >
+                        No items are snoozed. Items hidden with "ignore before" will appear here.
+                    </Typography>
+                )}
             </Box>
         );
     }

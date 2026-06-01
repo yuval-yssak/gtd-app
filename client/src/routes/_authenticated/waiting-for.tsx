@@ -18,6 +18,7 @@ import dayjs from 'dayjs';
 import { AccountChip } from '../../components/AccountChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
@@ -30,7 +31,7 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
-    const { items, people, routines, workContexts, refreshItems } = useAppData();
+    const { items, people, routines, workContexts, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
@@ -65,15 +66,20 @@ function WaitingForPage() {
                 >
                     Waiting For
                 </Typography>
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
-                    Nothing pending.
-                </Typography>
+                {/* First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading. */}
+                {isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Typography
+                        sx={{
+                            color: 'text.secondary',
+                            textAlign: 'center',
+                            mt: 6,
+                        }}
+                    >
+                        Nothing pending.
+                    </Typography>
+                )}
             </Box>
         );
     }

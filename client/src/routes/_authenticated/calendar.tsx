@@ -20,7 +20,9 @@ import { CalendarRowMeta } from '../../components/CalendarRowMeta';
 import { groupCalendarItemsByDay, isMultiDayAllDay, NO_DATE_KEY } from '../../components/calendarRouteSort';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
+import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { formatAllDayDate, fromGCalExclusive } from '../../lib/allDayDate';
@@ -33,7 +35,7 @@ export const Route = createFileRoute('/_authenticated/calendar')({
 
 function CalendarPage() {
     const { db } = Route.useRouteContext();
-    const { items, routines, people, workContexts, refreshItems } = useAppData();
+    const { items, routines, people, workContexts, refreshItems, isInitialSyncing, isCalendarSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
@@ -67,39 +69,48 @@ function CalendarPage() {
     if (calendarItems.length === 0) {
         return (
             <Box>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 3,
-                    }}
-                >
-                    Calendar
-                </Typography>
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
-                    No upcoming calendar items.
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
+                    <Typography
+                        variant="h5"
+                        sx={{
+                            fontWeight: 600,
+                        }}
+                    >
+                        Calendar
+                    </Typography>
+                    {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
+                </Box>
+                {/* First-launch bootstrap: skeleton while IDB loads; "no items" copy only once loaded. */}
+                {isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Typography
+                        sx={{
+                            color: 'text.secondary',
+                            textAlign: 'center',
+                            mt: 6,
+                        }}
+                    >
+                        No upcoming calendar items.
+                    </Typography>
+                )}
             </Box>
         );
     }
 
     return (
         <Box>
-            <Typography
-                variant="h5"
-                sx={{
-                    fontWeight: 600,
-                    mb: 3,
-                }}
-            >
-                Calendar
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
+                    Calendar
+                </Typography>
+                {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
+            </Box>
             {Object.entries(groups).map(([dateKey, groupItems]) => (
                 <Box
                     key={dateKey}

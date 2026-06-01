@@ -37,6 +37,7 @@ import { AccountChip } from '../../components/AccountChip';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -239,7 +240,7 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
 
 function InboxPage() {
     const { db } = Route.useRouteContext();
-    const { account, items, workContexts, people, routines, refreshItems } = useAppData();
+    const { account, items, workContexts, people, routines, refreshItems, isInitialSyncing } = useAppData();
     const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -378,15 +379,20 @@ function InboxPage() {
                 )}
             </Paper>
             {inboxItems.length === 0 ? (
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
-                    Inbox zero — well done.
-                </Typography>
+                // Skeleton during first-launch bootstrap; the "inbox zero" copy is only truthful once loaded.
+                isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Typography
+                        sx={{
+                            color: 'text.secondary',
+                            textAlign: 'center',
+                            mt: 6,
+                        }}
+                    >
+                        Inbox zero — well done.
+                    </Typography>
+                )
             ) : (
                 <List disablePadding className={styles.list}>
                     {inboxItems.map((item, idx) => (

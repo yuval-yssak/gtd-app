@@ -19,6 +19,7 @@ import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
 import styles from './ArchivedItemsView.module.css';
 import { CopyIdButton } from './itemEditor/CopyIdButton';
+import { ListSkeleton } from './ListSkeleton';
 import { RoutineIndicator } from './RoutineIndicator';
 
 dayjs.extend(relativeTime);
@@ -47,7 +48,7 @@ interface Props {
 }
 
 export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Props) {
-    const { items, routines } = useAppData();
+    const { items, routines, isInitialSyncing } = useAppData();
     const [sortKey, setSortKey] = useState<ItemSortKey>('updatedTs');
     const [sortDir, setSortDir] = useState<ItemSortDir>('desc');
 
@@ -66,17 +67,22 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                 >
                     {title}
                 </Typography>
-                <Paper variant="outlined" className={styles.emptyCard}>
-                    <Box className={styles.icon}>{emptyIcon}</Box>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            color: 'text.secondary',
-                        }}
-                    >
-                        {emptyMessage}
-                    </Typography>
-                </Paper>
+                {/* During first-launch bootstrap the empty list is "not loaded yet", not "truly empty" — show the skeleton instead of the empty-state copy. */}
+                {isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Paper variant="outlined" className={styles.emptyCard}>
+                        <Box className={styles.icon}>{emptyIcon}</Box>
+                        <Typography
+                            variant="body2"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
+                            {emptyMessage}
+                        </Typography>
+                    </Paper>
+                )}
             </Box>
         );
     }

@@ -20,6 +20,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { reassignEntity } from '../../db/reassignMutations';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
@@ -32,7 +33,7 @@ export const Route = createFileRoute('/_authenticated/work-contexts')({
 
 function WorkContextsPage() {
     const { db } = Route.useRouteContext();
-    const { account, workContexts, refreshWorkContexts, loggedInAccounts } = useAppData();
+    const { account, workContexts, refreshWorkContexts, loggedInAccounts, isInitialSyncing } = useAppData();
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<StoredWorkContext | null>(null);
     const [nameInput, setNameInput] = useState('');
@@ -92,15 +93,20 @@ function WorkContextsPage() {
                 </Button>
             </Box>
             {workContexts.length === 0 ? (
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
-                    No work contexts yet. Examples: @office, @phone, @computer, @errands.
-                </Typography>
+                // First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading.
+                isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Typography
+                        sx={{
+                            color: 'text.secondary',
+                            textAlign: 'center',
+                            mt: 6,
+                        }}
+                    >
+                        No work contexts yet. Examples: @office, @phone, @computer, @errands.
+                    </Typography>
+                )
             ) : (
                 <List disablePadding className={styles.list}>
                     {workContexts.map((ctx, idx) => (

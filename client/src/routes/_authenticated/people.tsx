@@ -20,6 +20,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
+import { ListSkeleton } from '../../components/ListSkeleton';
 import { PersonEditDialog } from '../../components/people/PersonEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson } from '../../db/personMutations';
@@ -40,7 +41,7 @@ const emptyForm: CreateFormState = { name: '', email: '', phone: '' };
 
 function PeoplePage() {
     const { db } = Route.useRouteContext();
-    const { account, people, refreshPeople, loggedInAccounts } = useAppData();
+    const { account, people, refreshPeople, loggedInAccounts, isInitialSyncing } = useAppData();
     const [createOpen, setCreateOpen] = useState(false);
     const [editing, setEditing] = useState<StoredPerson | null>(null);
     const [createForm, setCreateForm] = useState<CreateFormState>(emptyForm);
@@ -88,15 +89,20 @@ function PeoplePage() {
                 </Button>
             </Box>
             {people.length === 0 ? (
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
-                    No people yet. Add contacts to reference in Waiting For and items.
-                </Typography>
+                // First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading.
+                isInitialSyncing ? (
+                    <ListSkeleton />
+                ) : (
+                    <Typography
+                        sx={{
+                            color: 'text.secondary',
+                            textAlign: 'center',
+                            mt: 6,
+                        }}
+                    >
+                        No people yet. Add contacts to reference in Waiting For and items.
+                    </Typography>
+                )
             ) : (
                 <List disablePadding className={styles.list}>
                     {people.map((person, idx) => (
