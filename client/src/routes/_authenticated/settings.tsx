@@ -13,9 +13,11 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import classNames from 'classnames';
 import type { IDBPDatabase } from 'idb';
-import { useCallback, useEffect, useState, useTransition } from 'react';
+import { Suspense, useCallback, useEffect, useState, useTransition } from 'react';
 import { getPushStatus } from '../../api/pushApi';
+import { AppErrorBoundary } from '../../components/AppErrorBoundary';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
+import { CalendarIntegrationsSkeleton } from '../../components/settings/CalendarIntegrationsSkeleton';
 import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
@@ -108,7 +110,14 @@ function SettingsPage() {
                         automatically.
                     </Typography>
                     <Divider className={styles.divider} />
-                    <CalendarIntegrations />
+                    {/* Scoped boundary: only the calendar section waits on its network reads — the rest
+                        of the settings page renders immediately. The skeleton reserves the section's
+                        final height so content sharpens in without shifting the sections below it. */}
+                    <AppErrorBoundary mode="inline" title="Couldn't load calendar settings">
+                        <Suspense fallback={<CalendarIntegrationsSkeleton />}>
+                            <CalendarIntegrations />
+                        </Suspense>
+                    </AppErrorBoundary>
                 </Box>
             </Paper>
             {/* Calendar horizon */}

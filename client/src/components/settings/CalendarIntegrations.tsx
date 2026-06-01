@@ -23,7 +23,7 @@ import Switch from '@mui/material/Switch';
 import Typography from '@mui/material/Typography';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { startTransition, use, useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import {
     type CalendarIntegration,
     type CalendarSyncConfig,
@@ -33,13 +33,12 @@ import {
     type GoogleCalendar,
     initiateGoogleCalendarAuth,
     listCalendars,
-    listIntegrations,
-    listSyncConfigs,
     syncIntegration,
     type UnlinkAction,
     updateSyncConfig,
 } from '../../api/calendarApi';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { getCalendarIntegrationsResource, type IntegrationWithDetails, invalidateCalendarIntegrationsResource } from '../../data/calendarIntegrationsResource';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { StoredAccount } from '../../types/MyDB';
 
@@ -91,86 +90,41 @@ function useCalendarList(integrationId: string): { calendars: GoogleCalendar[]; 
 }
 
 export function CalendarIntegrations() {
-    const [integrations, setIntegrations] = useState<CalendarIntegration[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState<string | null>(null);
+    // `resource` is the promise the whole section suspends on. A refresh swaps in a fresh promise
+    // inside startTransition (below) so mutations re-read without flashing the Suspense fallback.
+    const [resource, setResource] = useState(getCalendarIntegrationsResource);
+    const details = use(resource);
     const [chooseCalendarFor, setChooseCalendarFor] = useState<CalendarIntegration | null>(null);
     const { account, loggedInAccounts, syncAndRefresh } = useAppData();
     const navigate = useNavigate();
     // calendarConnected and calendarConnectError are set by the OAuth callback redirect; the first
     // auto-opens the calendar picker, the second renders a mismatch error inline.
     const { calendarConnected, calendarConnectError } = useSearch({ from: '/_authenticated/settings' });
-    // isMountedRef guards setState calls in loadIntegrations against post-unmount updates.
-    const isMountedRef = useRef(true);
 
-    const loadIntegrations = useCallback(async () => {
-        setIsLoading(true);
-        setError(null);
-        try {
-            const loaded = await listIntegrations();
-            if (!isMountedRef.current) {
-                return [];
-            }
-            setIntegrations(loaded);
-            return loaded;
-        } catch {
-            if (!isMountedRef.current) {
-                return [];
-            }
-            setError('Failed to load calendar integrations.');
-            return [];
-        } finally {
-            // isMountedRef guards setState against post-unmount updates. A fast dep change
-            // could cause two overlapping calls; the stale call's finally fires while the new
-            // call is in flight. isMountedRef is reset to true at effect start (see below), so
-            // it cannot distinguish the stale call — the stale call may clear isLoading early.
-            // Accepting this: the race window is tiny and the worst case is a brief spinner gap.
-            if (isMountedRef.current) setIsLoading(false);
-        }
+    // Drops the resource cache and re-reads. The new promise is swapped in inside a transition so
+    // the current rows stay on screen until the fresh tree resolves — no fallback flash.
+    const refreshIntegrations = useCallback(() => {
+        const next = invalidateCalendarIntegrationsResource();
+        startTransition(() => setResource(next));
     }, []);
 
     useEffect(() => {
-        // Reset on every re-run: cleanup sets this to false, so without the reset
-        // loadIntegrations() would bail immediately when the effect re-fires (e.g. after
-        // navigate clears calendarConnected).
-        isMountedRef.current = true;
-        // cancelled guards THIS invocation's .then() callback — isMountedRef is reset to true
-        // at re-run start, so it cannot distinguish a stale .then() from a fresh one.
-        let cancelled = false;
-        loadIntegrations().then((loaded) => {
-            if (cancelled || !calendarConnected || !hasAtLeastOne(loaded)) {
-                return;
-            }
-            // Auto-open the calendar picker for the most recently connected integration and
-            // clear the query param so a reload doesn't reopen it. Use the functional form of
-            // `search` so we strip only this one param without clobbering siblings (e.g. an
-            // existing calendarConnectError that the user hasn't dismissed yet).
-            const newest = loaded.reduce((a, b) => (a.createdTs > b.createdTs ? a : b));
-            setChooseCalendarFor(newest);
-            navigate({ to: '/settings', search: (prev) => ({ ...prev, calendarConnected: undefined }), replace: true }).catch(() => {});
-        });
-        return () => {
-            cancelled = true;
-            // Prevent setState calls in loadIntegrations from firing after unmount.
-            isMountedRef.current = false;
-        };
-    }, [calendarConnected, loadIntegrations, navigate]);
+        // After the OAuth redirect lands (calendarConnected set), auto-open the picker for the most
+        // recently connected integration, then strip the query param so a reload doesn't reopen it.
+        // `details` already holds the resolved integrations — no extra fetch needed here.
+        if (!calendarConnected || !hasAtLeastOne(details)) {
+            return;
+        }
+        const newest = details.reduce((a, b) => (a.integration.createdTs > b.integration.createdTs ? a : b));
+        setChooseCalendarFor(newest.integration);
+        // Functional `search` form strips only this param without clobbering siblings (e.g. an
+        // existing calendarConnectError the user hasn't dismissed yet).
+        navigate({ to: '/settings', search: (prev) => ({ ...prev, calendarConnected: undefined }), replace: true }).catch(() => {});
+    }, [calendarConnected, details, navigate]);
 
     function dismissMismatchError() {
         // Clear the query param via navigate(replace) so refreshing the page doesn't re-show the error.
         navigate({ to: '/settings', search: (prev) => ({ ...prev, calendarConnectError: undefined }), replace: true }).catch(() => {});
-    }
-
-    if (isLoading) {
-        return <CircularProgress size={20} />;
-    }
-
-    if (error) {
-        return (
-            <Typography variant="body2" color="error">
-                {error}
-            </Typography>
-        );
     }
 
     function onConnectActiveAccount() {
@@ -187,7 +141,7 @@ export function CalendarIntegrations() {
         <Box>
             <ActiveAccountScopeNotice account={account} hasMultipleAccounts={loggedInAccounts.length > 1} />
             {calendarConnectError === 'mismatch' && <ConnectMismatchError onDismiss={dismissMismatchError} />}
-            {integrations.length === 0 && (
+            {details.length === 0 && (
                 <Typography
                     variant="body2"
                     sx={{
@@ -199,12 +153,12 @@ export function CalendarIntegrations() {
                     No calendars connected.
                 </Typography>
             )}
-            {integrations.map((integration) => (
+            {details.map((detail) => (
                 <IntegrationRow
-                    key={integration._id}
-                    integration={integration}
-                    onDisconnected={loadIntegrations}
-                    onChooseCalendar={() => setChooseCalendarFor(integration)}
+                    key={detail.integration._id}
+                    detail={detail}
+                    onIntegrationsChanged={refreshIntegrations}
+                    onChooseCalendar={() => setChooseCalendarFor(detail.integration)}
                 />
             ))}
             <Button variant="outlined" size="small" onClick={onConnectActiveAccount} disabled={!account}>
@@ -216,7 +170,7 @@ export function CalendarIntegrations() {
                     onClose={() => setChooseCalendarFor(null)}
                     onSaved={() => {
                         setChooseCalendarFor(null);
-                        loadIntegrations();
+                        refreshIntegrations();
                         syncAndRefresh().catch(() => {});
                     }}
                 />
@@ -283,46 +237,31 @@ function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
     );
 }
 
-/** Fetches sync configs for an integration, with unmount-safe cancellation. */
-function useSyncConfigs(integrationId: string): {
+/**
+ * Local mirror of the resource's sync configs for one integration. Seeded from the resolved
+ * resource so the row renders immediately (no per-row spinner), then owned locally so optimistic
+ * mutations (toggle, set-default, remove) update in place without a round-trip. `onReloaded`
+ * re-seeds from `seed` when the resource refreshes (e.g. after adding a calendar).
+ */
+function useLocalSyncConfigs(seed: CalendarSyncConfig[]): {
     configs: CalendarSyncConfig[];
-    isLoading: boolean;
-    reload: () => void;
     setConfigs: React.Dispatch<React.SetStateAction<CalendarSyncConfig[]>>;
 } {
-    const [configs, setConfigs] = useState<CalendarSyncConfig[]>([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const isMountedRef = useRef(true);
-
-    useEffect(() => {
-        isMountedRef.current = true;
-        return () => {
-            isMountedRef.current = false;
-        };
-    }, []);
-
-    const fetchConfigs = useCallback(async () => {
-        setIsLoading(true);
-        try {
-            const loaded = await listSyncConfigs(integrationId);
-            if (isMountedRef.current) setConfigs(loaded);
-        } catch {
-            // Swallow — the caller decides how to handle missing configs.
-        } finally {
-            if (isMountedRef.current) setIsLoading(false);
-        }
-    }, [integrationId]);
-
-    useEffect(() => {
-        fetchConfigs();
-    }, [fetchConfigs]);
-
-    return { configs, isLoading, reload: fetchConfigs, setConfigs };
+    const [configs, setConfigs] = useState(seed);
+    // Re-seed when the upstream resource provides a new array identity (post-refresh). Comparing by
+    // reference is enough: invalidateCalendarIntegrationsResource() always builds fresh arrays.
+    const seedRef = useRef(seed);
+    if (seedRef.current !== seed) {
+        seedRef.current = seed;
+        setConfigs(seed);
+    }
+    return { configs, setConfigs };
 }
 
 interface IntegrationRowProps {
-    integration: CalendarIntegration;
-    onDisconnected: () => void;
+    detail: IntegrationWithDetails;
+    /** Refreshes the integrations resource after a structural change (disconnect, calendar added). */
+    onIntegrationsChanged: () => void;
     onChooseCalendar: () => void;
 }
 
@@ -405,28 +344,31 @@ function useSyncNow(integrationId: string): { onSyncNow: () => void; isSyncing: 
     return { onSyncNow, isSyncing, syncError };
 }
 
-function IntegrationRow({ integration, onDisconnected, onChooseCalendar }: IntegrationRowProps) {
-    const { calendars, fetchError: calendarFetchError } = useCalendarList(integration._id);
-    const { configs, isLoading: configsLoading, reload: reloadConfigs, setConfigs } = useSyncConfigs(integration._id);
+function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar }: IntegrationRowProps) {
+    const { integration, calendars } = detail;
+    const { configs, setConfigs } = useLocalSyncConfigs(detail.syncConfigs);
     const { actions, actionError } = useSyncConfigActions(integration._id, setConfigs);
     const { onSyncNow, isSyncing, syncError } = useSyncNow(integration._id);
     const [isDisconnectOpen, setIsDisconnectOpen] = useState(false);
     const [isAddCalendarOpen, setIsAddCalendarOpen] = useState(false);
     const { syncAndRefresh } = useAppData();
 
+    // null calendars means the calendar-list fetch failed — surface it but keep the row usable.
+    const calendarFetchError = calendars === null ? 'Could not load calendars.' : null;
+
     function resolveCalendarName(calendarId: string): string {
-        return calendars.find((c) => c.id === calendarId)?.name ?? calendarId;
+        return calendars?.find((c) => c.id === calendarId)?.name ?? calendarId;
     }
 
     // Calendars already being synced — used to filter the "add calendar" dropdown.
     const syncedCalendarIds = new Set(configs.map((c) => c.calendarId));
-    const availableToAdd = calendars.filter((c) => !syncedCalendarIds.has(c.id));
+    const availableToAdd = (calendars ?? []).filter((c) => !syncedCalendarIds.has(c.id));
 
     const connectedSince = dayjs(integration.createdTs).format('MMM D, YYYY');
     const errorMessage = calendarFetchError ?? actionError ?? syncError;
     // Step 2: integrations require an explicit calendar choice. If the user dismissed the
     // post-OAuth dialog without picking one, surface a "choose one" CTA so they can resume.
-    const hasNoCalendarChosen = !configsLoading && configs.length === 0;
+    const hasNoCalendarChosen = configs.length === 0;
 
     return (
         <Box
@@ -465,9 +407,7 @@ function IntegrationRow({ integration, onDisconnected, onChooseCalendar }: Integ
                     {errorMessage}
                 </Typography>
             )}
-            {configsLoading ? (
-                <CircularProgress size={16} sx={{ mt: 1 }} />
-            ) : hasNoCalendarChosen ? (
+            {hasNoCalendarChosen ? (
                 <NoCalendarChosenRow onChooseCalendar={onChooseCalendar} />
             ) : (
                 <SyncConfigList configs={configs} resolveCalendarName={resolveCalendarName} actions={actions} />
@@ -481,7 +421,7 @@ function IntegrationRow({ integration, onDisconnected, onChooseCalendar }: Integ
                 open={isDisconnectOpen}
                 integrationId={integration._id}
                 onClose={() => setIsDisconnectOpen(false)}
-                onDisconnected={onDisconnected}
+                onDisconnected={onIntegrationsChanged}
             />
             {isAddCalendarOpen && (
                 <AddCalendarDialog
@@ -490,7 +430,9 @@ function IntegrationRow({ integration, onDisconnected, onChooseCalendar }: Integ
                     onClose={() => setIsAddCalendarOpen(false)}
                     onAdded={() => {
                         setIsAddCalendarOpen(false);
-                        reloadConfigs();
+                        // Refresh the resource (new config + shrunken add-list) and sync IDB so the
+                        // newly synced calendar's events land locally.
+                        onIntegrationsChanged();
                         syncAndRefresh().catch(() => {});
                     }}
                 />
