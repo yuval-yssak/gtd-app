@@ -21,6 +21,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 
 import { AccountChip } from '../../components/AccountChip';
+import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListSkeleton } from '../../components/ListSkeleton';
@@ -44,15 +45,19 @@ function SomedayPage() {
     if (somedayItems.length === 0) {
         return (
             <Box>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 3,
-                    }}
-                >
-                    Someday / Maybe
-                </Typography>
+                {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
+                    <Typography
+                        variant="h5"
+                        sx={{
+                            fontWeight: 600,
+                        }}
+                    >
+                        Someday / Maybe
+                    </Typography>
+                    {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                    <AccountSyncChip />
+                </Box>
                 {/* First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading. */}
                 {isInitialSyncing ? (
                     <ListSkeleton />
@@ -84,16 +89,20 @@ function SomedayPage() {
 
     return (
         <Box>
-            <Typography
-                variant="h5"
-                sx={{
-                    fontWeight: 600,
-                    mb: 3,
-                }}
-            >
-                Someday / Maybe
-                <Chip label={somedayItems.length} size="small" className={styles.countChip} />
-            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 3,
+                    }}
+                >
+                    Someday / Maybe
+                    <Chip label={somedayItems.length} size="small" className={styles.countChip} />
+                </Typography>
+                {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                <AccountSyncChip />
+            </Box>
             <List disablePadding className={styles.list}>
                 {somedayItems.map((item, idx) => (
                     <Box key={item._id}>

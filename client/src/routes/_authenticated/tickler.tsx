@@ -16,6 +16,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { AccountChip } from '../../components/AccountChip';
+import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListSkeleton } from '../../components/ListSkeleton';
@@ -67,15 +68,19 @@ function TicklerPage() {
     if (ticklerItems.length === 0) {
         return (
             <Box>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 3,
-                    }}
-                >
-                    Tickler
-                </Typography>
+                {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
+                    <Typography
+                        variant="h5"
+                        sx={{
+                            fontWeight: 600,
+                        }}
+                    >
+                        Tickler
+                    </Typography>
+                    {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                    <AccountSyncChip />
+                </Box>
                 {/* First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading. */}
                 {isInitialSyncing ? (
                     <ListSkeleton />
@@ -96,16 +101,20 @@ function TicklerPage() {
 
     return (
         <Box>
-            <Typography
-                variant="h5"
-                sx={{
-                    fontWeight: 600,
-                    mb: 3,
-                }}
-            >
-                Tickler
-                <Chip label={ticklerItems.length} size="small" className={styles.countChip} />
-            </Typography>
+            {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
+                    Tickler
+                    <Chip label={ticklerItems.length} size="small" className={styles.countChip} />
+                </Typography>
+                {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                <AccountSyncChip />
+            </Box>
             {Object.entries(groups).map(([dateKey, groupItems]) => (
                 <Box
                     key={dateKey}

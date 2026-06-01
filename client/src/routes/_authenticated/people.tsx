@@ -20,6 +20,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
+import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { PersonEditDialog } from '../../components/people/PersonEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -75,15 +76,19 @@ function PeoplePage() {
     return (
         <Box>
             <Box className={styles.pageHeader}>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
-                    People
-                    {people.length > 0 && <Chip label={people.length} size="small" className={styles.countChip} />}
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography
+                        variant="h5"
+                        sx={{
+                            fontWeight: 600,
+                        }}
+                    >
+                        People
+                        {people.length > 0 && <Chip label={people.length} size="small" className={styles.countChip} />}
+                    </Typography>
+                    {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                    <AccountSyncChip />
+                </Box>
                 <Button startIcon={<AddIcon />} variant="contained" size="small" onClick={openCreate}>
                     Add person
                 </Button>

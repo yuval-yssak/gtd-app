@@ -17,6 +17,7 @@ import { useAppData } from '../contexts/AppDataProvider';
 import { type ItemSortDir, type ItemSortKey, sortItems } from '../lib/itemSearch';
 import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
+import { AccountSyncChip } from './AccountSyncChip';
 import styles from './ArchivedItemsView.module.css';
 import { CopyIdButton } from './itemEditor/CopyIdButton';
 import { ListSkeleton } from './ListSkeleton';
@@ -58,15 +59,19 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
     if (filtered.length === 0) {
         return (
             <Box>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                        mb: 3,
-                    }}
-                >
-                    {title}
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography
+                        variant="h5"
+                        sx={{
+                            fontWeight: 600,
+                            mb: 3,
+                        }}
+                    >
+                        {title}
+                    </Typography>
+                    {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                    <AccountSyncChip />
+                </Box>
                 {/* During first-launch bootstrap the empty list is "not loaded yet", not "truly empty" — show the skeleton instead of the empty-state copy. */}
                 {isInitialSyncing ? (
                     <ListSkeleton />
@@ -97,15 +102,19 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
     return (
         <Box>
             <Box className={styles.headerRow}>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
-                    {title}
-                    <Chip label={filtered.length} size="small" className={styles.countChip} />
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography
+                        variant="h5"
+                        sx={{
+                            fontWeight: 600,
+                        }}
+                    >
+                        {title}
+                        <Chip label={filtered.length} size="small" className={styles.countChip} />
+                    </Typography>
+                    {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                    <AccountSyncChip />
+                </Box>
                 <TextField
                     size="small"
                     select

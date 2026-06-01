@@ -16,6 +16,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { AccountChip } from '../../components/AccountChip';
+import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CalendarRowMeta } from '../../components/CalendarRowMeta';
 import { groupCalendarItemsByDay, isMultiDayAllDay, NO_DATE_KEY } from '../../components/calendarRouteSort';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
@@ -79,6 +80,7 @@ function CalendarPage() {
                         Calendar
                     </Typography>
                     {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
+                    <AccountSyncChip />
                 </Box>
                 {/* First-launch bootstrap: skeleton while IDB loads; "no items" copy only once loaded. */}
                 {isInitialSyncing ? (
@@ -110,6 +112,7 @@ function CalendarPage() {
                     Calendar
                 </Typography>
                 {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
+                <AccountSyncChip />
             </Box>
             {Object.entries(groups).map(([dateKey, groupItems]) => (
                 <Box

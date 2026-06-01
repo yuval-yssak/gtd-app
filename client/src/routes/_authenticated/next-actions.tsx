@@ -19,6 +19,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
+import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListSkeleton } from '../../components/ListSkeleton';
@@ -113,16 +114,20 @@ function NextActionsPage() {
 
     return (
         <Box>
-            <Typography
-                variant="h5"
-                sx={{
-                    fontWeight: 600,
-                    mb: 2,
-                }}
-            >
-                Next Actions
-                {nextActions.length > 0 && <Chip label={nextActions.length} size="small" color="primary" className={styles.countChip} />}
-            </Typography>
+            {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <Typography
+                    variant="h5"
+                    sx={{
+                        fontWeight: 600,
+                    }}
+                >
+                    Next Actions
+                    {nextActions.length > 0 && <Chip label={nextActions.length} size="small" color="primary" className={styles.countChip} />}
+                </Typography>
+                {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+                <AccountSyncChip />
+            </Box>
             {/* Filter bar */}
             <Box
                 sx={{

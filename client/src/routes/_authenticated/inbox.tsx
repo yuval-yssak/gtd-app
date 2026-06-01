@@ -34,6 +34,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AccountChip } from '../../components/AccountChip';
+import { AccountSyncChip } from '../../components/AccountSyncChip';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
@@ -315,15 +316,19 @@ function InboxPage() {
     return (
         <Box>
             <Box className={styles.pageHeader}>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
-                    Inbox
-                    {inboxItems.length > 0 && <Chip label={inboxItems.length} size="small" color="primary" className={styles.countChip} />}
-                </Typography>
+                {/* Title + sync chip grouped so the chip stays beside the title; pageHeader's space-between keeps the button right. */}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Typography
+                        variant="h5"
+                        sx={{
+                            fontWeight: 600,
+                        }}
+                    >
+                        Inbox
+                        {inboxItems.length > 0 && <Chip label={inboxItems.length} size="small" color="primary" className={styles.countChip} />}
+                    </Typography>
+                    <AccountSyncChip />
+                </Box>
                 <Button variant="outlined" size="small" disabled={inboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
                     Process Inbox ({inboxItems.length})
                 </Button>

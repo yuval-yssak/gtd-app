@@ -24,6 +24,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import { useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
+import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { useRoutineEditor } from '../../components/routineEditor/useRoutineEditor';
@@ -108,6 +109,7 @@ function RoutinesPage() {
                     </Typography>
                     {/* Routines surface GCal-linked recurring series, so a calendar sync can change them. */}
                     {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
+                    <AccountSyncChip />
                 </Box>
                 <Tooltip title="Create routine">
                     <IconButton onClick={() => editor.openEditor({})} data-testid="newRoutineButton">
