@@ -88,7 +88,7 @@ export interface CalendarProvider {
      * @param untilDate RRULE-formatted UNTIL value (e.g. "20260423T235959Z" — UTC, no separators).
      */
     capRecurringEvent(eventId: string, untilDate: string, calendarId: string, timeZone: string): Promise<void>;
-    listCalendars(): Promise<Array<{ id: string; name: string }>>;
+    listCalendars(): Promise<Array<{ id: string; name: string; primary: boolean; accessRole: string }>>;
     /** @param since ISO datetime string — only exceptions after this point are returned */
     getExceptions(eventId: string, calendarId: string, since: string, masterContent?: MasterContent): Promise<GCalException[]>;
     /** Fetches all events (including cancelled) within the given time window. */

@@ -32,7 +32,7 @@ function makeConfig(id: string, integrationId: string, calendarId: string): Cale
     };
 }
 
-const CALENDARS: GoogleCalendar[] = [{ id: 'cal-1', name: 'Work' }];
+const CALENDARS: GoogleCalendar[] = [{ id: 'cal-1', name: 'Work', primary: false, accessRole: 'owner' }];
 
 beforeEach(() => {
     _resetCalendarIntegrationsResourceForTests();

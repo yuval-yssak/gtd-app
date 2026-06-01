@@ -447,12 +447,14 @@ export class GoogleCalendarProvider implements CalendarProvider {
         await cal.events.patch({ calendarId, eventId, requestBody: { recurrence: nextRecurrence } });
     }
 
-    async listCalendars(): Promise<Array<{ id: string; name: string }>> {
+    async listCalendars(): Promise<Array<{ id: string; name: string; primary: boolean; accessRole: string }>> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const response = await cal.calendarList.list();
+        // `primary` and `accessRole` drive the picker's grouping (primary → owned → shared); without
+        // them the client can't tell which calendar to pre-select or how to order the list.
         return (response.data.items ?? [])
             .filter((item): item is typeof item & { id: string; summary: string } => Boolean(item.id && item.summary))
-            .map((item) => ({ id: item.id, name: item.summary }));
+            .map((item) => ({ id: item.id, name: item.summary, primary: Boolean(item.primary), accessRole: item.accessRole ?? 'reader' }));
     }
 
     async listEvents(calendarId: string, since: string, until: string): Promise<GCalEvent[]> {

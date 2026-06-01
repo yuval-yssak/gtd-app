@@ -532,15 +532,17 @@ describe('GET /calendar/integrations/:id/calendars', () => {
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'listCalendars').mockResolvedValueOnce([
-            { id: 'primary', name: 'Alice Smith' },
-            { id: 'work@group.calendar.google.com', name: 'Work' },
+            { id: 'primary', name: 'Alice Smith', primary: true, accessRole: 'owner' },
+            { id: 'work@group.calendar.google.com', name: 'Work', primary: false, accessRole: 'writer' },
         ]);
 
         const res = await authenticatedRequest(app, { method: 'GET', path: '/calendar/integrations/int-1/calendars', sessionCookie });
         expect(res.status).toBe(200);
+        // The route is a passthrough — primary/accessRole flow to the client untouched so the picker
+        // can group and pre-select.
         expect(await res.json()).toEqual([
-            { id: 'primary', name: 'Alice Smith' },
-            { id: 'work@group.calendar.google.com', name: 'Work' },
+            { id: 'primary', name: 'Alice Smith', primary: true, accessRole: 'owner' },
+            { id: 'work@group.calendar.google.com', name: 'Work', primary: false, accessRole: 'writer' },
         ]);
     });
 });

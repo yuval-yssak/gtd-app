@@ -15,6 +15,7 @@ import InputLabel from '@mui/material/InputLabel';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
+import ListSubheader from '@mui/material/ListSubheader';
 import MenuItem from '@mui/material/MenuItem';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
@@ -41,6 +42,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { getCalendarIntegrationsResource, type IntegrationWithDetails, invalidateCalendarIntegrationsResource } from '../../data/calendarIntegrationsResource';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import type { StoredAccount } from '../../types/MyDB';
+import { buildCalendarPickerRows, defaultCalendarId } from './calendarPickerOrder';
 
 /**
  * Maps a `createSyncConfig` failure to a user-facing message. The thrown Error from `apiFetch`
@@ -73,6 +75,8 @@ function useCalendarList(integrationId: string): { calendars: GoogleCalendar[]; 
         let cancelled = false;
         listCalendars(integrationId)
             .then((cals) => {
+                // Ordering is owned by calendarSelectRows/defaultCalendarId (they sort internally), so
+                // we store the raw list and let the picker decide order — no need to pre-sort here.
                 if (!cancelled) setCalendars(cals);
             })
             .catch(() => {
@@ -491,6 +495,29 @@ function IntegrationActions({ isSyncing, hasAvailableCalendars, actions }: Integ
     );
 }
 
+/**
+ * Builds the option rows for a calendar-picker `<Select>`: grouped (primary → owned → shared) with a
+ * non-selectable `<ListSubheader>` before the "Your calendars" / "Shared with you" sections. MUI's
+ * Select skips `<ListSubheader>` for value resolution and keyboard nav, so headers don't become options.
+ *
+ * Returns a flat element ARRAY (not a fragment): MUI Select resolves options via
+ * `React.Children.toArray(children)` over its *direct* children and does not recurse into a wrapper
+ * component or fragment — so the rows must be spread directly as Select children. A fragment child
+ * makes Select see one invalid option and breaks selection/value display entirely.
+ */
+export function calendarSelectRows(calendars: GoogleCalendar[]) {
+    return buildCalendarPickerRows(calendars).map((row) =>
+        row.kind === 'header' ? (
+            <ListSubheader key={`header-${row.key}`}>{row.label}</ListSubheader>
+        ) : (
+            <MenuItem key={row.calendar.id} value={row.calendar.id}>
+                {row.calendar.name}
+                {row.calendar.primary ? ' (primary)' : ''}
+            </MenuItem>
+        ),
+    );
+}
+
 interface ConfigActions {
     onToggleEnabled: (config: CalendarSyncConfig) => void;
     onSetDefault: (config: CalendarSyncConfig) => void;
@@ -560,7 +587,7 @@ interface AddCalendarDialogProps {
 }
 
 function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded }: AddCalendarDialogProps) {
-    const [selectedId, setSelectedId] = useState(hasAtLeastOne(availableCalendars) ? availableCalendars[0].id : '');
+    const [selectedId, setSelectedId] = useState(defaultCalendarId(availableCalendars) ?? '');
     const [isSaving, startSaving] = useTransition();
     const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -588,11 +615,7 @@ function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded
                 <FormControl size="small" fullWidth sx={{ mt: 1 }}>
                     <InputLabel>Calendar</InputLabel>
                     <Select label="Calendar" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-                        {availableCalendars.map((cal) => (
-                            <MenuItem key={cal.id} value={cal.id}>
-                                {cal.name}
-                            </MenuItem>
-                        ))}
+                        {calendarSelectRows(availableCalendars)}
                     </Select>
                 </FormControl>
             </DialogContent>
@@ -633,10 +656,11 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
         [],
     );
 
-    // Default to the first calendar once the list loads.
+    // Default to the primary calendar (else the first in picker order) once the list loads.
     useEffect(() => {
-        if (hasAtLeastOne(calendars) && !selectedId) {
-            setSelectedId(calendars[0].id);
+        const defaultId = defaultCalendarId(calendars);
+        if (defaultId && !selectedId) {
+            setSelectedId(defaultId);
         }
     }, [calendars, selectedId]);
 
@@ -682,11 +706,7 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
                     <FormControl size="small" fullWidth>
                         <InputLabel>Calendar</InputLabel>
                         <Select label="Calendar" value={selectedId} onChange={(e) => setSelectedId(e.target.value)}>
-                            {calendars.map((cal) => (
-                                <MenuItem key={cal.id} value={cal.id}>
-                                    {cal.name}
-                                </MenuItem>
-                            ))}
+                            {calendarSelectRows(calendars)}
                         </Select>
                     </FormControl>
                 )}

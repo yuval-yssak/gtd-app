@@ -19,6 +19,10 @@ export interface CalendarIntegration {
 export interface GoogleCalendar {
     id: string;
     name: string;
+    /** True for the account's primary calendar — pinned to the top of the picker and pre-selected. */
+    primary: boolean;
+    /** Google calendarList access role: `owner`/`writer` are "your calendars"; `reader`/`freeBusyReader` are shared. */
+    accessRole: string;
 }
 
 export type CalendarSyncConfig = StoredCalendarSyncConfig;
