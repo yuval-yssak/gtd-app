@@ -141,8 +141,14 @@ function authSecret(): string {
 }
 
 interface OAuthStatePayload {
+    /**
+     * The active-session user id at /auth/google time. Retained for CSRF/audit context and HMAC
+     * binding, but NOT used to choose the integration owner — the callback resolves the owner from
+     * the authorized Google email against the device's signed-in sessions instead, so a drifted
+     * active-session cookie can't attach the integration to the wrong account.
+     */
     userId: string;
-    /** Email of the Google account the user expects to authorize. Verified against userinfo + active session. */
+    /** Email of the Google account the user expects to authorize. The callback requires the authorized email to match it. */
     loginHint?: string;
     /** Caller-supplied hint for what the user came here to do. `'rsvp'` triggers a popup-close redirect target. */
     intent?: 'rsvp';
@@ -235,8 +241,9 @@ calendarRoutes.get('/auth/google', authenticateRequest, (c) => {
     const userId = c.get('session').user.id;
 
     // login_hint pre-selects an account in Google's picker. The callback verifies the authorized
-    // account email matches both the hint and the active session — preventing a user signed in
-    // as a@ from accidentally authorizing an unrelated b@ Google identity.
+    // account email matches the hint and attaches the integration to whichever signed-in account
+    // owns that Google identity — preventing a user from accidentally authorizing an unrelated
+    // Google identity, and tolerating drift between the app's active account and the API-origin cookie.
     const rawHint = c.req.query('login_hint');
     const loginHint = typeof rawHint === 'string' && rawHint.trim() !== '' ? rawHint.trim() : undefined;
     // `intent=rsvp` rides through state so the callback can route to the popup-close finalizer
@@ -273,7 +280,10 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     if (!state) {
         return c.text('Invalid state parameter', 400);
     }
-    const { userId, loginHint, intent } = state;
+    // `state.userId` (the cookie-derived id at /auth/google time) is intentionally NOT read here:
+    // the integration owner is resolved from the authorized Google email instead, so a drifted
+    // active-session cookie can't attach the integration to the wrong signed-in account.
+    const { loginHint, intent } = state;
 
     const oauth2 = buildOAuthClient();
     const tokenResult = await tryExchangeOAuthTokens(oauth2, code);
@@ -284,14 +294,17 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     }
     const { accessToken, refreshToken, expiryDate, grantedScopes } = tokenResult;
 
-    // Verify the user actually authorized the account they targeted: compare the authorized
-    // identity (Google userinfo) against both the login_hint we sent and the active GTD session.
-    // Mismatch means the user picked a different account in Google's picker — revoke the just-
-    // -granted tokens and bounce back to settings with an error.
+    // Verify the user actually authorized the account they targeted, then attach the integration to
+    // the GTD account that OWNS that Google identity — NOT the state's `userId` (which is stamped
+    // from the ambient active-session cookie at /auth/google time and can point at a different
+    // signed-in account when the app's active account and the API-origin session cookie have drifted;
+    // that drift was the "switches me back to my work account" mismatch). We resolve the owner by
+    // matching the authorized Google email against the device's signed-in sessions, so the integration
+    // lands on the right account regardless of which session the cookie happened to point at.
     oauth2.setCredentials({ access_token: accessToken, refresh_token: refreshToken });
     const authorizedEmail = await tryFetchAuthorizedEmail(oauth2);
-    const sessionEmail = await tryFetchSessionEmail(c.req.raw.headers);
-    if (!authorizedEmailMatches(authorizedEmail, loginHint, sessionEmail)) {
+    const ownerUserId = await resolveOwnerUserIdForAuthorizedEmail(c.req.raw.headers, authorizedEmail);
+    if (!authorizedConnectIsValid(authorizedEmail, loginHint, ownerUserId)) {
         await oauth2.revokeToken(accessToken).catch(() => {});
         if (intent === 'rsvp') {
             return renderPopupCloser(c, { ok: false, reason: 'mismatch' });
@@ -302,7 +315,7 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     const now = dayjs().toISOString();
     const integration: CalendarIntegrationInterface = {
         _id: randomUUID(),
-        user: userId,
+        user: ownerUserId,
         provider: 'google',
         accessToken,
         refreshToken,
@@ -322,7 +335,8 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     // to that account's integration id forever — a reconnect to a DIFFERENT Google account would
     // never deliver an inbound event id matching the marker, and pushback would permanently skip
     // the entity. The repair runs on every successful OAuth completion (cheap: scoped by user).
-    await clearOrphanedLastKnownMarkers(userId);
+    // Scoped to `ownerUserId` (the resolved Google-identity owner), matching the integration above.
+    await clearOrphanedLastKnownMarkers(ownerUserId);
 
     // intent=rsvp branch: the OAuth ran in a popup launched by MeetingDetails. Serve a tiny HTML
     // page that posts a message to window.opener and closes itself — saves the parent a 500ms poll
@@ -448,36 +462,79 @@ async function tryFetchAuthorizedEmail(oauth2: ReturnType<typeof buildOAuthClien
     }
 }
 
-/** Resolves the active Better Auth session email from the request cookies. Returns null if no session. */
-async function tryFetchSessionEmail(headers: Headers): Promise<string | null> {
+/**
+ * Resolves which GTD account should OWN a calendar integration for the just-authorized Google
+ * identity. Matches `authorizedEmail` (case-insensitive) against every account signed in on this
+ * device and returns that account's userId — this is the fix for the cookie/IDB drift: the owner is
+ * derived from the Google identity the user actually authorized, not from whichever session the
+ * API-origin cookie happened to point at.
+ *
+ * The candidate set is the active session (`getSession`, always available from the main session
+ * cookie — covers the single-account case) UNION the device's other signed-in sessions
+ * (`listDeviceSessions`, set only after "add another account" — covers the multi-account drift case).
+ *
+ * Returns null when no signed-in account owns the authorized email (or there's no authorized email).
+ * The callback treats null as a mismatch and revokes the tokens — the security guard: we only ever
+ * attach an integration to an account the user is actually signed in as, never to a Google identity
+ * with no corresponding session on this device.
+ */
+async function resolveOwnerUserIdForAuthorizedEmail(headers: Headers, authorizedEmail: string | null): Promise<string | null> {
+    if (!authorizedEmail) {
+        return null;
+    }
+    const candidates = await signedInAccountsForDevice(headers);
+    const target = authorizedEmail.toLowerCase();
+    return candidates.find((a) => a.email.toLowerCase() === target)?.id ?? null;
+}
+
+/**
+ * Enumerates every account signed in on this device: the active session plus any additional
+ * multi-session accounts, de-duplicated by userId. Each lookup degrades to empty on failure so a
+ * transient error in one source still lets the other resolve an owner.
+ */
+async function signedInAccountsForDevice(headers: Headers): Promise<Array<{ id: string; email: string }>> {
+    const [active, deviceSessions] = await Promise.all([tryFetchActiveAccount(headers), tryListDeviceSessions(headers)]);
+    const byId = new Map<string, { id: string; email: string }>();
+    for (const account of [...(active ? [active] : []), ...deviceSessions]) {
+        byId.set(account.id, account);
+    }
+    return [...byId.values()];
+}
+
+/** Resolves the active session's account from the main session cookie; null when there's no active session. */
+async function tryFetchActiveAccount(headers: Headers): Promise<{ id: string; email: string } | null> {
     try {
         const session = await auth.api.getSession({ headers });
-        return session?.user.email ?? null;
+        return session ? { id: session.user.id, email: session.user.email } : null;
     } catch {
         return null;
     }
 }
 
+/** Lists the device's additional signed-in sessions; returns [] on any failure so resolution degrades to the active account. */
+async function tryListDeviceSessions(headers: Headers): Promise<Array<{ id: string; email: string }>> {
+    try {
+        const sessions = await auth.api.listDeviceSessions({ headers });
+        return sessions.map((s) => ({ id: s.user.id, email: s.user.email }));
+    } catch {
+        return [];
+    }
+}
+
 /**
- * All three of (authorizedEmail, loginHint, sessionEmail) must match case-insensitively for the
- * connect to proceed. authorizedEmail is required (we just got it from Google). loginHint and
- * sessionEmail are each compared when present — but at least one must match so we don't allow a
- * silent fallback to "no validation" if userinfo or session resolution fails.
+ * A connect is valid when the authorized Google email matches the login_hint we sent (when present)
+ * AND we resolved a GTD owner account for it. `authorizedEmail` is required (we just got it from
+ * Google). Requiring `loginHint` to match guards against the user picking a different account in
+ * Google's chooser than the one the app intended to connect.
  */
-function authorizedEmailMatches(authorizedEmail: string | null, loginHint: string | undefined, sessionEmail: string | null): boolean {
-    if (!authorizedEmail) {
+function authorizedConnectIsValid(authorizedEmail: string | null, loginHint: string | undefined, ownerUserId: string | null): ownerUserId is string {
+    if (!authorizedEmail || !ownerUserId) {
         return false;
     }
-    const authorized = authorizedEmail.toLowerCase();
-    if (loginHint && authorized !== loginHint.toLowerCase()) {
+    if (loginHint && authorizedEmail.toLowerCase() !== loginHint.toLowerCase()) {
         return false;
     }
-    if (sessionEmail && authorized !== sessionEmail.toLowerCase()) {
-        return false;
-    }
-    // Require at least one corroborating source so a missing session + missing hint can't
-    // accept any authorized account.
-    return Boolean(loginHint) || Boolean(sessionEmail);
+    return true;
 }
 
 // ── Provider factory ─────────────────────────────────────────────────────────

@@ -136,9 +136,11 @@ export function CalendarIntegrations() {
             return;
         }
         // Active-user only: hand the active account's email as login_hint so Google's picker
-        // pre-selects it. The server still validates that the eventually-authorized email
-        // matches both the hint and the active session before storing tokens.
-        initiateGoogleCalendarAuth(account.email);
+        // pre-selects it. initiateGoogleCalendarAuth first re-asserts the API-origin active session
+        // to this account (cookie/IDB can drift), then redirects; the server attaches the integration
+        // to the account that owns the eventually-authorized Google identity. Fire-and-forget: the
+        // function ends in a full-page navigation, so there's nothing to await here.
+        initiateGoogleCalendarAuth(account.email).catch(() => {});
     }
 
     return (

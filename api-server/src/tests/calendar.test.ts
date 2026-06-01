@@ -312,10 +312,11 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(integrations).toHaveLength(0);
     });
 
-    it('redirects to mismatch when authorized email differs from the active session email', async () => {
-        // Active session is alice@example.com (from mockGoogleOAuth profile). We craft a state
-        // payload WITHOUT a loginHint so the callback's only corroboration source is the session
-        // email — and we make userinfo return a different email. The session-email check must reject.
+    it('redirects to mismatch when the authorized email matches no signed-in session', async () => {
+        // Alice is signed in. Google authorizes a DIFFERENT identity (different-account@example.com)
+        // that owns no session on this device. The owner-resolution returns null (no session matches
+        // the authorized email) → reject. This is the security guard: we never attach an integration
+        // to a Google identity that doesn't correspond to a signed-in account, even with no loginHint.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
 
@@ -331,7 +332,7 @@ describe('GET /calendar/auth/google/callback', () => {
             tokens: { access_token: 'test-at', refresh_token: 'test-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
         } as never);
         const revokeSpy = vi.spyOn(google.auth.OAuth2.prototype, 'revokeToken').mockResolvedValueOnce({} as never);
-        // userinfo email differs from the active session email.
+        // userinfo email belongs to no signed-in session.
         mockUserInfoEmail('different-account@example.com');
 
         const res = await app.fetch(
@@ -345,9 +346,10 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toHaveLength(0);
     });
 
-    it('redirects to mismatch when there is no login hint AND no active session', async () => {
-        // No login_hint, no session cookie attached to the callback request → no corroboration
-        // source → reject. This guards against authorizing any account when both checks are absent.
+    it('redirects to mismatch when there is no active session at all', async () => {
+        // No session cookie on the callback request → listDeviceSessions resolves empty → the
+        // authorized email matches no session → reject. Guards against authorizing any account when
+        // the request carries no signed-in session.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
 
@@ -365,12 +367,127 @@ describe('GET /calendar/auth/google/callback', () => {
         const revokeSpy = vi.spyOn(google.auth.OAuth2.prototype, 'revokeToken').mockResolvedValueOnce({} as never);
         mockUserInfoEmail('alice@example.com');
 
-        // Note: NO Cookie header → /auth/get-session resolves null → sessionEmail is null.
+        // Note: NO Cookie header → listDeviceSessions resolves empty → no owner match.
         const res = await app.fetch(new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`));
         expect(res.status).toBe(302);
         expect(res.headers.get('location')).toContain('calendarConnectError=mismatch');
         expect(revokeSpy).toHaveBeenCalled();
         expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toHaveLength(0);
+    });
+
+    it('attaches the integration to the account that owns the authorized email — even when the active-session cookie points at a DIFFERENT signed-in account (cookie/IDB drift)', async () => {
+        // The core regression: app intends to connect bob@ (login_hint=bob), Google authorizes bob@,
+        // but the API-origin active-session cookie still resolves to alice@ (drift). The callback must
+        // attach the integration to BOB (the authorized-email owner), not alice (the cookie's user).
+        const aliceCookie = await loginAsAlice();
+        const aliceId = await getUserId(aliceCookie);
+        // bob is a second account signed in on this device. We don't need a real user row (the
+        // integration carries `user: bobId` without an FK), so use a distinct synthetic id and stub
+        // the device-session list to report bob alongside alice's (drifted) active session.
+        const bobId = 'bob-user-id';
+
+        // Initiate connect for bob (login_hint=bob) under ALICE's cookie to simulate the drift:
+        // /auth/google stamps state.userId = alice, yet the app intends bob.
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=bob@example.com',
+            sessionCookie: aliceCookie, // drifted cookie = alice
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'bob-at', refresh_token: 'bob-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        // Google authorized bob@ (matches login_hint).
+        mockUserInfoEmail('bob@example.com');
+        // Active session still resolves to alice (the drift); the device-session list adds bob, so the
+        // owner-resolver can match the authorized bob@ against a signed-in account.
+        vi.spyOn(auth.api, 'listDeviceSessions').mockResolvedValueOnce([{ user: { id: bobId, email: 'bob@example.com' } }] as never);
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${aliceCookie}` }, // still the drifted cookie
+            }),
+        );
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnected=1');
+
+        // Integration attached to BOB, not alice.
+        expect(await calendarIntegrationsDAO.findByUserDecrypted(aliceId)).toHaveLength(0);
+        const bobIntegrations = await calendarIntegrationsDAO.findByUserDecrypted(bobId);
+        expect(bobIntegrations).toHaveLength(1);
+        const [bobIntegration] = bobIntegrations;
+        if (!bobIntegration) throw new Error('expected one integration for bob');
+        expect(bobIntegration.user).toBe(bobId);
+        expect(bobIntegration.accessToken).toBe('bob-at');
+    });
+
+    it('rejects (mismatch + revoke) when BOTH session lookups fail — fails closed', async () => {
+        // If getSession AND listDeviceSessions both throw (transient Better Auth outage), the
+        // candidate set is empty → no owner → reject. The connect must NEVER fall back to attaching
+        // the integration to an unverified account when account resolution is unavailable.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'test-at', refresh_token: 'test-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        const revokeSpy = vi.spyOn(google.auth.OAuth2.prototype, 'revokeToken').mockResolvedValueOnce({} as never);
+        mockUserInfoEmail('alice@example.com');
+        // Both account-resolution sources down.
+        vi.spyOn(auth.api, 'getSession').mockRejectedValueOnce(new Error('auth down'));
+        vi.spyOn(auth.api, 'listDeviceSessions').mockRejectedValueOnce(new Error('auth down'));
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnectError=mismatch');
+        expect(revokeSpy).toHaveBeenCalledWith('test-at');
+        expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toHaveLength(0);
+    });
+
+    it('de-duplicates the active account appearing in BOTH sources — attaches exactly one integration', async () => {
+        // listDeviceSessions in production includes the active account. The candidate union must
+        // de-dupe by userId so the same account isn't double-counted; the integration still attaches
+        // exactly once to that account.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'test-at', refresh_token: 'test-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+        // Active session (getSession) is alice; listDeviceSessions ALSO reports alice → overlap.
+        vi.spyOn(auth.api, 'listDeviceSessions').mockResolvedValueOnce([{ user: { id: userId, email: 'alice@example.com' } }] as never);
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnected=1');
+        expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toHaveLength(1);
     });
 
     it('persists tokens.scope as grantedScopes on the integration', async () => {

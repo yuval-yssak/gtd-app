@@ -7,7 +7,19 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteIntegration, initiateGoogleCalendarAuth, rsvpOnline, type UnlinkAction } from '../api/calendarApi';
+import { authClient } from '../lib/authClient';
 import type { StoredItem } from '../types/MyDB';
+
+// initiateGoogleCalendarAuth re-asserts the active session before redirecting (cookie/IDB drift fix),
+// so the multi-session client must be mocked. Default: no device sessions → setActive is skipped.
+vi.mock('../lib/authClient', () => ({
+    authClient: {
+        multiSession: {
+            listDeviceSessions: vi.fn(async () => ({ data: [] })),
+            setActive: vi.fn(async () => ({ data: {} })),
+        },
+    },
+}));
 
 const API_SERVER = import.meta.env.VITE_API_SERVER ?? '';
 
@@ -49,6 +61,15 @@ describe('initiateGoogleCalendarAuth', () => {
     beforeEach(() => {
         originalWindow = (globalThis as { window?: { location: LocationStub } }).window;
         (globalThis as { window: { location: LocationStub } }).window = { location: { href: '' } };
+        // Clear call history AND re-arm: these are module-level vi.mock fns, so afterEach's
+        // restoreAllMocks doesn't reset them — without mockClear, a prior test's setActive call
+        // (or a rejected listDeviceSessions) leaks into the next assertion.
+        vi.mocked(authClient.multiSession.listDeviceSessions)
+            .mockClear()
+            .mockResolvedValue({ data: [] } as never);
+        vi.mocked(authClient.multiSession.setActive)
+            .mockClear()
+            .mockResolvedValue({ data: {} } as never);
     });
 
     afterEach(() => {
@@ -59,30 +80,88 @@ describe('initiateGoogleCalendarAuth', () => {
         }
     });
 
-    it('navigates to /calendar/auth/google with login_hint set to the provided email', () => {
-        initiateGoogleCalendarAuth('alice@example.com');
+    it('navigates to /calendar/auth/google with login_hint set to the provided email', async () => {
+        await initiateGoogleCalendarAuth('alice@example.com');
         const target = (globalThis as { window: { location: LocationStub } }).window.location.href;
         const url = new URL(target);
         expect(url.pathname).toBe('/calendar/auth/google');
         expect(url.searchParams.get('login_hint')).toBe('alice@example.com');
     });
 
-    it('encodes the login hint so addresses with "+" or special chars survive', () => {
+    it('encodes the login hint so addresses with "+" or special chars survive', async () => {
         // URLSearchParams.set encodes unsafe characters — ensures the API server sees the original
         // string after Hono parses the query, not a corrupted variant.
-        initiateGoogleCalendarAuth('user+tag@example.com');
+        await initiateGoogleCalendarAuth('user+tag@example.com');
         const url = new URL((globalThis as { window: { location: LocationStub } }).window.location.href);
         // .get() returns the decoded value, so the round-trip should match the original input.
         expect(url.searchParams.get('login_hint')).toBe('user+tag@example.com');
     });
 
-    it('targets the API_SERVER origin, not the client origin', () => {
+    it('targets the API_SERVER origin, not the client origin', async () => {
         // The OAuth flow lives on the API server (cross-origin in prod) — never on the SPA host.
-        initiateGoogleCalendarAuth('alice@example.com');
+        await initiateGoogleCalendarAuth('alice@example.com');
         const url = new URL((globalThis as { window: { location: LocationStub } }).window.location.href);
         if (API_SERVER) {
             expect(url.origin).toBe(new URL(API_SERVER).origin);
         }
+    });
+
+    it('re-asserts the API-origin active session to the connecting account before redirecting (cookie/IDB drift fix)', async () => {
+        // bob is signed in alongside the (drifted) active account. Connecting bob must setActive to
+        // bob's session token first, so /auth/google stamps the right account into the OAuth state.
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValue({
+            data: [
+                { user: { email: 'alice@example.com' }, session: { token: 'alice-token' } },
+                { user: { email: 'bob@example.com' }, session: { token: 'bob-token' } },
+            ],
+        } as never);
+
+        await initiateGoogleCalendarAuth('bob@example.com');
+
+        expect(authClient.multiSession.setActive).toHaveBeenCalledWith({ sessionToken: 'bob-token' });
+        // The redirect still carries bob's login_hint.
+        const url = new URL((globalThis as { window: { location: LocationStub } }).window.location.href);
+        expect(url.searchParams.get('login_hint')).toBe('bob@example.com');
+    });
+
+    it('redirects anyway when session alignment fails (server-side owner resolution is the real guard)', async () => {
+        // listDeviceSessions rejecting (e.g. offline) must not block the connect — the redirect
+        // proceeds and the server attaches the integration to the authorized-email owner.
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockRejectedValue(new Error('offline'));
+
+        await initiateGoogleCalendarAuth('alice@example.com');
+
+        expect(authClient.multiSession.setActive).not.toHaveBeenCalled();
+        const url = new URL((globalThis as { window: { location: LocationStub } }).window.location.href);
+        expect(url.pathname).toBe('/calendar/auth/google');
+        expect(url.searchParams.get('login_hint')).toBe('alice@example.com');
+    });
+
+    it('matches the session email case-insensitively', async () => {
+        // Google may report the address with different casing than the stored session email; the
+        // match must be case-insensitive so alignment still picks the right session token.
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValue({
+            data: [{ user: { email: 'Bob@Example.com' }, session: { token: 'bob-token' } }],
+        } as never);
+
+        await initiateGoogleCalendarAuth('bob@example.com');
+
+        expect(authClient.multiSession.setActive).toHaveBeenCalledWith({ sessionToken: 'bob-token' });
+    });
+
+    it('redirects without setActive when sessions exist but none match the hint', async () => {
+        // Populated device-session list with no matching email → skip setActive (no token to use)
+        // and still proceed; the server-side owner resolution remains the guard.
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValue({
+            data: [{ user: { email: 'someone-else@example.com' }, session: { token: 'x' } }],
+        } as never);
+
+        await initiateGoogleCalendarAuth('alice@example.com');
+
+        expect(authClient.multiSession.setActive).not.toHaveBeenCalled();
+        const url = new URL((globalThis as { window: { location: LocationStub } }).window.location.href);
+        expect(url.pathname).toBe('/calendar/auth/google');
+        expect(url.searchParams.get('login_hint')).toBe('alice@example.com');
     });
 });
 

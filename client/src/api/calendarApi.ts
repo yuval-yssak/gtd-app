@@ -1,4 +1,5 @@
 import { API_SERVER } from '../constants/globals';
+import { authClient } from '../lib/authClient';
 import type { GCalResponseStatus, StoredCalendarSyncConfig, StoredItem } from '../types/MyDB';
 
 export type UnlinkAction = 'keepLinkedEntities' | 'removeLinkedEntities';
@@ -191,11 +192,37 @@ async function parseScopeMissing(response: Response): Promise<RsvpOnlineResult> 
 }
 
 /**
- * Navigates the browser to the Google Calendar OAuth flow on the API server.
- * `loginHint` pre-selects an account in Google's picker; the server validates the eventually
- * authorized email matches both the hint and the active session before storing tokens.
+ * Aligns the API-origin Better Auth active session to the account identified by `email` before the
+ * OAuth redirect. The app tracks its active account in IndexedDB, which can drift from the active
+ * session cookie on the API origin (e.g. after connecting another account). If the cookie points at
+ * a DIFFERENT signed-in account, `/calendar/auth/google` stamps the wrong userId into the OAuth
+ * state and the callback rejects the connect as a "mismatch" — the exact "switches me back to my
+ * work account" bug. Re-asserting the active session here keeps cookie + intent in sync.
+ *
+ * Best-effort: a failed lookup/setActive (offline, single-session) is swallowed — the server-side
+ * owner-resolution (match authorized Google email → device session) is the real guard, so the
+ * redirect proceeds regardless.
  */
-export function initiateGoogleCalendarAuth(loginHint: string): void {
+async function alignActiveSessionToEmail(email: string): Promise<void> {
+    try {
+        const { data: sessions } = await authClient.multiSession.listDeviceSessions();
+        const target = sessions?.find((s) => s.user.email.toLowerCase() === email.toLowerCase());
+        if (target) {
+            await authClient.multiSession.setActive({ sessionToken: target.session.token });
+        }
+    } catch {
+        // Swallow — server-side owner resolution still attaches the integration to the correct account.
+    }
+}
+
+/**
+ * Navigates the browser to the Google Calendar OAuth flow on the API server.
+ * Aligns the API-origin active session to `loginHint` first (see `alignActiveSessionToEmail`), then
+ * hands `loginHint` to Google's picker. The server validates the eventually-authorized email against
+ * the hint and attaches the integration to the account that owns that Google identity.
+ */
+export async function initiateGoogleCalendarAuth(loginHint: string): Promise<void> {
+    await alignActiveSessionToEmail(loginHint);
     const url = new URL(`${API_SERVER}/calendar/auth/google`);
     url.searchParams.set('login_hint', loginHint);
     window.location.href = url.toString();
