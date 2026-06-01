@@ -121,12 +121,20 @@ async function trashFutureOpenItemsForRoutine(ctx: CompositeContext, routineId: 
     if (!futureOpen.length) {
         return;
     }
-    const ops: RawOperation[] = futureOpen.map((item) => ({
-        entityType: 'item',
-        opType: 'update',
-        entityId: item._id ?? '',
-        snapshot: { ...item, status: 'trash' as const, updatedTs: now },
-    }));
+    // Drop calendarInstanceEventId on trash so a paused GCal routine's items release their slot on the
+    // presence-partial (user, calendarInstanceEventId) unique index. Otherwise resume — or a later split
+    // successor on the same master — regenerates the same deterministic ids, E11000s, and the inserts are
+    // silently swallowed (→ invisible occurrences). applyEntitySnapshotOp replaceById's the full snapshot,
+    // so omitting the key unsets it. Symmetric to deactivateRoutineFromGCal on the GCal-sync side.
+    const ops: RawOperation[] = futureOpen.map((item) => {
+        const { calendarInstanceEventId: _freed, ...rest } = item;
+        return {
+            entityType: 'item',
+            opType: 'update' as const,
+            entityId: item._id ?? '',
+            snapshot: { ...rest, status: 'trash' as const, updatedTs: now },
+        };
+    });
     await applyAndPublishOperations(ctx.userId, ops, { deviceId: `api:${ctx.tokenId}`, now, strict: true });
 }
 

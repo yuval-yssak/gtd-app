@@ -740,19 +740,27 @@ async function trashGeneratedCalendarItems(routineId: string, userId: string): P
         return;
     }
     const now = dayjs().toISOString();
-    await itemsDAO.updateMany({ user: userId, routineId, status: 'calendar' }, { $set: { status: 'trash', updatedTs: now } });
-    // Build the post-update snapshot locally rather than re-reading — saves a round trip and
-    // the local merge is equivalent since we control the mutation.
+    // Free calendarInstanceEventId on trash so a re-import of this series (the GCal master deletion is
+    // best-effort and may fail, leaving the series live) can regenerate occurrences without colliding
+    // on the presence-partial (user, calendarInstanceEventId) unique index.
+    await itemsDAO.updateMany(
+        { user: userId, routineId, status: 'calendar' },
+        { $set: { status: 'trash', updatedTs: now }, $unset: { calendarInstanceEventId: '' } },
+    );
+    // Build the post-update snapshot locally rather than re-reading — saves a round trip and the local
+    // merge is equivalent since we control the mutation. Drop calendarInstanceEventId so the op snapshot
+    // matches the freed DB state (apply replaceById's the full snapshot on other devices).
     await Promise.all(
-        withId.map((item) =>
-            recordOperation(userId, {
+        withId.map((item) => {
+            const { calendarInstanceEventId: _freed, ...rest } = item;
+            return recordOperation(userId, {
                 entityType: 'item',
                 entityId: item._id,
-                snapshot: { ...item, status: 'trash', updatedTs: now },
+                snapshot: { ...rest, status: 'trash', updatedTs: now },
                 opType: 'update',
                 now,
-            }),
-        ),
+            });
+        }),
     );
 }
 

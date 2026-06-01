@@ -244,6 +244,43 @@ describe('regenerateFutureRoutineItems — sets calendarInstanceEventId', () => 
         expect(sibling?.title).toBe('Sibling-owned occurrence');
     });
 
+    it('frees calendarInstanceEventId when a routine is paused, so a replacement routine can regenerate the same dates', async () => {
+        // Regression: a GCal "this and following" split successor (or a disconnect→reconnect re-import)
+        // creates a NEW active routine on the same bare master while the OLD routine's items get trashed.
+        // The (user, calendarInstanceEventId) unique index is partial on the field's presence (not status),
+        // so a trashed item kept reserving its instance id → the new routine's inserts E11000'd and were
+        // silently swallowed → zero items → the series went invisible in the app. Pausing must now $unset
+        // the instance id so the replacement can claim it.
+        const tz = 'UTC';
+        const now = dayjs().toISOString();
+
+        // First routine generates a full set of future items with instance ids.
+        const oldRoutine = makeRoutine({ _id: 'routine-old' });
+        await routinesDAO.insertOne(oldRoutine);
+        await regenerateFutureRoutineItems(oldRoutine, USER, now, tz);
+        const generated = await itemsDAO.findArray({ user: USER, routineId: 'routine-old', status: 'calendar' });
+        expect(generated.length).toBeGreaterThan(0);
+        expect(generated.every((i) => typeof i.calendarInstanceEventId === 'string')).toBe(true);
+
+        // Pause the old routine → its future items are trashed AND their instance ids freed.
+        await routinesDAO.replaceById('routine-old', { ...oldRoutine, active: false, updatedTs: now });
+        await regenerateFutureRoutineItems({ ...oldRoutine, active: false }, USER, now, tz);
+        const trashed = await itemsDAO.findArray({ user: USER, routineId: 'routine-old', status: 'trash' });
+        expect(trashed.length).toBe(generated.length);
+        // The freed id is the load-bearing assertion: without the $unset the index stays occupied.
+        expect(trashed.every((i) => i.calendarInstanceEventId === undefined)).toBe(true);
+
+        // New active routine on the SAME master must now regenerate every date with no E11000 collision.
+        const newRoutine = makeRoutine({ _id: 'routine-new' });
+        await routinesDAO.insertOne(newRoutine);
+        const ops = await regenerateFutureRoutineItems(newRoutine, USER, now, tz);
+
+        const fresh = await itemsDAO.findArray({ user: USER, routineId: 'routine-new', status: 'calendar' });
+        expect(fresh.length).toBe(generated.length); // every occurrence materialised, none swallowed
+        expect(fresh.every((i) => typeof i.calendarInstanceEventId === 'string')).toBe(true);
+        expect(ops.filter((op) => op.opType === 'create').length).toBe(fresh.length);
+    });
+
     it('complex rrule (WEEKLY+BYDAY): all generated items still get the instance id', async () => {
         // Anchor in the recent past so the next BYDAY match falls inside the horizon.
         const routine = makeRoutine({

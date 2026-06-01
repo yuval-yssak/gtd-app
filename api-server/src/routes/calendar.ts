@@ -656,7 +656,13 @@ async function trashItemsForIntegration(userId: string, integrationId: string, n
         .filter((id): id is string => Boolean(id));
 
     if (hasAtLeastOne(openIds)) {
-        await itemsDAO.updateMany({ _id: { $in: openIds }, user: userId }, { $set: { status: 'trash', updatedTs: now } });
+        // Free `calendarInstanceEventId` on trash so a reconnect re-import can regenerate these
+        // occurrences — a trashed item otherwise keeps reserving its id on the presence-partial
+        // unique index, silently E11000-blocking the new routine's inserts (→ invisible series).
+        await itemsDAO.updateMany(
+            { _id: { $in: openIds }, user: userId },
+            { $set: { status: 'trash', updatedTs: now }, $unset: { calendarInstanceEventId: '' } },
+        );
     }
     if (hasAtLeastOne(doneIds)) {
         // Done items: unlink only (clear calendar fields, status stays 'done'). Same shape as
@@ -2010,6 +2016,7 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
             await updateItemsAndRecordOps(ctx, {
                 filter: { user: ctx.userId, routineId, status: 'calendar', timeStart: { $gt: untilDate } },
                 setFields: { status: 'trash', updatedTs: ctx.now },
+                unsetFields: { calendarInstanceEventId: '' },
             });
         }
     }
@@ -2147,10 +2154,12 @@ async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined,
     await routinesDAO.replaceById(routineId, updated);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
 
-    // Trash all future items belonging to this routine.
+    // Trash all future items belonging to this routine — freeing their instance ids so a replacement
+    // routine on the same series can regenerate them.
     await updateItemsAndRecordOps(ctx, {
         filter: { user: ctx.userId, routineId, status: 'calendar', timeStart: { $gte: ctx.now } },
         setFields: { status: 'trash', updatedTs: ctx.now },
+        unsetFields: { calendarInstanceEventId: '' },
     });
 }
 
@@ -2847,13 +2856,21 @@ function mergeExceptions(existing: RoutineException[], ex: GCalException): Routi
  * timeStart filter after the write would return zero results).  The post-write re-fetch by
  * stable ID ensures operation snapshots reflect the persisted state.
  */
-async function updateItemsAndRecordOps(ctx: SyncContext, query: { filter: Record<string, unknown>; setFields: Record<string, unknown> }): Promise<void> {
+async function updateItemsAndRecordOps(
+    ctx: SyncContext,
+    query: { filter: Record<string, unknown>; setFields: Record<string, unknown>; unsetFields?: Record<string, ''> },
+): Promise<void> {
     const before = await itemsDAO.findArray(query.filter);
     const ids = before.map((item) => item._id).filter((id): id is string => Boolean(id));
     if (!hasAtLeastOne(ids)) {
         return;
     }
-    await itemsDAO.updateMany(query.filter, { $set: query.setFields });
+    // `unsetFields` lets trash call sites release `calendarInstanceEventId` so the freed id no longer
+    // occupies the presence-partial `(user, calendarInstanceEventId)` unique index — otherwise a
+    // replacement routine on the same GCal series (split successor / reconnect re-import) can't
+    // regenerate that occurrence (silent E11000 in insertFreshOccurrence → invisible series).
+    const updateDoc = query.unsetFields ? { $set: query.setFields, $unset: query.unsetFields } : { $set: query.setFields };
+    await itemsDAO.updateMany(query.filter, updateDoc);
     // Re-fetch by stable ID so the snapshot reflects the post-write state.
     const updated = await itemsDAO.findArray({ _id: { $in: ids }, user: ctx.userId });
     const ops = await Promise.all(
@@ -2900,8 +2917,13 @@ export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalE
     const target = await resolveExceptionTarget(routine, ex, ctx.userId);
 
     if (ex.type === 'deleted') {
-        // No create-on-miss for deletes — there's nothing to delete if no item matches.
-        await updateItemsAndRecordOps(ctx, { filter: target.filter, setFields: { status: 'trash', updatedTs: ctx.now } });
+        // No create-on-miss for deletes — there's nothing to delete if no item matches. Free the
+        // instance id too: the occurrence is gone from GCal, so its id must not keep the index slot.
+        await updateItemsAndRecordOps(ctx, {
+            filter: target.filter,
+            setFields: { status: 'trash', updatedTs: ctx.now },
+            unsetFields: { calendarInstanceEventId: '' },
+        });
         return;
     }
 

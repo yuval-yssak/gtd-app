@@ -15,6 +15,7 @@ import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { pauseRoutine } from '../lib/routineComposites.js';
 import { buildRoutineItemSnapshot } from '../lib/routineItemGeneration.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
@@ -398,6 +399,50 @@ describe('Pause + resume composite — item generation', () => {
         expect(open[0]!.expectedBy! >= tomorrow).toBe(true);
         // Tickler invariant preserved on resume-generated items.
         expect(open[0]!.ignoreBefore).toBe(open[0]!.expectedBy);
+    });
+
+    it('pausing a GCal-linked routine frees calendarInstanceEventId on its trashed future items', async () => {
+        // GAP-1 regression: the app-side pause path (trashFutureOpenItemsForRoutine) must release the
+        // instance id, mirroring the GCal-sync deactivate path. Otherwise resume — or a later split
+        // successor on the same master — can't regenerate the occurrence (silent E11000 → invisible).
+        const userId = await login();
+        const master = 'gcal-paused-master';
+        const routineId = 'routine-paused-gcal';
+        const now = dayjs().toISOString();
+        await routinesDAO.insertOne({
+            _id: routineId,
+            user: userId,
+            title: 'Daily standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            createdTs: now,
+            updatedTs: now,
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            calendarEventId: master,
+        });
+        const futureDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+        await itemsDAO.insertOne({
+            _id: 'paused-future-item',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily standup',
+            timeStart: `${futureDate}T09:00:00`,
+            timeEnd: `${futureDate}T09:30:00`,
+            routineId,
+            calendarEventId: master,
+            calendarInstanceEventId: `${master}_${futureDate.replace(/-/g, '')}T060000Z`,
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const result = await pauseRoutine({ userId, tokenId: 'test-token' }, routineId);
+        expect(result.ok).toBe(true);
+
+        const item = await itemsDAO.findByOwnerAndId('paused-future-item', userId);
+        expect(item?.status).toBe('trash');
+        expect(item?.calendarInstanceEventId).toBeUndefined();
     });
 
     it('resume is idempotent for an already-active routine with an open item', async () => {

@@ -262,14 +262,26 @@ async function trashExistingFutureItems(routine: RoutineInterface, userId: strin
     if (!futureIds.length) {
         return [];
     }
-    await itemsDAO.updateMany({ _id: { $in: futureIds }, user: userId } as never, { $set: { status: 'trash', updatedTs: now } });
+    // Free `calendarInstanceEventId` on trash. The `(user, calendarInstanceEventId)` unique index is
+    // partial on the field's PRESENCE (not status), so a trashed item keeps reserving its instance id —
+    // which then E11000-blocks a replacement routine (e.g. a "this and following" split successor, or a
+    // disconnect→reconnect re-import) from regenerating that same occurrence. Clearing it here releases
+    // the id so the live routine can claim it. `insertFreshOccurrence` swallows the collision silently,
+    // so without this the occurrence would vanish from the app with no error.
+    await itemsDAO.updateMany({ _id: { $in: futureIds }, user: userId } as never, {
+        $set: { status: 'trash', updatedTs: now },
+        $unset: { calendarInstanceEventId: '' },
+    });
     const ops = await Promise.all(
         future.map(async (item) => {
             const itemId = item._id;
             if (!itemId) {
                 return null;
             }
-            const snapshot: ItemInterface = { ...item, status: 'trash', updatedTs: now };
+            // Drop calendarInstanceEventId from the op snapshot too so other devices converge to the
+            // freed state and don't keep the id reserved locally.
+            const { calendarInstanceEventId: _freed, ...rest } = item;
+            const snapshot: ItemInterface = { ...rest, status: 'trash', updatedTs: now };
             return recordOperation(userId, { entityType: 'item', entityId: itemId, snapshot, opType: 'update', now });
         }),
     );

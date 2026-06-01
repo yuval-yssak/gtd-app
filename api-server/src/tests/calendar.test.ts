@@ -7488,6 +7488,94 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         }
     });
 
+    // Regression for the "daily series invisible after split" bug: when GCal splits with an `_R<…>`
+    // successor on the SAME bare master, the parent gets a past UNTIL and its overlapping future items
+    // are trashed — but those trashed items used to keep their `calendarInstanceEventId`, which still
+    // occupied the presence-partial unique index. The successor (sharing the bare master id) then
+    // produced the SAME instance ids, so its inserts E11000'd and were silently swallowed → zero items.
+    // The cap path must now FREE the instance id so the successor materialises every occurrence.
+    it('successor on the same bare master regenerates items the capped parent trashed (instance id freed)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareId = 'shared-daily-master';
+        const tz = 'Asia/Jerusalem';
+        // Parent already active with overlapping future items at 10:00 daily.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'parent-daily',
+                calendarEventId: bareId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Daily standup',
+                rrule: 'FREQ=DAILY',
+                calendarItemTemplate: { timeOfDay: '10:00', duration: 30 },
+                updatedTs: dayjs().subtract(2, 'hour').toISOString(),
+            }),
+        );
+        // Seed a future parent item that collides with the successor's first occurrences.
+        const collidingDate = dayjs().tz(tz).add(2, 'day').format('YYYY-MM-DD');
+        const collidingInstanceId = `${bareId}_${dayjs.tz(`${collidingDate}T10:00:00`, tz).utc().format('YYYYMMDD[T]HHmmss[Z]')}`;
+        await itemsDAO.insertOne({
+            _id: 'parent-future-item',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily standup',
+            timeStart: `${collidingDate}T10:00:00`,
+            timeEnd: `${collidingDate}T10:30:00`,
+            routineId: 'parent-daily',
+            calendarEventId: bareId,
+            calendarInstanceEventId: collidingInstanceId,
+            calendarIntegrationId: 'int-1',
+            createdTs: dayjs().subtract(2, 'hour').toISOString(),
+            updatedTs: dayjs().subtract(2, 'hour').toISOString(),
+        });
+
+        // Sync batch: capped base (past UNTIL) + open successor `<bareId>_R<anchor>`, same 10:00 daily.
+        const successorStart = dayjs().tz(tz).add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();
+        const untilCompact = dayjs(successorStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: bareId,
+                    title: 'Daily standup',
+                    timeStart: dayjs().subtract(30, 'day').toISOString(),
+                    timeEnd: dayjs().subtract(30, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=DAILY;UNTIL=${untilCompact}`],
+                },
+                {
+                    id: `${bareId}_R20260615T070000`,
+                    title: 'Daily standup',
+                    timeStart: successorStart,
+                    timeEnd: dayjs(successorStart).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-instance-free',
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // The parent's colliding item was trashed AND its instance id freed.
+        const trashedParentItem = await itemsDAO.findByOwnerAndId('parent-future-item', userId);
+        expect(trashedParentItem!.status).toBe('trash');
+        expect(trashedParentItem!.calendarInstanceEventId).toBeUndefined();
+
+        // The active successor materialised items — including the previously-colliding date — none swallowed.
+        const [successor] = (await routinesDAO.findArray({ user: userId, calendarEventId: bareId, calendarIntegrationId: 'int-1' })).filter((r) => r.active);
+        if (!successor) throw new Error('expected an active successor');
+        const successorItems = await itemsDAO.findArray({ user: userId, routineId: successor._id, status: 'calendar' });
+        expect(successorItems.length).toBeGreaterThan(0);
+        expect(successorItems.some((i) => i.calendarInstanceEventId === collidingInstanceId)).toBe(true);
+    });
+
     it('E8 regression: does not link an unrelated master whose start happens to fall within the gap window', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

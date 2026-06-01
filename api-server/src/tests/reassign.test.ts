@@ -323,6 +323,7 @@ describe('POST /sync/reassign', () => {
                 status: 'calendar',
                 timeStart: '2030-01-01T10:00:00Z',
                 timeEnd: '2030-01-01T11:00:00Z',
+                calendarInstanceEventId: 'gcal-master-routine_20300101T100000Z',
             });
             const item2 = makeItem(alice.userId, { routineId: routine._id, status: 'done' });
             await Promise.all([itemsDAO.insertOne(item1), itemsDAO.insertOne(item2)]);
@@ -338,6 +339,8 @@ describe('POST /sync/reassign', () => {
             // status='calendar' rows, by design (matrix A8).
             const aliceItem1 = await itemsDAO.findByOwnerAndId(item1._id!, alice.userId);
             expect(aliceItem1?.status).toBe('trash');
+            // The trashed item releases its instance id so a re-import can't be E11000-blocked by it.
+            expect(aliceItem1?.calendarInstanceEventId).toBeUndefined();
             const aliceItem2 = await itemsDAO.findByOwnerAndId(item2._id!, alice.userId);
             expect(aliceItem2?.status).toBe('done');
             // Bob inherits NO historical generated items — the routine starts fresh on his side.
