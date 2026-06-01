@@ -590,3 +590,136 @@ describe('POST /maintenance/heal-stuck-gcal-routines', () => {
         expect(res.status).toBe(401);
     });
 });
+
+// ─── POST /maintenance/heal-split-successor-routines ───────────────────────────
+
+describe('POST /maintenance/heal-split-successor-routines', () => {
+    async function heal(sessionCookie: string) {
+        return authenticatedRequest(app, { method: 'POST', path: '/maintenance/heal-split-successor-routines', sessionCookie, body: {} });
+    }
+
+    it('revives the lone open-rrule paused successor, links it to the capped parent, and regenerates items', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        // The stranded-split state: a capped+paused parent and an open-rrule paused successor on the
+        // same series, with NO active routine — exactly what the import bug left behind.
+        await seedRoutine({
+            id: 'parent-capped',
+            userId,
+            rrule: 'FREQ=WEEKLY;WKST=SU;UNTIL=20251110T215959Z;BYDAY=MO,TU,WE',
+            active: false,
+            calendarEventId: 'evt-split',
+            updatedTs: '2026-05-01T00:00:00.000Z',
+        });
+        await seedRoutine({
+            id: 'successor-open',
+            userId,
+            rrule: 'FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE',
+            active: false,
+            calendarEventId: 'evt-split',
+            updatedTs: '2026-05-24T00:00:00.000Z',
+        });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedSuccessors: number };
+        expect(body.revivedSuccessors).toBe(1);
+
+        const successor = await db.collection('routines').findOne({ _id: 'successor-open' });
+        expect(successor?.active).toBe(true);
+        // Parent UNTIL is NEVER stripped — it stays capped (GCal truth) and paused.
+        expect(successor?.rrule).toBe('FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE');
+        expect(successor?.splitFromRoutineId).toBe('parent-capped');
+        const parent = await db.collection('routines').findOne({ _id: 'parent-capped' });
+        expect(parent?.active).toBe(false);
+        expect(parent?.rrule).toContain('UNTIL=');
+
+        const op = await db.collection('operations').findOne({ entityId: 'successor-open', entityType: 'routine' });
+        expect(op?.opType).toBe('update');
+        const liveItems = await db.collection('items').find({ user: userId, routineId: 'successor-open', status: 'calendar' }).toArray();
+        expect(liveItems.length).toBeGreaterThan(0);
+    });
+
+    it('is idempotent — a second run revives nothing', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await seedRoutine({ id: 'p', userId, rrule: 'FREQ=WEEKLY;UNTIL=20251110T215959Z;BYDAY=MO', active: false, calendarEventId: 'evt-idem' });
+        await seedRoutine({
+            id: 's',
+            userId,
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            active: false,
+            calendarEventId: 'evt-idem',
+            updatedTs: '2026-05-24T00:00:00.000Z',
+        });
+
+        const first = (await (await heal(cookie)).json()) as { revivedSuccessors: number };
+        expect(first.revivedSuccessors).toBe(1);
+        const second = (await (await heal(cookie)).json()) as { revivedSuccessors: number };
+        expect(second.revivedSuccessors).toBe(0);
+    });
+
+    it('skips a series that already has an active routine (no double-activation, no E11000)', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await seedRoutine({ id: 'live', userId, rrule: 'FREQ=WEEKLY;BYDAY=MO', active: true, calendarEventId: 'evt-has-active' });
+        await seedRoutine({ id: 'capped', userId, rrule: 'FREQ=WEEKLY;UNTIL=20251110T215959Z;BYDAY=MO', active: false, calendarEventId: 'evt-has-active' });
+
+        const res = await heal(cookie);
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { revivedSuccessors: number };
+        expect(body.revivedSuccessors).toBe(0);
+        const active = await db.collection('routines').find({ user: userId, calendarEventId: 'evt-has-active', active: true }).toArray();
+        expect(active).toHaveLength(1);
+    });
+
+    it('does not revive when two stranded successors share a series (ambiguous — must not guess)', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await seedRoutine({ id: 'cap', userId, rrule: 'FREQ=WEEKLY;UNTIL=20251110T215959Z;BYDAY=MO', active: false, calendarEventId: 'evt-ambig' });
+        await seedRoutine({
+            id: 'succ-a',
+            userId,
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            active: false,
+            calendarEventId: 'evt-ambig',
+            updatedTs: '2026-05-20T00:00:00.000Z',
+        });
+        await seedRoutine({
+            id: 'succ-b',
+            userId,
+            rrule: 'FREQ=WEEKLY;BYDAY=TU',
+            active: false,
+            calendarEventId: 'evt-ambig',
+            updatedTs: '2026-05-24T00:00:00.000Z',
+        });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedSuccessors: number };
+        expect(body.revivedSuccessors).toBe(0);
+        const active = await db.collection('routines').find({ user: userId, calendarEventId: 'evt-ambig', active: true }).toArray();
+        expect(active).toHaveLength(0);
+    });
+
+    it('does not revive a deliberately-paused single routine with no capped sibling', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        // A lone open-rrule paused routine with NO capped sibling is a user-paused routine, not a split tail.
+        await seedRoutine({ id: 'user-paused', userId, rrule: 'FREQ=WEEKLY;BYDAY=MO', active: false, calendarEventId: 'evt-lonely' });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedSuccessors: number };
+        expect(body.revivedSuccessors).toBe(0);
+        expect((await db.collection('routines').findOne({ _id: 'user-paused' }))?.active).toBe(false);
+    });
+
+    it('rejects unauthenticated requests with 401', async () => {
+        const res = await app.fetch(
+            new Request('http://localhost:4000/maintenance/heal-split-successor-routines', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({}),
+            }),
+        );
+        expect(res.status).toBe(401);
+    });
+});

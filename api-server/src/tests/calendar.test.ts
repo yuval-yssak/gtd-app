@@ -14,7 +14,7 @@ import { gcalCreationInFlight, maybePushToGCal } from '../lib/calendarPushback.j
 import * as sseConnections from '../lib/sseConnections.js';
 import * as webPush from '../lib/webPush.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { calendarRoutes, pickSplitParent } from '../routes/calendar.js';
+import { calendarRoutes, classifyRecurringMaster, pickSplitParent } from '../routes/calendar.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
@@ -7127,6 +7127,80 @@ describe('notes/description sync — outbound push-back', () => {
         expect(updated!.calendarEventId).toBe('new-gcal-notes-id');
         // lastSyncedNotes stores HTML (the value sent to GCal), not the raw Markdown.
         expect(updated!.lastSyncedNotes).toBe('<p>New item notes</p>\n');
+    });
+});
+
+// ─── classifyRecurringMaster — unit tests ─────────────────────────────────
+
+describe('classifyRecurringMaster', () => {
+    const makeEvent = (over: Partial<GCalEvent> & Pick<GCalEvent, 'id'>): GCalEvent => ({
+        title: 'Daily - Tech sync',
+        timeStart: '2026-06-15T09:00:00Z',
+        timeEnd: '2026-06-15T09:30:00Z',
+        updated: '2026-06-01T00:00:00Z',
+        status: 'confirmed',
+        recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+        ...over,
+    });
+    const makeRoutine = (over: Partial<RoutineInterface> & Pick<RoutineInterface, 'calendarEventId'>): RoutineInterface => ({
+        _id: 'r1',
+        user: 'u1',
+        title: 'Daily - Tech sync',
+        routineType: 'calendar',
+        rrule: 'FREQ=WEEKLY;BYDAY=MO',
+        active: true,
+        createdTs: '2026-01-01T00:00:00Z',
+        updatedTs: '2026-01-01T00:00:00Z',
+        ...over,
+    });
+    const bareId = 'base-master';
+    const successorId = `${bareId}_R20260615T090000`;
+
+    it('flags an open _R event when a capped base sibling is in the batch', () => {
+        const successor = makeEvent({ id: successorId, recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'] });
+        const base = makeEvent({ id: bareId, recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260101T000000Z'] });
+        expect(classifyRecurringMaster(successor, [base, successor], [])).toBe('splitSuccessor');
+    });
+
+    it('flags an open _R event when an existing routine on the bare id is capped (no sibling in batch)', () => {
+        const successor = makeEvent({ id: successorId });
+        const capped = makeRoutine({ calendarEventId: bareId, rrule: 'FREQ=WEEKLY;BYDAY=MO;UNTIL=20260101T000000Z' });
+        expect(classifyRecurringMaster(successor, [successor], [capped])).toBe('splitSuccessor');
+    });
+
+    it('flags an open _R event when an existing routine on the bare id is paused', () => {
+        const successor = makeEvent({ id: successorId });
+        const paused = makeRoutine({ calendarEventId: bareId, active: false });
+        expect(classifyRecurringMaster(successor, [successor], [paused])).toBe('splitSuccessor');
+    });
+
+    it('treats a lone _R event with an active uncapped routine on the bare id as a re-report', () => {
+        const successor = makeEvent({ id: successorId });
+        const active = makeRoutine({ calendarEventId: bareId, active: true, rrule: 'FREQ=WEEKLY;BYDAY=MO' });
+        expect(classifyRecurringMaster(successor, [successor], [active])).toBe('reReport');
+    });
+
+    it('treats a lone _R event with no related routine or sibling as a re-report', () => {
+        const successor = makeEvent({ id: successorId });
+        expect(classifyRecurringMaster(successor, [successor], [])).toBe('reReport');
+    });
+
+    it('does NOT flag a capped _R event (a historical segment, not the live tail)', () => {
+        const cappedSuccessor = makeEvent({ id: successorId, recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260601T000000Z'] });
+        const capped = makeRoutine({ calendarEventId: bareId, active: false });
+        expect(classifyRecurringMaster(cappedSuccessor, [cappedSuccessor], [capped])).toBe('reReport');
+    });
+
+    it('does NOT flag a bare (non-_R) master', () => {
+        const base = makeEvent({ id: bareId });
+        const capped = makeRoutine({ calendarEventId: bareId, active: false });
+        expect(classifyRecurringMaster(base, [base], [capped])).toBe('reReport');
+    });
+
+    it('does NOT flag a cancelled _R event', () => {
+        const cancelled = makeEvent({ id: successorId, status: 'cancelled', recurrence: [] });
+        const capped = makeRoutine({ calendarEventId: bareId, active: false });
+        expect(classifyRecurringMaster(cancelled, [cancelled], [capped])).toBe('reReport');
     });
 });
 

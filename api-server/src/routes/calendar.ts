@@ -1391,9 +1391,11 @@ async function importCalendarEvents(source: CalendarSource, events: GCalEvent[],
     const recurringMasters = events.filter(isRecurringMaster);
     const regularEvents = events.filter((e) => !isRecurringMaster(e));
 
-    // Import recurring masters as routines first — their calendarEventIds must be known
-    // before filtering regular events so instances of these series are correctly skipped.
-    await Promise.all(recurringMasters.map((event) => importRecurringEventAsRoutine(event, source, ctx)));
+    // Import recurring masters as routines, ordered so a GCal "this and all following" split is
+    // handled deterministically: the capped base master must pause its routine BEFORE the open-ended
+    // `_R<…>` successor inserts its own active routine on the same bare id (else the active-partial
+    // unique index would reject the successor). See `classifyRecurringMaster`.
+    await importRecurringMastersOrdered(recurringMasters, existingLinkedRoutines, source, ctx);
 
     // Re-fetch after importing new recurring masters so freshly created routines are included.
     const allLinkedRoutines = await routinesDAO.findArray({
@@ -1411,6 +1413,99 @@ async function importCalendarEvents(source: CalendarSource, events: GCalEvent[],
     // duplicate standalone items alongside the routine-generated ones).
     const eventsToUpsert = regularEvents.filter((e) => !e.recurringEventId || !routineEventIds.has(normalizeMasterEventId(e.recurringEventId)));
     await Promise.all(eventsToUpsert.map((event) => upsertCalendarItem(event, source, ctx)));
+}
+
+/** True when a raw GCal master id carries the `_R<YYYYMMDD[THHMMSS[Z]]>` rebased-master suffix. */
+function hasRebasedSuffix(rawId: string): boolean {
+    return rawId !== normalizeMasterEventId(rawId);
+}
+
+/** True when an rrule string has no UNTIL clause (an open-ended, still-live series). */
+function isOpenRrule(rrule: string): boolean {
+    return !rrule.includes('UNTIL=');
+}
+
+/**
+ * Classify an inbound recurring-master event in the context of its sync batch + existing routines.
+ *
+ * A GCal "this and all following" split produces TWO masters that both normalize to one bare id:
+ * the capped base `<id>` (gains a past UNTIL) and an open-ended successor `<id>_R<anchor>`. The
+ * unconditional `normalizeMasterEventId` in `importRecurringEventAsRoutine` would collapse the
+ * successor onto the base routine and never onboard it as its own live series → the series goes
+ * invisible in the app. We must instead route the successor to its own NEW active routine.
+ *
+ * - `'splitSuccessor'`: an open-ended `_R<…>` event whose bare base is also present as a capped/cancelled
+ *   master in this batch, OR matches an existing routine on the bare id that is capped (UNTIL) or inactive.
+ *   This is the live tail of a split — onboard it as a distinct routine keyed on the BARE id (GCal's
+ *   instance ids use the bare id, so `buildCalendarInstanceEventId` matches → no duplicate items).
+ * - `'reReport'`: everything else, including the case where ONLY the `_R` event arrives with no
+ *   capped sibling/routine (Google re-reporting a single master with a rebased id). Keep the existing
+ *   normalize-onto-existing behavior — this preserves the duplicate-items fix.
+ *
+ * Exported for unit testing.
+ */
+export function classifyRecurringMaster(event: GCalEvent, batch: GCalEvent[], existingRoutines: RoutineInterface[]): 'reReport' | 'splitSuccessor' {
+    if (!hasRebasedSuffix(event.id) || event.status !== 'confirmed') {
+        return 'reReport';
+    }
+    const rrule = extractRrule(event.recurrence ?? []);
+    if (!rrule || !isOpenRrule(rrule)) {
+        return 'reReport';
+    }
+    const bareId = normalizeMasterEventId(event.id);
+    // (4a) A distinct base master in the same batch that is itself capped or cancelled.
+    const cappedSiblingInBatch = batch.some((e) => {
+        if (e.id !== bareId) {
+            return false;
+        }
+        if (e.status === 'cancelled') {
+            return true;
+        }
+        const siblingRrule = extractRrule(e.recurrence ?? []);
+        return siblingRrule !== null && !isOpenRrule(siblingRrule);
+    });
+    // (4b) An existing routine on the bare id that is already capped (UNTIL) or paused.
+    const cappedExistingRoutine = existingRoutines.some((r) => r.calendarEventId === bareId && (!r.active || !isOpenRrule(r.rrule)));
+    return cappedSiblingInBatch || cappedExistingRoutine ? 'splitSuccessor' : 'reReport';
+}
+
+/**
+ * Imports recurring masters in an order that makes "this and all following" splits deterministic.
+ *  - Phase 1 (sequential): base/capped masters + `reReport` events. Running the capped base FIRST
+ *    pauses its routine (active:false) before any successor inserts.
+ *  - Phase 2 (sequential per bare-id group): `_R<…>` split successors. Sequencing per bare id avoids
+ *    a Promise.all race when GCal split the same series twice (two `_R` masters → one bare id).
+ */
+async function importRecurringMastersOrdered(
+    masters: GCalEvent[],
+    existingRoutines: RoutineInterface[],
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<void> {
+    const successors = masters.filter((e) => classifyRecurringMaster(e, masters, existingRoutines) === 'splitSuccessor');
+    const successorIds = new Set(successors.map((e) => e.id));
+    const phaseOne = masters.filter((e) => !successorIds.has(e.id));
+
+    for (const event of phaseOne) {
+        await importRecurringEventAsRoutine(event, source, ctx);
+    }
+    // Group successors by bare id; run each group sequentially so two successors on the same series
+    // don't race their inserts. Distinct series run in parallel — safe against the unique active index
+    // because its key includes calendarEventId, which differs per group, and all events here share one
+    // `source` (single integration). A future multi-integration importCalendarEvents would need to
+    // re-check this invariant.
+    const byBareId = new Map<string, GCalEvent[]>();
+    for (const event of successors) {
+        const key = normalizeMasterEventId(event.id);
+        byBareId.set(key, [...(byBareId.get(key) ?? []), event]);
+    }
+    await Promise.all(
+        [...byBareId.values()].map(async (group) => {
+            for (const event of group) {
+                await importRecurringEventAsRoutine(event, source, ctx, { forceSplitSuccessor: true });
+            }
+        }),
+    );
 }
 
 const normalizeTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -1530,7 +1625,12 @@ function extractRrule(recurrence: string[]): string | null {
  * Without this, downstream `buildCalendarInstanceEventId` produces double-anchored instance ids
  * that never match GCal payloads → reconcile orphan-creates a duplicate item per occurrence.
  */
-async function importRecurringEventAsRoutine(rawEvent: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+async function importRecurringEventAsRoutine(
+    rawEvent: GCalEvent,
+    source: CalendarSource,
+    ctx: SyncContext,
+    opts?: { forceSplitSuccessor?: boolean },
+): Promise<void> {
     const event: GCalEvent = { ...rawEvent, id: normalizeMasterEventId(rawEvent.id) };
     const rrule = event.status === 'cancelled' ? null : extractRrule(event.recurrence ?? []);
 
@@ -1551,6 +1651,24 @@ async function importRecurringEventAsRoutine(rawEvent: GCalEvent, source: Calend
         return;
     }
 
+    // Split-successor path: the open-ended `_R<…>` tail of a "this and all following" split must become
+    // its OWN active routine on the bare id, NOT overwrite the capped (now-inactive) parent that
+    // `findExistingRoutineForEvent` resolves to. `event.id` is already the bare id (normalized above), so
+    // the new routine + its generated items match GCal's bare-id instance ids — no duplicate items.
+    if (opts?.forceSplitSuccessor) {
+        // An already-active routine on the bare id IS the successor (idempotent re-sync) → update it,
+        // never the inactive parent. `findExistingRoutineForEvent` prefers the active row.
+        if (existing?.active) {
+            console.log(`[gcal-sync] updating split-successor routine | eventId=${event.id} title=${event.title} routineId=${existing._id}`);
+            await updateRoutineFromGCal(existing, event, rrule, source, ctx);
+            return;
+        }
+        const parentId = await resolveSplitParentId(event.id, source, ctx);
+        console.log(`[gcal-sync] creating split-successor routine | eventId=${event.id} title=${event.title} rrule=${rrule} parent=${parentId ?? 'none'}`);
+        await createRoutineFromGCal(event, rrule, source, ctx, parentId ? { splitFromRoutineId: parentId } : undefined);
+        return;
+    }
+
     if (existing) {
         console.log(`[gcal-sync] updating routine | eventId=${event.id} title=${event.title} routineId=${existing._id}`);
         await updateRoutineFromGCal(existing, event, rrule, source, ctx);
@@ -1559,6 +1677,22 @@ async function importRecurringEventAsRoutine(rawEvent: GCalEvent, source: Calend
 
     console.log(`[gcal-sync] creating routine | eventId=${event.id} title=${event.title} rrule=${rrule}`);
     await createRoutineFromGCal(event, rrule, source, ctx);
+}
+
+/**
+ * Resolve the capped/paused parent routine for a split successor — the routine sharing the bare
+ * `calendarEventId` that is inactive or holds an UNTIL (the segment GCal capped when the user chose
+ * "this and all following"). Returns the most-recently-updated such routine's id, or undefined if none
+ * (a webhook may deliver the successor before the cap landed; the successor is still created, unlinked).
+ */
+async function resolveSplitParentId(bareEventId: string, source: CalendarSource, ctx: SyncContext): Promise<string | undefined> {
+    const candidates = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarEventId: bareEventId,
+        calendarIntegrationId: source.integration._id,
+    });
+    const capped = candidates.filter((r) => !r.active || r.rrule.includes('UNTIL='));
+    return hasAtLeastOne(capped) ? pickMostRecentlyUpdated(capped)._id : undefined;
 }
 
 /**
@@ -1687,7 +1821,13 @@ async function relinkRoutineToEvent(
     return relinked;
 }
 
-async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
+async function createRoutineFromGCal(
+    event: GCalEvent,
+    rrule: string,
+    source: CalendarSource,
+    ctx: SyncContext,
+    opts?: { splitFromRoutineId?: string },
+): Promise<void> {
     // All-day routines skip the time/duration extraction — GCal emits `start.date` (YYYY-MM-DD)
     // with no time component, so `extractLocalTime` and the `diff('minute')` math would both yield
     // junk. Downstream item generation reads `template.allDay` to switch to the all-day shape
@@ -1706,7 +1846,12 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
         title: event.title,
         routineType: 'calendar',
         rrule,
-        active: true,
+        // A master that arrives already capped (UNTIL in the past or future) is a historical/closed
+        // segment, not a live series — create it paused. Only `updateRoutineFromGCal`'s `newlyGainsUntil`
+        // path previously enforced this; a freshly-imported capped master (e.g. the base side of a
+        // cold-start split where both masters arrive at once) must not become active and then collide
+        // with its open-ended successor on the active-partial unique index.
+        active: isOpenRrule(rrule),
         calendarEventId: event.id,
         calendarIntegrationId: source.integration._id,
         calendarSyncConfigId: source.config._id,
@@ -1717,6 +1862,11 @@ async function createRoutineFromGCal(event: GCalEvent, rrule: string, source: Ca
         // routine doc. `buildCalendarItem` copies these onto every generated occurrence so the
         // first sync after import already produces meeting-aware items.
         ...pickGCalOwnedFields(event),
+        // Record split lineage when this routine is the open-ended tail of a "this and all following"
+        // split. The `_R<…>` successor shares the parent's bare calendarEventId, so the gap-window
+        // heuristic in `pickSplitParent`/`detectAndLinkSplits` can't reliably pair them when the cap
+        // and the first tail occurrence are far apart — the caller passes the parent id directly.
+        ...(opts?.splitFromRoutineId ? { splitFromRoutineId: opts.splitFromRoutineId } : {}),
         // Anchor the GCal-truth timestamp on create so the first inbound update's structural gate
         // compares against the real GCal payload, not the self-bumped updatedTs. Mirrors createNewCalendarItem.
         lastSyncedFromGCalTs: event.updated,

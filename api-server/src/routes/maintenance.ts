@@ -4,7 +4,7 @@ import { authenticateRequest } from '../auth/middleware.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
-import { healDuplicateCalendarItems, healStuckGCalRoutines } from '../lib/calendarHeal.js';
+import { healDuplicateCalendarItems, healSplitSuccessorRoutines, healStuckGCalRoutines } from '../lib/calendarHeal.js';
 import { computePurgeFloor, type PurgeFloor } from '../lib/purgeFloor.js';
 import type { AuthVariables } from '../types/authTypes.js';
 
@@ -100,4 +100,20 @@ export const maintenanceRoutes = new Hono<{ Variables: AuthVariables }>()
         const ops = await healStuckGCalRoutines(user.id, dayjs().toISOString());
         const revivedRoutines = ops.filter((op) => op.entityType === 'routine').length;
         return c.json({ revivedRoutines, totalOps: ops.length }, 200);
+    })
+
+    // ---------------------------------------------------------------------------
+    // POST /maintenance/heal-split-successor-routines — recover stranded split tails
+    // ---------------------------------------------------------------------------
+    // Recovers GCal "this and all following" splits whose open-ended successor routine was stranded
+    // active:false (the live tail never went active → the series shows nothing in the app). Per series,
+    // reactivates the lone open-rrule paused routine and links it to the capped parent — WITHOUT
+    // stripping the parent's UNTIL (the parent stays capped, matching GCal truth). Distinct from
+    // heal-stuck-gcal-routines, which is unsafe here because stripping the parent's UNTIL would
+    // fabricate a phantom infinite series contradicting GCal. Idempotent; scoped to the session user.
+    .post('/heal-split-successor-routines', authenticateRequest, async (c) => {
+        const { user } = c.get('session');
+        const ops = await healSplitSuccessorRoutines(user.id, dayjs().toISOString());
+        const revivedSuccessors = ops.filter((op) => op.entityType === 'routine').length;
+        return c.json({ revivedSuccessors, totalOps: ops.length }, 200);
     });
