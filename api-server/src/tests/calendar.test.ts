@@ -176,6 +176,21 @@ describe('GET /calendar/auth/google', () => {
         expect(inner.loginHint).toBe('alice@example.com');
     });
 
+    it('forces Google account selection (prompt=select_account) so a second-account connect is not silently reused', async () => {
+        const sessionCookie = await loginAsAlice();
+        const res = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        expect(res.status).toBe(302);
+        const location = new URL(res.headers.get('location') ?? '');
+        // Must include both select_account (force the account chooser) and consent (force refresh token).
+        const promptValues = (location.searchParams.get('prompt') ?? '').split(/\s+/);
+        expect(promptValues).toContain('select_account');
+        expect(promptValues).toContain('consent');
+    });
+
     it('omits login_hint when the query value is empty', async () => {
         const sessionCookie = await loginAsAlice();
         const res = await authenticatedRequest(app, {

@@ -249,7 +249,11 @@ calendarRoutes.get('/auth/google', authenticateRequest, (c) => {
     // access token can't call /oauth2/v2/userinfo and the connect flow always rejects.
     const url = oauth2.generateAuthUrl({
         access_type: 'offline', // request refresh token
-        prompt: 'consent', // always show consent screen so we always get a refresh token
+        // `select_account` forces Google's account chooser even when a Google session is already
+        // signed in — without it, connecting a SECOND account silently reuses the first signed-in
+        // identity, so the callback's email-mismatch guard rejects the connect ("authorized account
+        // didn't match the one you selected"). `consent` is kept so we still always get a refresh token.
+        prompt: 'select_account consent',
         scope: ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email'],
         state: signState({ userId, ...(loginHint ? { loginHint } : {}), ...(intent ? { intent } : {}) }),
         ...(loginHint ? { login_hint: loginHint } : {}),
