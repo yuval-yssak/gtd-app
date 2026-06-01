@@ -8,11 +8,11 @@ describe('parseClarifyMode', () => {
         }
     });
 
-    it('returns dialog for an unknown string', () => {
-        expect(parseClarifyMode('bogus')).toBe('dialog');
+    it('returns the default page mode for an unknown string', () => {
+        expect(parseClarifyMode('bogus')).toBe('page');
     });
 
-    it('returns dialog for null', () => {
-        expect(parseClarifyMode(null)).toBe('dialog');
+    it('returns the default page mode for null', () => {
+        expect(parseClarifyMode(null)).toBe('page');
     });
 });
