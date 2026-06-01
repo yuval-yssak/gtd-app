@@ -115,6 +115,38 @@ export async function advanceRoutineAfterDisposal(ctx: RoutineItemGenerationCont
 }
 
 /**
+ * Re-stamp a nextAction routine's single open first item after its `startDate` was changed via
+ * PATCH. The CREATE path (`ensureFirstRoutineItem`) anchors the first item on `startDate`, but a
+ * later `startDate` PATCH leaves that already-materialized item stranded on its old date — and the
+ * MCP/public-API caller this server-side bootstrap exists for has no client tick to fix it up.
+ *
+ * Safety: only touches an item that still looks like an untouched routine-generated first
+ * occurrence — `expectedBy === ignoreBefore` (the tickler invariant `buildRoutineItemSnapshot`
+ * sets) and the recomputed first occurrence actually differs. That guard means a user who has
+ * already pulled the item forward / edited its tickler keeps their edit. No-op for calendar /
+ * inactive routines and when no open item exists (nothing materialized yet).
+ */
+export async function restampOpenItemForStartDateChange(ctx: RoutineItemGenerationContext, routine: RoutineInterface): Promise<void> {
+    if (routine.routineType !== 'nextAction' || !routine.active) {
+        return;
+    }
+    const open = await findOpenRoutineItem(ctx.userId, routine._id);
+    if (!open || open.expectedBy !== open.ignoreBefore) {
+        return;
+    }
+    try {
+        const next = computeNextOccurrence(routine.rrule, computeFirstAnchor(routine.startDate), true);
+        const expectedBy = dayjs.utc(next).format('YYYY-MM-DD');
+        if (expectedBy === open.expectedBy) {
+            return;
+        }
+        await publishRestampedItem(ctx, open, expectedBy);
+    } catch (err) {
+        await handleGenerationError(ctx, routine, err, 'restampOpenItemForStartDateChange');
+    }
+}
+
+/**
  * The first-item anchor: UTC-midnight of `max(today, routine.startDate)`. Constructed on the
  * user's local calendar date — see `createFirstRoutineItem` in the client helpers for the
  * timezone reasoning. Without a startDate, anchor at today.
@@ -181,8 +213,27 @@ async function deactivateRoutine(ctx: RoutineItemGenerationContext, routine: Rou
     );
 }
 
+/** The routine's open (non-done/non-trash) item, or null. There is at most one by invariant. */
+async function findOpenRoutineItem(userId: string, routineId: string): Promise<ItemInterface | null> {
+    return itemsDAO.findOne({ user: userId, routineId, status: { $nin: ['done', 'trash'] } } as never);
+}
+
 /** True when the routine already has a non-done/non-trash item — preserves "at most one open item". */
 async function hasOpenItem(userId: string, routineId: string): Promise<boolean> {
-    const open = await itemsDAO.findOne({ user: userId, routineId, status: { $nin: ['done', 'trash'] } } as never);
-    return open !== null;
+    return (await findOpenRoutineItem(userId, routineId)) !== null;
+}
+
+/**
+ * Persist a re-stamped first item through the apply pipeline as an `update` op (same fan-out as
+ * `publishRoutineItem`). Keeps the tickler invariant by moving `ignoreBefore` in lockstep with
+ * `expectedBy`.
+ */
+async function publishRestampedItem(ctx: RoutineItemGenerationContext, item: ItemInterface, expectedBy: string): Promise<void> {
+    const now = dayjs().toISOString();
+    const snapshot: ItemInterface = { ...item, expectedBy, ignoreBefore: expectedBy, updatedTs: now };
+    await applyAndPublishOperation(
+        ctx.userId,
+        { entityType: 'item', opType: 'update', entityId: snapshot._id ?? '', snapshot },
+        { deviceId: `api:${ctx.tokenId}`, now },
+    );
 }

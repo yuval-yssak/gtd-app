@@ -75,6 +75,16 @@ async function postJson(path: string, token: string, body: unknown): Promise<Res
     );
 }
 
+async function patchJson(path: string, token: string, body: unknown): Promise<Response> {
+    return app.fetch(
+        new Request(`http://localhost:4000${path}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }),
+    );
+}
+
 async function getItemsForRoutine(userId: string, routineId: string): Promise<ItemInterface[]> {
     return itemsDAO.findArray({ user: userId, routineId } as never);
 }
@@ -240,6 +250,146 @@ describe('POST /v1/routines — bootstrap first item', () => {
         const op = await db.collection<{ opType: string; deviceId: string }>('operations').findOne({ entityId: itemId } as never);
         expect(op?.opType).toBe('create');
         expect(op?.deviceId.startsWith('api:')).toBe(true);
+    });
+});
+
+// ── PATCH /v1/routines/:id: re-stamp first item on startDate change ──────────
+
+describe('PATCH /v1/routines/:id — re-stamp first item on startDate change', () => {
+    it('moving startDate forward re-stamps the open first item expectedBy + ignoreBefore', async () => {
+        // The original bug: create-without-startDate stamps the first item at today, then a later
+        // startDate PATCH leaves it stranded. The re-stamp pushes it to the new first occurrence.
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const routine = await createRoutineViaApi(token, { rrule: 'FREQ=MONTHLY' });
+        const today = dayjs().format('YYYY-MM-DD');
+        const before = await getItemsForRoutine(userId, routine._id);
+        expect(before[0]!.expectedBy).toBe(today);
+
+        const futureStart = dayjs.utc().add(20, 'day').format('YYYY-MM-DD');
+        const res = await patchJson(`/v1/routines/${routine._id}`, token, { startDate: futureStart });
+        expect(res.status).toBe(200);
+
+        const after = await getItemsForRoutine(userId, routine._id);
+        // Still exactly one open item — re-stamped, not duplicated.
+        expect(after.filter((i) => i.status === 'nextAction')).toHaveLength(1);
+        expect(after[0]!._id).toBe(before[0]!._id);
+        expect(after[0]!.expectedBy).toBe(futureStart);
+        expect(after[0]!.ignoreBefore).toBe(futureStart);
+    });
+
+    it('PATCH that does not change startDate leaves the first item untouched', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const routine = await createRoutineViaApi(token, { rrule: 'FREQ=MONTHLY' });
+        const before = await getItemsForRoutine(userId, routine._id);
+        const originalExpectedBy = before[0]!.expectedBy;
+
+        const res = await patchJson(`/v1/routines/${routine._id}`, token, { title: 'renamed' });
+        expect(res.status).toBe(200);
+
+        const after = await getItemsForRoutine(userId, routine._id);
+        expect(after[0]!.expectedBy).toBe(originalExpectedBy);
+    });
+
+    it('does not re-stamp a user-edited item (expectedBy !== ignoreBefore)', async () => {
+        // Guard: once a user pulls the tickler off the due date, the item is no longer an untouched
+        // routine-generated first occurrence — a startDate PATCH must not clobber that edit.
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const routine = await createRoutineViaApi(token, { rrule: 'FREQ=MONTHLY' });
+        const before = await getItemsForRoutine(userId, routine._id);
+        const itemId = before[0]!._id!;
+        // Simulate a user editing the tickler so expectedBy !== ignoreBefore.
+        await itemsDAO.replaceById(itemId, { ...before[0]!, ignoreBefore: '2020-01-01' });
+
+        const futureStart = dayjs.utc().add(20, 'day').format('YYYY-MM-DD');
+        const res = await patchJson(`/v1/routines/${routine._id}`, token, { startDate: futureStart });
+        expect(res.status).toBe(200);
+
+        const after = await itemsDAO.findByOwnerAndId(itemId, userId);
+        expect(after?.expectedBy).toBe(before[0]!.expectedBy);
+        expect(after?.ignoreBefore).toBe('2020-01-01');
+    });
+
+    it('rejects clearing startDate via null and leaves the open item untouched', async () => {
+        // The routine schema models startDate as `isoDate.optional()` — it accepts a date or its
+        // absence, but `null` is not a valid value, so the public API has no way to UNSET startDate.
+        // A failed validation must reject the whole PATCH (no routine write, no re-stamp).
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const futureStart = dayjs.utc().add(20, 'day').format('YYYY-MM-DD');
+        const routine = await createRoutineViaApi(token, { rrule: 'FREQ=MONTHLY', startDate: futureStart });
+
+        const res = await patchJson(`/v1/routines/${routine._id}`, token, { startDate: null });
+        expect(res.status).toBe(400);
+
+        const after = await getItemsForRoutine(userId, routine._id);
+        expect(after[0]!.expectedBy).toBe(futureStart);
+        expect(after[0]!.ignoreBefore).toBe(futureStart);
+    });
+
+    it('startDate moved past UNTIL: re-stamp deactivates the routine without stranding the item', async () => {
+        // If the new startDate pushes the first occurrence past the rule's UNTIL, the rule is
+        // exhausted. The re-stamp must route through handleGenerationError → deactivate, never throw.
+        // Seed routine + item directly: UNTIL is in the past relative to "today", so going through
+        // createRoutineViaApi would exhaust at create time and never materialize a first item.
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const routineId = 'r-restamp-exhaust';
+        const seededExpectedBy = '2019-06-15';
+        await routinesDAO.insertOne({
+            _id: routineId,
+            user: userId,
+            title: 'Exhaust on restamp',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY;UNTIL=20191231T000000Z',
+            template: {},
+            active: true,
+            startDate: '2019-06-15',
+            createdTs: '2019-06-01T00:00:00.000Z',
+            updatedTs: '2019-06-01T00:00:00.000Z',
+        });
+        await itemsDAO.insertOne({
+            _id: 'i-restamp-exhaust',
+            user: userId,
+            status: 'nextAction',
+            title: 'Exhaust on restamp',
+            routineId,
+            expectedBy: seededExpectedBy,
+            ignoreBefore: seededExpectedBy,
+            createdTs: '2019-06-15T00:00:00.000Z',
+            updatedTs: '2019-06-15T00:00:00.000Z',
+        });
+
+        // startDate after UNTIL → computeNextOccurrence throws RruleExhaustedError inside the re-stamp.
+        const res = await patchJson(`/v1/routines/${routineId}`, token, { startDate: '2020-01-01' });
+        expect(res.status).toBe(200);
+
+        // Item is left as-is (not re-stamped, not duplicated) and the routine is deactivated.
+        const after = await getItemsForRoutine(userId, routineId);
+        expect(after.filter((i) => i.status === 'nextAction')).toHaveLength(1);
+        expect(after[0]!.expectedBy).toBe(seededExpectedBy);
+        const stored = await routinesDAO.findByOwnerAndId(routineId, userId);
+        expect(stored?.active).toBe(false);
+    });
+
+    it('re-stamp publishes an item update op tagged api:<tokenId>', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const routine = await createRoutineViaApi(token, { rrule: 'FREQ=MONTHLY' });
+        const itemId = (await getItemsForRoutine(userId, routine._id))[0]!._id!;
+
+        const futureStart = dayjs.utc().add(20, 'day').format('YYYY-MM-DD');
+        await patchJson(`/v1/routines/${routine._id}`, token, { startDate: futureStart });
+
+        const ops = await db
+            .collection<{ opType: string; deviceId: string }>('operations')
+            .find({ entityId: itemId } as never)
+            .toArray();
+        const updateOp = ops.find((o) => o.opType === 'update');
+        expect(updateOp).toBeDefined();
+        expect(updateOp?.deviceId.startsWith('api:')).toBe(true);
     });
 });
 

@@ -12,7 +12,7 @@ import { requireScope } from '../../auth/scopeMiddleware.js';
 import routinesDAO from '../../dataAccess/routinesDAO.js';
 import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
 import { pauseRoutine, resumeRoutine, type SplitParams, splitRoutine } from '../../lib/routineComposites.js';
-import { ensureFirstRoutineItem } from '../../lib/routineItemGeneration.js';
+import { ensureFirstRoutineItem, restampOpenItemForStartDateChange } from '../../lib/routineItemGeneration.js';
 import type { RoutineInterface } from '../../types/entities.js';
 import { presentRoutine } from './projections/routine.js';
 
@@ -267,6 +267,12 @@ export const v1RoutinesRoutes = new Hono<{ Variables: BearerVariables }>()
                 { error: result.error.message, code: result.error.code, ...(result.error.path ? { path: result.error.path } : {}) },
                 result.error.status,
             );
+        }
+        // A startDate change has to re-stamp the already-materialized first item — the CREATE-path
+        // bootstrap anchored it on the old startDate (or today), and the MCP/API caller has no client
+        // tick to fix it up. Only fires when startDate actually changed; errors are logged + swallowed.
+        if (snapshot.startDate !== existing.startDate) {
+            await restampOpenItemForStartDateChange({ userId, tokenId }, snapshot);
         }
         return c.json(presentRoutine(snapshot));
     })
