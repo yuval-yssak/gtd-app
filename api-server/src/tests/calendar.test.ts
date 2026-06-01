@@ -7351,6 +7351,253 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
     });
 
+    // ─── `_R<…>` rebased-master split successor onboarding ──────────────────────────────────────
+    // Regression for "recurring events invisible after a GCal 'this and all following' split": Google
+    // caps the base master `<id>` (past UNTIL) and creates an open-ended successor `<id>_R<anchor>`.
+    // Both arrive in one batch and both normalize to `<id>`; pre-fix the successor was collapsed onto
+    // the capped base routine and never onboarded → the live series showed nothing in the app.
+
+    it('onboards an open-ended _R successor as a new active routine when the capped base arrives in the same batch', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareId = '3qp933p629fvlgob08faqdtaak';
+        const successorId = `${bareId}_R20260615T090000`;
+        // Pre-seed the original active series on the bare id (the routine the user already has).
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-base',
+                calendarEventId: bareId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Daily - Tech sync',
+                rrule: 'FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE',
+                active: true,
+                updatedTs: dayjs().subtract(2, 'hour').toISOString(),
+            }),
+        );
+
+        const tz = 'Asia/Jerusalem';
+        const successorStart = dayjs().tz(tz).add(1, 'day').hour(11).minute(0).second(0).millisecond(0).toISOString();
+        const successorEnd = dayjs(successorStart).add(30, 'minute').toISOString();
+        // Base caps the day before the successor's first occurrence.
+        const untilCompact = dayjs(successorStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: bareId,
+                    title: 'Daily - Tech sync',
+                    timeStart: dayjs().subtract(30, 'day').toISOString(),
+                    timeEnd: dayjs().subtract(30, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE;UNTIL=${untilCompact}`],
+                },
+                {
+                    id: successorId,
+                    title: 'Daily - Tech sync',
+                    timeStart: successorStart,
+                    timeEnd: successorEnd,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE'],
+                },
+            ],
+            nextSyncToken: 'tok-split',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const onSeries = await routinesDAO.findArray({ user: userId, calendarEventId: bareId, calendarIntegrationId: 'int-1' });
+        // Two routines now share the bare id: the capped (paused) parent + the open active successor.
+        const active = onSeries.filter((r) => r.active);
+        expect(active).toHaveLength(1);
+        const [successor] = active;
+        if (!successor) throw new Error('expected one active routine on the series');
+        expect(successor.rrule).not.toContain('UNTIL=');
+        expect(successor.calendarEventId).toBe(bareId);
+        expect(successor._id).not.toBe('routine-base');
+        expect(successor.splitFromRoutineId).toBe('routine-base');
+        // The capped parent is paused with its UNTIL retained (GCal truth — not stripped).
+        const parent = await routinesDAO.findByOwnerAndId('routine-base', userId);
+        expect(parent!.active).toBe(false);
+        expect(parent!.rrule).toContain('UNTIL=');
+
+        // Successor materialised future items, all keyed on the BARE id (so they match GCal instance
+        // ids — the duplicate-items regression guard) and at the new 11:00 wall-clock time.
+        const items = await itemsDAO.findArray({ user: userId, routineId: successor._id, status: 'calendar' });
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) {
+            expect(item.timeStart).toMatch(/T11:00:00$/);
+            expect(item.calendarInstanceEventId?.startsWith(`${bareId}_`)).toBe(true);
+            expect(item.calendarInstanceEventId).not.toContain('_R');
+        }
+    });
+
+    it('onboards an _R successor when only it arrives but the base routine is already capped (webhook-only batch)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareId = '42lpclon5cuqh5pggln2u5adlk';
+        const successorId = `${bareId}_R20260620T073000`;
+        // Base already capped + paused on a prior sync; only the successor arrives now.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-base-capped',
+                calendarEventId: bareId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Daily - Team Leaders',
+                rrule: 'FREQ=WEEKLY;WKST=SU;BYDAY=TH,SU,MO;UNTIL=20260101T205959Z',
+                active: false,
+                updatedTs: dayjs().subtract(1, 'day').toISOString(),
+            }),
+        );
+
+        const tz = 'Asia/Jerusalem';
+        const successorStart = dayjs().tz(tz).add(1, 'day').hour(10).minute(30).second(0).millisecond(0).toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: successorId,
+                    title: 'Daily - Team Leaders',
+                    timeStart: successorStart,
+                    timeEnd: dayjs(successorStart).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;WKST=SU;BYDAY=TH,SU,MO'],
+                },
+            ],
+            nextSyncToken: 'tok-webhook',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const active = (await routinesDAO.findArray({ user: userId, calendarEventId: bareId, calendarIntegrationId: 'int-1' })).filter((r) => r.active);
+        expect(active).toHaveLength(1);
+        const [successor] = active;
+        if (!successor) throw new Error('expected one active successor');
+        expect(successor.rrule).not.toContain('UNTIL=');
+        expect(successor.splitFromRoutineId).toBe('routine-base-capped');
+        // Parent untouched, still capped + paused.
+        const parent = await routinesDAO.findByOwnerAndId('routine-base-capped', userId);
+        expect(parent!.active).toBe(false);
+    });
+
+    it('is idempotent: re-running the split sync creates no second successor and no duplicate items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareId = 'mleem99efhim4a0tsh3s86797o';
+        const successorId = `${bareId}_R20260618T090000`;
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-base-idem',
+                calendarEventId: bareId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Standup',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                active: true,
+                updatedTs: dayjs().subtract(2, 'hour').toISOString(),
+            }),
+        );
+
+        const tz = 'Asia/Jerusalem';
+        const successorStart = dayjs().tz(tz).add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const untilCompact = dayjs(successorStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
+        const events = [
+            {
+                id: bareId,
+                title: 'Standup',
+                timeStart: dayjs().subtract(30, 'day').toISOString(),
+                timeEnd: dayjs().subtract(30, 'day').add(30, 'minute').toISOString(),
+                updated: dayjs().toISOString(),
+                status: 'confirmed' as const,
+                recurrence: [`RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=${untilCompact}`],
+            },
+            {
+                id: successorId,
+                title: 'Standup',
+                timeStart: successorStart,
+                timeEnd: dayjs(successorStart).add(30, 'minute').toISOString(),
+                updated: dayjs().toISOString(),
+                status: 'confirmed' as const,
+                recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+            },
+        ];
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events, nextSyncToken: 'tok-idem' });
+
+        await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        const afterFirst = await routinesDAO.findArray({ user: userId, calendarEventId: bareId, calendarIntegrationId: 'int-1' });
+        const [activeFirst] = afterFirst.filter((r) => r.active);
+        if (!activeFirst) throw new Error('expected an active successor after first sync');
+        const itemsFirst = await itemsDAO.findArray({ user: userId, routineId: activeFirst._id, status: 'calendar' });
+
+        // Second sync with the identical batch — must not duplicate the successor or its items.
+        await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        const afterSecond = await routinesDAO.findArray({ user: userId, calendarEventId: bareId, calendarIntegrationId: 'int-1' });
+        expect(afterSecond).toHaveLength(afterFirst.length);
+        expect(afterSecond.filter((r) => r.active)).toHaveLength(1);
+        const itemsSecond = await itemsDAO.findArray({ user: userId, routineId: activeFirst._id, status: 'calendar' });
+        expect(itemsSecond.length).toBe(itemsFirst.length);
+    });
+
+    it('re-report guard: a lone _R event with an active uncapped routine on the bare id does NOT create a successor', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareId = 'rereport-master-id';
+        const successorId = `${bareId}_R20260519T123000`;
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-rereport',
+                calendarEventId: bareId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Standup',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                active: true,
+                updatedTs: dayjs().subtract(2, 'hour').toISOString(),
+            }),
+        );
+
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: successorId,
+                    title: 'Standup',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-rereport',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const onSeries = await routinesDAO.findArray({ user: userId, calendarEventId: bareId, calendarIntegrationId: 'int-1' });
+        // Exactly the one pre-existing routine — the lone _R event was treated as a re-report.
+        expect(onSeries).toHaveLength(1);
+        const [routine] = onSeries;
+        if (!routine) throw new Error('expected one routine');
+        expect(routine._id).toBe('routine-rereport');
+        expect(routine.splitFromRoutineId).toBeUndefined();
+        expect(routine.active).toBe(true);
+    });
+
     it('links a new master to its split parent and pauses the parent (happy path)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
