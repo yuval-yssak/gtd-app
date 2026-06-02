@@ -2453,6 +2453,26 @@ function hasGCalOwnedDelta(existing: ItemInterface, event: CalendarEvent): boole
 }
 
 /**
+ * True when the structural fields (title / time / all-day) on the incoming event actually differ
+ * from the existing local item. Used to distinguish "GCal's `updated` advanced but the synced
+ * content is byte-identical" (a content no-op — silently advance the anchor, no op recorded) from
+ * a real edit. Without this gate, GCal bumping `event.updated` for non-synced reasons (reminders,
+ * ACL changes, our own done-marker echo) re-applies an identical write on every webhook fire,
+ * recording an op and firing a web push each time — the staging notification storm.
+ *
+ * `incomingTitle` is the title after done-marker stripping (the caller's `existing.status === 'done'`
+ * normalization), so a done item whose only GCal-side delta is the "✓ " prefix counts as no-change.
+ */
+function hasStructuralDelta(existing: ItemInterface, event: CalendarEvent, incomingTitle: string): boolean {
+    return (
+        existing.title !== incomingTitle ||
+        existing.timeStart !== event.timeStart ||
+        existing.timeEnd !== event.timeEnd ||
+        Boolean(existing.allDay) !== Boolean(event.allDay)
+    );
+}
+
+/**
  * Strong-key lookup: by `calendarEventId` only. Used for echo/cancelled/past-event branches that
  * must operate on a known-linked item. Naked-orphan relink is intentionally NOT done here —
  * relinking only makes sense for live future-confirmed events.
@@ -2803,13 +2823,28 @@ async function updateExistingCalendarItem(existing: ItemInterface, event: Calend
         );
         return;
     }
-    console.log(
-        `[debug-gcal-sync][server] updateExistingCalendarItem applying | eventId=${event.id} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate} gcalOwnedChanged=${gcalOwnedChanged}`,
-    );
 
     // Sync layer owns the "✓ " done marker on GCal — strip it on inbound only when this item is
     // already done locally. For an open item, a user-typed "✓ " in GCal must be preserved verbatim.
     const incomingTitle = existing.status === 'done' ? stripDoneMarker(event.title) : event.title;
+
+    // Content no-op: GCal's `updated` advanced (structurallyNewer) but no synced field actually
+    // changed. Advancing `lastSyncedFromGCalTs` quietly — without a replaceById op or a ctx.ops
+    // entry — re-anchors the echo guard so the next fire short-circuits, and avoids recording an
+    // identical-snapshot op that would fan out a web push. This is the primary fix for the staging
+    // notification storm (see hasStructuralDelta). Only reachable when structurallyNewer is the
+    // sole trigger; notes/owned deltas fall through to the real merge below.
+    if (structurallyNewer && !notesUpdate && !gcalOwnedChanged && !hasStructuralDelta(existing, event, incomingTitle)) {
+        console.log(
+            `[debug-gcal-sync][server] updateExistingCalendarItem content-noop — advancing anchor only | eventId=${event.id} eventUpdated=${event.updated}`,
+        );
+        await itemsDAO.updateOne({ _id: itemId, user: ctx.userId }, { $set: { lastSyncedFromGCalTs: event.updated } });
+        return;
+    }
+
+    console.log(
+        `[debug-gcal-sync][server] updateExistingCalendarItem applying | eventId=${event.id} structurallyNewer=${structurallyNewer} notesUpdate=${!!notesUpdate} gcalOwnedChanged=${gcalOwnedChanged}`,
+    );
 
     // Field-level merge:
     //  - Structural fields (title/time/allDay) stay behind the `structurallyNewer` gate.
@@ -3726,6 +3761,14 @@ async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void
     await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
         console.error(`[calendar-webhook] renewWebhookIfExpired failed for config ${config._id}:`, err);
     });
+    // Only notify when the sync actually produced operations. A 0-op webhook (GCal fired but nothing
+    // changed locally — echo, content no-op, or a change on another calendar) must not buzz every
+    // device: SSE wakes idle tabs into a needless pull, and web push surfaces a phone notification
+    // for nothing. This was a major contributor to the staging notification storm.
+    if (!ctx.ops.length) {
+        console.log(`[gcal-webhook-sync] no ops — skipping SSE + push | userId=${config.user}`);
+        return;
+    }
     console.log(`[gcal-webhook-sync] notifying SSE + push | userId=${config.user} ops=${ctx.ops.length}`);
     notifyUserViaSse(config.user, { type: 'update', ts: now });
     // Web Push for devices without an open SSE connection (app closed / backgrounded).

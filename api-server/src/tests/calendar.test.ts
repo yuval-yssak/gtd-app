@@ -2333,6 +2333,93 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(item?.title).toBe('Title from t2');
     });
 
+    it('advances the anchor without recording an op when GCal updated advances but content is identical', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Reproduces the staging notification storm: GCal bumps event.updated for a non-synced
+        // reason (reminders/ACL/our own done-marker echo) while title/time are byte-identical.
+        // Pre-fix this re-applied a full replaceById + op on every webhook fire → a web push each
+        // time. Post-fix it advances lastSyncedFromGCalTs silently — no op, no updatedTs bump.
+        const t1 = dayjs().subtract(1, 'hour').toISOString(); // last applied inbound (anchor)
+        const t2 = dayjs().toISOString(); // newer event.updated, same content
+        const start = dayjs().add(1, 'day').toISOString();
+        const end = dayjs().add(1, 'day').add(30, 'minute').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-noop',
+            user: userId,
+            status: 'calendar',
+            title: 'Stable title',
+            timeStart: start,
+            timeEnd: end,
+            calendarEventId: 'evt-noop',
+            calendarIntegrationId: 'int-1',
+            createdTs: t1,
+            updatedTs: t1,
+            lastSyncedFromGCalTs: t1,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            // Identical title/time/allDay; only `updated` advanced.
+            events: [{ id: 'evt-noop', title: 'Stable title', timeStart: start, timeEnd: end, updated: t2, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-noop' });
+        // Anchor advanced so the next fire short-circuits at the "not newer" guard.
+        expect(item?.lastSyncedFromGCalTs).toBe(t2);
+        // updatedTs (the LWW anchor) must NOT move — this is a silent re-anchor, not a user-visible edit.
+        expect(item?.updatedTs).toBe(t1);
+        // Crucially: no operation recorded → no web push fans out for a content no-op.
+        const ops = await db.collection('operations').find({ user: userId, entityId: 'item-noop' }).toArray();
+        expect(ops).toHaveLength(0);
+    });
+
+    it('still records an op when the GCal payload is newer AND a structural field changed', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Boundary opposite of the content-noop case: same advancing `updated`, but the title
+        // actually changed. The noop short-circuit must NOT engage — a real edit has to apply,
+        // record an op, and bump updatedTs so other devices and live tabs converge.
+        const t1 = dayjs().subtract(1, 'hour').toISOString();
+        const t2 = dayjs().toISOString();
+        const start = dayjs().add(1, 'day').toISOString();
+        const end = dayjs().add(1, 'day').add(30, 'minute').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-real-edit',
+            user: userId,
+            status: 'calendar',
+            title: 'Original title',
+            timeStart: start,
+            timeEnd: end,
+            calendarEventId: 'evt-real-edit',
+            calendarIntegrationId: 'int-1',
+            createdTs: t1,
+            updatedTs: t1,
+            lastSyncedFromGCalTs: t1,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-real-edit', title: 'Renamed in GCal', timeStart: start, timeEnd: end, updated: t2, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-real-edit' });
+        expect(item?.title).toBe('Renamed in GCal');
+        expect(item?.lastSyncedFromGCalTs).toBe(t2);
+        const ops = await db.collection('operations').find({ user: userId, entityId: 'item-real-edit' }).toArray();
+        expect(ops).toHaveLength(1);
+    });
+
     it('revives a trashed item when its GCal event becomes confirmed again', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

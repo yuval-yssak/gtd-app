@@ -45,6 +45,12 @@ async function findSubscribedDevicesForUser(userId: string, excludeDeviceId: str
  * Used to notify devices that aren't connected via SSE (e.g., app is closed).
  */
 export async function notifyViaWebPush(userId: string, excludeDeviceId: string | null, ops: OperationInterface[], now: string): Promise<void> {
+    // Defensive: a 0-op call has nothing to announce — sending a push would buzz every device for
+    // no change (the staging notification storm). Callers should already gate on ops.length, but
+    // this is the single chokepoint, so guard here too rather than relying on every callsite.
+    if (!ops.length) {
+        return;
+    }
     const opSummaries = ops.map((op) => ({
         entityType: op.entityType,
         opType: op.opType,

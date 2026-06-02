@@ -172,6 +172,17 @@ describe('Push fan-out via deviceUsers join', () => {
         expect(mockSendNotification).not.toHaveBeenCalled();
     });
 
+    it('sends no push when called with zero ops, even with subscribed devices', async () => {
+        // A 0-op webhook sync (GCal fired but nothing changed locally) must not buzz any device.
+        // This is the chokepoint guard for the staging notification storm — see notifyViaWebPush.
+        await seedSubscribedDevice('dev-zero-ops');
+        mockSendNotification.mockResolvedValue(undefined as unknown as never);
+
+        await notifyViaWebPush(TEST_USER, null, [], dayjs().toISOString());
+
+        expect(mockSendNotification).not.toHaveBeenCalled();
+    });
+
     it('excludeDeviceId filters out the originating device on multi-device fan-out', async () => {
         await seedSubscribedDevice('dev-source');
         await seedSubscribedDevice('dev-target');
