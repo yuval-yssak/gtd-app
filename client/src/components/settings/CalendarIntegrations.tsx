@@ -275,6 +275,11 @@ interface IntegrationRowProps {
 function useSyncConfigActions(
     integrationId: string,
     setConfigs: React.Dispatch<React.SetStateAction<CalendarSyncConfig[]>>,
+    // Invalidates the cached integrations resource after a successful mutation. Without this the
+    // optimistic setConfigs only touches this row's local state — the module-level resource promise
+    // still holds the pre-mutation snapshot, so navigating away and back re-seeds the stale value
+    // (the change only "sticks" after a full reload, which rebuilds the module cache from the server).
+    invalidateResource: () => void,
 ): { actions: ConfigActions; actionError: string | null } {
     const [actionError, setActionError] = useState<string | null>(null);
 
@@ -284,11 +289,12 @@ function useSyncConfigActions(
             try {
                 const updated = await updateSyncConfig(integrationId, config._id, { enabled: !config.enabled });
                 setConfigs((prev) => prev.map((c) => (c._id === config._id ? updated : c)));
+                invalidateResource();
             } catch {
                 setActionError('Failed to update calendar. Please try again.');
             }
         },
-        [integrationId, setConfigs],
+        [integrationId, setConfigs, invalidateResource],
     );
 
     const onSetDefault = useCallback(
@@ -298,11 +304,12 @@ function useSyncConfigActions(
                 const updated = await updateSyncConfig(integrationId, config._id, { isDefault: true });
                 // The server unsets isDefault on all sibling configs — refresh to get accurate state.
                 setConfigs((prev) => prev.map((c) => (c._id === config._id ? updated : { ...c, isDefault: false })));
+                invalidateResource();
             } catch {
                 setActionError('Failed to set default calendar. Please try again.');
             }
         },
-        [integrationId, setConfigs],
+        [integrationId, setConfigs, invalidateResource],
     );
 
     const onRemove = useCallback(
@@ -311,11 +318,12 @@ function useSyncConfigActions(
             try {
                 await deleteSyncConfig(integrationId, config._id);
                 setConfigs((prev) => prev.filter((c) => c._id !== config._id));
+                invalidateResource();
             } catch {
                 setActionError('Failed to remove calendar. Please try again.');
             }
         },
-        [integrationId, setConfigs],
+        [integrationId, setConfigs, invalidateResource],
     );
 
     return { actions: { onToggleEnabled, onSetDefault, onRemove }, actionError };
@@ -353,7 +361,10 @@ function useSyncNow(integrationId: string): { onSyncNow: () => void; isSyncing: 
 function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar }: IntegrationRowProps) {
     const { integration, calendars } = detail;
     const { configs, setConfigs } = useLocalSyncConfigs(detail.syncConfigs);
-    const { actions, actionError } = useSyncConfigActions(integration._id, setConfigs);
+    // onIntegrationsChanged is refreshIntegrations: drops the cached resource + re-reads in a
+    // transition. Passing it here makes toggle/set-default/remove durable across navigation, not
+    // just local to this mount (see useSyncConfigActions' invalidateResource note).
+    const { actions, actionError } = useSyncConfigActions(integration._id, setConfigs, onIntegrationsChanged);
     const { onSyncNow, isSyncing, syncError } = useSyncNow(integration._id);
     const [isDisconnectOpen, setIsDisconnectOpen] = useState(false);
     const [isAddCalendarOpen, setIsAddCalendarOpen] = useState(false);
@@ -550,33 +561,46 @@ function SyncConfigList({ configs, resolveCalendarName, actions }: SyncConfigLis
 
     return (
         <List dense disablePadding sx={{ mt: 0.5 }}>
-            {configs.map((config) => (
-                <ListItem
-                    key={config._id}
-                    disableGutters
-                    secondaryAction={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            {config.isDefault && <Chip label="default" size="small" color="primary" variant="outlined" />}
-                            {!config.isDefault && config.enabled && (
-                                <Button size="small" onClick={() => actions.onSetDefault(config)}>
-                                    Set default
-                                </Button>
-                            )}
-                            <Switch size="small" checked={config.enabled} onChange={() => actions.onToggleEnabled(config)} />
-                            <IconButton size="small" onClick={() => actions.onRemove(config)} title="Stop syncing this calendar">
-                                <Typography variant="body2">✕</Typography>
-                            </IconButton>
-                        </Box>
-                    }
-                >
-                    <ListItemText
-                        primary={config.displayName ?? resolveCalendarName(config.calendarId)}
-                        slotProps={{
-                            primary: { variant: 'body2', color: config.enabled ? 'text.primary' : 'text.disabled' },
-                        }}
-                    />
-                </ListItem>
-            ))}
+            {configs.map((config) => {
+                // Same expression as the visible ListItemText below, so the switch's accessible name
+                // matches the calendar name the user sees (not the raw calendarId when displayName is null).
+                const calendarName = config.displayName ?? resolveCalendarName(config.calendarId);
+                return (
+                    <ListItem
+                        key={config._id}
+                        disableGutters
+                        secondaryAction={
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                {config.isDefault && <Chip label="default" size="small" color="primary" variant="outlined" />}
+                                {!config.isDefault && config.enabled && (
+                                    <Button size="small" onClick={() => actions.onSetDefault(config)}>
+                                        Set default
+                                    </Button>
+                                )}
+                                {/* aria-label on the input slot doubles as the e2e selector (getByRole checkbox,
+                                    name: "Sync <calendar>" — MUI's Switch input is type=checkbox) and as
+                                    accessible labelling for the otherwise-unlabeled toggle. */}
+                                <Switch
+                                    size="small"
+                                    checked={config.enabled}
+                                    onChange={() => actions.onToggleEnabled(config)}
+                                    slotProps={{ input: { 'aria-label': `Sync ${calendarName}` } }}
+                                />
+                                <IconButton size="small" onClick={() => actions.onRemove(config)} title="Stop syncing this calendar">
+                                    <Typography variant="body2">✕</Typography>
+                                </IconButton>
+                            </Box>
+                        }
+                    >
+                        <ListItemText
+                            primary={calendarName}
+                            slotProps={{
+                                primary: { variant: 'body2', color: config.enabled ? 'text.primary' : 'text.disabled' },
+                            }}
+                        />
+                    </ListItem>
+                );
+            })}
         </List>
     );
 }
