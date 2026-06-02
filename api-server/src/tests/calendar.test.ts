@@ -780,6 +780,176 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(unchanged?.updatedTs).toBe(itemTs);
     });
 
+    it('reverts a modified-instance item to master time and drops the exception when GCal stops reporting it', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Repro of the "nudged then moved back, app stuck at the old time" bug: the user moved an
+        // instance (12:00 → 11:45, recorded as a modified exception), then dragged it back to master
+        // time. GCal drops the override, so getExceptions no longer reports this date. The stale
+        // exception + moved item must be reconciled away.
+        const date = dayjs().add(14, 'day').format('YYYY-MM-DD'); // in-window (within now+1y)
+        const movedStart = `${date}T11:45:00`;
+        const movedEnd = `${date}T12:45:00`;
+        // makeRoutine's template is 09:00 / 30min, so master time for `date` is 09:00–09:30.
+        const masterStart = `${date}T09:00:00`;
+        const masterEnd = `${date}T09:30:00`;
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-revert',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [{ date, type: 'modified', newTimeStart: movedStart, newTimeEnd: movedEnd }],
+            }),
+        );
+        const itemTs = '2026-01-01T00:00:00.000Z';
+        await itemsDAO.insertOne({
+            _id: 'item-revert',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: movedStart,
+            timeEnd: movedEnd,
+            createdTs: itemTs,
+            updatedTs: itemTs,
+        });
+
+        // GCal reports NO exceptions for this series — the instance is back at master time.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-revert' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Item reverted to master time.
+        const item = await itemsDAO.findByOwnerAndId('item-revert', userId);
+        expect(item?.timeStart).toBe(masterStart);
+        expect(item?.timeEnd).toBe(masterEnd);
+        // Stale exception removed from the routine.
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions ?? []).not.toContainEqual(expect.objectContaining({ date, type: 'modified' }));
+    });
+
+    it('does NOT reconcile away a modified exception outside the getExceptions window (older than 30 days)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // An exception 60 days in the past is never reported by getExceptions (timeMin floor is now-30d),
+        // so its absence must NOT be treated as "removed" — that would wrongly drop a still-valid override.
+        const oldDate = dayjs().subtract(60, 'day').format('YYYY-MM-DD');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-oldex',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [{ date: oldDate, type: 'modified', newTimeStart: `${oldDate}T11:45:00`, newTimeEnd: `${oldDate}T12:45:00` }],
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-oldex' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date: oldDate, type: 'modified' }));
+    });
+
+    it('does NOT reconcile away a time-move exception dated before the sync cursor (within now-30d but predating lastSyncedTs)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // Recent cursor: getExceptions' real timeMin is max(since, now-30d) = since. An exception dated
+        // 10 days ago is inside [now-30d, now] but BEFORE the cursor, so GCal never returns it — its
+        // absence must NOT be treated as "removed". Pre-fix (hardcoded now-30d window) this was a
+        // silent data-loss revert.
+        const integration = makeIntegration(userId);
+        await calendarIntegrationsDAO.insertEncrypted(integration);
+        const recentCursor = dayjs().subtract(5, 'day').toISOString();
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, integration._id, { lastSyncedTs: recentCursor }));
+
+        const preCursorDate = dayjs().subtract(10, 'day').format('YYYY-MM-DD');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-precursor',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [
+                    { date: preCursorDate, type: 'modified', newTimeStart: `${preCursorDate}T11:45:00`, newTimeEnd: `${preCursorDate}T12:45:00` },
+                ],
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-precursor' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date: preCursorDate, type: 'modified' }));
+    });
+
+    it('does NOT reconcile away a time-move exception ON the cursor date (same-day boundary, master time before cursor instant)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // Same-day sliver: cursor instant is 14:30 on its date; the master instance time is 09:00, so
+        // GCal's timeMin (full ISO) excludes this instance even though its date == the cursor's date.
+        // A date-only window would wrongly include it → revert. The strict floor (date > floorDate)
+        // must drop the cursor's own date so this exception is preserved.
+        const integration = makeIntegration(userId);
+        await calendarIntegrationsDAO.insertEncrypted(integration);
+        const sinceDate = dayjs().subtract(3, 'day').format('YYYY-MM-DD');
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, integration._id, { lastSyncedTs: `${sinceDate}T14:30:00.000Z` }));
+
+        // Exception on the cursor's own date; master template time is 09:00 (< 14:30 cursor).
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-sameday',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [{ date: sinceDate, type: 'modified', newTimeStart: `${sinceDate}T11:45:00`, newTimeEnd: `${sinceDate}T12:45:00` }],
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-sameday' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date: sinceDate, type: 'modified' }));
+    });
+
+    it('does NOT reconcile away a time-move exception ON the now+1y ceiling date (symmetric boundary)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Symmetric to the floor sliver: getExceptions' timeMax is the now+1y INSTANT. An exception on
+        // the now+1y calendar date but later-in-day than `now` is excluded by the provider, so its
+        // absence must not trigger a revert. The strict ceiling (date < windowEnd) drops that day.
+        const ceilingDate = dayjs().add(1, 'year').format('YYYY-MM-DD');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-ceiling',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [{ date: ceilingDate, type: 'modified', newTimeStart: `${ceilingDate}T11:45:00`, newTimeEnd: `${ceilingDate}T12:45:00` }],
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-ceiling' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date: ceilingDate, type: 'modified' }));
+    });
+
     it('skips the routine master write + op when an unchanged GCal event re-syncs (no-op churn guard)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

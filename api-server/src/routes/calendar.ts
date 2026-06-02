@@ -3377,6 +3377,86 @@ function deriveExceptionItemTimes(routine: RoutineInterface, ex: GCalException):
     return { timeStart, timeEnd };
 }
 
+/**
+ * Reverts a single routine item back to its master rrule time and clears any per-instance overrides.
+ * Called when a `modified` exception is reconciled away (GCal stopped reporting the instance as
+ * overridden). Reuses the regular modified-exception apply machinery by synthesizing a bare
+ * exception (only `originalDate`): `deriveExceptionItemTimes` then yields the master template time,
+ * and `applyModifiedExceptionToOne`'s `isItemUpdateNoop` guard makes it a no-op if already reverted.
+ */
+async function revertItemToMasterTime(routine: RoutineInterface, date: string, ctx: SyncContext): Promise<void> {
+    const bareException: GCalException = { originalDate: date, type: 'modified' };
+    const masterTimes = deriveExceptionItemTimes(routine, bareException);
+    if (!masterTimes) {
+        console.warn(`[gcal-sync] reconcileRemovedExceptions: cannot derive master time to revert | routineId=${routine._id} date=${date}`);
+        return;
+    }
+    const { matches } = await resolveExceptionTarget(routine, bareException, ctx.userId);
+    if (!hasAtLeastOne(matches)) {
+        return;
+    }
+    // sharedFields carries the master time + allDay; applyModifiedExceptionToOne also unsets any
+    // GCal-owned per-instance overrides the item still holds, restoring full master inheritance.
+    const sharedFields = { ...masterTimes, updatedTs: ctx.now };
+    await applyModifiedExceptionToMatches(matches, bareException, sharedFields, ctx);
+}
+
+/**
+ * Removes local `modified` exceptions that GCal no longer reports as overridden instances, reverting
+ * each affected item back to its master rrule time. Returns the reconciled exception list (a subset
+ * of the routine's current exceptions) for the caller to merge fresh GCal exceptions into.
+ *
+ * Window: only exceptions whose date falls within `getExceptions`' own query window
+ * (`[now-30d, now+1y]`) are eligible for removal. An exception older or further out than that window
+ * is never reported by `getExceptions` regardless of whether it's still a real override, so deleting
+ * it on absence would wrongly drop a still-valid exception.
+ *
+ * Scope: only `modified` exceptions that are a pure TIME move (`newTimeStart` set) are reconciled.
+ * A time override's absence from `getExceptions` genuinely means the instance is back at master time
+ * (the reported bug). A title/notes/owned-only override is deliberately left alone — `getExceptions`
+ * suppresses content exceptions that match the master (RFC 5545 inheritance), so absence there is
+ * ambiguous and must not trigger a revert that would clobber a still-valid per-instance title/notes.
+ * `skipped` (GCal-deleted) instances are also out of scope: reviving a trashed item is a larger
+ * behavior change left for a follow-up.
+ */
+async function reconcileRemovedExceptions(routine: RoutineInterface, reported: GCalException[], since: string, ctx: SyncContext): Promise<RoutineException[]> {
+    const existing = routine.routineExceptions ?? [];
+    if (!hasAtLeastOne(existing)) {
+        return [];
+    }
+    // Window MUST mirror GoogleCalendarProvider.getExceptions' actual query bounds, NOT a hardcoded
+    // now-30d. Its timeMin is max(since, now-30d): with a recent sync cursor, exceptions dated in
+    // [now-30d, since) legitimately aren't returned because they predate the cursor — treating that
+    // absence as "removed" would falsely revert + drop a still-valid time override (silent data loss).
+    //
+    // The provider's timeMin is a full ISO instant; we only have an exception's YYYY-MM-DD. An
+    // instance ON the floor's calendar date but earlier-in-day than the floor instant is excluded by
+    // the provider yet would round into a date-only window — the same data-loss class, one day wide.
+    // Make BOTH bounds STRICTLY EXCLUSIVE of their own date (`floorDate < date < windowEnd`) to drop
+    // the ambiguous boundary days at each end — timeMax (now+1y) is also a full instant anchored to
+    // the current time-of-day, so an instance ON the now+1y date but later-in-day is excluded by the
+    // provider yet would round into an inclusive `<=` window (the symmetric sliver). Cost is nil: the
+    // revert bug concerns recent/future moves, not the exact 30-day-ago or 1-year-out boundary days.
+    const floor = dayjs(ctx.now).subtract(30, 'day');
+    const floorDate = (dayjs(since).isAfter(floor) ? dayjs(since) : floor).format('YYYY-MM-DD');
+    const windowEnd = dayjs(ctx.now).add(1, 'year').format('YYYY-MM-DD');
+    const reportedDates = new Set(reported.map((ex) => ex.originalDate));
+    const isInWindow = (date: string) => date > floorDate && date < windowEnd;
+
+    const isReconcilable = (ex: RoutineException) => ex.type === 'modified' && ex.newTimeStart !== undefined;
+    const removable = existing.filter((ex) => isReconcilable(ex) && isInWindow(ex.date) && !reportedDates.has(ex.date));
+    if (!hasAtLeastOne(removable)) {
+        return existing;
+    }
+    console.log(
+        `[gcal-sync] reconcileRemovedExceptions: reverting ${removable.length} stale modified exception(s) | routineId=${routine._id} dates=${removable.map((e) => e.date).join(',')}`,
+    );
+    // Revert each orphaned exception's item back to master time before dropping the exception.
+    await Promise.all(removable.map((ex) => revertItemToMasterTime(routine, ex.date, ctx)));
+    const removedDates = new Set(removable.map((ex) => ex.date));
+    return existing.filter((ex) => !(isReconcilable(ex) && removedDates.has(ex.date)));
+}
+
 async function syncRoutineExceptions(routine: RoutineInterface, provider: GoogleCalendarProvider, ctx: RoutineSyncCtx): Promise<void> {
     if (!routine.calendarEventId) {
         return;
@@ -3394,16 +3474,22 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
         ...(routine.eventType ? { eventType: routine.eventType } : {}),
     };
     const exceptions = await provider.getExceptions(routine.calendarEventId, ctx.calendarId, ctx.since, masterContent);
-    if (!hasAtLeastOne(exceptions)) {
-        return;
-    }
 
     console.log(`[gcal-sync] syncing routine exceptions | routineId=${routine._id} title=${routine.title} exceptionCount=${exceptions.length}`);
 
-    const updatedExceptions = exceptions.reduce((acc, ex) => mergeExceptions(acc, ex), [...(routine.routineExceptions ?? [])]);
+    const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops, ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}) };
+
+    // Reconcile DELETIONS first: a local `modified` exception that GCal no longer reports as an
+    // overridden instance (e.g. the user dragged an instance back to its master time, so GCal
+    // dropped the override) must be removed and its item reverted to the master rrule time.
+    // `getExceptions` only ever ADDS/updates — without this, the stale exception froze the item at
+    // the moved time (the "nudged then moved back, app stuck at the old time" bug). Runs even when
+    // `exceptions` is empty, which is exactly the revert-everything case.
+    const reconciled = await reconcileRemovedExceptions(routine, exceptions, ctx.since, syncCtx);
+
     // Apply item side-effects in parallel — each exception targets a different date so there
     // are no write conflicts between them.
-    const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops, ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}) };
+    const updatedExceptions = exceptions.reduce((acc, ex) => mergeExceptions(acc, ex), reconciled);
     await Promise.all(exceptions.map((ex) => applyExceptionToItems(routine, ex, syncCtx)));
 
     // Skip the routine write + op when the merged exception set is byte-identical to what's stored.
