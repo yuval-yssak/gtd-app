@@ -3560,12 +3560,44 @@ calendarRoutes.post('/items/:itemId/rsvp', authenticateRequest, async (c) => {
 
 // ── Webhook watch management ─────────────────────────────────────────────────
 
-/** Sets up a Google push notification channel for the given sync config. Stores webhook fields on success. */
+/**
+ * Stops a channel on Google's side, best-effort. Does NOT touch the config row — callers decide
+ * whether to clear (teardown) or overwrite (re-register) the stored webhook fields. Extracted so
+ * `setupWatch` can stop a stale channel before minting a new one without clearing fields it's about
+ * to rewrite.
+ */
+async function stopChannelOnGoogle(
+    channelId: string | undefined,
+    resourceId: string | undefined,
+    provider: GoogleCalendarProvider,
+    integrationId: string,
+): Promise<void> {
+    if (!channelId || !resourceId) {
+        return;
+    }
+    // Best-effort — the channel may have already expired or been invalidated.
+    await withAuthFailureHandling(integrationId, () => provider.stopWatch(channelId, resourceId)).catch(() => {});
+}
+
+/**
+ * Sets up a Google push notification channel for the given sync config. Stores webhook fields on
+ * success. Idempotent: if the config already carries a channel (e.g. an enable→disable→enable
+ * cycle, or a config row that survived a disconnect+reconnect), that channel is stopped on Google's
+ * side first. Without this, each setup minted a fresh channel while leaving the old one live —
+ * Google then delivered every change once per orphaned channel, multiplying webhook fan-out (the
+ * orphaned-channel leak behind the staging notification storm).
+ */
 async function setupWatch(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider, integrationId: string): Promise<void> {
     // Webhook feature is opt-in: no-op when CALENDAR_WEBHOOK_URL is not configured.
     const webhookUrl = process.env.CALENDAR_WEBHOOK_URL;
     if (!webhookUrl) {
         return;
+    }
+    // Stop any pre-existing channel for this config before registering a new one, so a re-setup
+    // never strands the previous channel as an orphan that keeps firing.
+    if (config.webhookChannelId) {
+        console.log(`[calendar-webhook] stopping stale channel before re-setup | config=${config._id} staleChannelId=${config.webhookChannelId}`);
+        await stopChannelOnGoogle(config.webhookChannelId, config.webhookResourceId, provider, integrationId);
     }
     const channelId = randomUUID();
     const { resourceId, expiration } = await withAuthFailureHandling(integrationId, () => provider.watchEvents(config.calendarId, webhookUrl, channelId));
@@ -3574,12 +3606,7 @@ async function setupWatch(config: CalendarSyncConfigInterface, provider: GoogleC
 
 /** Stops the existing push notification channel for the given sync config. Clears webhook fields regardless of whether the stop call succeeds. */
 async function teardownWatch(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider, integrationId: string): Promise<void> {
-    const channelId = config.webhookChannelId;
-    const resourceId = config.webhookResourceId;
-    if (channelId && resourceId) {
-        // Best-effort stop — the channel may have already expired or been invalidated.
-        await withAuthFailureHandling(integrationId, () => provider.stopWatch(channelId, resourceId)).catch(() => {});
-    }
+    await stopChannelOnGoogle(config.webhookChannelId, config.webhookResourceId, provider, integrationId);
     await calendarSyncConfigsDAO.clearWebhookFields(config._id);
 }
 
@@ -3594,9 +3621,8 @@ async function renewWebhookIfExpired(config: CalendarSyncConfigInterface, provid
         return;
     }
 
-    if (config.webhookChannelId) {
-        await teardownWatch(config, provider, integrationId);
-    }
+    // setupWatch now stops any stale channel itself, so a separate teardown is no longer needed —
+    // the config still carries the old channel ids when we call it, and setupWatch stops them.
     await setupWatch(config, provider, integrationId);
     console.log(`[calendar-webhook] renewed watch for config ${config._id}`);
 }

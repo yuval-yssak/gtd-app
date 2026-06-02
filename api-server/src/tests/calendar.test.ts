@@ -5290,16 +5290,20 @@ describe('webhook watch lifecycle', () => {
             resourceId: 'res-renewed',
             expiration: dayjs().add(7, 'day').toISOString(),
         });
+        // setupWatch now stops the stale channel itself, so renew no longer tears down (which would
+        // clear the fields) before re-registering — pin that "one fewer DB write" simplification.
+        const clearSpy = vi.spyOn(calendarSyncConfigsDAO, 'clearWebhookFields');
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok' });
 
         try {
             const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
             expect(res.status).toBe(200);
-            // Old channel should be stopped and new one created.
+            // Old channel should be stopped and new one created — without clearing fields mid-renew.
             expect(stopSpy).toHaveBeenCalledWith('ch-expired', 'res-expired');
             expect(watchSpy).toHaveBeenCalledOnce();
+            expect(clearSpy).not.toHaveBeenCalled();
             const config = await calendarSyncConfigsDAO.findByOwnerAndId('sync-config-1', userId);
-            expect(config!.webhookResourceId).toBe('res-renewed');
+            expect(config?.webhookResourceId).toBe('res-renewed');
         } finally {
             delete process.env.CALENDAR_WEBHOOK_URL;
         }
@@ -5382,6 +5386,42 @@ describe('webhook watch lifecycle', () => {
             });
             expect(res.status).toBe(200);
             expect(watchSpy).toHaveBeenCalledOnce();
+        } finally {
+            delete process.env.CALENDAR_WEBHOOK_URL;
+        }
+    });
+
+    it('stops a stale channel before re-registering when a re-enabled config still carries webhook fields', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Disabled config that STILL carries webhook fields from a prior enable cycle (or a config
+        // row that survived a disconnect+reconnect). Pre-fix, re-enabling minted a fresh channel
+        // and left 'ch-stale' live on Google → an orphan that kept firing (the storm's leak).
+        await calendarSyncConfigsDAO.updateOne({ _id: 'sync-config-1' } as never, { $set: { enabled: false } });
+        await calendarSyncConfigsDAO.upsertWebhookFields('sync-config-1', 'ch-stale', 'res-stale', dayjs().add(7, 'day').toISOString());
+
+        process.env.CALENDAR_WEBHOOK_URL = 'https://example.com/webhooks/google';
+        const stopSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'stopWatch').mockResolvedValue(undefined);
+        const watchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents').mockResolvedValue({
+            resourceId: 'res-fresh',
+            expiration: dayjs().add(7, 'day').toISOString(),
+        });
+
+        try {
+            const res = await authenticatedRequest(app, {
+                method: 'PATCH',
+                path: '/calendar/integrations/int-1/sync-configs/sync-config-1',
+                sessionCookie,
+                body: { enabled: true },
+            });
+            expect(res.status).toBe(200);
+            // The stale channel must be stopped on Google's side before the new one is registered.
+            expect(stopSpy).toHaveBeenCalledWith('ch-stale', 'res-stale');
+            expect(watchSpy).toHaveBeenCalledOnce();
+            const config = await calendarSyncConfigsDAO.findByOwnerAndId('sync-config-1', userId);
+            expect(config?.webhookChannelId).not.toBe('ch-stale');
+            expect(config?.webhookResourceId).toBe('res-fresh');
         } finally {
             delete process.env.CALENDAR_WEBHOOK_URL;
         }
