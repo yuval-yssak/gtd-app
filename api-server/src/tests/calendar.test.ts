@@ -950,6 +950,356 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date: ceilingDate, type: 'modified' }));
     });
 
+    // ─── skipped-exception revival (un-deleted / restored GCal instances) ─────
+    //
+    // Symmetric sibling of the time-move reconcile tests above. makeRoutine's rrule is
+    // FREQ=WEEKLY;BYDAY=MO anchored at createdTs (now), so revival dates must be a Monday ON/AFTER
+    // the anchor week for `routineGeneratesOccurrenceOnDate` to confirm the occurrence is real.
+
+    /** The Nth future Monday from today (N=1 → the next upcoming Monday), as YYYY-MM-DD. */
+    function futureMonday(weeksAhead: number): string {
+        const today = dayjs().startOf('day');
+        const daysUntilMonday = (8 - today.day()) % 7 || 7; // 1..7, never 0 → always strictly future
+        return today
+            .add(daysUntilMonday, 'day')
+            .add((weeksAhead - 1) * 7, 'day')
+            .format('YYYY-MM-DD');
+    }
+
+    it('revives a trashed routine item to master time and drops the skipped exception when GCal stops reporting the deletion', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // The user deleted a routine occurrence on GCal (→ local `skipped` exception + trashed item),
+        // then un-deleted it. GCal no longer reports the date as `deleted`, so the occurrence is back:
+        // the trashed item must return to `status:'calendar'` at master time + the exception drop.
+        const date = futureMonday(2);
+        // makeRoutine's template is 09:00 / 30min → master time for `date` is 09:00–09:30.
+        const masterStart = `${date}T09:00:00`;
+        const masterEnd = `${date}T09:30:00`;
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-revive',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [{ date, type: 'skipped' }],
+            }),
+        );
+        const itemTs = '2026-01-01T00:00:00.000Z';
+        await itemsDAO.insertOne({
+            _id: 'item-revive',
+            user: userId,
+            status: 'trash',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: masterStart,
+            timeEnd: masterEnd,
+            cancelledByGCal: true,
+            createdTs: itemTs,
+            updatedTs: itemTs,
+        });
+
+        // GCal reports NO exceptions — the cancellation tombstone is gone.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-revive' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findByOwnerAndId('item-revive', userId);
+        expect(item?.status).toBe('calendar');
+        expect(item?.timeStart).toBe(masterStart);
+        expect(item?.timeEnd).toBe(masterEnd);
+        // cancelledByGCal badge cleared on revive.
+        expect(item?.cancelledByGCal).toBeUndefined();
+        // Instance id re-minted so the row re-occupies the unique partial index.
+        expect(item?.calendarInstanceEventId).toBeTruthy();
+        // skipped exception dropped from the routine.
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions ?? []).not.toContainEqual(expect.objectContaining({ date, type: 'skipped' }));
+    });
+
+    it('revives an ALL-DAY routine occurrence to the single-day master range with a YYYYMMDD instance id', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // All-day template path: revival must produce a date-only single-day range (GCal exclusive-end
+        // → +1 day), set allDay:true, and mint the YYYYMMDD (no T) instance-id form. The all-day branch
+        // in buildRevivedInstanceEventId + reviveTrashedRoutineItemInPlace was otherwise untested.
+        const date = futureMonday(2);
+        const nextDay = dayjs(date).add(1, 'day').format('YYYY-MM-DD');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-allday',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                calendarItemTemplate: { allDay: true },
+                routineExceptions: [{ date, type: 'skipped' }],
+            }),
+        );
+        await itemsDAO.insertOne({
+            _id: 'item-allday-revive',
+            user: userId,
+            status: 'trash',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: date,
+            timeEnd: nextDay,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-allday' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findByOwnerAndId('item-allday-revive', userId);
+        expect(item?.status).toBe('calendar');
+        expect(item?.allDay).toBe(true);
+        expect(item?.timeStart).toBe(date);
+        expect(item?.timeEnd).toBe(nextDay);
+        // All-day instance id is YYYYMMDD only (no T component).
+        expect(item?.calendarInstanceEventId).toBe(`gcal-evt-allday_${date.replace(/-/g, '')}`);
+    });
+
+    it('revives via orphan-create when no trashed row survives at the master date', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // The trashed row was purged (or its timeStart shifted off the master date by a prior move), so
+        // the in-place lookup misses → reviveSkippedOccurrence falls back to createItemForOrphanedException,
+        // which mints a fresh master-time row. Exercises the `!target` branch.
+        const date = futureMonday(2);
+        const masterStart = `${date}T09:00:00`;
+        const masterEnd = `${date}T09:30:00`;
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-orphanrevive',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [{ date, type: 'skipped' }],
+            }),
+        );
+        // Deliberately NO trashed item at the master date.
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-orphanrevive' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // A fresh live calendar item was created at master time, with the re-minted instance id.
+        const created = await itemsDAO.findArray({ user: userId, routineId: 'routine-1', status: 'calendar' });
+        expect(created).toHaveLength(1);
+        const [item] = created;
+        if (!item) throw new Error('expected one orphan-created item');
+        expect(item.timeStart).toBe(masterStart);
+        expect(item.timeEnd).toBe(masterEnd);
+        expect(item.calendarInstanceEventId).toBeTruthy();
+        // skipped exception dropped.
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions ?? []).not.toContainEqual(expect.objectContaining({ date, type: 'skipped' }));
+    });
+
+    it('does NOT revive a skipped exception when the master rrule no longer generates that occurrence', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // A skipped date can vanish from getExceptions because the master recurrence changed (e.g. the
+        // routine was paused → capped with UNTIL) so the occurrence no longer exists — reviving it would
+        // resurrect a phantom. Here the routine is weekly-Monday but the exception is on a SUNDAY, which
+        // the rrule never generates → the GCal-truth guard must refuse to revive.
+        const monday = futureMonday(2);
+        const sunday = dayjs(monday).subtract(1, 'day').format('YYYY-MM-DD'); // never an rrule occurrence
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-phantom',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [{ date: sunday, type: 'skipped' }],
+            }),
+        );
+        await itemsDAO.insertOne({
+            _id: 'item-phantom',
+            user: userId,
+            status: 'trash',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: `${sunday}T09:00:00`,
+            timeEnd: `${sunday}T09:30:00`,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-phantom' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // Item stays trashed; skipped exception preserved.
+        const item = await itemsDAO.findByOwnerAndId('item-phantom', userId);
+        expect(item?.status).toBe('trash');
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date: sunday, type: 'skipped' }));
+    });
+
+    it('does NOT revive a skipped exception GCal still reports as deleted (occurrence still cancelled)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // GCal still reports the date as `deleted` → the occurrence is still cancelled → no revival.
+        const date = futureMonday(2);
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-stillcancelled',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [{ date, type: 'skipped' }],
+            }),
+        );
+        await itemsDAO.insertOne({
+            _id: 'item-stillcancelled',
+            user: userId,
+            status: 'trash',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: `${date}T09:00:00`,
+            timeEnd: `${date}T09:30:00`,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([{ originalDate: date, type: 'deleted' }]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-stillcancelled' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stillcancelled', userId);
+        expect(item?.status).toBe('trash');
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date, type: 'skipped' }));
+    });
+
+    it('does NOT revive a skipped exception outside the getExceptions window (older than 30 days)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // 60 days in the past: getExceptions' timeMin floor is now-30d, so this date is never reported —
+        // its absence from the deleted set must NOT trigger a revival (would resurrect a stale deletion).
+        // Pick a past Monday so the rrule-generates guard isn't what blocks it — the window guard must.
+        const today = dayjs().startOf('day');
+        const daysSinceMonday = (today.day() + 6) % 7; // 0 if Monday
+        const recentPastMonday = today.subtract(daysSinceMonday, 'day');
+        const oldMonday = recentPastMonday.subtract(9, 'week').format('YYYY-MM-DD'); // ~63 days ago, a Monday
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-oldskip',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                // Anchor startDate well before the old date so the rrule WOULD generate it — isolating the window guard.
+                startDate: oldMonday,
+                routineExceptions: [{ date: oldMonday, type: 'skipped' }],
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-oldskip' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date: oldMonday, type: 'skipped' }));
+    });
+
+    it('does NOT revive a skipped exception dated before the sync cursor (within now-30d but predating lastSyncedTs)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // Recent cursor: getExceptions' real timeMin is max(since, now-30d) = since. A skipped date 10
+        // days ago is inside [now-30d, now] but BEFORE the cursor, so GCal never returns it — its absence
+        // must NOT be treated as a revival (mirrors the time-move pre-cursor preserve test).
+        const integration = makeIntegration(userId);
+        await calendarIntegrationsDAO.insertEncrypted(integration);
+        const recentCursor = dayjs().subtract(5, 'day').toISOString();
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, integration._id, { lastSyncedTs: recentCursor }));
+
+        const today = dayjs().startOf('day');
+        const daysSinceMonday = (today.day() + 6) % 7;
+        const recentPastMonday = today.subtract(daysSinceMonday, 'day');
+        const preCursorMonday = recentPastMonday.subtract(1, 'week').format('YYYY-MM-DD'); // a Monday ~7-13 days ago
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-precursorskip',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                startDate: preCursorMonday,
+                routineExceptions: [{ date: preCursorMonday, type: 'skipped' }],
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-precursorskip' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updatedRoutine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(updatedRoutine?.routineExceptions).toContainEqual(expect.objectContaining({ date: preCursorMonday, type: 'skipped' }));
+    });
+
+    it('does not re-fire (zero churn) on a sync against already-revived state (no skipped exception left)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Steady state AFTER a revival: the skipped exception was already dropped on a prior sync and the
+        // item is already live at master time. A subsequent sync (getExceptions still []) must find no
+        // skipped exception to revive → no item write, no routine write, no ops. This is exactly the
+        // second-fire condition; we set it up directly to avoid a second real-HTTP sync in the harness.
+        const date = futureMonday(2);
+        const itemTs = '2026-01-01T00:00:00.000Z';
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-churn',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                routineExceptions: [], // already reconciled away
+                updatedTs: itemTs,
+            }),
+        );
+        await itemsDAO.insertOne({
+            _id: 'item-churn',
+            user: userId,
+            status: 'calendar', // already revived
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'gcal-evt-churn_inst',
+            timeStart: `${date}T09:00:00`,
+            timeEnd: `${date}T09:30:00`,
+            createdTs: itemTs,
+            updatedTs: itemTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-churn' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // No new ops for the item or routine, and neither was rewritten.
+        const itemOps = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-churn' });
+        expect(itemOps).toHaveLength(0);
+        const routineOps = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-1' });
+        expect(routineOps).toHaveLength(0);
+        const item = await itemsDAO.findByOwnerAndId('item-churn', userId);
+        expect(item?.updatedTs).toBe(itemTs);
+        const routine = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(routine?.updatedTs).toBe(itemTs);
+    });
+
     it('skips the routine master write + op when an unchanged GCal event re-syncs (no-op churn guard)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

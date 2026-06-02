@@ -521,6 +521,44 @@ export const devLoginRoutes = new Hono()
         return c.json({ ok: true, opsRecorded: ctx.ops.length });
     })
 
+    // POST /dev/calendar/simulate-routine-exception-sync — drives the FULL routine-exception
+    // reconcile path (`reconcileAndApplyRoutineExceptions`) with a caller-controlled `reported` set,
+    // standing in for `provider.getExceptions` (which needs a live Google account). Used by the
+    // skipped-exception revival e2e: seed a `skipped` exception + trashed item, then POST an EMPTY
+    // `reported` array to simulate GCal dropping the cancellation tombstone → the occurrence revives.
+    //
+    // Trust boundary: same as simulate-routine-exception — dev-only module, unmountable in prod.
+    .post('/calendar/simulate-routine-exception-sync', async (c) => {
+        const { default: routinesDAO } = await import('../dataAccess/routinesDAO.js');
+        const { reconcileAndApplyRoutineExceptions } = await import('./calendar.js');
+        const body = await c.req.json<{
+            userId: string;
+            routineId: string;
+            reported: Parameters<typeof reconcileAndApplyRoutineExceptions>[1];
+            since?: string;
+            timeZone?: string;
+        }>();
+        if (!body.userId || !body.routineId || !Array.isArray(body.reported)) {
+            return c.json({ error: 'userId, routineId, reported[] required' }, 400);
+        }
+        const routine = await routinesDAO.findByOwnerAndId(body.routineId, body.userId);
+        if (!routine) {
+            return c.json({ error: 'routine not found' }, 404);
+        }
+        const now = dayjs().toISOString();
+        // Default `since` to epoch so the reconcile window floor collapses to now-30d (the common
+        // fresh-sync case); callers can override to exercise the cursor-bounded window.
+        const since = body.since ?? '1970-01-01T00:00:00.000Z';
+        const ctx: Parameters<typeof reconcileAndApplyRoutineExceptions>[3] = {
+            userId: body.userId,
+            now,
+            ops: [],
+            ...(body.timeZone ? { timeZone: body.timeZone } : {}),
+        };
+        await reconcileAndApplyRoutineExceptions(routine, body.reported, since, ctx);
+        return c.json({ ok: true, opsRecorded: ctx.ops.length });
+    })
+
     // POST /dev/api-tokens — issue a personal API token for the currently logged-in user.
     // Stand-in for a settings-page mint UI: the dev runs this from a browser/curl with their
     // session cookie and pastes the resulting plaintext into their MCP env file. Production has

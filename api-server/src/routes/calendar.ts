@@ -32,7 +32,13 @@ import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { isDuplicateKeyError } from '../lib/mongoErrors.js';
 import { recordOperation } from '../lib/operationHelpers.js';
-import { normalizeMasterEventId, propagateRoutineTitleToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
+import {
+    buildCalendarInstanceEventId,
+    normalizeMasterEventId,
+    propagateRoutineTitleToItems,
+    regenerateFutureRoutineItems,
+    routineGeneratesOccurrenceOnDate,
+} from '../lib/routineItemRegeneration.js';
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { applyRsvpToAttendees, resolveSyncConfigForItem } from '../lib/rsvpHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
@@ -3416,9 +3422,180 @@ async function revertItemToMasterTime(routine: RoutineInterface, date: string, c
  * (the reported bug). A title/notes/owned-only override is deliberately left alone — `getExceptions`
  * suppresses content exceptions that match the master (RFC 5545 inheritance), so absence there is
  * ambiguous and must not trigger a revert that would clobber a still-valid per-instance title/notes.
- * `skipped` (GCal-deleted) instances are also out of scope: reviving a trashed item is a larger
- * behavior change left for a follow-up.
+ * `skipped` (GCal-deleted) instances are out of scope HERE — their symmetric revival reconciliation
+ * lives in `reconcileRevivedSkippedExceptions`, which runs immediately after this in `syncRoutineExceptions`.
  */
+/**
+ * Computes the `calendarInstanceEventId` a revived occurrence should carry, mirroring what the
+ * routine generator (`buildCalendarItem`) mints. Returns undefined for an in-app (non-GCal) routine
+ * or when the timed-template fields needed to derive the suffix are missing — the revival then
+ * proceeds without an instance id (the next inbound sync re-keys it).
+ */
+function buildRevivedInstanceEventId(routine: RoutineInterface, date: string, timeZone: string): string | undefined {
+    if (!routine.calendarEventId) {
+        return undefined;
+    }
+    const template = routine.calendarItemTemplate;
+    const occurrenceDate = dayjs.utc(date).toDate();
+    if (template?.allDay === true) {
+        return buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, undefined, timeZone);
+    }
+    if (template?.timeOfDay === undefined) {
+        return undefined;
+    }
+    return buildCalendarInstanceEventId(routine.calendarEventId, occurrenceDate, template.timeOfDay, timeZone);
+}
+
+/**
+ * Revives a routine occurrence whose `skipped` exception GCal stopped reporting as cancelled — the
+ * inverse of `revertItemToMasterTime`. The occurrence is back on GCal (the cancellation tombstone
+ * disappeared), so the local item must return to `status: 'calendar'` at master time.
+ *
+ * Prefers an in-place flip of the still-present trashed row (preserves the item id + sync history);
+ * the trash path `$unset` its `calendarInstanceEventId`, so we re-mint a valid one here to re-key the
+ * occurrence and re-occupy the `(user, calendarInstanceEventId)` unique partial index. When no trashed
+ * row survives (purged, or its `timeStart` was shifted by a prior move so it no longer sits at the
+ * master date), fall back to the orphan-create path, which mints a fresh master-time row and resolves
+ * any index collision via the existing dead-twin demote machinery.
+ */
+async function reviveSkippedOccurrence(routine: RoutineInterface, date: string, ctx: SyncContext): Promise<void> {
+    const bareException: GCalException = { originalDate: date, type: 'modified' };
+    const masterTimes = deriveExceptionItemTimes(routine, bareException);
+    if (!masterTimes) {
+        console.warn(`[gcal-sync] reviveSkippedOccurrence: cannot derive master time to revive | routineId=${routine._id} date=${date}`);
+        return;
+    }
+    const nextDay = dayjs(date).add(1, 'day').format('YYYY-MM-DD');
+    const trashedFilter = { user: ctx.userId, routineId: routine._id, status: 'trash', timeStart: { $gte: date, $lt: nextDay } } as const;
+    const trashed = await itemsDAO.findArray(trashedFilter);
+    // First match wins; any stragglers (legacy duplicate-bug residue) stay trashed — harmless.
+    const target = trashed.find((item) => Boolean(item._id));
+    if (!target?._id) {
+        // No trashed row at the master date — recreate from scratch at master time.
+        const instanceEventId = buildRevivedInstanceEventId(routine, date, ctx.timeZone ?? 'UTC');
+        await createItemForOrphanedException(routine, { ...bareException, ...(instanceEventId ? { googleEventId: instanceEventId } : {}) }, ctx);
+        return;
+    }
+    await reviveTrashedRoutineItemInPlace(routine, { item: target, itemId: target._id }, { masterTimes, date }, ctx);
+}
+
+/** The occurrence-specific inputs a revival writes: the rrule date and the master-template times to land on. */
+type RevivalTarget = { masterTimes: { timeStart: string; timeEnd: string; allDay?: boolean }; date: string };
+
+/**
+ * Flips a single trashed routine item back to `status: 'calendar'` at master time, re-minting its
+ * `calendarInstanceEventId` and clearing the `cancelledByGCal` badge. Conditional on the row's
+ * `updatedTs` so a concurrent `/sync/push` edit between resolve and write isn't clobbered.
+ */
+async function reviveTrashedRoutineItemInPlace(
+    routine: RoutineInterface,
+    pending: { item: ItemInterface; itemId: string },
+    revival: RevivalTarget,
+    ctx: SyncContext,
+): Promise<void> {
+    const { item, itemId } = pending;
+    const { masterTimes, date } = revival;
+    const instanceEventId = buildRevivedInstanceEventId(routine, date, ctx.timeZone ?? 'UTC');
+    const setFields: Record<string, unknown> = {
+        status: 'calendar',
+        timeStart: masterTimes.timeStart,
+        timeEnd: masterTimes.timeEnd,
+        ...(masterTimes.allDay === true ? { allDay: true } : {}),
+        ...(instanceEventId ? { calendarInstanceEventId: instanceEventId } : {}),
+        updatedTs: ctx.now,
+    };
+    // Clear the "Cancelled in Calendar" badge a GCal-driven trash may have stamped, and drop a stale
+    // all-day flag if the revived master time is timed. `$set` alone can't remove keys.
+    const unsetFields: Record<string, ''> = {
+        ...(item.cancelledByGCal !== undefined ? { cancelledByGCal: '' as const } : {}),
+        ...(masterTimes.allDay !== true && item.allDay !== undefined ? { allDay: '' as const } : {}),
+    };
+    const update = Object.keys(unsetFields).length > 0 ? { $set: setFields, $unset: unsetFields } : { $set: setFields };
+    // Conditional on `updatedTs` — a concurrent /sync/push edit between resolve and apply would change
+    // it; matchedCount === 0 means we lost the race and must not clobber. Next sync re-resolves.
+    let result: { matchedCount: number };
+    try {
+        result = await itemsDAO.updateOne({ _id: itemId, user: ctx.userId, updatedTs: item.updatedTs } as never, update);
+    } catch (err) {
+        if (isDuplicateKeyError(err) && instanceEventId) {
+            // A dead twin (trash/done row from a reconnect/split) still squats the re-minted instance id.
+            // The orphan-create path owns the full dead-twin demote machinery — delegate to it.
+            console.warn(
+                `[gcal-sync] reviveTrashedRoutineItemInPlace: re-mint hit E11000, delegating to orphan-create | itemId=${itemId} instanceId=${instanceEventId}`,
+            );
+            await createItemForOrphanedException(routine, { originalDate: date, type: 'modified', googleEventId: instanceEventId }, ctx);
+            return;
+        }
+        throw err;
+    }
+    if (result.matchedCount === 0) {
+        console.log(`[gcal-sync] reviveTrashedRoutineItemInPlace: skipped due to concurrent updatedTs bump | itemId=${itemId}`);
+        return;
+    }
+    const refreshed = await itemsDAO.findByOwnerAndId(itemId, ctx.userId);
+    if (!refreshed) {
+        return;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: refreshed, opType: 'update', now: ctx.now }));
+    console.log(
+        `[gcal-sync] reviveTrashedRoutineItemInPlace: revived trashed routine item to master time | routineId=${refreshed.routineId} itemId=${itemId} date=${date}`,
+    );
+}
+
+/**
+ * Removes local `skipped` exceptions that GCal no longer reports as cancelled instances, reviving each
+ * affected occurrence's item to master time. The symmetric sibling of `reconcileRemovedExceptions`:
+ * `getExceptions` (`singleEvents: true, showDeleted: true`) reports a date as `deleted` only while the
+ * GCal cancellation tombstone exists; once the user un-deletes / recreates that occurrence the tombstone
+ * disappears, so the date's absence from the reported deleted set means "the occurrence is back."
+ *
+ * Provenance is NOT a concern: an in-app trash of a routine instance pushes `cancelRecurringInstance`
+ * to GCal (`pushRoutineInstanceCancellation`), so EVERY `skipped` exception corresponds to a real GCal
+ * tombstone regardless of whether the user deleted in-app or in GCal. The tombstone vanishing is the
+ * authoritative "back" signal either way.
+ *
+ * Guards (each mirrors `reconcileRemovedExceptions`, with one addition):
+ *  - Window: only `skipped` exceptions inside `getExceptions`' real query window
+ *    (`max(since, now-30d) < date < now+1y`, strictly exclusive on both date boundaries to drop the
+ *    date-vs-instant truncation slivers) are eligible — an out-of-window date is never reported, so its
+ *    absence is meaningless.
+ *  - GCal truth: the master rrule must still generate the occurrence. A `skipped` date can also vanish
+ *    from `getExceptions` because the master recurrence changed (e.g. capped by UNTIL on pause) so the
+ *    occurrence no longer exists at all — reviving it then would resurrect a phantom. `routineGenerates-
+ *    OccurrenceOnDate` reads the raw rrule (ignoring exceptions) to confirm the occurrence is real.
+ */
+async function reconcileRevivedSkippedExceptions(
+    routine: RoutineInterface,
+    existing: RoutineException[],
+    reported: GCalException[],
+    since: string,
+    ctx: SyncContext,
+): Promise<RoutineException[]> {
+    if (!hasAtLeastOne(existing)) {
+        return existing;
+    }
+    // Identical window derivation to reconcileRemovedExceptions — see its comment for the
+    // strict-exclusive boundary rationale (date-vs-ISO-instant truncation slivers at each edge).
+    const floor = dayjs(ctx.now).subtract(30, 'day');
+    const floorDate = (dayjs(since).isAfter(floor) ? dayjs(since) : floor).format('YYYY-MM-DD');
+    const windowEnd = dayjs(ctx.now).add(1, 'year').format('YYYY-MM-DD');
+    const reportedDeletedDates = new Set(reported.filter((ex) => ex.type === 'deleted').map((ex) => ex.originalDate));
+    const isInWindow = (d: string) => d > floorDate && d < windowEnd;
+
+    const isRevivable = (ex: RoutineException) =>
+        ex.type === 'skipped' && isInWindow(ex.date) && !reportedDeletedDates.has(ex.date) && routineGeneratesOccurrenceOnDate(routine, ex.date);
+    const revivable = existing.filter(isRevivable);
+    if (!hasAtLeastOne(revivable)) {
+        return existing;
+    }
+    console.log(
+        `[gcal-sync] reconcileRevivedSkippedExceptions: reviving ${revivable.length} restored occurrence(s) | routineId=${routine._id} dates=${revivable.map((e) => e.date).join(',')}`,
+    );
+    await Promise.all(revivable.map((ex) => reviveSkippedOccurrence(routine, ex.date, ctx)));
+    const revivedDates = new Set(revivable.map((ex) => ex.date));
+    return existing.filter((ex) => !revivedDates.has(ex.date));
+}
+
 async function reconcileRemovedExceptions(routine: RoutineInterface, reported: GCalException[], since: string, ctx: SyncContext): Promise<RoutineException[]> {
     const existing = routine.routineExceptions ?? [];
     if (!hasAtLeastOne(existing)) {
@@ -3478,19 +3655,36 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
     console.log(`[gcal-sync] syncing routine exceptions | routineId=${routine._id} title=${routine.title} exceptionCount=${exceptions.length}`);
 
     const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops, ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}) };
+    await reconcileAndApplyRoutineExceptions(routine, exceptions, ctx.since, syncCtx);
+}
 
+/**
+ * The provider-agnostic core of `syncRoutineExceptions`: given the `reported` exception set GCal
+ * returned for this series, reconcile both removal directions, apply each reported exception's item
+ * side-effects, and persist the merged exception list. Exported so the dev-only
+ * `/dev/calendar/simulate-routine-exception-sync` endpoint can drive the full reconcile path with a
+ * controllable `reported` set (real `getExceptions` needs a live Google account).
+ */
+export async function reconcileAndApplyRoutineExceptions(routine: RoutineInterface, reported: GCalException[], since: string, ctx: SyncContext): Promise<void> {
     // Reconcile DELETIONS first: a local `modified` exception that GCal no longer reports as an
     // overridden instance (e.g. the user dragged an instance back to its master time, so GCal
     // dropped the override) must be removed and its item reverted to the master rrule time.
     // `getExceptions` only ever ADDS/updates — without this, the stale exception froze the item at
     // the moved time (the "nudged then moved back, app stuck at the old time" bug). Runs even when
-    // `exceptions` is empty, which is exactly the revert-everything case.
-    const reconciled = await reconcileRemovedExceptions(routine, exceptions, ctx.since, syncCtx);
+    // `reported` is empty, which is exactly the revert-everything case.
+    const reconciled = await reconcileRemovedExceptions(routine, reported, since, ctx);
+
+    // Reconcile REVIVALS next (symmetric sibling): a local `skipped` exception that GCal no longer
+    // reports as a cancelled instance means the occurrence was un-deleted / recreated on GCal — revive
+    // the trashed item to master time and drop the `skipped` exception. Chained on `reconciled` (not
+    // the routine) so both reconcilers' removals compose rather than clobber — they touch disjoint
+    // exception types (`modified` vs `skipped`), so the merge of fresh exceptions below is unaffected.
+    const afterRevival = await reconcileRevivedSkippedExceptions(routine, reconciled, reported, since, ctx);
 
     // Apply item side-effects in parallel — each exception targets a different date so there
     // are no write conflicts between them.
-    const updatedExceptions = exceptions.reduce((acc, ex) => mergeExceptions(acc, ex), reconciled);
-    await Promise.all(exceptions.map((ex) => applyExceptionToItems(routine, ex, syncCtx)));
+    const updatedExceptions = reported.reduce((acc, ex) => mergeExceptions(acc, ex), afterRevival);
+    await Promise.all(reported.map((ex) => applyExceptionToItems(routine, ex, ctx)));
 
     // Skip the routine write + op when the merged exception set is byte-identical to what's stored.
     // `getExceptions` is a time-range (not incremental) query, so every webhook fire re-surfaces the

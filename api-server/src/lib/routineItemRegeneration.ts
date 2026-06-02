@@ -52,6 +52,25 @@ function buildCalendarRule(rruleStr: string, dtstart: Date): InstanceType<typeof
     return RRule.fromString(`DTSTART:${dtStartStr}\nRRULE:${rruleStr}`);
 }
 
+/**
+ * True iff the master rrule (anchored exactly as `getValidFutureOccurrences` anchors it) still
+ * generates an occurrence on `date` (a `YYYY-MM-DD`). Deliberately ignores `routineExceptions` —
+ * the caller (skipped-exception revival) is reconciling a `skipped` exception away and needs the
+ * RAW rrule truth, not the exception-filtered set. RRule's own UNTIL/COUNT handling means a series
+ * capped by a past UNTIL (e.g. a paused routine) correctly reports no occurrence, so we never
+ * resurrect an occurrence the live recurrence no longer produces.
+ *
+ * Queries a ±1-day window so a `between` boundary can't drop an occurrence whose UTC-midnight
+ * anchor lands on the adjacent calendar day; the `.some` narrows back to the exact date.
+ */
+export function routineGeneratesOccurrenceOnDate(routine: RoutineInterface, date: string): boolean {
+    const anchorTs = routine.startDate ?? routine.createdTs;
+    const rule = buildCalendarRule(routine.rrule, dayjs.utc(anchorTs.slice(0, 10)).toDate());
+    const windowStart = dayjs.utc(date).subtract(1, 'day').toDate();
+    const windowEnd = dayjs.utc(date).add(1, 'day').toDate();
+    return rule.between(windowStart, windowEnd, true).some((d) => d.toISOString().slice(0, 10) === date);
+}
+
 /** Exception dates that must be skipped when regenerating (skipped or cross-date modified). */
 function buildExceptionDateSet(routine: RoutineInterface): Set<string> {
     const exceptions = routine.routineExceptions ?? [];
