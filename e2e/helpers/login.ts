@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from '@playwright/test';
+import { CLARIFY_MODE_KEY } from '../../client/src/lib/clarifyMode';
 
 const DEV_LOGIN_URL = 'http://localhost:4000/dev/login';
 const CLIENT_URL = 'http://localhost:4173';
@@ -33,8 +34,25 @@ export async function fetchDevSessionCookie(email: string): Promise<DevLoginResp
 
 // /auth/callback populates IndexedDB (upsertAccount + setActiveAccount) then redirects to /.
 // Without this navigation, window.__gtd.* would throw "No active account" on every call.
+/**
+ * Pin the item-editor variant to 'dialog' before any app JS runs. The app's default mode is 'page'
+ * (opens the editor as a route), but the editor specs interact via getByRole('dialog'); without this,
+ * every dialog-based spec silently fails because the click navigates instead of opening a modal.
+ * addInitScript runs on every navigation in this context, so the mode is set before useItemEditor
+ * reads localStorage at click time. Call once per BrowserContext, before the first page navigation.
+ */
+export async function pinEditorModeToDialog(context: BrowserContext): Promise<void> {
+    await context.addInitScript(
+        ([key, mode]) => {
+            window.localStorage.setItem(key, mode);
+        },
+        [CLARIFY_MODE_KEY, 'dialog'] as const,
+    );
+}
+
 async function openAuthenticatedPage(context: BrowserContext, cookie: DevLoginResponse['cookie']): Promise<Page> {
     await context.addCookies([cookie]);
+    await pinEditorModeToDialog(context);
     const page = await context.newPage();
     await page.goto(`${CLIENT_URL}/auth/callback`);
     // /auth/callback redirects to /, which /_authenticated/index immediately redirects to /inbox

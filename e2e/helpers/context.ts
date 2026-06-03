@@ -1,5 +1,5 @@
 import type { Browser, BrowserContext, Page } from '@playwright/test';
-import { fetchDevSessionCookie, loginAs } from './login';
+import { fetchDevSessionCookie, loginAs, pinEditorModeToDialog } from './login';
 
 const DEV_MULTI_LOGIN_URL = 'http://localhost:4000/dev/multi-login';
 const DEV_RESET_URL = 'http://localhost:4000/dev/reset';
@@ -83,6 +83,7 @@ export async function fetchDevMultiSessionCookies(emails: string[], activeIndex 
 
 async function bootMultiSessionDevice(context: BrowserContext, cookies: MultiLoginCookie[]): Promise<Page> {
     await context.addCookies(cookies);
+    await pinEditorModeToDialog(context);
     const page = await context.newPage();
     // /auth/callback hydrates IDB (upsertAccount + setActiveAccount) for whichever session is currently
     // active per the `better-auth.session_token` cookie, then redirects to /. The other multi-session
