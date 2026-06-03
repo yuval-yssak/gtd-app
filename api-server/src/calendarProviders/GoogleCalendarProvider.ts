@@ -187,6 +187,12 @@ type RawGCalEvent = {
         optional?: boolean | null;
     }> | null;
     eventType?: string | null;
+    hangoutLink?: string | null;
+    htmlLink?: string | null;
+    location?: string | null;
+    conferenceData?: {
+        entryPoints?: Array<{ entryPointType?: string | null; uri?: string | null } | null> | null;
+    } | null;
 };
 
 /** Converts a raw GCal person object into our GCalPerson shape, dropping entries without an email. */
@@ -235,6 +241,20 @@ function toAttendees(raw: RawGCalEvent['attendees']): GCalAttendee[] | undefined
     });
     const sorted = mapped.sort((a, b) => a.email.localeCompare(b.email));
     return sorted.length > 0 ? sorted : undefined;
+}
+
+/**
+ * Resolves the conferencing join URL from a raw GCal event. Google represents conferencing two ways:
+ * `hangoutLink` (Google Meet — always wins when present), or `conferenceData.entryPoints[]` carrying
+ * a `video` entry whose `uri` is the join link (e.g. a Zoom/Teams link added via a GCal add-on).
+ * Picks the first `video` entry point — events can also carry `phone`/`sip`/`more` entries we ignore.
+ */
+function extractMeetingLink(event: RawGCalEvent): string | undefined {
+    if (event.hangoutLink) {
+        return event.hangoutLink;
+    }
+    const videoEntry = event.conferenceData?.entryPoints?.find((entry) => entry?.entryPointType === 'video');
+    return videoEntry?.uri ?? undefined;
 }
 
 /**
@@ -306,6 +326,9 @@ function buildConfirmedEvent(event: RawGCalEvent, eventId: string): GCalEvent[] 
             ...optionalField('attendees', attendees),
             ...optionalField('responseStatus', attendees?.find((a) => a.self)?.responseStatus),
             ...optionalField('eventType', event.eventType ? (event.eventType as GCalEventType) : undefined),
+            ...optionalField('meetingLink', extractMeetingLink(event)),
+            ...optionalField('location', event.location ?? undefined),
+            ...optionalField('htmlLink', event.htmlLink ?? undefined),
         },
     ];
 }
@@ -779,9 +802,9 @@ export class GoogleCalendarProvider implements CalendarProvider {
 
 /**
  * Detects time-move and/or content changes on a non-cancelled instance compared to the master.
- * Emits per-instance overrides for the GCal-owned set (attendees/organizer/creator/eventType) only
- * when the instance value diverges from the master — preserving RFC 5545 inheritance so a routine
- * with a master attendee list and a date-only override still inherits attendees from the master.
+ * Emits per-instance overrides for the GCal-owned set (see `GCAL_OWNED_ROUTINE_KEYS`) only when the
+ * instance value diverges from the master — preserving RFC 5545 inheritance so a routine with a
+ * master attendee list and a date-only override still inherits attendees from the master.
  *
  * Exported for unit testing — internal callers still go through `getExceptions`.
  */
@@ -803,13 +826,30 @@ export function buildModifiedException(
     const instanceCreator = toPerson(event.creator);
     const instanceAttendees = toAttendees(event.attendees);
     const instanceEventType = event.eventType ? (event.eventType as GCalEventType) : undefined;
+    const instanceMeetingLink = extractMeetingLink(event);
+    const instanceLocation = event.location ?? undefined;
+    const instanceHtmlLink = event.htmlLink ?? undefined;
 
     const organizerChanged = masterContent ? !shallowPersonEqual(instanceOrganizer, masterContent.organizer) : false;
     const creatorChanged = masterContent ? !shallowPersonEqual(instanceCreator, masterContent.creator) : false;
     const attendeesChanged = masterContent ? !attendeesEqual(instanceAttendees, masterContent.attendees) : false;
     const eventTypeChanged = masterContent ? instanceEventType !== masterContent.eventType : false;
+    const meetingLinkChanged = masterContent ? instanceMeetingLink !== masterContent.meetingLink : false;
+    const locationChanged = masterContent ? instanceLocation !== masterContent.location : false;
+    const htmlLinkChanged = masterContent ? instanceHtmlLink !== masterContent.htmlLink : false;
 
-    if (!timeMoved && !titleChanged && !descChanged && !organizerChanged && !creatorChanged && !attendeesChanged && !eventTypeChanged) {
+    if (
+        !timeMoved &&
+        !titleChanged &&
+        !descChanged &&
+        !organizerChanged &&
+        !creatorChanged &&
+        !attendeesChanged &&
+        !eventTypeChanged &&
+        !meetingLinkChanged &&
+        !locationChanged &&
+        !htmlLinkChanged
+    ) {
         return [];
     }
 
@@ -825,6 +865,9 @@ export function buildModifiedException(
             ...(creatorChanged && instanceCreator ? { creator: instanceCreator } : {}),
             ...(attendeesChanged && instanceAttendees ? { attendees: instanceAttendees } : {}),
             ...(eventTypeChanged && instanceEventType ? { eventType: instanceEventType } : {}),
+            ...(meetingLinkChanged && instanceMeetingLink ? { meetingLink: instanceMeetingLink } : {}),
+            ...(locationChanged && instanceLocation ? { location: instanceLocation } : {}),
+            ...(htmlLinkChanged && instanceHtmlLink ? { htmlLink: instanceHtmlLink } : {}),
             ...(event.id ? { googleEventId: event.id } : {}),
         },
     ];

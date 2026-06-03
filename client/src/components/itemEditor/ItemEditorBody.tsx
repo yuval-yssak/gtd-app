@@ -64,6 +64,7 @@ import {
     shouldDetachFromRoutine,
     stripRoutineId,
 } from '../editItemDialogLogic';
+import { CalendarEventLinks } from './CalendarEventLinks';
 import styles from './ItemEditorBody.module.css';
 import { MeetingDetails, type RsvpStatus } from './MeetingDetails';
 import { applyOptimisticRsvp, findSelfAttendee } from './meetingDetailsLogic';
@@ -581,6 +582,7 @@ export function ItemEditorBody({
                         calendarOptions={visibleCalendarOptions}
                         forceShowPicker={ownerUserId !== item.userId}
                     />
+                    <CalendarEventLinks item={item} calendarOptions={calendarOptions} />
                     {((liveAttendees?.length ?? 0) > 0 || item.organizer) && (
                         <MeetingDetails
                             item={{ ...item, ...(liveAttendees ? { attendees: liveAttendees } : {}) }}

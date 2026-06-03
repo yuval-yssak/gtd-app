@@ -3411,6 +3411,101 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         expect(item?.organizer).toBeUndefined();
     });
 
+    it('inbound event writes meetingLink/location/htmlLink onto an existing item (GCal-owned merge)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const localAnchor = dayjs().subtract(1, 'hour').toISOString();
+        const eventUpdated = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-links-write',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-links-write',
+            calendarIntegrationId: 'int-1',
+            createdTs: localAnchor,
+            updatedTs: localAnchor,
+            lastSyncedFromGCalTs: localAnchor,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-links-write',
+                    title: 'Standup',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                    meetingLink: 'https://meet.google.com/abc-defg-hij',
+                    location: 'Room 4B',
+                    htmlLink: 'https://calendar.google.com/event?eid=links-write',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-links-write' });
+        expect(item?.meetingLink).toBe('https://meet.google.com/abc-defg-hij');
+        expect(item?.location).toBe('Room 4B');
+        expect(item?.htmlLink).toBe('https://calendar.google.com/event?eid=links-write');
+    });
+
+    it('inbound event without a meeting link clears a stale local meetingLink (GCal-owned absent ⇒ delete)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const localAnchor = dayjs().subtract(1, 'hour').toISOString();
+        const eventUpdated = dayjs().toISOString();
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-links-clear',
+            user: userId,
+            status: 'calendar',
+            title: 'Meeting unscheduled',
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: 'evt-links-clear',
+            calendarIntegrationId: 'int-1',
+            meetingLink: 'https://meet.google.com/gone',
+            location: 'Old Room',
+            createdTs: localAnchor,
+            updatedTs: localAnchor,
+            lastSyncedFromGCalTs: localAnchor,
+        });
+
+        // Meeting removed on GCal: the event no longer carries hangoutLink/conferenceData/location.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-links-clear',
+                    title: 'Meeting unscheduled',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: eventUpdated,
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-links-clear' });
+        expect(item?.meetingLink).toBeUndefined();
+        expect(item?.location).toBeUndefined();
+    });
+
     it('cancelled inbound event trashes the item AND stamps cancelledByGCal: true', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -3526,6 +3621,50 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
             expect(item.attendees).toHaveLength(2);
             expect(item.organizer?.email).toBe('yuval@example.com');
             expect(item.eventType).toBe('default');
+        }
+    });
+
+    it('createRoutineFromGCal mirrors the master meetingLink/location/htmlLink onto the routine doc and every generated item', async () => {
+        // The weekly-standup-with-a-fixed-Meet-link case: recurring instances are managed by the
+        // routine surface, so the conferencing link must thread master → routine → generated items.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const tomorrowAt10 = dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-master-with-meet',
+                    title: 'Weekly standup',
+                    timeStart: tomorrowAt9,
+                    timeEnd: tomorrowAt10,
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                    meetingLink: 'https://meet.google.com/standup-link',
+                    location: 'HQ Room 4B',
+                    htmlLink: 'https://calendar.google.com/event?eid=standup',
+                },
+            ],
+            nextSyncToken: 'tok-meet',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'gcal-master-with-meet' });
+        expect(routine?.meetingLink).toBe('https://meet.google.com/standup-link');
+        expect(routine?.location).toBe('HQ Room 4B');
+        expect(routine?.htmlLink).toBe('https://calendar.google.com/event?eid=standup');
+
+        const items = await itemsDAO.findArray({ user: userId, routineId: routine?._id ?? '' });
+        expect(items.length).toBeGreaterThan(0);
+        for (const item of items) {
+            expect(item.meetingLink).toBe('https://meet.google.com/standup-link');
+            expect(item.location).toBe('HQ Room 4B');
+            expect(item.htmlLink).toBe('https://calendar.google.com/event?eid=standup');
         }
     });
 
@@ -10786,14 +10925,21 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         await setupRoutineAndIntegration(userId);
         // No item seeded — the exception has nothing to find via either tier.
 
-        const instanceEventId = 'gcal-evt-master_20260601T060000Z';
+        // Dates are relative to today so the exception is always in the FUTURE — otherwise the
+        // `isExceptionBeforeToday` past-cutoff guard skips the create-on-miss and the test rots the
+        // day after a hardcoded date passes. originalDate / move date / instance id stay consistent.
+        const originalDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+        const movedStart = dayjs().add(3, 'day').hour(7).minute(0).second(0).millisecond(0);
+        const movedTimeStart = movedStart.utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
+        const movedTimeEnd = movedStart.add(30, 'minute').utc().format('YYYY-MM-DDTHH:mm:ss[Z]');
+        const instanceEventId = `gcal-evt-master_${originalDate.replace(/-/g, '')}T060000Z`;
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
             {
-                originalDate: '2026-06-01',
+                originalDate,
                 type: 'modified',
                 googleEventId: instanceEventId,
-                newTimeStart: '2026-06-02T07:00:00Z',
-                newTimeEnd: '2026-06-02T07:30:00Z',
+                newTimeStart: movedTimeStart,
+                newTimeEnd: movedTimeEnd,
                 title: 'Standup (moved)',
             },
         ]);
@@ -10807,8 +10953,8 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         if (!item) throw new Error('expected create-on-miss to insert one item');
         expect(item.status).toBe('calendar');
         expect(item.title).toBe('Standup (moved)');
-        expect(item.timeStart).toBe('2026-06-02T07:00:00Z');
-        expect(item.timeEnd).toBe('2026-06-02T07:30:00Z');
+        expect(item.timeStart).toBe(movedTimeStart);
+        expect(item.timeEnd).toBe(movedTimeEnd);
         // Inherits the routine's integration link so the UI can group it under the right calendar.
         expect(item.calendarIntegrationId).toBe('int-1');
         expect(item.calendarSyncConfigId).toBe('sync-config-1');

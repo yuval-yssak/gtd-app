@@ -41,6 +41,9 @@ const routineExceptionSchema = z
         attendees: z.array(gcalAttendeeSchema).optional(),
         responseStatus: gcalResponseStatusSchema.optional(),
         eventType: gcalEventTypeSchema.optional(),
+        meetingLink: z.string().optional(),
+        location: z.string().optional(),
+        htmlLink: z.string().optional(),
     })
     .strict();
 
@@ -55,7 +58,7 @@ const calendarItemTemplateSchema = z
 // calendar-type routines — a nextAction routine has no GCal master event, so carrying them through
 // /sync/push is a contract violation (likely a stale client mirroring fields that should have been
 // stripped on routineType change). Reject at the schema layer.
-const GCAL_OWNED_ROUTINE_FIELD_NAMES = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType'] as const;
+const GCAL_OWNED_ROUTINE_FIELD_NAMES = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType', 'meetingLink', 'location', 'htmlLink'] as const;
 
 export const RoutineSnapshotSchema = z
     .object({
@@ -82,6 +85,9 @@ export const RoutineSnapshotSchema = z
         attendees: z.array(gcalAttendeeSchema).optional(),
         responseStatus: gcalResponseStatusSchema.optional(),
         eventType: gcalEventTypeSchema.optional(),
+        meetingLink: z.string().optional(),
+        location: z.string().optional(),
+        htmlLink: z.string().optional(),
         template: routineItemTemplateSchema,
         active: z.boolean(),
         createdTs: isoDateTime,

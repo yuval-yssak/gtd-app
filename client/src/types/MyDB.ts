@@ -71,6 +71,9 @@ export interface StoredItem {
     attendees?: GCalAttendee[]; // sorted by email
     responseStatus?: GCalResponseStatus; // denormalized from self attendee
     eventType?: GCalEventType;
+    meetingLink?: string; // Meet/Zoom join URL — read-only, GCal-owned
+    location?: string; // physical / free-text location — read-only, GCal-owned
+    htmlLink?: string; // canonical Google Calendar event URL — read-only, GCal-owned
     cancelledByGCal?: boolean; // true when an inbound GCal cancel pushed this item to trash
 }
 

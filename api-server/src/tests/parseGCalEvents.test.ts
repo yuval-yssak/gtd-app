@@ -174,6 +174,83 @@ describe('parseGCalEvents — meeting metadata', () => {
     });
 });
 
+describe('parseGCalEvents — meeting link, location, and event URL', () => {
+    function timedEvent(overrides: Record<string, unknown> = {}): RawEvent {
+        return {
+            id: 'evt-links',
+            summary: 'Standup',
+            start: { dateTime: '2026-06-12T09:00:00Z' },
+            end: { dateTime: '2026-06-12T09:15:00Z' },
+            updated: '2026-06-11T08:00:00Z',
+            status: 'confirmed',
+            ...overrides,
+        };
+    }
+
+    it('captures a Google Meet hangoutLink as meetingLink', () => {
+        const [event] = parseGCalEvents([timedEvent({ hangoutLink: 'https://meet.google.com/abc-defg-hij' })]);
+        if (!event) throw new Error('expected one event');
+        expect(event.meetingLink).toBe('https://meet.google.com/abc-defg-hij');
+    });
+
+    it('captures a Zoom link from the conferenceData video entry point', () => {
+        const [event] = parseGCalEvents([
+            timedEvent({
+                conferenceData: {
+                    entryPoints: [
+                        { entryPointType: 'phone', uri: 'tel:+1-555-0100' },
+                        { entryPointType: 'video', uri: 'https://zoom.us/j/123456789' },
+                    ],
+                },
+            }),
+        ]);
+        if (!event) throw new Error('expected one event');
+        expect(event.meetingLink).toBe('https://zoom.us/j/123456789');
+    });
+
+    it('prefers hangoutLink over conferenceData when both are present', () => {
+        const [event] = parseGCalEvents([
+            timedEvent({
+                hangoutLink: 'https://meet.google.com/win-ner',
+                conferenceData: { entryPoints: [{ entryPointType: 'video', uri: 'https://zoom.us/j/999' }] },
+            }),
+        ]);
+        if (!event) throw new Error('expected one event');
+        expect(event.meetingLink).toBe('https://meet.google.com/win-ner');
+    });
+
+    it('picks the video entry point even when other entry types appear first', () => {
+        const [event] = parseGCalEvents([
+            timedEvent({
+                conferenceData: {
+                    entryPoints: [
+                        { entryPointType: 'more', uri: 'https://example.com/more' },
+                        { entryPointType: 'sip', uri: 'sip:room@example.com' },
+                        { entryPointType: 'video', uri: 'https://teams.microsoft.com/l/meetup-join/xyz' },
+                    ],
+                },
+            }),
+        ]);
+        if (!event) throw new Error('expected one event');
+        expect(event.meetingLink).toBe('https://teams.microsoft.com/l/meetup-join/xyz');
+    });
+
+    it('captures location and htmlLink when present', () => {
+        const [event] = parseGCalEvents([timedEvent({ location: 'Room 4B, HQ', htmlLink: 'https://calendar.google.com/event?eid=abc123' })]);
+        if (!event) throw new Error('expected one event');
+        expect(event.location).toBe('Room 4B, HQ');
+        expect(event.htmlLink).toBe('https://calendar.google.com/event?eid=abc123');
+    });
+
+    it('leaves all three undefined when GCal returns none of them', () => {
+        const [event] = parseGCalEvents([timedEvent()]);
+        if (!event) throw new Error('expected one event');
+        expect(event.meetingLink).toBeUndefined();
+        expect(event.location).toBeUndefined();
+        expect(event.htmlLink).toBeUndefined();
+    });
+});
+
 describe('buildModifiedException — per-instance override emission', () => {
     const baseMaster: MasterContent = {
         title: 'Weekly 1:1',
@@ -277,6 +354,44 @@ describe('buildModifiedException — per-instance override emission', () => {
         expect(ex.attendees).toBeUndefined();
         expect(ex.organizer).toBeUndefined();
         expect(ex.eventType).toBeUndefined();
+    });
+
+    it('emits meetingLink when the instance has a different conferencing link than the master', () => {
+        const masterWithLink: MasterContent = { ...baseMaster, meetingLink: 'https://meet.google.com/master-link' };
+        const result = buildModifiedException(buildInstance({ hangoutLink: 'https://meet.google.com/instance-link' }), '2026-05-20', masterWithLink);
+        expect(result).toHaveLength(1);
+        const [ex] = result;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.meetingLink).toBe('https://meet.google.com/instance-link');
+    });
+
+    it('emits location and htmlLink when they diverge from the master', () => {
+        const masterWithMeta: MasterContent = { ...baseMaster, location: 'Master Room', htmlLink: 'https://calendar.google.com/event?eid=master' };
+        const result = buildModifiedException(
+            buildInstance({ location: 'Instance Room', htmlLink: 'https://calendar.google.com/event?eid=instance' }),
+            '2026-05-20',
+            masterWithMeta,
+        );
+        expect(result).toHaveLength(1);
+        const [ex] = result;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.location).toBe('Instance Room');
+        expect(ex.htmlLink).toBe('https://calendar.google.com/event?eid=instance');
+    });
+
+    it('omits meetingLink/location/htmlLink when the instance matches the master (inheritance)', () => {
+        const masterWithLink: MasterContent = { ...baseMaster, meetingLink: 'https://meet.google.com/same', location: 'Same Room' };
+        const result = buildModifiedException(
+            buildInstance({ hangoutLink: 'https://meet.google.com/same', location: 'Same Room', summary: 'Title changed only' }),
+            '2026-05-20',
+            masterWithLink,
+        );
+        expect(result).toHaveLength(1);
+        const [ex] = result;
+        if (!ex) throw new Error('expected one exception');
+        expect(ex.title).toBe('Title changed only');
+        expect(ex.meetingLink).toBeUndefined();
+        expect(ex.location).toBeUndefined();
     });
 });
 

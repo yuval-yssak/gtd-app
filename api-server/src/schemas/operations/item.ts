@@ -66,6 +66,11 @@ export const ItemSnapshotSchema = z
         attendees: z.array(gcalAttendeeSchema).optional(),
         responseStatus: gcalResponseStatusSchema.optional(),
         eventType: gcalEventTypeSchema.optional(),
+        // Read-only GCal-owned conferencing/location/event-URL. Server-overwritten on inbound; update
+        // ops that round-trip through /sync/push include them so the strict schema must accept them.
+        meetingLink: z.string().optional(),
+        location: z.string().optional(),
+        htmlLink: z.string().optional(),
         cancelledByGCal: z.boolean().optional(),
     })
     .strict();

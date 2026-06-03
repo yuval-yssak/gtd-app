@@ -2036,7 +2036,7 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
         return;
     }
     // GCal-owned-only path: avoids the read→merge→replaceById race for older webhooks. Targets
-    // only the five GCal-owned keys via $set/$unset and bypasses the structural merge.
+    // only the GCal-owned keys (GCAL_OWNED_ROUTINE_KEYS) via $set/$unset and bypasses the structural merge.
     if (!structurallyNewer && !notesUpdate) {
         await applyGCalOwnedRoutineDeltaOnly(existing, event, ctx);
         return;
@@ -2331,6 +2331,9 @@ export type CalendarEvent = {
     attendees?: GCalAttendee[];
     responseStatus?: GCalResponseStatus;
     eventType?: GCalEventType;
+    meetingLink?: string;
+    location?: string;
+    htmlLink?: string;
 };
 
 /**
@@ -2346,6 +2349,9 @@ function pickGCalOwnedFields(event: CalendarEvent): Partial<Pick<ItemInterface, 
         ...(event.attendees !== undefined ? { attendees: event.attendees } : {}),
         ...(event.responseStatus !== undefined ? { responseStatus: event.responseStatus } : {}),
         ...(event.eventType !== undefined ? { eventType: event.eventType } : {}),
+        ...(event.meetingLink !== undefined ? { meetingLink: event.meetingLink } : {}),
+        ...(event.location !== undefined ? { location: event.location } : {}),
+        ...(event.htmlLink !== undefined ? { htmlLink: event.htmlLink } : {}),
     };
 }
 
@@ -2362,16 +2368,20 @@ type GCalOwnedRoutineSource = {
     attendees?: GCalAttendee[];
     responseStatus?: GCalResponseStatus;
     eventType?: GCalEventType;
+    meetingLink?: string;
+    location?: string;
+    htmlLink?: string;
 };
-function pickGCalOwnedRoutineFields(
-    source: GCalOwnedRoutineSource,
-): Partial<Pick<RoutineInterface, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> {
+function pickGCalOwnedRoutineFields(source: GCalOwnedRoutineSource): Partial<Pick<RoutineInterface, (typeof GCAL_OWNED_ROUTINE_KEYS)[number]>> {
     return {
         ...(source.organizer !== undefined ? { organizer: source.organizer } : {}),
         ...(source.creator !== undefined ? { creator: source.creator } : {}),
         ...(source.attendees !== undefined ? { attendees: source.attendees } : {}),
         ...(source.responseStatus !== undefined ? { responseStatus: source.responseStatus } : {}),
         ...(source.eventType !== undefined ? { eventType: source.eventType } : {}),
+        ...(source.meetingLink !== undefined ? { meetingLink: source.meetingLink } : {}),
+        ...(source.location !== undefined ? { location: source.location } : {}),
+        ...(source.htmlLink !== undefined ? { htmlLink: source.htmlLink } : {}),
     };
 }
 const pickGCalOwnedExceptionFields = pickGCalOwnedRoutineFields;
@@ -2413,8 +2423,8 @@ function hasGCalOwnedRoutineDelta(existing: RoutineInterface, event: CalendarEve
 /**
  * Applies a GCal-owned-only update to a routine via targeted $set/$unset. Used when GCal's webhook
  * arrives older than the local updatedTs but a GCal-owned field still diverges. Avoids the
- * read→merge→replaceById race window used by the structural-update path: writes only the five
- * GCal-owned keys (and bumps updatedTs) without touching anything the client owns.
+ * read→merge→replaceById race window used by the structural-update path: writes only the
+ * GCal-owned keys (GCAL_OWNED_ROUTINE_KEYS) (and bumps updatedTs) without touching anything the client owns.
  *
  * Also propagates the new master values onto existing items via `propagateMasterGCalOwnedChangesToItems`.
  */
@@ -2962,6 +2972,9 @@ function buildExceptionEntry(ex: GCalException): RoutineException {
         ...(ex.attendees !== undefined ? { attendees: ex.attendees } : {}),
         ...(ex.responseStatus !== undefined ? { responseStatus: ex.responseStatus } : {}),
         ...(ex.eventType !== undefined ? { eventType: ex.eventType } : {}),
+        ...(ex.meetingLink !== undefined ? { meetingLink: ex.meetingLink } : {}),
+        ...(ex.location !== undefined ? { location: ex.location } : {}),
+        ...(ex.htmlLink !== undefined ? { htmlLink: ex.htmlLink } : {}),
     };
 }
 
@@ -3070,6 +3083,9 @@ export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalE
             ...(ex.attendees !== undefined ? { attendees: ex.attendees } : {}),
             ...(ex.responseStatus !== undefined ? { responseStatus: ex.responseStatus } : {}),
             ...(ex.eventType !== undefined ? { eventType: ex.eventType } : {}),
+            ...(ex.meetingLink !== undefined ? { meetingLink: ex.meetingLink } : {}),
+            ...(ex.location !== undefined ? { location: ex.location } : {}),
+            ...(ex.htmlLink !== undefined ? { htmlLink: ex.htmlLink } : {}),
         };
         if (hasAtLeastOne(target.matches)) {
             await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
@@ -3356,6 +3372,9 @@ async function applyExceptionAfterDuplicate(routine: RoutineInterface, ex: GCalE
         ...(ex.attendees !== undefined ? { attendees: ex.attendees } : {}),
         ...(ex.responseStatus !== undefined ? { responseStatus: ex.responseStatus } : {}),
         ...(ex.eventType !== undefined ? { eventType: ex.eventType } : {}),
+        ...(ex.meetingLink !== undefined ? { meetingLink: ex.meetingLink } : {}),
+        ...(ex.location !== undefined ? { location: ex.location } : {}),
+        ...(ex.htmlLink !== undefined ? { htmlLink: ex.htmlLink } : {}),
     };
     await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
 }
@@ -3649,6 +3668,9 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
         ...(routine.creator ? { creator: routine.creator } : {}),
         ...(routine.attendees ? { attendees: routine.attendees } : {}),
         ...(routine.eventType ? { eventType: routine.eventType } : {}),
+        ...(routine.meetingLink ? { meetingLink: routine.meetingLink } : {}),
+        ...(routine.location ? { location: routine.location } : {}),
+        ...(routine.htmlLink ? { htmlLink: routine.htmlLink } : {}),
     };
     const exceptions = await provider.getExceptions(routine.calendarEventId, ctx.calendarId, ctx.since, masterContent);
 

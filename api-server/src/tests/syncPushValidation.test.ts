@@ -185,6 +185,38 @@ describe('POST /sync/push — strict-mode validation', () => {
         const stored = await db.collection<{ timeStart: string }>('items').findOne({ _id: entityId } as never);
         expect(stored?.timeStart).toBe('2026-07-07T10:45:00');
     });
+
+    it('200 + persists when a calendar item update op carries meetingLink/location/htmlLink', async () => {
+        // These GCal-owned fields round-trip through /sync/push when the client re-edits a synced
+        // calendar item (e.g. a drag). The strict ItemSnapshotSchema must accept them, else the whole
+        // batch 400s — the documented fromGmail-style regression.
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const entityId = crypto.randomUUID();
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('item', entityId, 'create', {
+                _id: entityId,
+                user: userId,
+                userId,
+                status: 'calendar',
+                title: 'standup',
+                timeStart: '2026-07-08T09:00:00Z',
+                timeEnd: '2026-07-08T09:15:00Z',
+                meetingLink: 'https://meet.google.com/abc-defg-hij',
+                location: 'Room 4B',
+                htmlLink: 'https://calendar.google.com/event?eid=abc123',
+                createdTs: '2026-05-08T10:00:00Z',
+                updatedTs: '2026-05-08T10:00:00Z',
+            }),
+        ]);
+
+        expect(res.status).toBe(200);
+        const stored = await db.collection<{ meetingLink: string; location: string; htmlLink: string }>('items').findOne({ _id: entityId } as never);
+        expect(stored?.meetingLink).toBe('https://meet.google.com/abc-defg-hij');
+        expect(stored?.location).toBe('Room 4B');
+        expect(stored?.htmlLink).toBe('https://calendar.google.com/event?eid=abc123');
+    });
 });
 
 // Plan-mandated contract change: webhooks now fire for `/sync/push`-driven ops too, not just

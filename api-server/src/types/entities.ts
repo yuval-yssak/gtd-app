@@ -36,14 +36,14 @@ export interface GCalAttendee extends GCalPerson {
 export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation' | 'fromGmail';
 
 /** Keys overwritten verbatim from inbound GCal — replaceById must clear these when absent. */
-export const GCAL_OWNED_ITEM_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType'] as const;
+export const GCAL_OWNED_ITEM_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType', 'meetingLink', 'location', 'htmlLink'] as const;
 
 /**
  * Mirrors `GCAL_OWNED_ITEM_KEYS` for the routine surface (RFC 5545 master) and per-instance overrides.
  * Routines store master attendees/organizer/etc. so the regenerator can copy them onto generated items;
  * per-instance overrides under `routineExceptions[]` carry the same set when they differ from the master.
  */
-export const GCAL_OWNED_ROUTINE_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType'] as const;
+export const GCAL_OWNED_ROUTINE_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType', 'meetingLink', 'location', 'htmlLink'] as const;
 
 export interface ItemInterface {
     /**
@@ -160,6 +160,12 @@ export interface ItemInterface {
     responseStatus?: GCalResponseStatus;
     /** GCal event type — usually `'default'`; outOfOffice/focusTime/workingLocation/fromGmail are special. Server-overwritten. */
     eventType?: GCalEventType;
+    /** Conferencing join URL — Meet `hangoutLink` or the `video` entry point from conferenceData (e.g. Zoom). GCal-owned; read-only in-app. */
+    meetingLink?: string;
+    /** Free-text / physical location from the GCal `location` field. GCal-owned; read-only in-app. */
+    location?: string;
+    /** Canonical Google Calendar event URL (`htmlLink`); opens the event in the GCal UI. GCal-owned; read-only in-app. */
+    htmlLink?: string;
     /** Server-set to true when an inbound GCal cancellation pushed this item to trash. UI surfaces it as a badge. */
     cancelledByGCal?: boolean;
     /**
@@ -223,6 +229,10 @@ export interface RoutineInterface {
     attendees?: GCalAttendee[];
     responseStatus?: GCalResponseStatus;
     eventType?: GCalEventType;
+    /** GCal master conferencing/location/event-URL — mirrored onto generated items. See `GCAL_OWNED_ROUTINE_KEYS`. */
+    meetingLink?: string;
+    location?: string;
+    htmlLink?: string;
     /**
      * Ref to CalendarIntegrationInterface._id. Identifies which calendar integration owns the series.
      */
@@ -317,6 +327,9 @@ export interface RoutineInterface {
         attendees?: GCalAttendee[];
         responseStatus?: GCalResponseStatus;
         eventType?: GCalEventType;
+        meetingLink?: string;
+        location?: string;
+        htmlLink?: string;
     }>;
 }
 

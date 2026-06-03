@@ -16,9 +16,9 @@ import { recordOperation } from './operationHelpers.js';
  * is preserved: missing key on the override ⇒ inherit master, present key ⇒ override wins.
  */
 function pickGCalOwnedRoutineMirror(
-    source: Partial<Pick<RoutineInterface, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>>,
-): Partial<Pick<ItemInterface, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> {
-    const next: Partial<Pick<ItemInterface, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> = {};
+    source: Partial<Pick<RoutineInterface, (typeof GCAL_OWNED_ROUTINE_KEYS)[number]>>,
+): Partial<Pick<ItemInterface, (typeof GCAL_OWNED_ROUTINE_KEYS)[number]>> {
+    const next: Partial<Pick<ItemInterface, (typeof GCAL_OWNED_ROUTINE_KEYS)[number]>> = {};
     for (const key of GCAL_OWNED_ROUTINE_KEYS) {
         const value = source[key];
         if (value !== undefined) {

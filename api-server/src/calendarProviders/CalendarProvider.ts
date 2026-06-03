@@ -32,6 +32,9 @@ export interface GCalException {
     attendees?: GCalAttendee[];
     responseStatus?: GCalResponseStatus;
     eventType?: GCalEventType;
+    meetingLink?: string;
+    location?: string;
+    htmlLink?: string;
 }
 
 /**
@@ -46,6 +49,9 @@ export interface MasterContent {
     creator?: GCalPerson;
     attendees?: GCalAttendee[];
     eventType?: GCalEventType;
+    meetingLink?: string;
+    location?: string;
+    htmlLink?: string;
 }
 
 export interface GCalEvent {
@@ -72,6 +78,12 @@ export interface GCalEvent {
     responseStatus?: GCalResponseStatus;
     /** GCal event type — usually `'default'`; outOfOffice/focusTime/workingLocation/fromGmail are special. */
     eventType?: GCalEventType;
+    /** Conferencing join URL (Meet hangoutLink or conferenceData video entry point). GCal-owned; read-only. */
+    meetingLink?: string;
+    /** Free-text / physical location from the GCal `location` field. GCal-owned; read-only. */
+    location?: string;
+    /** Canonical Google Calendar event URL (`htmlLink`); opens the event in the GCal UI. GCal-owned; read-only. */
+    htmlLink?: string;
 }
 
 export interface CalendarProvider {
