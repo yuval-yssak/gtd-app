@@ -58,6 +58,41 @@ describe('upsertAccount', () => {
         const all = await db.getAll('accounts');
         expect(all).toHaveLength(1);
     });
+
+    it('reconciles a same-email row under a new id instead of throwing ConstraintError', async () => {
+        // Re-login where the email now maps to a different userId. The store is keyed by `id` but
+        // `email` is uniquely indexed — a plain put would throw ConstraintError. upsertAccount must
+        // replace the stale-id row so the same email never collides across two primary keys.
+        await upsertAccount(makeAccount('old-id', 1000, { email: 'same@example.com' }), db);
+        await upsertAccount(makeAccount('new-id', 2000, { email: 'same@example.com' }), db);
+
+        expect(await db.get('accounts', 'old-id')).toBeUndefined();
+        expect((await db.get('accounts', 'new-id'))?.email).toBe('same@example.com');
+
+        const all = await db.getAll('accounts');
+        expect(all).toHaveLength(1);
+    });
+
+    it('leaves a different-email account untouched when upserting a new account', async () => {
+        await upsertAccount(makeAccount('u1', 1000, { email: 'a@example.com' }), db);
+        await upsertAccount(makeAccount('u2', 2000, { email: 'b@example.com' }), db);
+
+        const all = await getAllAccounts(db);
+        expect(all.map((a) => a.id)).toEqual(['u1', 'u2']);
+    });
+
+    it('does not repoint activeAccount when reconciling a same-email row (caller owns that)', async () => {
+        // Documents the deliberate single-responsibility boundary: reconciling the stale-id row leaves
+        // the activeAccount pointer dangling at the old id; the re-login caller's setActiveAccount is
+        // what re-points it. getActiveAccount returns undefined in the interim (pointer → deleted row).
+        await upsertAccount(makeAccount('old-id', 1000, { email: 'same@example.com' }), db);
+        await setActiveAccount('old-id', db);
+
+        await upsertAccount(makeAccount('new-id', 2000, { email: 'same@example.com' }), db);
+
+        expect(await db.get('activeAccount', 'active')).toEqual({ userId: 'old-id' });
+        expect(await getActiveAccount(db)).toBeUndefined();
+    });
 });
 
 // ── setActiveAccount / getActiveAccount ───────────────────────────────────────

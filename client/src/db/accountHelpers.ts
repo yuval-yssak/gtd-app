@@ -2,8 +2,32 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase, IDBPTransaction } from 'idb';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
 
+/**
+ * Upserts an account row, reconciling on the unique `email` index. The store is keyed by `id`
+ * (Better Auth userId), but `email` carries a unique index — so a plain `put` throws
+ * `ConstraintError` when the same email already exists under a DIFFERENT `id` (re-login where an
+ * email now maps to a new userId, or a stale row from a prior identity). We delete any same-email
+ * row whose `id` differs before writing the new one, all inside a single readwrite transaction so a
+ * concurrent read never sees the email mapped to zero or two rows.
+ *
+ * Callers fan this out concurrently via `Promise.all` (useAccounts mirrors every device session,
+ * AppDataProvider re-hydrates on load). That's safe: IDB serializes overlapping readwrite
+ * transactions on the same store, and `listDeviceSessions` never returns two sessions sharing an
+ * email — so no two concurrent upserts contend for the same email row.
+ *
+ * Note: this reconciles the `accounts` store only. If the deleted stale row happened to be the
+ * `activeAccount` pointer, the caller's `setActiveAccount` (re-login) or session list (multi-session
+ * mirror) is what re-points it — kept out of here to preserve single responsibility.
+ */
 export async function upsertAccount(account: StoredAccount, db: IDBPDatabase<MyDB>): Promise<void> {
-    await db.put('accounts', account);
+    const tx = db.transaction('accounts', 'readwrite');
+    const store = tx.objectStore('accounts');
+    const existingByEmail = await store.index('email').get(account.email);
+    if (existingByEmail && existingByEmail.id !== account.id) {
+        await store.delete(existingByEmail.id);
+    }
+    await store.put(account);
+    await tx.done;
 }
 
 /** Shape of the Better Auth `getSession()` user object we care about. Keep `image` permissive
