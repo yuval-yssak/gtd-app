@@ -125,3 +125,25 @@ export function itemContextNames(item: StoredItem, contextsById: Map<string, Sto
         return c ? [c.name] : [];
     });
 }
+
+// {id, name} variants for UI that renders one element per tag — id gives a stable React key
+// since display names are not unique (two people can share a name).
+export interface ResolvedTag {
+    id: string;
+    name: string;
+}
+
+export function itemContextTags(item: StoredItem, contextsById: Map<string, StoredWorkContext>): ResolvedTag[] {
+    return (item.workContextIds ?? []).flatMap((id) => {
+        const c = contextsById.get(id);
+        return c ? [{ id: c._id, name: c.name }] : [];
+    });
+}
+
+export function itemPersonTags(item: StoredItem, peopleById: Map<string, StoredPerson>): ResolvedTag[] {
+    const ids = [...(item.peopleIds ?? []), ...(item.waitingForPersonId ? [item.waitingForPersonId] : [])];
+    return ids.flatMap((id) => {
+        const p = peopleById.get(id);
+        return p ? [{ id: p._id, name: p.name }] : [];
+    });
+}

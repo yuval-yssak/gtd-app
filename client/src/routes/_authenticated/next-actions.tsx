@@ -1,9 +1,12 @@
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
+import SellOutlinedIcon from '@mui/icons-material/SellOutlined';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
@@ -11,13 +14,14 @@ import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Snackbar from '@mui/material/Snackbar';
 import Stack from '@mui/material/Stack';
+import Switch from '@mui/material/Switch';
 import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
@@ -26,7 +30,8 @@ import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
-import type { EnergyLevel, StoredItem } from '../../types/MyDB';
+import { itemContextTags, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
+import type { EnergyLevel, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import styles from './-next-actions.module.css';
 
 export const Route = createFileRoute('/_authenticated/next-actions')({
@@ -70,6 +75,55 @@ function makeToggle<T>(setter: React.Dispatch<React.SetStateAction<T | null>>) {
     return (value: T) => setter((prev) => (prev === value ? null : value));
 }
 
+// "Show tags" preference persists across visits. Defaults ON; only an explicit 'false' hides them.
+const SHOW_TAGS_KEY = 'nextActions.showTags';
+export const readShowTags = () => localStorage.getItem(SHOW_TAGS_KEY) !== 'false';
+
+interface RowTagsProps {
+    contextTags: ResolvedTag[];
+    personTags: ResolvedTag[];
+    dueLabel: string | null;
+}
+
+// Second line of a next-action row: work-context chips (tag icon), people chips (person icon),
+// then the optional "Due" text. Chips keyed by entity id — display names are not unique.
+export function RowTags({ contextTags, personTags, dueLabel }: RowTagsProps) {
+    if (contextTags.length === 0 && personTags.length === 0 && !dueLabel) {
+        return null;
+    }
+    return (
+        <Box component="span" className={styles.tagRow} data-testid="nextActionRowTags">
+            {contextTags.map((tag) => (
+                <Chip key={`ctx-${tag.id}`} icon={<SellOutlinedIcon />} label={tag.name} size="small" variant="outlined" />
+            ))}
+            {personTags.map((tag) => (
+                <Chip key={`person-${tag.id}`} icon={<PersonOutlineIcon />} label={tag.name} size="small" color="info" variant="outlined" />
+            ))}
+            {dueLabel && (
+                <Typography component="span" variant="caption" color="text.secondary" className={styles.dueText}>
+                    {dueLabel}
+                </Typography>
+            )}
+        </Box>
+    );
+}
+
+interface RowSecondaryDeps {
+    showTags: boolean;
+    contextsById: Map<string, StoredWorkContext>;
+    peopleById: Map<string, StoredPerson>;
+}
+
+// Builds a row's second line. Tags hidden → just the "Due" text (original behaviour, undefined when no date);
+// tags shown → work-context + people chips precede it. Extracted so both branches are unit-testable.
+export function buildRowSecondary(item: StoredItem, { showTags, contextsById, peopleById }: RowSecondaryDeps) {
+    const dueLabel = item.expectedBy ? `Due ${dayjs(item.expectedBy).format('MMM D')}` : null;
+    if (!showTags) {
+        return dueLabel ?? undefined;
+    }
+    return <RowTags contextTags={itemContextTags(item, contextsById)} personTags={itemPersonTags(item, peopleById)} dueLabel={dueLabel} />;
+}
+
 function NextActionsPage() {
     const { db } = Route.useRouteContext();
     const { items, workContexts, people, routines, refreshItems, isInitialSyncing } = useAppData();
@@ -79,10 +133,20 @@ function NextActionsPage() {
     const [energyFilter, setEnergyFilter] = useState<EnergyLevel | null>(null);
     const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
     const [contextFilter, setContextFilter] = useState<string | null>(null);
+    const [showTags, setShowTags] = useState(readShowTags);
 
     const toggleEnergy = makeToggle(setEnergyFilter);
     const toggleTime = makeToggle(setTimeFilter);
     const toggleContext = makeToggle(setContextFilter);
+
+    function onShowTagsToggled(next: boolean) {
+        setShowTags(next);
+        localStorage.setItem(SHOW_TAGS_KEY, String(next));
+    }
+
+    // Lookup maps for resolving an item's workContextIds / peopleIds to names without rescanning the arrays per row.
+    const contextsById = useMemo(() => new Map(workContexts.map((c) => [c._id, c])), [workContexts]);
+    const peopleById = useMemo(() => new Map(people.map((p) => [p._id, p])), [people]);
 
     const nextActions = items
         .filter((item) => item.status === 'nextAction')
@@ -184,6 +248,13 @@ function NextActionsPage() {
                         />
                     ))}
                 </Stack>
+                <FormControlLabel
+                    sx={{ mt: 0.5 }}
+                    control={
+                        <Switch size="small" checked={showTags} onChange={(e) => onShowTagsToggled(e.target.checked)} data-testid="nextActionsShowTagsToggle" />
+                    }
+                    label={<Typography variant="body2">Show tags</Typography>}
+                />
             </Box>
             {nextActions.length === 0 ? (
                 // isInitialSyncing is only true during first-launch bootstrap, when IDB is empty —
@@ -241,7 +312,9 @@ function NextActionsPage() {
                                                 <AccountChip userId={item.userId} />
                                             </Box>
                                         }
-                                        secondary={item.expectedBy ? `Due ${dayjs(item.expectedBy).format('MMM D')}` : undefined}
+                                        // secondary slot rendered as 'div' so chips (block content) can nest — the default <p> would be invalid DOM.
+                                        slotProps={{ secondary: { component: 'div' } }}
+                                        secondary={buildRowSecondary(item, { showTags, contextsById, peopleById })}
                                         className={styles.listItemText}
                                     />
                                 </ListItemButton>
