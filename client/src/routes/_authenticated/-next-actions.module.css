@@ -32,3 +32,17 @@
 .listItemText {
     padding-right: 7.5rem;
 }
+
+/* Second line: work-context + people chips, then the optional "Due" text. Wraps independently of the title row. */
+.tagRow {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    flex-wrap: wrap;
+    margin-top: 0.25rem;
+}
+
+/* "Due …" sits at the end of the tag row; nudged left so it doesn't crowd the last chip. */
+.dueText {
+    margin-left: 0.25rem;
+}

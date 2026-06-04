@@ -4,3 +4,4 @@
 - [Uncancellable setTimeout in routes](feedback_uncancellable_settimeout_in_routes.md) — Deferred-navigate setTimeouts in route components need re-entry clearTimeout + unmount cleanup; missing either leaves stale navigations firing after the user already moved on.
 - [Extracting branches swallows outer-return semantics](feedback_extract_branch_helpers_swallow_outer_return.md) — Moving a fire-and-forget branch into an inner helper demotes its `return` from "exit callback" to "exit helper"; outer postludes (onSaved/onClose/nav) silently fire for that branch.
 - [IDB upsert on unique secondary index](feedback_idb_upsert_unique_index_reconcile.md) — delete-stale-then-put in one tx; check tx-liveness, dangling activeAccount pointer, and Promise.all concurrent callers.
+- [React keys by display name](feedback_react_keys_by_display_name.md) — list rows keyed by chip label / person / context name (not _id); duplicate names collide since helpers return lossy string[]. Flag it.
