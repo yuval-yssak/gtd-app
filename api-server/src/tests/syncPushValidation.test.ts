@@ -217,6 +217,98 @@ describe('POST /sync/push — strict-mode validation', () => {
         expect(stored?.location).toBe('Room 4B');
         expect(stored?.htmlLink).toBe('https://calendar.google.com/event?eid=abc123');
     });
+
+    it('200 + persists when a routine update op carries lastSyncedFromGCalTs (any GCal-synced routine)', async () => {
+        // lastSyncedFromGCalTs is set on every GCal-synced routine. The strict RoutineSnapshotSchema must
+        // accept it — otherwise the routine update op 400s with unrecognized_keys and jams the client's
+        // push queue ("Sync failed"), starving the device of all subsequent sync (observed in staging).
+        // Reproduces the staging failure mode exactly: an `update` op (the routine already exists).
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const entityId = crypto.randomUUID();
+        const snapshot = {
+            _id: entityId,
+            user: userId,
+            title: 'Take a Time lapse picture',
+            routineType: 'calendar',
+            rrule: 'FREQ=MONTHLY;BYDAY=1SA',
+            active: true,
+            template: {},
+            calendarItemTemplate: { timeOfDay: '10:00', duration: 15 },
+            calendarEventId: 'gcal-evt-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'cfg-1',
+            lastSyncedFromGCalTs: '2026-05-26T12:18:35.284Z',
+            createdTs: '2025-02-01T08:00:00.000Z',
+            updatedTs: '2026-06-01T18:55:51.450Z',
+        };
+        await db.collection('routines').insertOne(snapshot as never);
+
+        const res = await push(sessionCookie!, 'dev-1', [makeClientOp('routine', entityId, 'update', { ...snapshot, updatedTs: '2026-06-02T09:00:00.000Z' })]);
+
+        expect(res.status).toBe(200);
+        const stored = await db.collection<{ lastSyncedFromGCalTs: string }>('routines').findOne({ _id: entityId } as never);
+        expect(stored?.lastSyncedFromGCalTs).toBe('2026-05-26T12:18:35.284Z');
+    });
+
+    it('200 + persists when an all-day routine update op carries calendarItemTemplate { allDay: true }', async () => {
+        // All-day routines (e.g. yearly birthdays) carry `{ allDay: true }` instead of `{ timeOfDay,
+        // duration }`. The strict calendarItemTemplate schema must accept that shape, else every all-day
+        // routine's update op 400s and jams the push queue.
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const entityId = crypto.randomUUID();
+        const snapshot = {
+            _id: entityId,
+            user: userId,
+            title: "Dad's Birthday",
+            routineType: 'calendar',
+            rrule: 'FREQ=YEARLY',
+            active: true,
+            template: {},
+            calendarItemTemplate: { allDay: true },
+            calendarEventId: 'gcal-bday-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'cfg-1',
+            createdTs: '2025-02-01T08:00:00.000Z',
+            updatedTs: '2026-06-01T18:55:51.450Z',
+        };
+        await db.collection('routines').insertOne(snapshot as never);
+
+        const res = await push(sessionCookie!, 'dev-1', [makeClientOp('routine', entityId, 'update', { ...snapshot, updatedTs: '2026-06-02T09:00:00.000Z' })]);
+
+        expect(res.status).toBe(200);
+        const stored = await db.collection<{ calendarItemTemplate: { allDay: boolean } }>('routines').findOne({ _id: entityId } as never);
+        expect(stored?.calendarItemTemplate?.allDay).toBe(true);
+    });
+
+    it('400 when a timed routine template is missing duration (union must not relax timed-template requirements)', async () => {
+        // Guards the union's intent: relaxing calendarItemTemplate for all-day routines must NOT make
+        // timeOfDay/duration globally optional. A timed template missing duration is still malformed.
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const entityId = crypto.randomUUID();
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('routine', entityId, 'create', {
+                _id: entityId,
+                user: userId,
+                title: 'Malformed timed routine',
+                routineType: 'calendar',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                active: true,
+                template: {},
+                calendarItemTemplate: { timeOfDay: '10:00' }, // missing duration → invalid
+                calendarEventId: 'gcal-evt-2',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'cfg-1',
+                createdTs: '2025-02-01T08:00:00.000Z',
+                updatedTs: '2026-06-01T18:55:51.450Z',
+            }),
+        ]);
+
+        expect(res.status).toBe(400);
+    });
 });
 
 // Plan-mandated contract change: webhooks now fire for `/sync/push`-driven ops too, not just

@@ -47,12 +47,29 @@ const routineExceptionSchema = z
     })
     .strict();
 
-const calendarItemTemplateSchema = z
-    .object({
-        timeOfDay: z.string().regex(/^\d{2}:\d{2}$/, { message: 'timeOfDay must be HH:MM' }),
-        duration: z.number().positive(),
-    })
-    .strict();
+// Two shapes per RoutineInterface.calendarItemTemplate: an all-day routine carries `{ allDay: true }`
+// (timeOfDay/duration ignored — e.g. yearly birthdays), a timed routine carries `{ timeOfDay, duration }`.
+// The schema must accept BOTH or every all-day routine's update op is rejected with unrecognized_keys /
+// invalid_type, jamming the client's push queue ("Sync failed").
+const calendarItemTemplateSchema = z.union([
+    z
+        .object({
+            allDay: z.literal(true),
+            timeOfDay: z
+                .string()
+                .regex(/^\d{2}:\d{2}$/)
+                .optional(),
+            duration: z.number().positive().optional(),
+        })
+        .strict(),
+    z
+        .object({
+            allDay: z.literal(false).optional(),
+            timeOfDay: z.string().regex(/^\d{2}:\d{2}$/, { message: 'timeOfDay must be HH:MM' }),
+            duration: z.number().positive(),
+        })
+        .strict(),
+]);
 
 // GCal-owned routine fields (organizer/creator/attendees/responseStatus/eventType) only apply to
 // calendar-type routines — a nextAction routine has no GCal master event, so carrying them through
@@ -80,6 +97,10 @@ export const RoutineSnapshotSchema = z
         // Raw GCal rebased-master id for split-successor routines — see entities.ts.
         calendarRebasedEventId: nonEmptyString.optional(),
         lastPushedToGCalTs: isoDateTime.optional(),
+        // GCal-truth sync anchor (last applied master payload). Present on any GCal-synced routine;
+        // the strict op schema must accept it or every routine update op carrying it is rejected with
+        // unrecognized_keys, jamming the client's push queue ("Sync failed"). See entities.ts.
+        lastSyncedFromGCalTs: isoDateTime.optional(),
         lastSyncedNotes: z.string().optional(),
         // GCal master-mirror fields — see entities.ts GCAL_OWNED_ROUTINE_KEYS.
         organizer: gcalPersonSchema.optional(),
