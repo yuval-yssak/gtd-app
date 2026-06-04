@@ -112,6 +112,8 @@ export interface StoredRoutine {
     lastKnownCalendarSyncConfigId?: string;
     /** Ref to the routine this was split from ("this and all following" edit). */
     splitFromRoutineId?: string;
+    /** Raw GCal rebased-master id (`<bareId>_R<anchor>`) for split-successor routines — see RoutineInterface. */
+    calendarRebasedEventId?: string;
     lastPushedToGCalTs?: string;
     lastSyncedNotes?: string; // last template.notes value synced from/to Google Calendar — used for conflict detection
     /** GCal master organizer/creator/attendees/responseStatus/eventType — RFC 5545 mirror; see RoutineInterface for semantics. */

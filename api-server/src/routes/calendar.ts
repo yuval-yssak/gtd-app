@@ -1729,8 +1729,25 @@ async function importRecurringEventAsRoutine(
     // `findExistingRoutineForEvent` resolves to. `event.id` is already the bare id (normalized above), so
     // the new routine + its generated items match GCal's bare-id instance ids — no duplicate items.
     if (opts?.forceSplitSuccessor) {
-        // An already-active routine on the bare id IS the successor (idempotent re-sync) → update it,
-        // never the inactive parent. `findExistingRoutineForEvent` prefers the active row.
+        // Idempotency on the raw rebased id (`rawEvent.id` still carries the `_R<anchor>` suffix). The
+        // SAME successor re-arriving must update the SAME routine, regardless of its active flag — phase 1
+        // of the same batch imports the capped base and (because base + successor share a bare
+        // calendarEventId) can flip this successor to active:false. Matching on the stable rebased id and
+        // reactivating reverses that erroneous cap, so a re-reported split converges instead of minting a
+        // fresh routine every webhook fire (the unbounded-chain bug).
+        const successor = await findSplitSuccessorByRebasedId(rawEvent.id, source, ctx);
+        if (successor) {
+            console.log(
+                `[gcal-sync] updating split-successor routine (rebased-id match) | rebasedId=${rawEvent.id} routineId=${successor._id} active=${successor.active}`,
+            );
+            // Pass the successor as-is: when phase 1's base import wrongly capped it (active:false + UNTIL
+            // rrule), `updateRoutineFromGCal`'s `newlyLosesUntil` gate reactivates it from the open inbound
+            // rrule. Pre-setting active:true here would instead DEFEAT that gate (it requires !existing.active).
+            await updateRoutineFromGCal(successor, event, rrule, source, ctx);
+            return;
+        }
+        // Legacy fallback (pre-rebased-id routines): an already-active routine on the bare id IS the
+        // successor → update it, never the inactive parent. `findExistingRoutineForEvent` prefers active.
         if (existing?.active) {
             console.log(`[gcal-sync] updating split-successor routine | eventId=${event.id} title=${event.title} routineId=${existing._id}`);
             await updateRoutineFromGCal(existing, event, rrule, source, ctx);
@@ -1738,7 +1755,7 @@ async function importRecurringEventAsRoutine(
         }
         const parentId = await resolveSplitParentId(event.id, source, ctx);
         console.log(`[gcal-sync] creating split-successor routine | eventId=${event.id} title=${event.title} rrule=${rrule} parent=${parentId ?? 'none'}`);
-        await createRoutineFromGCal(event, rrule, source, ctx, parentId ? { splitFromRoutineId: parentId } : undefined);
+        await createRoutineFromGCal(event, rrule, source, ctx, { rebasedEventId: rawEvent.id, ...(parentId ? { splitFromRoutineId: parentId } : {}) });
         return;
     }
 
@@ -1750,6 +1767,21 @@ async function importRecurringEventAsRoutine(
 
     console.log(`[gcal-sync] creating routine | eventId=${event.id} title=${event.title} rrule=${rrule}`);
     await createRoutineFromGCal(event, rrule, source, ctx);
+}
+
+/**
+ * Find a split-successor routine by its stable raw rebased GCal id (`<bareId>_R<anchor>`). This is the
+ * idempotency key that lets a re-reported `_R` master re-find the same successor instead of creating a
+ * new one — see `RoutineInterface.calendarRebasedEventId`. Matches active OR capped (a same-batch base
+ * import may have wrongly capped it); the caller reactivates.
+ */
+async function findSplitSuccessorByRebasedId(rebasedEventId: string, source: CalendarSource, ctx: SyncContext): Promise<RoutineInterface | undefined> {
+    const matches = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarRebasedEventId: rebasedEventId,
+        calendarIntegrationId: source.integration._id,
+    });
+    return hasAtLeastOne(matches) ? pickMostRecentlyUpdated(matches) : undefined;
 }
 
 /**
@@ -1899,7 +1931,7 @@ async function createRoutineFromGCal(
     rrule: string,
     source: CalendarSource,
     ctx: SyncContext,
-    opts?: { splitFromRoutineId?: string },
+    opts?: { splitFromRoutineId?: string; rebasedEventId?: string },
 ): Promise<void> {
     // All-day routines skip the time/duration extraction — GCal emits `start.date` (YYYY-MM-DD)
     // with no time component, so `extractLocalTime` and the `diff('minute')` math would both yield
@@ -1940,6 +1972,9 @@ async function createRoutineFromGCal(
         // heuristic in `pickSplitParent`/`detectAndLinkSplits` can't reliably pair them when the cap
         // and the first tail occurrence are far apart — the caller passes the parent id directly.
         ...(opts?.splitFromRoutineId ? { splitFromRoutineId: opts.splitFromRoutineId } : {}),
+        // Stable per-tail key for split successors (see RoutineInterface.calendarRebasedEventId). Lets a
+        // re-reported `_R` master re-find THIS routine instead of minting a new one each sync.
+        ...(opts?.rebasedEventId ? { calendarRebasedEventId: opts.rebasedEventId } : {}),
         // Anchor the GCal-truth timestamp on create so the first inbound update's structural gate
         // compares against the real GCal payload, not the self-bumped updatedTs. Mirrors createNewCalendarItem.
         lastSyncedFromGCalTs: event.updated,

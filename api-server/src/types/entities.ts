@@ -260,6 +260,16 @@ export interface RoutineInterface {
      */
     splitFromRoutineId?: string;
     /**
+     * Raw GCal rebased-master id (`<bareId>_R<anchor>`) when this routine is the open-ended tail of a
+     * "this and all following" split. `calendarEventId` stores the BARE id (so generated items match
+     * GCal's bare-id instance ids), which means multiple split tails on one series share a
+     * `calendarEventId` and cannot be told apart by it. The rebased id is the only stable per-tail key:
+     * keying split-successor onboarding on it makes re-import idempotent — a re-reported `_R` master
+     * updates the same successor instead of minting a fresh routine each webhook fire (which otherwise
+     * grew an unbounded routine chain on RSVP-churny series).
+     */
+    calendarRebasedEventId?: string;
+    /**
      * ISO datetime — set when the app pushes an edit to Google Calendar.
      * Used to detect and skip our own echo when a webhook-triggered pull finds the same change.
      */
