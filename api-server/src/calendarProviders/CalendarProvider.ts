@@ -162,6 +162,9 @@ export interface CalendarProvider {
      * and A8 (routine-generated item marked done — apply title marker + sage colorId).
      * `colorId` semantics match `updateEvent`: `undefined` leaves it untouched, `null` clears it.
      * `allDay`/`attendees`/`options.sendUpdates` semantics also match `updateEvent`.
+     * `options.instanceEventId`: when the caller already holds the GCal instance id (e.g. an item's
+     * `calendarInstanceEventId`), pass it to patch that occurrence directly and skip the live
+     * instances lookup — more reliable for already-modified instances and avoids a round-trip.
      */
     updateRecurringInstance(
         masterEventId: string,
@@ -177,15 +180,17 @@ export interface CalendarProvider {
         },
         calendarId: string,
         timeZone: string,
-        options?: { sendUpdates?: 'all' | 'none' },
+        options?: { sendUpdates?: 'all' | 'none'; instanceEventId?: string },
     ): Promise<void>;
     /**
      * Cancels a single instance of a recurring event series without affecting other occurrences.
      * The instance is located by `originalDate` (the YYYY-MM-DD the rrule originally generated),
      * then patched to `status: cancelled`. Used for matrix case A4 (trash a single instance of a
      * routine-managed series — equivalent to a `skipped` routineException).
+     * `options.instanceEventId`: same as `updateRecurringInstance` — patch the known occurrence
+     * directly and skip the live instances lookup.
      */
-    cancelRecurringInstance(masterEventId: string, originalDate: string, calendarId: string): Promise<void>;
+    cancelRecurringInstance(masterEventId: string, originalDate: string, calendarId: string, options?: { instanceEventId?: string }): Promise<void>;
     /** Deletes (cancels) a single event. */
     deleteEvent(calendarId: string, eventId: string): Promise<void>;
     /**

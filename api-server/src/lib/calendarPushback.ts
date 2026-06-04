@@ -253,7 +253,11 @@ async function pushRoutineInstanceOverride(
             },
             config.calendarId,
             timeZone,
-            { sendUpdates },
+            // Patch the known GCal instance directly when the item carries its `calendarInstanceEventId`
+            // (set by buildCalendarItem on linked routines). This skips the date-window `events.instances`
+            // lookup, which silently misses already-modified instances — the cause of routine-item `done`
+            // markers never reaching GCal. Absent (legacy items) → provider falls back to the date lookup.
+            { sendUpdates, ...(snapshot.calendarInstanceEventId ? { instanceEventId: snapshot.calendarInstanceEventId } : {}) },
         ),
     );
     await stampItemLastPushed(userId, snapshot._id);
@@ -304,7 +308,15 @@ async function pushRoutineInstanceCancellation(
     console.log(
         `[gcal-pushback] cancelling routine instance | routineId=${snapshot.routineId} eventId=${calendarEventId} originalDate=${originalDate} status=${snapshot.status}`,
     );
-    await withAuthFailureHandling(integration._id, () => provider.cancelRecurringInstance(calendarEventId, originalDate, config.calendarId));
+    await withAuthFailureHandling(integration._id, () =>
+        // Patch the known GCal instance directly when available — see pushRoutineInstanceOverride.
+        provider.cancelRecurringInstance(
+            calendarEventId,
+            originalDate,
+            config.calendarId,
+            snapshot.calendarInstanceEventId ? { instanceEventId: snapshot.calendarInstanceEventId } : undefined,
+        ),
+    );
     // Skip stamping when the caller is `handleItemDelete` — the item row has already been
     // hard-deleted by `applyEntityOp`, so the `updateOne` would silently no-op. Wasteful, not
     // wrong, but cleaner to gate it explicitly.

@@ -6479,7 +6479,8 @@ describe('calendar push-back — routine instance overrides', () => {
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
         expect(cancelSpy).toHaveBeenCalledOnce();
-        expect(cancelSpy).toHaveBeenCalledWith('recurring-master-1', '2026-04-27', 'primary');
+        // 4th arg is the instance-id option (undefined here — legacy item without calendarInstanceEventId).
+        expect(cancelSpy).toHaveBeenCalledWith('recurring-master-1', '2026-04-27', 'primary', undefined);
         expect(updateSpy).not.toHaveBeenCalled();
 
         const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
@@ -6521,6 +6522,135 @@ describe('calendar push-back — routine instance overrides', () => {
         // Stored title stays clean — marker lives only in GCal.
         expect(updated!.title).toBe('Standup');
         expect(updated!.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('patches the known calendarInstanceEventId directly on done, without an events.instances lookup', async () => {
+        // Regression: routine-generated `done` markers never reached GCal because the override path
+        // re-resolved the instance via a date-window events.instances query, which silently misses
+        // already-modified instances (the prod failure on item 9a19f9ab…). When the item carries
+        // its `calendarInstanceEventId` — exactly what GCal returns as event.id for the instance —
+        // we must patch that id directly and skip the lookup. Drives the REAL updateRecurringInstance
+        // (only events.instances/patch are stubbed) so the resolution path is exercised, not mocked.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-done-cieid',
+            routineId: 'routine-1',
+            status: 'done',
+            title: 'Standup',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+            calendarInstanceEventId: 'recurring-master-1_20260427T060000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy, instancesSpy } = spyOnGCalEventsApi();
+        // Simulate the prod failure: the date-window lookup returns NO matching instance. With the fix
+        // the patch must still land, because resolution comes from calendarInstanceEventId, not this call.
+        instancesSpy.mockResolvedValue({ data: { items: [] } });
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(instancesSpy).not.toHaveBeenCalled();
+        const params = getPatchRequestBody(patchSpy);
+        expect((params as { eventId?: string }).eventId).toBe('recurring-master-1_20260427T060000Z');
+        expect(params.requestBody).toMatchObject({ summary: '✓ Standup', colorId: '2' });
+    });
+
+    it('swallows a 404 (drifted instance id) as a skip rather than throwing', async () => {
+        // A caller-supplied instanceEventId can drift from what GCal actually materialized (tz /
+        // timeOfDay reconstruction). The patch then 404s — we want the same warn-and-skip as a missed
+        // findInstanceId lookup, not a raw error bubbling up through the fire-and-forget pushback caller.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-done-404',
+            routineId: 'routine-1',
+            status: 'done',
+            title: 'Standup',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+            calendarInstanceEventId: 'recurring-master-1_20260427T060000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy } = spyOnGCalEventsApi();
+        const notFound = Object.assign(new Error('Not Found'), { code: 404 });
+        patchSpy.mockRejectedValue(notFound);
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+        // maybePushToGCal must resolve (not reject) — the 404 is swallowed inside the provider.
+        await expect(
+            maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider()),
+        ).resolves.toBeUndefined();
+        expect(patchSpy).toHaveBeenCalledOnce();
+        // Log parity: the drift case warns just like a missed findInstanceId lookup.
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('no longer exists (404) — skipping'));
+    });
+
+    it('patches the known calendarInstanceEventId directly on trash (cancellation), without an events.instances lookup', async () => {
+        // Symmetric to the done case: single-instance trash cancels via the known instance id when
+        // present, so a previously-moved instance still cancels the correct occurrence.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-trash-cieid',
+            routineId: 'routine-1',
+            status: 'trash',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+            calendarInstanceEventId: 'recurring-master-1_20260427T060000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy, instancesSpy } = spyOnGCalEventsApi();
+        instancesSpy.mockResolvedValue({ data: { items: [] } });
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(instancesSpy).not.toHaveBeenCalled();
+        const params = getPatchRequestBody(patchSpy);
+        expect((params as { eventId?: string }).eventId).toBe('recurring-master-1_20260427T060000Z');
+        expect(params.requestBody).toMatchObject({ status: 'cancelled' });
+    });
+
+    it('falls back to the events.instances lookup when a legacy item has no calendarInstanceEventId', async () => {
+        // Items generated before calendarInstanceEventId existed must still resolve via the date window.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await setupRoutineWithEvent(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-done-legacy',
+            routineId: 'routine-1',
+            status: 'done',
+            title: 'Standup',
+            timeStart: '2026-04-27T09:00:00.000Z',
+            timeEnd: '2026-04-27T10:00:00.000Z',
+            // no calendarInstanceEventId
+        });
+        await itemsDAO.insertOne(item);
+
+        const { patchSpy, instancesSpy } = spyOnGCalEventsApi();
+        instancesSpy.mockResolvedValue({
+            data: { items: [{ id: 'resolved-by-date', originalStartTime: { dateTime: '2026-04-27T09:00:00.000Z' } }] },
+        });
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(instancesSpy).toHaveBeenCalledOnce();
+        const params = getPatchRequestBody(patchSpy);
+        expect((params as { eventId?: string }).eventId).toBe('resolved-by-date');
     });
 
     it('clears the done marker on the GCal instance when a routine-generated item is reopened to calendar', async () => {

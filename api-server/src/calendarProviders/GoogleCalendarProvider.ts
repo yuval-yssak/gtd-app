@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
-import { google } from 'googleapis';
+import { type calendar_v3, google } from 'googleapis';
 import rrule from 'rrule';
 
 // `rrule@2.8.1` ships a UMD/CJS bundle as its `main` (no conditional exports), so under Node's
@@ -655,18 +655,22 @@ export class GoogleCalendarProvider implements CalendarProvider {
         },
         calendarId: string,
         timeZone: string,
-        options?: { sendUpdates?: 'all' | 'none' },
+        options?: { sendUpdates?: 'all' | 'none'; instanceEventId?: string },
     ): Promise<void> {
-        const instanceId = await this.findInstanceId(masterEventId, originalDate, calendarId, 'updateRecurringInstance');
+        // Prefer the caller's known instance id (e.g. `item.calendarInstanceEventId`, which GCal returns
+        // verbatim as `event.id` for series instances). It's deterministic and stable across prior
+        // exceptions, so it patches the right occurrence without a live `events.instances` round-trip —
+        // which `findInstanceId` can silently miss for already-modified instances. Fall back to the
+        // date-window lookup only for legacy items that predate the field.
+        const instanceId = options?.instanceEventId ?? (await this.findInstanceId(masterEventId, originalDate, calendarId, 'updateRecurringInstance'));
         if (!instanceId) {
             return;
         }
-        const cal = google.calendar({ version: 'v3', auth: this.auth });
         const allDay = updates.allDay === true;
-        await cal.events.patch({
+        await this.patchInstanceById(
             calendarId,
-            eventId: instanceId,
-            requestBody: {
+            instanceId,
+            {
                 ...(updates.title !== undefined ? { summary: updates.title } : {}),
                 ...(updates.timeStart !== undefined ? { start: allDay ? buildDate(updates.timeStart) : { dateTime: updates.timeStart, timeZone } } : {}),
                 ...(updates.timeEnd !== undefined ? { end: allDay ? buildDate(updates.timeEnd) : { dateTime: updates.timeEnd, timeZone } } : {}),
@@ -674,19 +678,47 @@ export class GoogleCalendarProvider implements CalendarProvider {
                 ...(updates.colorId !== undefined ? { colorId: updates.colorId } : {}),
                 ...(updates.attendees !== undefined ? { attendees: updates.attendees } : {}),
             },
+            'updateRecurringInstance',
             // cal.events.patch accepts sendUpdates the same as update; default 'none' preserves the
             // historical silent-override behavior for code paths that don't yet forward a choice.
-            sendUpdates: options?.sendUpdates ?? 'none',
-        });
+            options?.sendUpdates ?? 'none',
+        );
     }
 
-    async cancelRecurringInstance(masterEventId: string, originalDate: string, calendarId: string): Promise<void> {
-        const instanceId = await this.findInstanceId(masterEventId, originalDate, calendarId, 'cancelRecurringInstance');
+    async cancelRecurringInstance(masterEventId: string, originalDate: string, calendarId: string, options?: { instanceEventId?: string }): Promise<void> {
+        // Same rationale as updateRecurringInstance: prefer the caller's known instance id when present,
+        // skipping the date-window lookup that misses already-modified instances.
+        const instanceId = options?.instanceEventId ?? (await this.findInstanceId(masterEventId, originalDate, calendarId, 'cancelRecurringInstance'));
         if (!instanceId) {
             return;
         }
+        await this.patchInstanceById(calendarId, instanceId, { status: 'cancelled' }, 'cancelRecurringInstance');
+    }
+
+    /**
+     * Patches a recurring-series instance by its (already-resolved) event id. Treats a 404 as a
+     * skip — when a caller-supplied `instanceEventId` (e.g. a legacy item's deterministic id) has
+     * drifted from what GCal actually materialized, we want the same warn-and-skip behavior as a
+     * missed `findInstanceId` lookup, not a raw googleapis error bubbling up through the
+     * fire-and-forget pushback caller.
+     */
+    private async patchInstanceById(
+        calendarId: string,
+        instanceId: string,
+        requestBody: calendar_v3.Schema$Event,
+        callerLabel: string,
+        sendUpdates: 'all' | 'none' = 'none',
+    ): Promise<void> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
-        await cal.events.patch({ calendarId, eventId: instanceId, requestBody: { status: 'cancelled' } });
+        try {
+            await cal.events.patch({ calendarId, eventId: instanceId, requestBody, sendUpdates });
+        } catch (err) {
+            if (isGoogleApiError(err) && err.code === 404) {
+                console.warn(`[GoogleCalendarProvider] ${callerLabel}: instance ${instanceId} no longer exists (404) — skipping`);
+                return;
+            }
+            throw err;
+        }
     }
 
     /**
