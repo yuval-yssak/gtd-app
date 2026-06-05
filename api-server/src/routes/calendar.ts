@@ -2683,11 +2683,12 @@ export async function upsertCalendarItem(event: CalendarEvent, source: CalendarS
     }
 
     // Past-event handling: anything that ended before start-of-today (in the calendar's timezone)
-    // is treated as past. New past events are ignored; an existing live `calendar` item moved to
-    // before today is trashed (the user dragged it into the past, so it's no longer on the calendar).
+    // is treated as past. New past events (no existing item) are ignored — we don't import history.
+    // But an existing item moved into the past is synced like any other update (the user just
+    // rescheduled it backwards); see `applyPastEventToExisting`.
     // Routine-managed items are preserved (the routine path owns their lifecycle).
-    // Skip strong-key restore for past events for the same reason as cancelled — restoring an item
-    // that we'd immediately trash via `applyPastEventToExisting` is a wasted op + flap.
+    // Skip strong-key restore for past events: a *new* past event short-circuits to a no-op here, so
+    // restoring an item we'd then ignore is a wasted op + flap.
     const cutoffIso = startOfTodayInTz(ctx.now, source.config.timeZone ?? 'UTC');
     if (event.timeStart && isPastEvent(event, cutoffIso)) {
         await applyPastEventToExisting(existing, event, source, ctx);
@@ -2800,19 +2801,20 @@ function clearAllDayIfAbsent(merged: ItemInterface, event: CalendarEvent): ItemI
 
 /**
  * Resolves a past event's effect on the existing local item:
- * - no local item: nothing to do
- * - routine-managed: skip (routine path owns lifecycle)
- * - live `calendar` item: trash (user moved it into the past)
- * - other statuses (user reclassified to nextAction/done): preserve edit semantics
+ * - no local item: nothing to do (new past events are not imported)
+ * - routine-managed or already-trashed: skip (routine path owns lifecycle / no-op)
+ * - any other existing item: normal field-level merge — the user just rescheduled it
+ *   backwards, so it's synced like any other GCal update (regardless of status).
  */
 async function applyPastEventToExisting(existing: ItemInterface | undefined, event: CalendarEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
     if (!existing || existing.routineId || existing.status === 'trash') {
         return;
     }
-    if (existing.status === 'calendar') {
-        await trashItem(existing, ctx);
-        return;
-    }
+    // An item that already exists in GTD is synced wherever the user moves it on GCal — including
+    // into the past. We used to trash a live `calendar` item dragged before today; that surprised
+    // users who simply rescheduled an event backwards. New past events (no existing item) are still
+    // ignored — that filtering happens in the caller, which only routes through here when `existing`
+    // is present.
     await updateExistingCalendarItem(existing, event, source, ctx);
 }
 

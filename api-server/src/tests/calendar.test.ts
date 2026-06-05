@@ -2438,7 +2438,7 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         expect(item).toBeNull();
     });
 
-    it("trashes an existing 'calendar' item moved to a date before today", async () => {
+    it("syncs (not trashes) an existing 'calendar' item moved to a date before today", async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -2467,8 +2467,54 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
 
+        // An existing item rescheduled backwards is synced wherever it lands — kept live, new time + title applied.
         const item = await itemsDAO.findOne({ _id: 'item-moved-past' });
-        expect(item?.status).toBe('trash');
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('Now past');
+        expect(item?.timeStart).toBe(pastTime);
+        // A user-driven backward drag must never masquerade as a GCal cancellation.
+        expect(item?.cancelledByGCal).toBeUndefined();
+    });
+
+    it('applies a backward move even when the item carries a lastSyncedFromGCalTs anchor', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // The structurally-newer guard compares event.updated against the item's lastSyncedFromGCalTs.
+        // A real inbound backward move carries an event.updated newer than the last applied payload —
+        // assert that gate doesn't block the move when an anchor is present (regression for the
+        // no-op-on-existing-anchor edge the past-event trash removal could otherwise hide).
+        const anchorTs = dayjs().subtract(2, 'hour').toISOString();
+        const eventUpdatedTs = dayjs().toISOString();
+        const futureTime = dayjs().add(1, 'day').toISOString();
+        const pastTime = dayjs().subtract(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-moved-past-anchored',
+            user: userId,
+            status: 'calendar',
+            title: 'Was future',
+            timeStart: futureTime,
+            timeEnd: futureTime,
+            calendarEventId: 'evt-moved-anchored',
+            calendarIntegrationId: 'int-1',
+            lastSyncedFromGCalTs: anchorTs,
+            createdTs: anchorTs,
+            updatedTs: anchorTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ id: 'evt-moved-anchored', title: 'Now past', timeStart: pastTime, timeEnd: pastTime, updated: eventUpdatedTs, status: 'confirmed' }],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-moved-past-anchored' });
+        expect(item?.status).toBe('calendar');
+        expect(item?.title).toBe('Now past');
+        expect(item?.timeStart).toBe(pastTime);
     });
 
     it('updates (not trashes) an in-progress event whose start is past but end is future', async () => {
@@ -2677,32 +2723,20 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         // In JLM that's April 26 01:30 — already "tomorrow". start-of-today JLM = April 26 00:00 JLM = April 25 21:00 UTC.
         // start-of-today UTC = April 25 00:00 UTC. The cutoffs disagree by 21h.
         // An event ending at April 25 20:30 UTC is *before* the JLM cutoff (past in JLM)
-        // but *after* the UTC cutoff (today in UTC). So a TZ-aware sync must trash; a UTC-only sync would not.
+        // but *after* the UTC cutoff (today in UTC). A *new* (no local item) past event is ignored,
+        // so a TZ-aware sync creates nothing; a UTC-only sync would treat it as today and create the item.
         const baseDay = dayjs.utc('2026-04-25T00:00:00Z');
         vi.useFakeTimers();
         vi.setSystemTime(baseDay.add(22, 'hour').add(30, 'minute').toDate());
         try {
             const eventStart = baseDay.add(20, 'hour').toISOString();
             const eventEnd = baseDay.add(20, 'hour').add(30, 'minute').toISOString();
-            const createdTs = baseDay.toISOString();
-            await itemsDAO.insertOne({
-                _id: 'item-tz-borderline',
-                user: userId,
-                status: 'calendar',
-                title: 'Borderline',
-                timeStart: eventStart,
-                timeEnd: eventEnd,
-                calendarEventId: 'evt-tz-borderline',
-                calendarIntegrationId: 'int-1',
-                createdTs,
-                updatedTs: createdTs,
-            });
 
             vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
                 events: [
                     {
                         id: 'evt-tz-borderline',
-                        title: 'Borderline edited',
+                        title: 'Borderline',
                         timeStart: eventStart,
                         timeEnd: eventEnd,
                         updated: dayjs().toISOString(),
@@ -2715,8 +2749,11 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
             const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
             expect(res.status).toBe(200);
 
-            const item = await itemsDAO.findOne({ _id: 'item-tz-borderline' });
-            expect(item?.status).toBe('trash');
+            // The mock returns the event unconditionally (bypassing GCal's own timeMin), so this
+            // asserts the in-process cutoff specifically: past in JLM → ignored, no item created.
+            // A UTC-only cutoff would classify it as today and import it.
+            const item = await itemsDAO.findOne({ calendarEventId: 'evt-tz-borderline' });
+            expect(item).toBeNull();
         } finally {
             vi.useRealTimers();
         }
