@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { closeContextQuietly, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
 // Dev-only endpoints exercised here:
@@ -49,6 +49,23 @@ async function waitForDeviceUserRow(deviceId: string, userId: string): Promise<v
         await new Promise((r) => setTimeout(r, 200));
     }
     throw new Error(`deviceUsers row for (${deviceId}, ${userId}) never appeared`);
+}
+
+// Symmetric to waitForDeviceUserRow: /devices/signout removes the row asynchronously, so under
+// full-suite load the removal — and the read that observes it — can lag well past a second.
+// Poll until the row is gone before asserting. Budget is generous (15s) because this runs under
+// the stop-hook's full-parallel-suite saturation, where the DELETE round-trip + read can queue
+// behind a busy local Mongo; 5s proved too tight there.
+async function waitForDeviceUserRowGone(deviceId: string, userId: string): Promise<void> {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+        const rows = await readServerDeviceUserRows(deviceId);
+        if (!rows.some((r) => r.userId === userId)) {
+            return;
+        }
+        await new Promise((r) => setTimeout(r, 200));
+    }
+    throw new Error(`deviceUsers row for (${deviceId}, ${userId}) never disappeared`);
 }
 
 // Drives the full sign-out flow from the page context — the test would otherwise need to
@@ -164,6 +181,17 @@ test.describe('deviceUsers join — multi-account', () => {
                 });
             }, deviceId);
 
+            // Take the page offline so no app-originated authenticated request (SSE-triggered sync,
+            // push re-registration) carrying X-Device-Id under the still-active secondary cookie can
+            // fire the auth middleware's fire-and-forget deviceUsers upsert AFTER signout and
+            // re-insert the row we just removed. Our row polling below uses Node fetch (not the page),
+            // so it's unaffected by the page's offline state. This race only surfaced under full-suite
+            // load, where the straggler upsert landed seconds after the immediate read.
+            await page.context().setOffline(true);
+
+            // Removal is async — wait for the secondary's row to disappear before asserting the
+            // surviving set, otherwise the read can race the signout under full-suite load.
+            await waitForDeviceUserRowGone(deviceId, secondary.userId);
             const rowsAfter = await readServerDeviceUserRows(deviceId);
             expect(rowsAfter.map((r) => r.userId)).toEqual([active.userId]);
         });
@@ -240,7 +268,7 @@ test.describe('Settings → Notifications state machine', () => {
             // Plain Typography line — match by exact text rather than role/aria.
             await expect(page.getByText('Notifications enabled.', { exact: true })).toBeVisible({ timeout: 10_000 });
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 
@@ -258,7 +286,7 @@ test.describe('Settings → Notifications state machine', () => {
             // Settings polls /push/status on mount via refreshStatus; the button then surfaces.
             await expect(page.getByRole('button', { name: 'Re-enable notifications' })).toBeVisible({ timeout: 10_000 });
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 
@@ -269,7 +297,7 @@ test.describe('Settings → Notifications state machine', () => {
             await page.goto('http://localhost:4173/settings');
             await expect(page.getByRole('button', { name: 'Enable notifications' })).toBeVisible({ timeout: 10_000 });
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 });

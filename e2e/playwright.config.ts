@@ -9,6 +9,12 @@ export default defineConfig({
     globalSetup: path.resolve(__dirname, 'global-setup.ts'),
     timeout: 30_000,
     retries: 1, // one retry on flake — E2E tests can be timing-sensitive
+    // Cap workers well below Playwright's default (≈half the 12 cores = 6). The stop-hook runs this
+    // e2e suite IN PARALLEL with the client + api-server vitest suites (each with its own worker pool)
+    // against one local Mongo, often alongside the developer's own Chrome; 6 browsers on top of that
+    // oversubscribed the machine and starved operations past their timeouts. 2 keeps each browser
+    // adequately fed under that concurrent load while still parallelising e2e.
+    workers: 2,
     use: {
         baseURL: 'http://localhost:4173',
         // Each test file gets fresh contexts — no shared browser state

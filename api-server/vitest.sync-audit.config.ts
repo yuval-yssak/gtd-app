@@ -5,6 +5,10 @@ export default defineConfig({
         globals: true,
         // dotenv/config loads api-server/.env so GOOGLE_OAUTH_APP_CLIENT_ID etc. are available.
         setupFiles: ['dotenv/config'],
+        // This suite also runs under NODE_ENV=test, so loadDataAccess namespaces its `gtd_test_sync_audit`
+        // DB by process.ppid (see mainLoader.namespaceTestDB). Wire the same teardown so the per-run
+        // database is dropped afterwards instead of leaking a fresh `gtd_test_sync_audit_p<pid>` each run.
+        globalSetup: ['src/tests/globalTeardown.ts'],
         include: ['src/tests-sync-audit/scenarios/**/*.audit.ts'],
         // Real Mongo + real Google Calendar API — never run in parallel.
         // Scenarios within a file share setup (one user, one integration) and

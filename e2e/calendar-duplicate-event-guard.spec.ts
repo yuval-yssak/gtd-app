@@ -1,6 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { resetServerForEmails } from './helpers/context';
+import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -100,7 +100,7 @@ test.describe('calendar — duplicate-event create guard', () => {
             // UI assertion — the calendar page shows the event exactly once.
             await expect(page.getByText('Team sync')).toHaveCount(1, { timeout: 10_000 });
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 });

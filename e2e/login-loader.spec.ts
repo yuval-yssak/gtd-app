@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { closeContextQuietly } from './helpers/context';
 
 const CLIENT_URL = 'http://localhost:4173';
 
@@ -30,7 +31,7 @@ test.describe('login page — loader on sign-in click', () => {
             await expect(redirectingBtn).toBeDisabled();
             await expect(githubBtn).toBeDisabled();
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 
@@ -53,7 +54,7 @@ test.describe('login page — loader on sign-in click', () => {
             await expect(googleBtn).toBeEnabled();
             await expect(page.getByRole('button', { name: 'Sign in with GitHub' })).toBeEnabled();
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 });

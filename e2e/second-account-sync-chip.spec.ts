@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { fetchDevMultiSessionCookies } from './helpers/context';
+import { closeContextQuietly, fetchDevMultiSessionCookies } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { fetchDevSessionCookie, loginAs } from './helpers/login';
 
@@ -27,7 +27,7 @@ test.describe('second-account sync chip', () => {
             await gtd.collect(seedPage, 'Account A task');
             await gtd.flush(seedPage);
         } finally {
-            await seedCtx.close();
+            await closeContextQuietly(seedCtx);
         }
 
         const ctx = await browser.newContext();
@@ -60,7 +60,7 @@ test.describe('second-account sync chip', () => {
             await expect(page.getByTestId('syncingChip')).toHaveCount(0, { timeout: 15_000 });
             await expect(page.getByText('Account A task')).toBeVisible();
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 });

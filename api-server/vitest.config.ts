@@ -12,9 +12,13 @@ export default defineConfig({
         onConsoleLog: () => false,
         // Exclude compiled JS output — only run TypeScript sources
         exclude: ['**/node_modules/**', '**/build/**'],
-        // Run test files sequentially — all test files share the same gtd_test MongoDB
-        // database, so concurrent file execution causes beforeEach cleanup in one file
-        // to wipe OAuth state records that another file's in-flight login still needs.
+        // Run test files sequentially — within one run, files share the same (now PID-namespaced)
+        // MongoDB database, so concurrent file execution would let beforeEach cleanup in one file
+        // wipe OAuth state records that another file's in-flight login still needs.
         fileParallelism: false,
+        // Each run namespaces its test DBs by process.ppid (see mainLoader.namespaceTestDB) so two
+        // concurrent `npm run test` invocations don't collide on `gtd_test`; this teardown drops the
+        // databases this run created once everything finishes.
+        globalSetup: ['src/tests/globalTeardown.ts'],
     },
 });

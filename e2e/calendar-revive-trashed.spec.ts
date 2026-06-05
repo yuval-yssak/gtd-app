@@ -1,6 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { resetServerForEmails } from './helpers/context';
+import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -132,7 +132,7 @@ test.describe('calendar — revive trashed item on inbound GCal payload', () => 
             await page.goto(`${CLIENT_URL}/calendar`);
             await expect(page.getByText('Smoke event (revived)')).toBeVisible({ timeout: 10_000 });
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 });

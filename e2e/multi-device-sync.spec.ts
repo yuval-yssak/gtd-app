@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
-import { withTwoLoggedInDevices } from './helpers/context';
+import { closeContextQuietly, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -156,8 +156,8 @@ test.describe('multi-device sync', () => {
         expect(items?.some((i) => i.title === 'Bootstrap item A')).toBe(true);
         expect(items?.some((i) => i.title === 'Bootstrap item B')).toBe(true);
 
-        await ctx1.close();
-        await ctx2.close();
+        await closeContextQuietly(ctx1);
+        await closeContextQuietly(ctx2);
     });
 
     test('item created on device-2 is visible in server bootstrap', async ({ browser }) => {

@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
-import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { closeContextQuietly, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -65,7 +65,7 @@ test.describe('multi-account sync', () => {
             }, API_SERVER);
             expect(status).toBe(403);
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 
@@ -89,7 +89,7 @@ test.describe('multi-account sync', () => {
                 const seen = await waitForItemTitle(page1, 'A from device 2');
                 expect(seen.userId).toBe(accounts.active.userId);
             } finally {
-                await ctx2.close();
+                await closeContextQuietly(ctx2);
             }
         });
     });

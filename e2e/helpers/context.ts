@@ -22,13 +22,27 @@ export async function resetServerForEmails(emails: string[]): Promise<void> {
     }
 }
 
+/**
+ * Tear a context down without letting it fail an already-passing test. Two load-induced hazards
+ * are neutralised here: (1) a live EventSource (SSE) keeps the context's network alive, so we go
+ * offline first to drop the keep-alive; (2) under full-suite saturation `ctx.close()` itself could
+ * still hang past the 30s test timeout ("gracefully close start" never completing), so we bound it
+ * — if graceful close doesn't finish in 5s we stop waiting and let the worker reap the context at
+ * process exit. The test body has already run by the time any caller invokes this in its finally,
+ * so a slow teardown must never turn a green test red.
+ */
+export async function closeContextQuietly(ctx: BrowserContext): Promise<void> {
+    await ctx.setOffline(true).catch(() => {});
+    await Promise.race([ctx.close().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+}
+
 export async function withOneLoggedInDevice(browser: Browser, email: string, fn: (page: Page) => Promise<void>): Promise<void> {
     const ctx = await browser.newContext();
     try {
         const page = await loginAs(ctx, email);
         await fn(page);
     } finally {
-        await ctx.close();
+        await closeContextQuietly(ctx);
     }
 }
 
@@ -41,8 +55,7 @@ export async function withTwoLoggedInDevices(browser: Browser, email: string, fn
         const [page1, page2] = await Promise.all([loginAs(ctx1, email), loginAs(ctx2, email)]);
         await fn(page1, page2);
     } finally {
-        await ctx1.close();
-        await ctx2.close();
+        await Promise.all([closeContextQuietly(ctx1), closeContextQuietly(ctx2)]);
     }
 }
 
@@ -122,6 +135,6 @@ export async function withTwoAccountsOnOneDevice(
         }
         await fn(page, { active, secondary });
     } finally {
-        await ctx.close();
+        await closeContextQuietly(ctx);
     }
 }

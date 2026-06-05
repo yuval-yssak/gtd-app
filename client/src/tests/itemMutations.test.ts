@@ -340,8 +340,9 @@ describe('clarifyToDone', () => {
 
     it('fires onReadOnlyGCal AFTER the local IDB write persists', async () => {
         // Locks in the doc-comment contract: by the time the callback runs, the IDB row is
-        // already 'done'. The callback enqueues an async read of the row; we drain the microtask
-        // queue with `setTimeout(0)` before asserting so the queued read settles.
+        // already 'done'. The callback snapshots the row it reads at fire time; we await that
+        // read directly (rather than racing a setTimeout against fake-indexeddb's internal read
+        // timer, which flaked under full-suite load) before asserting.
         const item = await collectItem(db, USER_ID, { title: 'order-of-ops' });
         const fromGmailItem: StoredItem = {
             ...item,
@@ -353,17 +354,14 @@ describe('clarifyToDone', () => {
         };
         await db.clear('syncOperations');
 
-        let storedAtCallback: StoredItem | undefined;
+        let readAtCallback: Promise<StoredItem | undefined> | undefined;
         const onReadOnlyGCal = vi.fn(() => {
-            void db.get('items', fromGmailItem._id).then((stored) => {
-                storedAtCallback = stored;
-            });
+            readAtCallback = db.get('items', fromGmailItem._id);
         });
         await clarifyToDone(db, fromGmailItem, { onReadOnlyGCal });
-        // Drain the microtask queued inside the callback before asserting.
-        await new Promise((resolve) => setTimeout(resolve, 0));
 
         expect(onReadOnlyGCal).toHaveBeenCalledOnce();
+        const storedAtCallback = await readAtCallback;
         expect(storedAtCallback?.status).toBe('done');
     });
 

@@ -26,8 +26,26 @@ let dbClient: MongoClient;
 export let auth!: Auth;
 export let db!: Db;
 
+// Under vitest the api-server unit suite, the client suite, and the e2e suite (which boots its own
+// api-server against the same local Mongo) can all run at once via the stop-hook. That saturation
+// made the driver's server-monitor heartbeat time out and clear the pool mid-query
+// (PoolClearedOnNetworkError / "server monitor timeout"), failing otherwise-passing tests. Widen the
+// monitor + selection budgets and lean on retryable reads/writes ONLY in tests, so a transient stall
+// under load is ridden out instead of killing in-flight operations. Production keeps the driver
+// defaults (no behavior change off the test path).
+function mongoClientOptions() {
+    if (process.env.NODE_ENV !== 'test') return undefined;
+    return {
+        serverSelectionTimeoutMS: 60_000,
+        heartbeatFrequencyMS: 30_000,
+        socketTimeoutMS: 60_000,
+        retryReads: true,
+        retryWrites: true,
+    } as const;
+}
+
 async function mongoConnect() {
-    const client = new MongoClient(mongoDBConfig.DBUrl);
+    const client = new MongoClient(mongoDBConfig.DBUrl, mongoClientOptions());
     await client.connect();
 
     // Strip password from URL before logging
@@ -36,8 +54,18 @@ async function mongoConnect() {
     return client;
 }
 
+// Under vitest, namespace each test DB by the runner's parent PID so two concurrent `npm run test`
+// processes (e.g. a manual run racing the stop-hook's parallel api-server check) never share a
+// `gtd_test` database and wipe each other's collections in beforeEach. `process.ppid` is identical
+// across all worker processes of one run but differs between separate runs — exactly the
+// stable-within-run, unique-across-runs token we need, with no per-test-file plumbing.
+function namespaceTestDB(name: string) {
+    if (process.env.NODE_ENV !== 'test') return name;
+    return `${name}_p${process.ppid}`;
+}
+
 async function loadDataAccess(customDBName?: string) {
-    const resolvedDBName = customDBName ?? mongoDBConfig.dbName;
+    const resolvedDBName = namespaceTestDB(customDBName ?? mongoDBConfig.dbName);
 
     dbClient = await mongoConnect();
     db = dbClient.db(resolvedDBName);

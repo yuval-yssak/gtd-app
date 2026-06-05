@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
+import { closeContextQuietly } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { fetchDevSessionCookie, loginAs } from './helpers/login';
 
@@ -24,7 +25,7 @@ test.describe('initial-sync skeleton', () => {
             await gtd.collect(seedPage, 'Bootstrap me slowly');
             await gtd.flush(seedPage);
         } finally {
-            await seedCtx.close();
+            await closeContextQuietly(seedCtx);
         }
 
         // Fresh context (empty IndexedDB → no sync cursor → isInitialSyncing fires) with a delayed bootstrap.
@@ -50,7 +51,7 @@ test.describe('initial-sync skeleton', () => {
             await expect(page.getByText('Bootstrap me slowly')).toBeVisible({ timeout: 15_000 });
             await expect(page.getByTestId('listSkeleton')).toHaveCount(0);
         } finally {
-            await freshCtx.close();
+            await closeContextQuietly(freshCtx);
         }
     });
 
@@ -78,7 +79,7 @@ test.describe('initial-sync skeleton', () => {
             await expect(page.getByText('Already cached')).toBeVisible();
             await expect(page.getByTestId('listSkeleton')).toHaveCount(0);
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 });

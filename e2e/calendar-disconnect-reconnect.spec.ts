@@ -1,6 +1,6 @@
 import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
-import { resetServerForEmails } from './helpers/context';
+import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
 
@@ -162,7 +162,7 @@ test.describe('calendar disconnect/reconnect idempotency', () => {
             await page.goto(`${CLIENT_URL}/calendar`);
             await expect(page.getByText('C2')).toHaveCount(1);
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 
@@ -257,7 +257,7 @@ test.describe('calendar disconnect/reconnect idempotency', () => {
             await page.goto(`${CLIENT_URL}/calendar`);
             await expect(page.getByText('Cross-account smoke 1 (moved)')).toBeHidden();
         } finally {
-            await ctx.close();
+            await closeContextQuietly(ctx);
         }
     });
 });

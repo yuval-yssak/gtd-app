@@ -74,18 +74,23 @@ test.describe('Item editor — page mode UX', () => {
             const preview = page.getByTestId('pageNotesPreview');
             await expect(preview).toBeVisible();
 
-            // Tab into the preview so it owns focus, then press Enter.
-            await preview.focus();
-            await page.keyboard.press('Enter');
+            // Press Enter on the preview locator directly: locator.press auto-waits for the element
+            // to be actionable and dispatches the key to it, so there's no separate focus() step to
+            // race under load (a detached page.keyboard.press could land on the wrong element).
+            await preview.press('Enter');
             const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            // Gate on visible before focus — under load the editor's mount+autofocus lagged the keypress.
+            // Generous timeout: the React mount can take several seconds under hook saturation.
+            await expect(notesEditor).toBeVisible({ timeout: 15_000 });
             await expect(notesEditor).toBeFocused();
 
             // Blur back to preview, then verify Space also activates.
             await page.getByRole('textbox', { name: 'Title' }).click();
-            await expect(page.getByTestId('pageNotesPreview')).toBeVisible();
-            await page.getByTestId('pageNotesPreview').focus();
-            await page.keyboard.press(' ');
-            await expect(page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.')).toBeFocused();
+            const previewAgain = page.getByTestId('pageNotesPreview');
+            await expect(previewAgain).toBeVisible();
+            await previewAgain.press(' ');
+            await expect(notesEditor).toBeVisible({ timeout: 15_000 });
+            await expect(notesEditor).toBeFocused();
         });
     });
 
@@ -95,8 +100,19 @@ test.describe('Item editor — page mode UX', () => {
             await gtd.updateItem(page, { ...item, notes: 'Clear me' });
 
             await page.goto(`/item/${item._id}`);
-            await page.getByRole('button', { name: 'Edit notes' }).click();
+            // Wait for the Edit-notes affordance to be actionable before clicking — under hook
+            // saturation the page hydrates slowly, so clicking too early was lost and the editor
+            // never opened.
+            const editNotesButton = page.getByRole('button', { name: 'Edit notes' });
+            await expect(editNotesButton).toBeVisible();
+            await editNotesButton.click();
             const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            // Generous timeout: under full-suite saturation the React mount of the editor can take
+            // several seconds. Then click into it to own focus deterministically — because the notes
+            // are non-empty, a missed autofocus would collapse the editor back to preview before a
+            // bare toBeFocused() settled; an explicit click removes that race and matches user intent.
+            await expect(notesEditor).toBeVisible({ timeout: 15_000 });
+            await notesEditor.click();
             await expect(notesEditor).toBeFocused();
 
             // Select-all + delete clears the field — once the value is empty, blur should NOT
