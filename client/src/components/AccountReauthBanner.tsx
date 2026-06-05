@@ -3,7 +3,6 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import type { IDBPDatabase } from 'idb';
 import { useSyncExternalStore } from 'react';
-import { useAppData } from '../contexts/AppDataProvider';
 import { dismissAccountReauth, ensureAccountReauthBridge, getReauthFlaggedUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
 import { useAccounts } from '../hooks/useAccounts';
 import type { MyDB } from '../types/MyDB';
@@ -22,15 +21,18 @@ ensureAccountReauthBridge();
  * instances and across breakpoint changes — per-instance state would diverge. Dismissals survive the
  * orchestrator's re-dispatch every sync cycle. Each row offers a Re-login button that drives
  * `reauthForUserId`'s OAuth redirect.
+ *
+ * Accounts come from `useAccounts(db)` (IDB-backed), NOT `useAppData()` — this banner mounts inside
+ * AppNav, which renders OUTSIDE the AppDataProvider, so `useAppData()` would return the context
+ * default (undefined) and crash on destructure.
  */
 export function AccountReauthBanner({ db }: { db: IDBPDatabase<MyDB> }) {
-    const { loggedInAccounts } = useAppData();
-    const { reauthForUserId } = useAccounts(db);
+    const { allAccounts, reauthForUserId } = useAccounts(db);
     const flaggedUserIds = useSyncExternalStore(subscribeAccountReauth, getReauthFlaggedUserIds);
 
     // Render only accounts that are flagged AND known locally (so we can show an email).
     const flagged = new Set(flaggedUserIds);
-    const visibleAccounts = loggedInAccounts.filter((a) => flagged.has(a.id));
+    const visibleAccounts = allAccounts.filter((a) => flagged.has(a.id));
     if (visibleAccounts.length === 0) {
         return null;
     }
