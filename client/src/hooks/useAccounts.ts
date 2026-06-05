@@ -20,11 +20,32 @@ export interface AccountsState {
     allAccounts: StoredAccount[];
     addAnotherAccount: (provider: OAuthProvider) => void;
     switchToAccount: (userId: string) => Promise<void>;
+    /**
+     * Kicks off an OAuth re-login redirect for a logged-in account whose Better Auth session is
+     * missing/expired. Returns true when navigation started, false when the account isn't known
+     * locally. Surfaced so the AccountReauthBanner can recover the silent-skip case (Bug B).
+     */
+    reauthForUserId: (userId: string) => boolean;
     signOutCurrent: () => Promise<void>;
     signOutAll: () => Promise<void>;
     pendingAction: PendingAction | null;
     actionError: string | null;
     dismissActionError: () => void;
+}
+
+/**
+ * Pure core of `reauthForUserId`, extracted so it's testable without a DOM. Looks up the account by
+ * id and, if found, invokes `startSignIn` with its provider — returning whether a re-auth was kicked
+ * off. The `startSignIn` callback is injected so tests can assert the provider without driving a real
+ * OAuth redirect.
+ */
+export function startReauthForAccount(accounts: StoredAccount[], userId: string, startSignIn: (provider: OAuthProvider) => void): boolean {
+    const account = accounts.find((a) => a.id === userId);
+    if (!account) {
+        return false;
+    }
+    startSignIn(account.provider);
+    return true;
 }
 
 export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
@@ -115,20 +136,15 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
     }, [db]);
 
     const reauthForUserId = useCallback(
-        (userId: string): boolean => {
-            // Session expired — trigger OAuth re-authentication for the target account.
-            // Returns true when navigation was kicked off, false when the account isn't
-            // known locally (caller is responsible for clearing any pending UI state).
-            const account = allAccounts.find((a) => a.id === userId);
-            if (!account) {
-                return false;
-            }
-            void authClient.signIn.social({
-                provider: account.provider,
-                callbackURL: `${window.location.origin}/auth/callback`,
-            });
-            return true;
-        },
+        (userId: string): boolean =>
+            // Session expired — trigger OAuth re-authentication for the target account. Returns true
+            // when navigation was kicked off, false when the account isn't known locally (caller is
+            // responsible for clearing any pending UI state). Core logic lives in startReauthForAccount.
+            startReauthForAccount(
+                allAccounts,
+                userId,
+                (provider) => void authClient.signIn.social({ provider, callbackURL: `${window.location.origin}/auth/callback` }),
+            ),
         [allAccounts],
     );
 
@@ -260,6 +276,7 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
         allAccounts,
         addAnotherAccount,
         switchToAccount,
+        reauthForUserId,
         signOutCurrent,
         signOutAll,
         pendingAction,

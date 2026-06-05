@@ -45,6 +45,15 @@ import type { StoredAccount } from '../../types/MyDB';
 import { buildCalendarPickerRows, defaultCalendarId } from './calendarPickerOrder';
 
 /**
+ * Runs a calendar MUTATION with the active Better Auth session pinned to the managed account (see
+ * AppData.withActiveAccountSession). Threaded from the root component down to every dialog/hook that
+ * mutates calendar state, so each request resolves under the right user even when the ambient cookie
+ * session has drifted (Bug A). Reads are intentionally left unwrapped — they run under the ambient
+ * unified session.
+ */
+type WithActiveAccountSession = <T>(task: () => Promise<T>) => Promise<T>;
+
+/**
  * Maps a `createSyncConfig` failure to a user-facing message. The thrown Error from `apiFetch`
  * carries the format `Calendar API error <status>: <body>`, so we sniff for the 409 conflict to
  * tell the user the calendar is already linked instead of a generic "try again".
@@ -99,7 +108,7 @@ export function CalendarIntegrations() {
     const [resource, setResource] = useState(getCalendarIntegrationsResource);
     const details = use(resource);
     const [chooseCalendarFor, setChooseCalendarFor] = useState<CalendarIntegration | null>(null);
-    const { account, loggedInAccounts, syncAndRefresh } = useAppData();
+    const { account, loggedInAccounts, syncAndRefresh, withActiveAccountSession } = useAppData();
     const navigate = useNavigate();
     // calendarConnected and calendarConnectError are set by the OAuth callback redirect; the first
     // auto-opens the calendar picker, the second renders a mismatch error inline.
@@ -165,6 +174,7 @@ export function CalendarIntegrations() {
                     detail={detail}
                     onIntegrationsChanged={refreshIntegrations}
                     onChooseCalendar={() => setChooseCalendarFor(detail.integration)}
+                    withActiveAccountSession={withActiveAccountSession}
                 />
             ))}
             <Button variant="outlined" size="small" onClick={onConnectActiveAccount} disabled={!account}>
@@ -179,6 +189,7 @@ export function CalendarIntegrations() {
                         refreshIntegrations();
                         syncAndRefresh().catch(() => {});
                     }}
+                    withActiveAccountSession={withActiveAccountSession}
                 />
             )}
         </Box>
@@ -269,17 +280,23 @@ interface IntegrationRowProps {
     /** Refreshes the integrations resource after a structural change (disconnect, calendar added). */
     onIntegrationsChanged: () => void;
     onChooseCalendar: () => void;
+    withActiveAccountSession: WithActiveAccountSession;
+}
+
+interface SyncConfigActionsDeps {
+    setConfigs: React.Dispatch<React.SetStateAction<CalendarSyncConfig[]>>;
+    // Invalidates the cached integrations resource after a successful mutation. Without this the
+    // optimistic setConfigs only touches this row's local state — the module-level resource promise
+    // still holds the pre-mutation snapshot, so navigating away and back re-seeds the stale value
+    // (the change only "sticks" after a full reload, which rebuilds the module cache from the server).
+    invalidateResource: () => void;
+    withActiveAccountSession: WithActiveAccountSession;
 }
 
 /** Manages sync config mutations with error handling and optimistic state updates. */
 function useSyncConfigActions(
     integrationId: string,
-    setConfigs: React.Dispatch<React.SetStateAction<CalendarSyncConfig[]>>,
-    // Invalidates the cached integrations resource after a successful mutation. Without this the
-    // optimistic setConfigs only touches this row's local state — the module-level resource promise
-    // still holds the pre-mutation snapshot, so navigating away and back re-seeds the stale value
-    // (the change only "sticks" after a full reload, which rebuilds the module cache from the server).
-    invalidateResource: () => void,
+    { setConfigs, invalidateResource, withActiveAccountSession }: SyncConfigActionsDeps,
 ): { actions: ConfigActions; actionError: string | null } {
     const [actionError, setActionError] = useState<string | null>(null);
 
@@ -287,21 +304,21 @@ function useSyncConfigActions(
         async (config: CalendarSyncConfig) => {
             setActionError(null);
             try {
-                const updated = await updateSyncConfig(integrationId, config._id, { enabled: !config.enabled });
+                const updated = await withActiveAccountSession(() => updateSyncConfig(integrationId, config._id, { enabled: !config.enabled }));
                 setConfigs((prev) => prev.map((c) => (c._id === config._id ? updated : c)));
                 invalidateResource();
             } catch {
                 setActionError('Failed to update calendar. Please try again.');
             }
         },
-        [integrationId, setConfigs, invalidateResource],
+        [integrationId, setConfigs, invalidateResource, withActiveAccountSession],
     );
 
     const onSetDefault = useCallback(
         async (config: CalendarSyncConfig) => {
             setActionError(null);
             try {
-                const updated = await updateSyncConfig(integrationId, config._id, { isDefault: true });
+                const updated = await withActiveAccountSession(() => updateSyncConfig(integrationId, config._id, { isDefault: true }));
                 // The server unsets isDefault on all sibling configs — refresh to get accurate state.
                 setConfigs((prev) => prev.map((c) => (c._id === config._id ? updated : { ...c, isDefault: false })));
                 invalidateResource();
@@ -309,28 +326,31 @@ function useSyncConfigActions(
                 setActionError('Failed to set default calendar. Please try again.');
             }
         },
-        [integrationId, setConfigs, invalidateResource],
+        [integrationId, setConfigs, invalidateResource, withActiveAccountSession],
     );
 
     const onRemove = useCallback(
         async (config: CalendarSyncConfig) => {
             setActionError(null);
             try {
-                await deleteSyncConfig(integrationId, config._id);
+                await withActiveAccountSession(() => deleteSyncConfig(integrationId, config._id));
                 setConfigs((prev) => prev.filter((c) => c._id !== config._id));
                 invalidateResource();
             } catch {
                 setActionError('Failed to remove calendar. Please try again.');
             }
         },
-        [integrationId, setConfigs, invalidateResource],
+        [integrationId, setConfigs, invalidateResource, withActiveAccountSession],
     );
 
     return { actions: { onToggleEnabled, onSetDefault, onRemove }, actionError };
 }
 
 /** Wraps the sync-now action with loading, error, and unmount-safety state. */
-function useSyncNow(integrationId: string): { onSyncNow: () => void; isSyncing: boolean; syncError: string | null } {
+function useSyncNow(
+    integrationId: string,
+    withActiveAccountSession: WithActiveAccountSession,
+): { onSyncNow: () => void; isSyncing: boolean; syncError: string | null } {
     const [isSyncing, setIsSyncing] = useState(false);
     const [syncError, setSyncError] = useState<string | null>(null);
     const { syncAndRefresh } = useAppData();
@@ -346,26 +366,30 @@ function useSyncNow(integrationId: string): { onSyncNow: () => void; isSyncing: 
         setIsSyncing(true);
         setSyncError(null);
         try {
-            await syncIntegration(integrationId);
+            await withActiveAccountSession(() => syncIntegration(integrationId));
             await syncAndRefresh();
         } catch {
             if (isMountedRef.current) setSyncError('Sync failed. Please try again.');
         } finally {
             if (isMountedRef.current) setIsSyncing(false);
         }
-    }, [integrationId, syncAndRefresh]);
+    }, [integrationId, syncAndRefresh, withActiveAccountSession]);
 
     return { onSyncNow, isSyncing, syncError };
 }
 
-function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar }: IntegrationRowProps) {
+function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withActiveAccountSession }: IntegrationRowProps) {
     const { integration, calendars } = detail;
     const { configs, setConfigs } = useLocalSyncConfigs(detail.syncConfigs);
     // onIntegrationsChanged is refreshIntegrations: drops the cached resource + re-reads in a
     // transition. Passing it here makes toggle/set-default/remove durable across navigation, not
     // just local to this mount (see useSyncConfigActions' invalidateResource note).
-    const { actions, actionError } = useSyncConfigActions(integration._id, setConfigs, onIntegrationsChanged);
-    const { onSyncNow, isSyncing, syncError } = useSyncNow(integration._id);
+    const { actions, actionError } = useSyncConfigActions(integration._id, {
+        setConfigs,
+        invalidateResource: onIntegrationsChanged,
+        withActiveAccountSession,
+    });
+    const { onSyncNow, isSyncing, syncError } = useSyncNow(integration._id, withActiveAccountSession);
     const [isDisconnectOpen, setIsDisconnectOpen] = useState(false);
     const [isAddCalendarOpen, setIsAddCalendarOpen] = useState(false);
     const { syncAndRefresh } = useAppData();
@@ -439,12 +463,14 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar }: Int
                 integrationId={integration._id}
                 onClose={() => setIsDisconnectOpen(false)}
                 onDisconnected={onIntegrationsChanged}
+                withActiveAccountSession={withActiveAccountSession}
             />
             {isAddCalendarOpen && (
                 <AddCalendarDialog
                     integrationId={integration._id}
                     availableCalendars={availableToAdd}
                     onClose={() => setIsAddCalendarOpen(false)}
+                    withActiveAccountSession={withActiveAccountSession}
                     onAdded={() => {
                         setIsAddCalendarOpen(false);
                         // Refresh the resource (new config + shrunken add-list) and sync IDB so the
@@ -610,9 +636,10 @@ interface AddCalendarDialogProps {
     availableCalendars: GoogleCalendar[];
     onClose: () => void;
     onAdded: () => void;
+    withActiveAccountSession: WithActiveAccountSession;
 }
 
-function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded }: AddCalendarDialogProps) {
+function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded, withActiveAccountSession }: AddCalendarDialogProps) {
     const [selectedId, setSelectedId] = useState(defaultCalendarId(availableCalendars) ?? '');
     const [isSaving, startSaving] = useTransition();
     const [saveError, setSaveError] = useState<string | null>(null);
@@ -625,7 +652,7 @@ function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded
         startSaving(async () => {
             try {
                 const displayName = availableCalendars.find((c) => c.id === selectedId)?.name;
-                await createSyncConfig(integrationId, { calendarId: selectedId, ...(displayName ? { displayName } : {}) });
+                await withActiveAccountSession(() => createSyncConfig(integrationId, { calendarId: selectedId, ...(displayName ? { displayName } : {}) }));
                 onAdded();
             } catch (err) {
                 console.error('[calendar] add sync config failed:', err);
@@ -666,10 +693,11 @@ interface ChooseCalendarDialogProps {
     integration: CalendarIntegration;
     onClose: () => void;
     onSaved: () => void;
+    withActiveAccountSession: WithActiveAccountSession;
 }
 
 /** Shown after the OAuth callback redirect — lets the user pick an initial calendar to sync. */
-function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarDialogProps) {
+function ChooseCalendarDialog({ integration, onClose, onSaved, withActiveAccountSession }: ChooseCalendarDialogProps) {
     const { calendars, isLoading, fetchError: calendarFetchError } = useCalendarList(integration._id);
     const [selectedId, setSelectedId] = useState('');
     const [isSaving, setIsSaving] = useState(false);
@@ -699,7 +727,9 @@ function ChooseCalendarDialog({ integration, onClose, onSaved }: ChooseCalendarD
         try {
             const displayName = calendars.find((c) => c.id === selectedId)?.name;
             // First calendar added via the post-OAuth dialog becomes the default sync target.
-            await createSyncConfig(integration._id, { calendarId: selectedId, isDefault: true, ...(displayName ? { displayName } : {}) });
+            await withActiveAccountSession(() =>
+                createSyncConfig(integration._id, { calendarId: selectedId, isDefault: true, ...(displayName ? { displayName } : {}) }),
+            );
             onSaved();
         } catch (err) {
             console.error('[calendar] save initial sync config failed:', err);
@@ -759,9 +789,10 @@ interface DisconnectDialogProps {
     integrationId: string;
     onClose: () => void;
     onDisconnected: () => void;
+    withActiveAccountSession: WithActiveAccountSession;
 }
 
-function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: DisconnectDialogProps) {
+function DisconnectDialog({ open, integrationId, onClose, onDisconnected, withActiveAccountSession }: DisconnectDialogProps) {
     const [action, setAction] = useState<UnlinkAction>('keepLinkedEntities');
     const [isDeleting, startDeleting] = useTransition();
     const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -787,7 +818,7 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected }: Disc
         setDeleteError(null);
         startDeleting(async () => {
             try {
-                await deleteIntegration(integrationId, action);
+                await withActiveAccountSession(() => deleteIntegration(integrationId, action));
                 onDisconnected();
                 onClose();
                 // Sync IDB so calendar items removed server-side are reflected locally immediately.

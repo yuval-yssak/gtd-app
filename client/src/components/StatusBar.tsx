@@ -1,10 +1,13 @@
 import CircleIcon from '@mui/icons-material/Circle';
 import Typography from '@mui/material/Typography';
+import type { IDBPDatabase } from 'idb';
 import { useOnline } from '../hooks/useOnline';
+import type { MyDB } from '../types/MyDB';
+import { AccountReauthBanner } from './AccountReauthBanner';
 import styles from './StatusBar.module.css';
 import { SyncIssuesPanel } from './SyncIssuesPanel';
 
-export function StatusBar() {
+export function StatusBar({ db }: { db: IDBPDatabase<MyDB> }) {
     const online = useOnline();
 
     return (
@@ -18,9 +21,10 @@ export function StatusBar() {
             >
                 {online ? 'Online' : 'Offline'}
             </Typography>
-            {/* Panel mounts unconditionally — the badge self-suppresses (returns null) when there are
-                no failed ops, so an empty state has zero visual footprint. */}
+            {/* Both mount unconditionally — each self-suppresses (returns null) when it has nothing to
+                show, so an empty state has zero visual footprint. */}
             <SyncIssuesPanel />
+            <AccountReauthBanner db={db} />
         </div>
     );
 }

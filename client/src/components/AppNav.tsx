@@ -158,7 +158,7 @@ function DrawerContent({ onItemClick, db }: DrawerContentProps) {
                 <Box className={styles.accountRow}>
                     <AccountSwitcher db={db} />
                 </Box>
-                <StatusBar />
+                <StatusBar db={db} />
             </Box>
         </Box>
     );

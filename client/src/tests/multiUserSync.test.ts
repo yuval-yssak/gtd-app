@@ -22,7 +22,9 @@ vi.mock('../lib/authClient', () => {
 
 import dayjs from 'dayjs';
 import { fetchSyncOps, pushSyncOps } from '#api/syncClient';
-import { syncAllLoggedInUsers, syncSingleUser } from '../db/multiUserSync';
+import { ACCOUNT_NEEDS_REAUTH_EVENT } from '../contexts/accountReauthEvents';
+import { syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
+import { setSessionGateTimeoutMs } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
@@ -241,20 +243,179 @@ describe('syncAllLoggedInUsers', () => {
         expect(vi.mocked(fetchSyncOps)).not.toHaveBeenCalled();
     });
 
-    it('multi-user device skips a user with no multi-session entry to avoid cross-user corruption', async () => {
-        // user-orphan is in IDB but missing from the multi-session list. Pulling for them under
-        // whichever cookie is currently set would attribute another user's data to user-orphan's
-        // cursor. The orchestrator must skip them with a warning instead of corrupting state.
+    it('multi-user device skips a still-missing user, warns, and dispatches a reauth-needed event', async () => {
+        // user-orphan is in IDB but missing from the multi-session list — even after the defensive
+        // in-loop refresh. Pulling for them under whichever cookie is set would attribute another
+        // user's data to user-orphan's cursor. The orchestrator must skip them (one pull total),
+        // warn, AND surface a reauth signal so the user isn't left with silently-absent data.
         await seedAccount(db, 'user-a', 'a@example.com');
         await seedAccount(db, 'user-orphan', 'orphan@example.com');
         await db.put('activeAccount', { userId: 'user-a' }, 'active');
 
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        // window is undefined under the `node` test env; stub it so dispatchAccountNeedsReauth fires.
+        const dispatchSpy = vi.fn();
+        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
+
         await syncAllLoggedInUsers(db);
 
         // user-a got its pull; user-orphan was skipped — only one pull in total.
         expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
         expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('user-orphan'))).toBe(true);
+
+        // Exactly the orphan's reauth event fired, carrying its userId.
+        const reauthEvents = dispatchSpy.mock.calls.map(([e]) => e as CustomEvent).filter((e) => e.type === ACCOUNT_NEEDS_REAUTH_EVENT);
+        expect(reauthEvents).toHaveLength(1);
+        const [reauthEvent] = reauthEvents;
+        if (!reauthEvent) throw new Error('expected one reauth event');
+        expect(reauthEvent.detail).toEqual({ userId: 'user-orphan' });
+
+        vi.unstubAllGlobals();
         warnSpy.mockRestore();
+    });
+
+    it('multi-user device recovers a stale-snapshot user via the in-loop session refresh', async () => {
+        // user-c is logged in but absent from the boot-time session snapshot (login finished in
+        // another tab after the orchestrator captured the list). The defensive in-loop refresh
+        // re-fetches and finds it, so user-c is synced with no reauth event dispatched.
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-c', 'c@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        // Give user-c a cursor so its recovered pass pulls (not bootstraps) — keeps the
+        // fetchSyncOps call-count assertion clean.
+        await db.put('syncCursors', { userId: 'user-c', lastSyncedTs: '2025-01-01T00:00:00.000Z', lastSyncedId: '' });
+
+        // Boot snapshot: user-c missing. In-loop refresh: full list (user-c present). The default
+        // mock returns a/b/c, so we only override the FIRST call (the boot-time load).
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValueOnce({
+            data: [
+                { user: { id: 'user-a' }, session: { token: 'token-a' } },
+                { user: { id: 'user-b' }, session: { token: 'token-b' } },
+            ],
+        } as Awaited<ReturnType<typeof authClient.multiSession.listDeviceSessions>>);
+
+        const dispatchSpy = vi.fn();
+        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
+
+        await syncAllLoggedInUsers(db);
+
+        // Both user-a and user-c synced — the refresh recovered user-c.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(2);
+        // user-c was pivoted to via its now-resolved token.
+        const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
+        expect(setActiveCalls).toContain('token-c');
+        // No reauth event — the user was recovered, not skipped.
+        const reauthEvents = dispatchSpy.mock.calls.map(([e]) => e as CustomEvent).filter((e) => e.type === ACCOUNT_NEEDS_REAUTH_EVENT);
+        expect(reauthEvents).toHaveLength(0);
+
+        vi.unstubAllGlobals();
+    });
+
+    it('single-account device dispatches no reauth event even with an empty session list', async () => {
+        // Single-account dev login: no multi-session entry, only the primary cookie. The single-user
+        // branch is legitimately session-less and must stay silent — no skip, no reauth signal.
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValueOnce({ data: [] });
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        const dispatchSpy = vi.fn();
+        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
+
+        await syncAllLoggedInUsers(db);
+
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(1);
+        const reauthEvents = dispatchSpy.mock.calls.map(([e]) => e as CustomEvent).filter((e) => e.type === ACCOUNT_NEEDS_REAUTH_EVENT);
+        expect(reauthEvents).toHaveLength(0);
+
+        vi.unstubAllGlobals();
+    });
+});
+
+describe('withAccountSession', () => {
+    it('pivots to the target account then restores the previously-active session', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        const task = vi.fn(async () => 'result');
+        const result = await withAccountSession(db, 'user-b', task);
+
+        expect(result).toBe('result');
+        const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
+        // First pivot to user-b for the task, last pivot back to user-a (restore).
+        expect(setActiveCalls[0]).toBe('token-b');
+        expect(setActiveCalls.at(-1)).toBe('token-a');
+        // IDB active account is restored too.
+        const active = await db.get('activeAccount', 'active');
+        expect(active?.userId).toBe('user-a');
+    });
+
+    it('runs the task with no pivot on a single-account device', async () => {
+        vi.mocked(authClient.multiSession.listDeviceSessions).mockResolvedValueOnce({ data: [] });
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        const task = vi.fn(async () => 'ok');
+        const result = await withAccountSession(db, 'user-a', task);
+
+        expect(result).toBe('ok');
+        expect(task).toHaveBeenCalledTimes(1);
+        // No session entry to pivot to — setActive is never called.
+        expect(vi.mocked(authClient.multiSession.setActive)).not.toHaveBeenCalled();
+    });
+
+    it('warns and runs without a pivot when the target has no session on a multi-account device', async () => {
+        // The Bug A failure mode: device has sessions (default mock lists a/b/c) but the target user
+        // is absent. We can't pivot, so the task runs under the ambient cookie and we warn — we must
+        // NOT call setActive (which would corrupt the active session to a wrong/nonexistent token).
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const task = vi.fn(async () => 'ran');
+        const result = await withAccountSession(db, 'user-z', task);
+
+        expect(result).toBe('ran');
+        expect(task).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(authClient.multiSession.setActive)).not.toHaveBeenCalled();
+        expect(warnSpy.mock.calls.some((c) => String(c[0]).includes('user-z'))).toBe(true);
+        warnSpy.mockRestore();
+    });
+
+    it('restores the previously-active session even when the task throws', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        const task = vi.fn(async () => {
+            throw new Error('mutation failed');
+        });
+        await expect(withAccountSession(db, 'user-b', task)).rejects.toThrow('mutation failed');
+
+        const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
+        // The finally block restores a@ before the error escapes.
+        expect(setActiveCalls.at(-1)).toBe('token-a');
+        const active = await db.get('activeAccount', 'active');
+        expect(active?.userId).toBe('user-a');
+    });
+
+    it('serializes overlapping calls — setActive writes never interleave', async () => {
+        // Two concurrent withAccountSession calls must not interleave their pivots: the gate runs
+        // them strictly one after the other. We assert the setActive call sequence reflects a full
+        // pivot+restore for the first call before the second's pivot begins.
+        setSessionGateTimeoutMs(2_000); // keep the gate snappy if anything stalls
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        // Each task resolves on the next microtask so the two calls genuinely overlap in flight.
+        const first = withAccountSession(db, 'user-b', async () => 'first');
+        const second = withAccountSession(db, 'user-b', async () => 'second');
+        await Promise.all([first, second]);
+
+        const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
+        // Serialized: [pivot-b, restore-a, pivot-b, restore-a] — never [pivot-b, pivot-b, …].
+        expect(setActiveCalls).toEqual(['token-b', 'token-a', 'token-b', 'token-a']);
+        setSessionGateTimeoutMs(10_000);
     });
 });

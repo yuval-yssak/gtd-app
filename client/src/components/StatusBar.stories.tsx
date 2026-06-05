@@ -1,12 +1,63 @@
-import type { Meta, StoryObj } from '@storybook/react';
-import { useEffect } from 'react';
+import type { Decorator, Meta, StoryObj } from '@storybook/react';
+import type { IDBPDatabase } from 'idb';
+import { useEffect, useState } from 'react';
+import { fn } from 'storybook/test';
+import type { AppData } from '../contexts/AppDataProvider';
+import { AppDataContext } from '../contexts/AppDataProvider';
+import { openAppDB } from '../db/indexedDB';
+import type { MyDB } from '../types/MyDB';
 import { StatusBar } from './StatusBar';
+
+// Minimal AppData so the AccountReauthBanner child's useAppData() resolves. It renders null with no
+// reauth event in flight, so these stories only exercise the online/offline indicator.
+const mockAppData: AppData = {
+    account: null,
+    loggedInAccounts: [],
+    loggedInUserIds: [],
+    items: [],
+    workContexts: [],
+    people: [],
+    routines: [],
+    refreshItems: fn().mockResolvedValue(undefined),
+    refreshWorkContexts: fn().mockResolvedValue(undefined),
+    refreshPeople: fn().mockResolvedValue(undefined),
+    refreshRoutines: fn().mockResolvedValue(undefined),
+    refreshAccounts: fn().mockResolvedValue(undefined),
+    syncAndRefresh: fn().mockResolvedValue(undefined),
+    isInitialSyncing: false,
+    isCalendarSyncing: false,
+    withActiveAccountSession: (task) => task(),
+};
+
+// Opens the real app IDB once and injects it as the StatusBar `db` arg, wrapped in the mock context.
+const WithDbAndContext: Decorator = (Story) => {
+    const [db, setDb] = useState<IDBPDatabase<MyDB> | null>(null);
+    useEffect(() => {
+        let active = true;
+        openAppDB().then((opened) => active && setDb(opened));
+        return () => {
+            active = false;
+        };
+    }, []);
+    if (!db) {
+        return <span>Loading…</span>;
+    }
+    return (
+        <AppDataContext.Provider value={mockAppData}>
+            <Story args={{ db }} />
+        </AppDataContext.Provider>
+    );
+};
 
 const meta = {
     title: 'Components/StatusBar',
     component: StatusBar,
     parameters: { layout: 'centered' },
     tags: ['autodocs'],
+    decorators: [WithDbAndContext],
+    // `db` is supplied by WithDbAndContext at render time (it's opened asynchronously). This
+    // placeholder only satisfies the CSF arg type; the decorator's `args={{ db }}` overrides it.
+    args: { db: null as unknown as IDBPDatabase<MyDB> },
 } satisfies Meta<typeof StatusBar>;
 
 export default meta;

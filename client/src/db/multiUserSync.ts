@@ -1,4 +1,5 @@
 import type { IDBPDatabase } from 'idb';
+import { dispatchAccountNeedsReauth } from '../contexts/accountReauthEvents';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
 import { getActiveAccount, getLoggedInUserIds, setActiveAccount } from './accountHelpers';
@@ -89,6 +90,58 @@ export async function syncSingleUser(db: IDBPDatabase<MyDB>, userId: string): Pr
     });
 }
 
+/**
+ * Runs `task` with the Better Auth active session pivoted to `userId`, then restores the previously
+ * active session. Use this around any API call that the server scopes to `c.get('session').user.id`
+ * but that targets a SPECIFIC account's resource — e.g. the calendar-integration endpoints. Without
+ * the pivot, multi-session lets the ambient cookie point at a different signed-in account than the
+ * one the app is managing, so the request resolves under the wrong user (404 on the target's
+ * integration). Mirrors the sync orchestrator's pivot/restore, under the same session gate so it
+ * serializes against pulls and `syncAllLoggedInUsers`.
+ *
+ * Single-account device (no multi-session entry, only the primary cookie): no pivot needed — the
+ * cookie already authenticates as this user — so the task runs as-is.
+ */
+export async function withAccountSession<T>(db: IDBPDatabase<MyDB>, userId: string, task: () => Promise<T>): Promise<T> {
+    return withSessionGate(async () => {
+        const sessions = await loadDeviceSessionsByUserId();
+        const target = sessions.get(userId);
+        if (!target) {
+            // No multi-session entry: either a single-account device (primary cookie already this
+            // user) or a session-less flow. Run without a pivot — pivoting is impossible and, on a
+            // single-account device, unnecessary.
+            if (sessions.size > 0) {
+                console.warn(`[withAccountSession] no multi-session entry for ${userId} on a multi-account device — running under the ambient session`);
+            }
+            return task();
+        }
+        const previouslyActive = await getActiveAccount(db);
+        const previouslyActiveSession = previouslyActive ? sessions.get(previouslyActive.id) : undefined;
+        try {
+            await authClient.multiSession.setActive({ sessionToken: target.sessionToken });
+            await setActiveAccount(userId, db);
+            return await task();
+        } finally {
+            await restorePreviouslyActiveSession(db, previouslyActive?.id, previouslyActiveSession);
+        }
+    });
+}
+
+/**
+ * Defensive single re-fetch of the device session list to re-resolve a user that was missing from
+ * the boot-time snapshot. Covers the stale-snapshot sub-case where a login completed in another tab
+ * after `syncAllLoggedInUsers` captured `sessions`. Best-effort — a failed refresh returns undefined
+ * so the caller falls through to the skip-and-signal path.
+ */
+async function refreshSessionForUser(userId: string): Promise<DeviceSession | undefined> {
+    try {
+        const refreshed = await loadDeviceSessionsByUserId();
+        return refreshed.get(userId);
+    } catch {
+        return undefined;
+    }
+}
+
 /** Reads every device session and indexes it by user id so the orchestrator can pivot in O(1). */
 async function loadDeviceSessionsByUserId(): Promise<Map<string, DeviceSession>> {
     const { data: sessions } = await authClient.multiSession.listDeviceSessions();
@@ -107,9 +160,12 @@ async function loadDeviceSessionsByUserId(): Promise<Map<string, DeviceSession>>
  * - **Single-user device** (one entry in `userIds` total): proceed without a pivot. The dev-login
  *   bypass and single-account flows only carry the primary `better-auth.session_token` cookie, so
  *   `listDeviceSessions()` returns empty — but the cookie already authenticates as this user.
- * - **Multi-user device** (more than one entry): skip the user and log a warning. Without a session
- *   token we'd authenticate as whoever the cookie currently points at and silently attribute their
- *   data to the wrong cursor (the failure mode `assertActiveSessionMatches` catches downstream).
+ * - **Multi-user device** (more than one entry): re-fetch the session list once (the boot-time
+ *   snapshot can predate a login completed in another tab) and re-resolve. If now present, pivot
+ *   and proceed. If still missing, skip with a warning AND dispatch a reauth-needed signal so the
+ *   user sees a banner instead of silent data absence — without a session token we'd authenticate
+ *   as whoever the cookie points at and attribute their data to the wrong cursor (the failure mode
+ *   `assertActiveSessionMatches` catches downstream).
  */
 async function syncOneUser(
     db: IDBPDatabase<MyDB>,
@@ -118,12 +174,14 @@ async function syncOneUser(
     options: SyncAllLoggedInUsersOptions,
     totalUsers: number,
 ): Promise<void> {
-    const session = sessions.get(userId);
+    const session = sessions.get(userId) ?? (totalUsers > 1 ? await refreshSessionForUser(userId) : undefined);
     if (session) {
         await authClient.multiSession.setActive({ sessionToken: session.sessionToken });
         await setActiveAccount(userId, db);
     } else if (totalUsers > 1) {
         console.warn(`[multi-sync] no multi-session entry for ${userId} on a multi-user device — skipping pass to avoid cross-user data corruption`);
+        // Surface it so the user can re-login instead of silently never seeing this account's data.
+        dispatchAccountNeedsReauth(userId);
         return;
     } else {
         // Single-user case: no pivot needed, but make sure IDB active matches so the downstream

@@ -7,7 +7,7 @@ import { triggerAppResourceRefresh } from '../data/appResource';
 import { getInitialAuthBundle } from '../data/initialAuthBundle';
 import { getActiveAccount, getLoggedInAccounts, upsertAccount } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
-import { syncAllLoggedInUsers, syncSingleUser } from '../db/multiUserSync';
+import { syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnections, openSseConnections } from '../db/sseClient';
@@ -54,6 +54,14 @@ export interface AppData {
      * pages surface this (those are the only views GCal data affects).
      */
     isCalendarSyncing: boolean;
+    /**
+     * Runs `task` with the Better Auth active session pinned to the active account, restoring the
+     * prior session afterwards. Wrap calendar-integration MUTATIONS in this so they resolve under
+     * the managed account even when the ambient cookie session has drifted to a different signed-in
+     * account (Bug A: 404 "Failed to save calendar selection"). No-op pivot on a single-account
+     * device, and an identity passthrough when there is no active account.
+     */
+    withActiveAccountSession: <T>(task: () => Promise<T>) => Promise<T>;
 }
 
 // Exported so Storybook stories can provide a mock AppData value directly.
@@ -84,6 +92,7 @@ interface AuthBundle {
     syncAndRefresh: () => Promise<void>;
     isInitialSyncing: boolean;
     isCalendarSyncing: boolean;
+    withActiveAccountSession: <T>(task: () => Promise<T>) => Promise<T>;
 }
 
 export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDatabase<MyDB> }>) {
@@ -319,6 +328,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         await refreshAccountsInternal();
     }, [refreshAccountsInternal]);
 
+    // Pins the active Better Auth session to the active account for the duration of `task`, then
+    // restores. Wraps calendar-integration mutations (see CalendarIntegrations.tsx) so they hit the
+    // managed account's resources even when the cookie session has drifted. No active account ⇒ run
+    // the task as-is (identity passthrough — behaviour unchanged from before this existed).
+    const withActiveAccountSession = useCallback(<T,>(task: () => Promise<T>) => (account ? withAccountSession(db, account.id, task) : task()), [db, account]);
+
     const authBundle = useMemo<AuthBundle>(
         () => ({
             account,
@@ -332,6 +347,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             syncAndRefresh,
             isInitialSyncing,
             isCalendarSyncing,
+            withActiveAccountSession,
         }),
         [
             account,
@@ -345,6 +361,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             syncAndRefresh,
             isInitialSyncing,
             isCalendarSyncing,
+            withActiveAccountSession,
         ],
     );
 
