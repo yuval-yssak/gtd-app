@@ -634,6 +634,48 @@ describe('POST /v1/items/:id/complete', () => {
     });
 });
 
+// ─── POST /v1/items/:id/trash (recoverable soft-delete) ─────────────────────
+
+describe('POST /v1/items/:id/trash', () => {
+    it('transitions an item to trash, keeps the row, and records an update op', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'dispose me', status: 'inbox', updatedTs: '2024-01-01T00:00:00.000Z' });
+        const res = await callApi({ method: 'POST', path: `/v1/items/${item._id}/trash`, token: plaintext });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as ItemInterface;
+        expect(body.status).toBe('trash');
+        expect(body.updatedTs > item.updatedTs).toBe(true);
+        // The row must still exist (soft-delete, not hard-delete) so it surfaces in the Trash view.
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored?.status).toBe('trash');
+        // An update op (not delete) is recorded so other devices pull the trashed state.
+        const op = await db.collection<{ opType: string }>('operations').findOne({ entityId: item._id } as never);
+        expect(op?.opType).toBe('update');
+    });
+
+    it('is idempotent: trashing an already-trashed item returns it unchanged with X-Idempotent-Replay', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'already trashed', status: 'trash', updatedTs: '2024-01-01T00:00:00.000Z' });
+        const res = await callApi({ method: 'POST', path: `/v1/items/${item._id}/trash`, token: plaintext });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('X-Idempotent-Replay')).toBe('true');
+        const body = (await res.json()) as ItemInterface;
+        expect(body.updatedTs).toBe('2024-01-01T00:00:00.000Z');
+        // No new op should have been written.
+        expect(await db.collection('operations').countDocuments({ entityId: item._id })).toBe(0);
+    });
+
+    it('returns 404 for items that do not belong to the caller and leaves them untouched', async () => {
+        const a = await newUserWithToken('alice');
+        const b = await newUserWithToken('bob');
+        const bobItem = await seedItem({ userId: b.userId, title: 'bob' });
+        const res = await callApi({ method: 'POST', path: `/v1/items/${bobItem._id}/trash`, token: a.plaintext });
+        expect(res.status).toBe(404);
+        const after = await db.collection<{ status: string }>('items').findOne({ _id: bobItem._id } as never);
+        expect(after?.status).toBe('inbox');
+    });
+});
+
 // ── Phase 3: broadened PATCH surface ───────────────────────────────────────────────────────
 //
 // PATCH used to be clarify-only (inbox → nextAction/waitingFor/somedayMaybe with a tiny field

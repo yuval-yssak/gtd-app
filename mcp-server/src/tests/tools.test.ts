@@ -112,6 +112,16 @@ describe('item tools', () => {
         expect(call.body).toEqual({});
     });
 
+    it('gtd_trash_item POSTs /trash with empty body (recoverable soft-delete)', async () => {
+        const { api, calls } = makeFakeApi();
+        await t.trashItem.handler({ id: 'abc' }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.method).toBe('POST');
+        expect(call.path).toBe('/v1/items/abc/trash');
+        expect(call.body).toEqual({});
+    });
+
     it('gtd_update_item rejects status:"trash" at the schema level (Zod enum)', () => {
         const result = t.updateItem.inputSchema.status.safeParse('trash');
         expect(result.success).toBe(false);

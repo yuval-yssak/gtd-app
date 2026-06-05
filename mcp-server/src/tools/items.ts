@@ -8,11 +8,10 @@ import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs }
  * accepts; the model gets the matrix described in tool descriptions so it can compose
  * status-transition gestures correctly. Validation is enforced server-side either way.
  *
- * Note on deletion: there is no DELETE /v1/items/:id, and PATCH rejects {status: 'trash'} with
- * 409 invalid_transition. Trashing items via the public API requires POST /v1/operations/batch
- * with an op of {entityType:'item', opType:'delete', ...} — exposed via gtd_batch. Keeping
- * destructive item ops behind the explicit batch tool is an intentional safety choice for an
- * LLM-driven surface.
+ * Note on deletion: to dispose of an item, use `gtd_trash_item` (soft-delete → status:'trash',
+ * recoverable from the in-app Trash view). There is no item hard-delete on the public API:
+ * `gtd_batch` rejects {entityType:'item', opType:'delete'}, and PATCH rejects {status:'trash'}
+ * with 409. Trashing is the single, recoverable disposal path for an LLM-driven surface.
  *
  * Multi-account: every tool accepts an optional `account` field — see the README's
  * "Multi-account setup" section. Omitting it uses the `'default'` account.
@@ -121,13 +120,29 @@ const completeItem = defineTool({
         api.request('POST', `/v1/items/${encodeURIComponent(args.id)}/complete`, {}, undefined, requestOptsFromArgs({ account: args.account })),
 });
 
+const trashItem = defineTool({
+    name: 'gtd_trash_item',
+    description:
+        'Trash (soft-delete) a single item — moves it to `status: "trash"`. This is the correct way to dispose of an item: ' +
+        "it is RECOVERABLE (the item stays in the user's in-app Trash view and can be restored), unlike a hard delete which is " +
+        'permanent. Idempotent — trashing an already-trashed item returns it unchanged. If the item belongs to an active ' +
+        'nextAction routine, the next occurrence is generated automatically.',
+    inputSchema: {
+        id: idSchema,
+        account: accountSchema,
+    },
+    handler: async (args, api) =>
+        api.request('POST', `/v1/items/${encodeURIComponent(args.id)}/trash`, {}, undefined, requestOptsFromArgs({ account: args.account })),
+});
+
 export function registerItemTools(server: McpServer, api: ApiClient): void {
     registerOne(server, capture, api);
     registerOne(server, listItems, api);
     registerOne(server, getItem, api);
     registerOne(server, updateItem, api);
     registerOne(server, completeItem, api);
+    registerOne(server, trashItem, api);
 }
 
 // Re-exported for tests.
-export const _itemToolsForTesting = { capture, listItems, getItem, updateItem, completeItem };
+export const _itemToolsForTesting = { capture, listItems, getItem, updateItem, completeItem, trashItem };

@@ -9,7 +9,9 @@ import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs }
  * referencing it). The pre-flight checks scope union and rejects 403 with no partial writes;
  * Zod validation also runs up-front so structural errors fail the whole batch.
  *
- * This is also the only public way to opType:'delete' an item — there is no DELETE /v1/items/:id.
+ * Item hard-delete is NOT permitted here — the server rejects {entityType:'item', opType:'delete'}
+ * with 400 because a hard delete is unrecoverable. To dispose of an item use `gtd_trash_item`
+ * (recoverable soft-delete). `opType:'delete'` remains valid for routine/person/workContext ops.
  */
 
 const batch = defineTool({
@@ -18,7 +20,9 @@ const batch = defineTool({
         'Submit a heterogeneous batch of primitive ops atomically. Each op is {entityType, opType, entityId, snapshot}. ' +
         'snapshot is a full entity object (or null for delete). The server re-stamps snapshot.user before persisting. ' +
         'Atomic w.r.t. validation and scope; NOT atomic w.r.t. mid-flight Mongo failures (same caveat as /sync/push). ' +
-        'Note: this is currently the only public way to delete an item — use {entityType:"item", opType:"delete", entityId, snapshot:null}.',
+        'Note: item hard-delete is rejected ({entityType:"item", opType:"delete"} → 400) because it is unrecoverable — ' +
+        'use gtd_trash_item to dispose of an item (recoverable soft-delete). opType:"delete" is still valid for ' +
+        'routine, person, and workContext entities.',
     inputSchema: {
         ops: z
             .array(

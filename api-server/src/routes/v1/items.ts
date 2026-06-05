@@ -24,9 +24,10 @@ const MAX_BULK_ITEMS = 5_000;
 const DEFAULT_BULK_CHUNK_SIZE = 100;
 const MAX_BULK_CHUNK_SIZE = 500;
 // Statuses from which `POST /v1/items/:id/complete` is allowed to move an item to `done`.
-// `trash` is intentionally not in this list: trashing belongs in the in-app UI because there is
-// no /v1 restore endpoint to undo it. The same gate exists on `PATCH /v1/items/:id` —
-// `{status: 'trash'}` returns 409 invalid_transition.
+// `trash` is intentionally not in this list: a trashed item is disposed-of, not completable.
+// Disposing of an item via the public API goes through the dedicated `POST /v1/items/:id/trash`
+// endpoint (recoverable soft-delete); `PATCH /v1/items/:id` still rejects `{status: 'trash'}` with
+// 409 so the trash transition has exactly one entry point.
 const COMPLETABLE_FROM: ReadonlyArray<ItemInterface['status']> = ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done'];
 
 const ITEM_STATUSES = new Set<ItemInterface['status']>(Object.values(ItemStatus));
@@ -425,6 +426,43 @@ async function maybeAdvanceRoutineForItem(item: ItemInterface, ctx: { userId: st
     await advanceRoutineAfterDisposal({ userId: ctx.userId, tokenId: ctx.tokenId }, routine, dayjs().toDate());
 }
 
+interface TrashContext {
+    userId: string;
+    tokenId: string;
+    itemId: string;
+}
+
+type TrashResult = { ok: true; item: ItemInterface; alreadyTrashed: boolean } | { ok: false; status: 404; code: 'not_found'; message: string };
+
+/**
+ * Soft-deletes an item by moving it to `status: 'trash'` — the RECOVERABLE disposal primitive for
+ * the public API. A trashed item still exists in the collection and surfaces in the in-app Trash
+ * view, where the user can restore it; contrast with a hard `opType: 'delete'` (physical row
+ * removal), which `/v1/operations/batch` now rejects for items precisely because it is
+ * unrecoverable. Idempotent — trashing an already-trashed item returns it unchanged.
+ *
+ * `trash` accepts every status-specific field per the matrix (it is archival, like `done`), so the
+ * snapshot is preserved as-is — no field sanitisation. Trashing a routine-linked item advances the
+ * series via `maybeAdvanceRoutineForItem`, identical to `completeItem`. Note this only generates
+ * the next item for `nextAction` routines (`advanceRoutineAfterDisposal` hard-returns for calendar
+ * routines); the client's `clarifyToTrash` additionally records a `skipped` exception for calendar
+ * routines, which the public API does not — a pre-existing parity gap shared with `completeItem`.
+ */
+async function trashItem({ userId, tokenId, itemId }: TrashContext): Promise<TrashResult> {
+    const existing = await itemsDAO.findByOwnerAndId(itemId, userId);
+    if (!existing) {
+        return { ok: false, status: 404, code: 'not_found', message: 'item not found' };
+    }
+    if (existing.status === 'trash') {
+        return { ok: true, item: existing, alreadyTrashed: true };
+    }
+    const now = dayjs().toISOString();
+    const updated: ItemInterface = { ...existing, status: 'trash', updatedTs: now };
+    await applyAndPublishOperation(userId, { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated }, { deviceId: `api:${tokenId}`, now });
+    await maybeAdvanceRoutineForItem(existing, { userId, tokenId });
+    return { ok: true, item: updated, alreadyTrashed: false };
+}
+
 // ── PATCH /v1/items/:id (full-surface update) ──────────────────────────────────────────────
 //
 // Phase 3 broadened this from a clarify-only handler to a general update surface: any status
@@ -493,16 +531,17 @@ async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promis
             return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${key}" cannot be set via the public API` } };
         }
     }
-    // Trash transitions stay out of the public API on purpose. Once an item is trashed the only
-    // way back is the in-app UI (no /v1 restore endpoint exists today), so silently letting
-    // callers PATCH `{status: 'trash'}` would create unrecoverable rows for headless integrations.
-    // Mirrors the same intent that gates trash out of POST /v1/items/:id/complete.
+    // Trashing has exactly one public entry point: POST /v1/items/:id/trash (which also handles
+    // routine advancement). PATCH keeps rejecting `{status: 'trash'}` so callers can't reach the
+    // trash transition through the general-purpose update surface — funnelling it through the
+    // dedicated endpoint keeps the disposal semantics (idempotency, routine advancement) in one
+    // place and avoids PATCH having to special-case routine advancement for a trash transition.
     //
-    // Note on routine advancement: because no public-API trash transition exists, there is no
-    // server-side `advanceRoutineAfterDisposal` call for trashes. The only way an item reaches
-    // `trash` server-side is via `/v1/operations/batch` (replay of a client-originated trash op),
-    // and triggering routine advancement on replay would double-create a tail item — the client
-    // already ran its own `maybeCreateNextRoutineItem` when it staged the trash op locally.
+    // Note on routine advancement via replay: a `trash` snapshot can still arrive through
+    // `/v1/operations/batch` (replay of a client-originated trash op). That path does NOT trigger
+    // server-side `advanceRoutineAfterDisposal` — the client already ran its own
+    // `maybeCreateNextRoutineItem` when it staged the trash op locally, so advancing again would
+    // double-create the tail item.
     // Bracket access is required by `noPropertyAccessFromIndexSignature` on the `Record` type;
     // suppress Biome's dot-notation preference, which would conflict with tsc.
     // biome-ignore lint/complexity/useLiteralKeys: see above.
@@ -710,6 +749,24 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json({ error: result.message, code: result.code }, result.status);
         }
         if (result.alreadyDone) {
+            c.header('X-Idempotent-Replay', 'true');
+        }
+        return c.json(presentItem(result.item));
+    })
+
+    // ── POST /v1/items/:id/trash ────────────────────────────────────────────
+    // Recoverable soft-delete: moves the item to `status: 'trash'`. This is the public API's
+    // disposal primitive — it replaces the old `gtd_batch` hard-delete hack, which physically
+    // removed the row (unrecoverable). A trashed item stays in the collection and shows up in the
+    // in-app Trash view for restore. Idempotent (already-trashed → X-Idempotent-Replay).
+    .post('/items/:id/trash', requireScope('items.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const result = await trashItem({ userId, tokenId, itemId: id });
+        if (!result.ok) {
+            return c.json({ error: result.message, code: result.code }, result.status);
+        }
+        if (result.alreadyTrashed) {
             c.header('X-Idempotent-Replay', 'true');
         }
         return c.json(presentItem(result.item));

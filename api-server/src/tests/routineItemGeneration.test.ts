@@ -19,16 +19,19 @@ import { pauseRoutine } from '../lib/routineComposites.js';
 import { buildRoutineItemSnapshot } from '../lib/routineItemGeneration.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
+import { v1OperationsRoutes } from '../routes/v1/operations.js';
 import { v1RoutinesRoutes } from '../routes/v1/routines.js';
 import type { ApiTokenScope, ItemInterface, RoutineInterface } from '../types/entities.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 
-// Mount both routers so a single test can create a routine, complete its item, and inspect the
-// resulting items in one app instance. Without this, tests had to maintain two app handles.
+// Mount routines, items, and operations routers so a single test can create a routine, dispose of
+// its item (via /complete, /trash, or an operations/batch replay), and inspect the resulting items
+// in one app instance. Without this, tests had to maintain separate app handles.
 const app = new Hono()
     .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
     .route('/v1', v1RoutinesRoutes)
-    .route('/v1', v1ItemsRoutes);
+    .route('/v1', v1ItemsRoutes)
+    .route('/v1', v1OperationsRoutes);
 
 beforeAll(async () => {
     await loadDataAccess('gtd_test');
@@ -521,6 +524,55 @@ describe('POST /v1/items/:id/complete — advance routine', () => {
         // Routine has been deactivated by the exhaustion handler.
         const stored = await routinesDAO.findByOwnerAndId(routine._id, userId);
         expect(stored?.active).toBe(false);
+    });
+});
+
+// ── POST /v1/items/:id/trash: advancement on disposal ────────────────────────
+
+describe('POST /v1/items/:id/trash — advance routine', () => {
+    it('trashes the first item and produces a second nextAction item (parity with /complete)', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write', 'items.write']);
+        const routine = await createRoutineViaApi(token, { rrule: 'FREQ=DAILY' });
+        const before = await getItemsForRoutine(userId, routine._id);
+        expect(before).toHaveLength(1);
+        const firstId = before[0]!._id!;
+
+        const res = await postJson(`/v1/items/${firstId}/trash`, token, {});
+        expect(res.status).toBe(200);
+
+        const after = await getItemsForRoutine(userId, routine._id);
+        // After trash: one `trash` item and one new `nextAction` item — the series advances even
+        // when the disposal is a trash (mirrors the client's clarifyToTrash → maybeCreateNextRoutineItem).
+        expect(after).toHaveLength(2);
+        const trashed = after.find((i) => i._id === firstId);
+        const next = after.find((i) => i._id !== firstId);
+        expect(trashed?.status).toBe('trash');
+        expect(next?.status).toBe('nextAction');
+    });
+
+    it('replaying a client-originated trash op via /operations/batch does NOT advance (no double-create)', async () => {
+        // Invariant pinned by the comments in items.ts: a `trash` snapshot arriving through
+        // /operations/batch is a REPLAY of a client trash — the client already ran its own
+        // maybeCreateNextRoutineItem locally, so the server must NOT advance again. The /trash
+        // endpoint is the only server-side path that advances on trash.
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write', 'items.write']);
+        const routine = await createRoutineViaApi(token, { rrule: 'FREQ=DAILY' });
+        const before = await getItemsForRoutine(userId, routine._id);
+        expect(before).toHaveLength(1);
+        const first = before[0]!;
+
+        const trashSnapshot = { ...first, status: 'trash', updatedTs: dayjs().toISOString() };
+        const res = await postJson('/v1/operations/batch', token, {
+            ops: [{ entityType: 'item', opType: 'update', entityId: first._id, snapshot: trashSnapshot }],
+        });
+        expect(res.status).toBe(200);
+
+        const after = await getItemsForRoutine(userId, routine._id);
+        // Still exactly one item (now trashed) — the batch replay must not have generated a tail.
+        expect(after).toHaveLength(1);
+        expect(after[0]!.status).toBe('trash');
     });
 });
 

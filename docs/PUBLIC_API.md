@@ -70,7 +70,7 @@ Each token carries a `scopes` array — the capabilities it is permitted to exer
 |---|---|
 | `items.capture` | `POST /v1/items`, `POST /v1/items/bulk` |
 | `items.read` | `GET /v1/items`, `GET /v1/items/:id` |
-| `items.write` | `PATCH /v1/items/:id`, `POST /v1/items/:id/complete` |
+| `items.write` | `PATCH /v1/items/:id`, `POST /v1/items/:id/complete`, `POST /v1/items/:id/trash` |
 | `routines.read` | `GET /v1/routines`, `GET /v1/routines/:id` |
 | `routines.write` | `POST /v1/routines`, `PATCH /v1/routines/:id`, `DELETE /v1/routines/:id`, plus the composite gestures (`/pause`, `/resume`, `/split`) |
 | `people.read` | `GET /v1/people`, `GET /v1/people/:id` |
@@ -141,7 +141,7 @@ The full item shape is `ItemInterface` in `api-server/src/types/entities.ts`. Th
 | Field | Type | Notes |
 |---|---|---|
 | `_id` | string (UUID) | Stable identifier. |
-| `status` | `inbox \| nextAction \| calendar \| waitingFor \| somedayMaybe \| done \| trash` | `POST /v1/items` always lands in `inbox`; transitions are driven by `PATCH /v1/items/:id` (any matrix-allowed transition except `trash`) and `POST /v1/items/:id/complete`. |
+| `status` | `inbox \| nextAction \| calendar \| waitingFor \| somedayMaybe \| done \| trash` | `POST /v1/items` always lands in `inbox`; transitions are driven by `PATCH /v1/items/:id` (any matrix-allowed transition except `trash`), `POST /v1/items/:id/complete` (→ `done`), and `POST /v1/items/:id/trash` (→ `trash`, recoverable). |
 | `title` | string | Required on create. |
 | `notes` | string? | Optional markdown. |
 | `createdTs` | string | Server-assigned on create. |
@@ -298,7 +298,7 @@ Status transitions are no longer restricted to `inbox` as the source — any mat
 
 **Two exceptions to the broadened surface:**
 
-- `{status: 'trash'}` is rejected with `409 invalid_transition` — there is no `/v1` restore endpoint, so trashing via PATCH would create unrecoverable rows. Trash from the in-app UI instead.
+- `{status: 'trash'}` is rejected with `409 invalid_transition` — trashing has a single dedicated entry point, [`POST /v1/items/:id/trash`](#post-v1itemsidtrash--soft-delete-recoverable) (recoverable soft-delete). Funnelling it through one endpoint keeps the disposal semantics (idempotency, routine advancement) in one place.
 - Server-managed fields are rejected up front with `400 forbidden_field`: `_id`, `user`, `createdTs`, `updatedTs`, `routineId`, `contentHash`, `externalId`, and the four sync-anchor fields (`lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`).
 
 **Stale-field sanitization.** When a status transition makes an existing-row field invalid (e.g. moving a calendar item to `inbox` makes its `timeStart` no longer valid), the server strips the *existing* field automatically. Caller-supplied incompatible fields are NOT silently stripped — they surface as `status_field_violation` so client bugs are visible.
@@ -452,6 +452,8 @@ Submit an array of primitive ops in one request. Use this when an integration ne
 
 Each op carries `entityType`, `opType` (`create` / `update` / `delete`), `entityId`, and a full `snapshot` (or `null` for delete). The server re-stamps `snapshot.user` to the calling token's user before persisting.
 
+> **Item hard-delete is not permitted here.** An op of `{ entityType: 'item', opType: 'delete' }` is rejected with `400 invalid_op_shape` because a hard delete physically removes the row and is unrecoverable. To dispose of an item use [`POST /v1/items/:id/trash`](#post-v1itemsidtrash--soft-delete-recoverable) — a recoverable soft-delete. `opType: 'delete'` remains valid for `routine`, `person`, and `workContext` ops (their deletes hydrate a pre-delete snapshot into the op log for cascade replay).
+
 **Atomicity guarantees**
 
 - **Scope:** the route computes the union of scopes the ops need (per `scopeForOp` in `api-server/src/routes/v1/operations.ts`) and rejects with `403 forbidden_scope` *before any write* if any are missing. The response includes `requiredScope` (the first missing) and `allRequiredScopes`.
@@ -484,6 +486,29 @@ Transitions any item to `done` and bumps `updatedTs`. Idempotent: completing an 
 - For a `calendar` item linked to Google Calendar (`calendarEventId` set), the existing GCal pushback path runs as it would for an in-app completion (the linked event is updated/removed per current routine/calendar rules).
 - A `routine`-generated item completing may trigger generation of the next instance, identical to the in-app flow.
 - An `OperationInterface` is logged with `deviceId = "api:<tokenId>"` so all the user's devices pull the change on their next sync.
+
+---
+
+### `POST /v1/items/:id/trash` — soft-delete (recoverable)
+
+Moves an item to `status: 'trash'` and bumps `updatedTs`. This is the **only** way to dispose of an item via the public API, and it is **recoverable** — the item stays in the collection and surfaces in the in-app Trash view, where the user can restore it. There is no item hard-delete on the public surface (`/v1/operations/batch` rejects `{entityType:'item', opType:'delete'}`; `PATCH` rejects `{status:'trash'}`). Idempotent: trashing an already-trashed item returns `200` with `X-Idempotent-Replay: true` and the unchanged item.
+
+Requires the `items.write` scope.
+
+**Request body**: empty (or `{}`).
+
+**Response** — `200 OK` with the updated (trashed) item.
+
+**Errors**
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `404` | `not_found` | Item doesn't exist for this user. |
+
+**Side effects**
+
+- Trashing a `routine`-generated item advances the series (next instance is generated), mirroring the in-app `clarifyToTrash` flow.
+- An `OperationInterface` (`opType: 'update'`, not `delete`) is logged with `deviceId = "api:<tokenId>"` so all the user's devices pull the trashed state on their next sync.
 
 ## Webhooks
 

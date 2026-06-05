@@ -172,6 +172,43 @@ describe('POST /v1/operations/batch', () => {
         expect(((await res.json()) as { code: string }).code).toBe('invalid_op_shape');
     });
 
+    it('rejects an item hard-delete with invalid_op_shape and leaves the row intact', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['items.capture', 'items.write']);
+        await itemsDAO.insertOne(itemSnapshot(userId, 'it-keep'));
+        const ops = [{ entityType: 'item', opType: 'delete', entityId: 'it-keep', snapshot: null }];
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops }),
+            }),
+        );
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as { code: string; error: string };
+        expect(body.code).toBe('invalid_op_shape');
+        // Error message must steer the caller to the recoverable trash endpoint.
+        expect(body.error).toContain('/v1/items/:id/trash');
+        // The row must NOT have been removed — the rejection happens before any persistence.
+        expect(await itemsDAO.findByOwnerAndId('it-keep', userId)).not.toBeNull();
+    });
+
+    it('still allows hard-delete for non-item entities (routine/person/workContext)', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['contexts.write']);
+        await db.collection('workContexts').insertOne(workContextSnapshot(userId, 'wc-del') as never);
+        const ops = [{ entityType: 'workContext', opType: 'delete', entityId: 'wc-del', snapshot: null }];
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        expect(await db.collection('workContexts').findOne({ _id: 'wc-del' } as never)).toBeNull();
+    });
+
     it('item.update vs item.create scopes differ: a token with only items.capture cannot send item.update in a batch', async () => {
         const userId = await login();
         const token = await tokenWith(userId, ['items.capture']);

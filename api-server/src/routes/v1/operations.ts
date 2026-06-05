@@ -80,6 +80,17 @@ function parseRawOpShape(op: RawOpBag): { ok: true; value: ParsedRawOp } | { ok:
     if (typeof opType !== 'string' || !OP_TYPES.has(opType as OpType)) {
         return { ok: false, message: `opType must be one of: ${[...OP_TYPES].join(', ')}` };
     }
+    // Item hard-deletes are forbidden on the public surface. `opType: 'delete'` physically removes
+    // the row (unrecoverable); headless integrations that meant to dispose of an item should trash
+    // it instead (POST /v1/items/:id/trash → recoverable soft-delete). Hard-delete stays available
+    // to the first-party client via /sync/push for legitimate permanent purges (e.g. routine
+    // item cleanup). Routine/person/workContext deletes are unaffected.
+    if (entityType === 'item' && opType === 'delete') {
+        return {
+            ok: false,
+            message: 'item hard-delete is not permitted via the public API — use POST /v1/items/:id/trash to soft-delete (recoverable)',
+        };
+    }
     if (typeof entityId !== 'string' || entityId.trim() === '') {
         return { ok: false, message: 'entityId must be a non-empty string' };
     }
