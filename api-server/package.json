@@ -17,6 +17,7 @@
         "test:sync-audit": "vitest run --config vitest.sync-audit.config.ts"
     },
     "dependencies": {
+        "@anthropic-ai/sdk": "^0.101.0",
         "@hono/node-server": "latest",
         "better-auth": "^1.5.6",
         "dayjs": "latest",

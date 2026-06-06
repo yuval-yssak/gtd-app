@@ -19,5 +19,11 @@ declare namespace NodeJS {
         CALENDAR_AUTH_GRACE_MS?: string;
         COMMIT_HASH?: string;
         WEBHOOKS_ENABLED?: string;
+        /** Anthropic API key for the Lane A Claude-assist endpoint. Separate billing from any Pro/Max subscription. */
+        ANTHROPIC_API_KEY?: string;
+        /** HMAC-SHA256 key (hex) for signing/verifying short-lived `executeToken`s. Dev fallback if unset. */
+        EXECUTE_TOKEN_SIGNING_KEY?: string;
+        /** Per-user daily USD cap for Claude-assist spend. Parsed as a float; falls back to a built-in default. */
+        CLAUDE_ASSIST_DAILY_COST_CAP_USD?: string;
     }
 }
