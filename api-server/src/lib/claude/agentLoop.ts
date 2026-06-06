@@ -2,7 +2,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { ItemInterface } from '../../types/entities.js';
 import { CLAUDE_ASSIST_MODEL, getAnthropicClient } from './anthropicClient.js';
 import { CLARIFY_PROPOSAL_SCHEMA, type ClarifyProposal } from './proposalSchema.js';
-import { CLARIFY_TOOLS, dispatchTool } from './tools.js';
+import { buildClarifyTools, dispatchTool, resolveCalendarContext, type ToolContext } from './tools.js';
 
 const MAX_TOOL_ITERATIONS = 6;
 const MAX_TOKENS = 2048;
@@ -91,13 +91,19 @@ export async function runClarifyLoop(
     const usage: AssistUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: buildInitialUserMessage(item, instruction) }];
 
+    // Resolve calendar access ONCE, up front: keeps the tool list (and thus the cached prefix)
+    // stable for the whole request. No calendar → the getCalendarEvents tool is simply omitted.
+    const calendar = await resolveCalendarContext(ownerUserId);
+    const tools = buildClarifyTools(calendar !== undefined);
+    const toolContext: ToolContext = calendar ? { ownerUserId, calendar } : { ownerUserId };
+
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
         const response = await client.messages.create(
             {
                 model: CLAUDE_ASSIST_MODEL,
                 max_tokens: MAX_TOKENS,
                 system: buildSystemBlocks(),
-                tools: CLARIFY_TOOLS,
+                tools,
                 output_config: { format: { type: 'json_schema', schema: CLARIFY_PROPOSAL_SCHEMA as unknown as Record<string, unknown> } },
                 messages,
             },
@@ -117,7 +123,7 @@ export async function runClarifyLoop(
         const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
         const toolResults: Anthropic.ToolResultBlockParam[] = await Promise.all(
             toolUses.map(async (block) => {
-                const outcome = await dispatchTool(block.name, block.input, ownerUserId);
+                const outcome = await dispatchTool(block.name, block.input, toolContext);
                 return {
                     type: 'tool_result' as const,
                     tool_use_id: block.id,

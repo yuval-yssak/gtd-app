@@ -3,14 +3,18 @@
  * The Anthropic SDK is mocked at the `anthropicClient` seam so no real API call happens and the
  * tool-use loop is driven by scripted responses. Covers the clarify happy-path (one tool call then
  * a structured proposal), the multi-account ownership guard (404), and the scope guard (403). */
+import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
+import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
+import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ClaudeRoutes } from '../routes/v1/claude.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
+import type { CalendarIntegrationInterface, CalendarSyncConfigInterface } from '../types/entities.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 // Mock the client seam. `vi.mock` is hoisted above the imports by Vitest, so the agent loop picks
@@ -19,6 +23,12 @@ const messagesCreate = vi.fn();
 vi.mock('../lib/claude/anthropicClient.js', () => ({
     getAnthropicClient: () => ({ messages: { create: messagesCreate } }),
     CLAUDE_ASSIST_MODEL: 'claude-sonnet-4-6',
+}));
+
+// Stub the calendar provider so getCalendarEvents returns canned events (no Google call).
+const listEvents = vi.fn();
+vi.mock('../lib/buildCalendarProvider.js', () => ({
+    buildCalendarProvider: () => ({ listEvents }),
 }));
 
 const app = new Hono()
@@ -45,10 +55,40 @@ beforeEach(async () => {
         db.collection('workContexts').deleteMany({}),
         db.collection('operations').deleteMany({}),
         db.collection('apiTokens').deleteMany({}),
+        db.collection('calendarIntegrations').deleteMany({}),
+        db.collection('calendarSyncConfigs').deleteMany({}),
     ]);
     __resetDefaultStoreForTests();
     messagesCreate.mockReset();
+    listEvents.mockReset();
 });
+
+/** Seeds an active integration + its default enabled sync config for the user. */
+async function seedCalendar(userId: string) {
+    const now = dayjs().toISOString();
+    const integration: CalendarIntegrationInterface = {
+        _id: 'int-1',
+        user: userId,
+        provider: 'google',
+        accessToken: 'at',
+        refreshToken: 'rt',
+        tokenExpiry: now,
+        createdTs: now,
+        updatedTs: now,
+    };
+    await calendarIntegrationsDAO.insertEncrypted(integration);
+    const config: CalendarSyncConfigInterface = {
+        _id: 'sync-1',
+        integrationId: 'int-1',
+        user: userId,
+        calendarId: 'primary',
+        isDefault: true,
+        enabled: true,
+        createdTs: now,
+        updatedTs: now,
+    };
+    await calendarSyncConfigsDAO.insertOne(config);
+}
 
 async function login(profileOverrides: Record<string, unknown> = {}) {
     const { sessionCookie } = await oauthLogin(app, 'google', profileOverrides);
@@ -395,5 +435,128 @@ describe('POST /v1/claude/assist/apply (redeem executeToken)', () => {
         );
         expect(res.status).toBe(400);
         expect((await res.json()) as { code: string }).toMatchObject({ code: 'invalid_request' });
+    });
+});
+
+describe('getCalendarEvents tool (gated on a connected calendar)', () => {
+    it('omits the getCalendarEvents tool when the owner has no calendar', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'no calendar', 'ext-nocal');
+
+        scriptProposal({ summary: 'ok', proposedSideEffects: [] });
+        await assist(plaintext, id);
+
+        const [firstCallParams] = messagesCreate.mock.calls[0] as [{ tools: Array<{ name: string }> }];
+        const toolNames = firstCallParams.tools.map((t) => t.name);
+        expect(toolNames).not.toContain('getCalendarEvents');
+    });
+
+    it('includes getCalendarEvents and serves owner-scoped events when a calendar is connected', async () => {
+        const { userId } = await login();
+        await seedCalendar(userId);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'prep for the standup', 'ext-cal');
+
+        listEvents.mockResolvedValueOnce([
+            {
+                id: 'evt-1',
+                title: 'Daily Standup',
+                timeStart: '2026-06-08T09:00:00Z',
+                timeEnd: '2026-06-08T09:30:00Z',
+                updated: '2026-06-01T00:00:00Z',
+                status: 'confirmed',
+            },
+        ]);
+        scriptToolThenProposal(
+            'getCalendarEvents',
+            { since: '2026-06-08T00:00:00Z', until: '2026-06-09T00:00:00Z' },
+            { summary: 'Found your standup.', proposedSideEffects: [] },
+        );
+
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(200);
+
+        // The tool was offered...
+        const [firstCallParams] = messagesCreate.mock.calls[0] as [{ tools: Array<{ name: string }> }];
+        expect(firstCallParams.tools.map((t) => t.name)).toContain('getCalendarEvents');
+        // ...the provider was called with the resolved calendarId + window...
+        expect(listEvents).toHaveBeenCalledWith('primary', '2026-06-08T00:00:00Z', '2026-06-09T00:00:00Z');
+        // ...and the event summary was fed back to the model (not credentials).
+        const [secondCallParams] = messagesCreate.mock.calls[1] as [{ messages: Array<{ role: string; content: unknown }> }];
+        const serialized = JSON.stringify(secondCallParams.messages);
+        expect(serialized).toContain('Daily Standup');
+        expect(serialized).not.toContain('refreshToken');
+    });
+
+    it('applies a calendar side-effect expressed as item calendar fields, through the op-log', async () => {
+        const { userId } = await login();
+        await seedCalendar(userId);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'lunch with sam thursday noon', 'ext-calapply');
+
+        // The model proposes turning the item into a calendar entry (status + timeStart/timeEnd).
+        const patch = { status: 'calendar', timeStart: '2026-06-11T12:00:00Z', timeEnd: '2026-06-11T13:00:00Z' };
+        const token = await assistAndGetToken(plaintext, id, patch);
+        const res = await apply(plaintext, token, patch);
+        expect(res.status).toBe(200);
+
+        const updated = await db.collection('items').findOne({ _id: id });
+        expect(updated).toMatchObject({ status: 'calendar', timeStart: '2026-06-11T12:00:00Z', timeEnd: '2026-06-11T13:00:00Z' });
+        const op = await db.collection('operations').findOne({ entityId: id, opType: 'update', deviceId: { $regex: '^api:' } });
+        expect(op).not.toBeNull();
+    });
+
+    it('degrades to no-calendar when an integration row is corrupt/undecryptable (does not fail clarify)', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'corrupt cal', 'ext-corrupt');
+
+        // Insert a row with non-encrypted (undecryptable) tokens directly, bypassing insertEncrypted —
+        // simulates a row encrypted under a rotated key. findByUserDecrypted will throw on decrypt.
+        const now = dayjs().toISOString();
+        await db.collection('calendarIntegrations').insertOne({
+            _id: 'int-bad',
+            user: userId,
+            provider: 'google',
+            accessToken: 'not-encrypted',
+            refreshToken: 'not-encrypted',
+            tokenExpiry: now,
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        scriptProposal({ summary: 'ok', proposedSideEffects: [] });
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(200);
+        // Calendar resolution failed → the tool is simply omitted, clarify still works.
+        const [firstCallParams] = messagesCreate.mock.calls[0] as [{ tools: Array<{ name: string }> }];
+        expect(firstCallParams.tools.map((t) => t.name)).not.toContain('getCalendarEvents');
+    });
+
+    it('omits getCalendarEvents when the integration is revoked', async () => {
+        const { userId } = await login();
+        await seedCalendar(userId);
+        await calendarIntegrationsDAO.updateOne({ _id: 'int-1' }, { $set: { status: 'revoked' } });
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'revoked cal', 'ext-revoked');
+
+        scriptProposal({ summary: 'ok', proposedSideEffects: [] });
+        await assist(plaintext, id);
+        const [firstCallParams] = messagesCreate.mock.calls[0] as [{ tools: Array<{ name: string }> }];
+        expect(firstCallParams.tools.map((t) => t.name)).not.toContain('getCalendarEvents');
+    });
+
+    it('omits getCalendarEvents when there is no enabled sync config', async () => {
+        const { userId } = await login();
+        await seedCalendar(userId);
+        await calendarSyncConfigsDAO.updateOne({ _id: 'sync-1' }, { $set: { enabled: false } });
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'disabled cal', 'ext-disabled');
+
+        scriptProposal({ summary: 'ok', proposedSideEffects: [] });
+        await assist(plaintext, id);
+        const [firstCallParams] = messagesCreate.mock.calls[0] as [{ tools: Array<{ name: string }> }];
+        expect(firstCallParams.tools.map((t) => t.name)).not.toContain('getCalendarEvents');
     });
 });

@@ -20,6 +20,11 @@ export const PROPOSABLE_ITEM_FIELDS = [
     'urgent',
     'expectedBy',
     'ignoreBefore',
+    // Calendar fields — let the agent clarify an inbox item into a calendar entry. The write still
+    // goes through the op-log, so GCal pushback creates/updates the event (no direct provider write).
+    'timeStart',
+    'timeEnd',
+    'allDay',
 ] as const;
 
 export type ProposableItemField = (typeof PROPOSABLE_ITEM_FIELDS)[number];
@@ -38,6 +43,9 @@ export interface ProposedItemPatch {
     urgent?: boolean;
     expectedBy?: string;
     ignoreBefore?: string;
+    timeStart?: string;
+    timeEnd?: string;
+    allDay?: boolean;
 }
 
 /**
@@ -81,6 +89,9 @@ export const CLARIFY_PROPOSAL_SCHEMA = {
                 urgent: { type: 'boolean' },
                 expectedBy: { type: 'string' },
                 ignoreBefore: { type: 'string' },
+                timeStart: { type: 'string' },
+                timeEnd: { type: 'string' },
+                allDay: { type: 'boolean' },
             },
             additionalProperties: false,
         },
