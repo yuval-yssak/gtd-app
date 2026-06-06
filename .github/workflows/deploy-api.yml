@@ -78,6 +78,13 @@ jobs:
                   # Outbound webhook delivery worker: off in production until you opt in by setting
                   # the GitHub Environment variable WEBHOOKS_ENABLED=true. Empty string == off.
                   WEBHOOKS_ENABLED: "${{ vars.WEBHOOKS_ENABLED }}"
+                  # Lane A Claude-assist ("clarify with AI"). ANTHROPIC_API_KEY + EXECUTE_TOKEN_SIGNING_KEY
+                  # are Environment secrets; without the API key the endpoint 503s, and since NODE_ENV is
+                  # production a missing/short signing key is a hard error when minting execute tokens.
+                  # The cost cap is a non-sensitive Environment variable (code default applies if empty).
+                  ANTHROPIC_API_KEY: "${{ secrets.ANTHROPIC_API_KEY }}"
+                  EXECUTE_TOKEN_SIGNING_KEY: "${{ secrets.EXECUTE_TOKEN_SIGNING_KEY }}"
+                  CLAUDE_ASSIST_DAILY_COST_CAP_USD: "${{ vars.CLAUDE_ASSIST_DAILY_COST_CAP_USD }}"
                   EOF
                   # SSE connection registry is in-process — multi-instance fanout would lose
                   # webhook-triggered notifications when the webhook lands on an instance that
