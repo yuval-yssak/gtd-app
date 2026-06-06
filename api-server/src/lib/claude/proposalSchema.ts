@@ -22,6 +22,8 @@ export const PROPOSABLE_ITEM_FIELDS = [
     'ignoreBefore',
     // Calendar fields — let the agent clarify an inbox item into a calendar entry. The write still
     // goes through the op-log, so GCal pushback creates/updates the event (no direct provider write).
+    // `timeStart`/`timeEnd` are status-specific (calendar-only) and matrix-gated by the op validator;
+    // `allDay` is a universal field and inert without those times, so it carries no write risk alone.
     'timeStart',
     'timeEnd',
     'allDay',
@@ -49,14 +51,15 @@ export interface ProposedItemPatch {
 }
 
 /**
- * A proposed side-effect the user can apply, edit, or skip. `kind` discriminates how the apply
- * handler turns it into an operation; `preview` is human-readable; `executeToken` is minted by the
- * server AFTER the loop (the model never produces it — see executeToken.ts).
+ * A proposed side-effect the user can apply, edit, or skip. `preview` is human-readable;
+ * `executeToken` is minted by the server AFTER the loop (the model never produces it — see
+ * executeToken.ts). Today the only kind is `itemPatch` — a calendar entry is just an item patch
+ * with `status: 'calendar'` + times, so GCal pushback creates the event with no separate kind.
  */
 export interface ProposedSideEffect {
-    kind: 'itemPatch' | 'calendarSideEffect';
+    kind: 'itemPatch';
     preview: string;
-    executeToken?: string; // filled in by the route handler post-loop; absent in step (b)
+    executeToken?: string; // filled in by the route handler post-loop
 }
 
 export interface ClarifyProposal {
@@ -100,7 +103,7 @@ export const CLARIFY_PROPOSAL_SCHEMA = {
             items: {
                 type: 'object',
                 properties: {
-                    kind: { type: 'string', enum: ['itemPatch', 'calendarSideEffect'] },
+                    kind: { type: 'string', enum: ['itemPatch'] },
                     preview: { type: 'string' },
                 },
                 required: ['kind', 'preview'],
