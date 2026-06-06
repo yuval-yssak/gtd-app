@@ -27,6 +27,10 @@ export function describeError(code: AssistErrorCode | undefined): ReviewErrorVie
             return { message: "You've reached today's Claude limit. Try again tomorrow.", retryable: false };
         case 'agent_timeout':
             return { message: 'Claude took too long to respond. Try again.', retryable: true };
+        case 'agent_unavailable':
+            // Our service-side failure (e.g. the API account is out of credits / overloaded) — the
+            // user can't fix it, only wait. Distinct from THEIR own daily limit (daily_spend_cap_reached).
+            return { message: 'Claude is temporarily unavailable. Please try again in a little while.', retryable: true };
         case 'agent_error':
             return { message: "Claude couldn't finish the request. Try again.", retryable: true };
         case 'execute_token_expired':

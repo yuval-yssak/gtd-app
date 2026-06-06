@@ -80,6 +80,7 @@ export type AssistErrorCode =
     | 'daily_spend_cap_reached'
     | 'agent_timeout'
     | 'agent_error'
+    | 'agent_unavailable'
     | 'execute_token_expired'
     | 'invalid_execute_token'
     | 'execute_token_target_mismatch'

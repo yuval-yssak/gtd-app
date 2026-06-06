@@ -143,6 +143,18 @@ test.describe('Lane A Claude review→apply flow (client UI, mocked endpoints)',
         });
     });
 
+    test('an unavailable service (503 agent_unavailable) shows friendly copy with a retry', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `claude-unavail-${dayjs().valueOf()}@example.com`, async (page) => {
+            await seedInboxAndOpen(page, 'unavailable item');
+            // e.g. the API account is out of credits / overloaded — the user can only wait + retry.
+            await page.route(ASSIST_GLOB, (route) => fulfillJson(route, { error: 'unavailable', code: 'agent_unavailable' }, 503));
+
+            await page.getByTestId('inboxItemClarifyClaudeButton').first().click();
+            await expect(page.getByTestId('claudeReviewError')).toContainText('temporarily unavailable');
+            await expect(page.getByTestId('claudeReviewRetry')).toBeVisible();
+        });
+    });
+
     test('an expired token on apply (410) surfaces re-run copy with a retry', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `claude-expired-${dayjs().valueOf()}@example.com`, async (page) => {
             const { contextId } = await seedInboxAndOpen(page, 'expired token item');

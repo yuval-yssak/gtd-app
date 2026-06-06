@@ -15,6 +15,21 @@ describe('describeError', () => {
         expect(describeError('agent_error').retryable).toBe(true);
     });
 
+    it('maps agent_unavailable to a friendly "temporarily unavailable" retryable message', () => {
+        const view = describeError('agent_unavailable');
+        expect(view.retryable).toBe(true);
+        expect(view.message).toMatch(/temporarily unavailable/i);
+    });
+
+    it('keeps the three Claude-failure messages distinct (the whole point of the codes)', () => {
+        const messages = new Set([
+            describeError('agent_unavailable').message,
+            describeError('agent_error').message,
+            describeError('daily_spend_cap_reached').message,
+        ]);
+        expect(messages.size).toBe(3);
+    });
+
     it('treats every expired/invalid token code as a retryable "re-run Clarify"', () => {
         const tokenCodes: AssistErrorCode[] = ['execute_token_expired', 'invalid_execute_token', 'execute_token_target_mismatch'];
         for (const code of tokenCodes) {

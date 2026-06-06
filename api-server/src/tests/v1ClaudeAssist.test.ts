@@ -3,6 +3,7 @@
  * The Anthropic SDK is mocked at the `anthropicClient` seam so no real API call happens and the
  * tool-use loop is driven by scripted responses. Covers the clarify happy-path (one tool call then
  * a structured proposal), the multi-account ownership guard (404), and the scope guard (403). */
+import Anthropic from '@anthropic-ai/sdk';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import { Hono } from 'hono';
@@ -639,6 +640,30 @@ describe('spend cap + metering (COGS)', () => {
         const usage = await db.collection('claudeUsage').findOne({ _id: `${userId}:${day}` });
         expect(usage).not.toBeNull();
         expect((usage as { inputTokens: number }).inputTokens).toBe(100);
+    });
+
+    it('returns 503 agent_unavailable when Anthropic reports the API account is out of credits', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'no credits', 'ext-credits');
+
+        // Simulate the SDK throwing the "credit balance too low" 400 — an operator/service failure
+        // the end user can't fix, so it maps to 503 agent_unavailable (not the generic 502).
+        messagesCreate.mockRejectedValueOnce(
+            new Anthropic.BadRequestError(
+                400,
+                { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } },
+                'credit balance',
+                new Headers({ 'request-id': 'req_credits' }),
+            ),
+        );
+
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(503);
+        const body = (await res.json()) as { code: string; error: string };
+        expect(body.code).toBe('agent_unavailable');
+        // The raw Anthropic detail must NOT leak to the client.
+        expect(body.error).not.toMatch(/credit balance/i);
     });
 
     it('rejects with 402 when the user is already over the daily cap, without calling Claude', async () => {

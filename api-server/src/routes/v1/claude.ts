@@ -4,6 +4,7 @@ import type { BearerVariables } from '../../auth/bearerMiddleware.js';
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
+import { classifyAgentError } from '../../lib/claude/agentError.js';
 import { emptyUsage, runClarifyLoop } from '../../lib/claude/agentLoop.js';
 import { applyItemPatch } from '../../lib/claude/applyProposal.js';
 import { hashPayload, signExecuteToken, verifyExecuteToken } from '../../lib/claude/executeToken.js';
@@ -102,10 +103,15 @@ export const v1ClaudeRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json(withExecuteTokens(proposal, ownerUserId, item._id as string), 200);
         } catch (err) {
             if (controller.signal.aborted) {
+                console.warn(`[claude-assist] agent timed out for user ${ownerUserId} (item ${item._id})`);
                 return c.json({ error: 'The assistant took too long to respond.', code: 'agent_timeout' }, 504);
             }
-            const message = err instanceof Error ? err.message : 'The assistant could not complete the request.';
-            return c.json({ error: message, code: 'agent_error' }, 502);
+            // Classify operator/service failures (no credits, bad key, overloaded) apart from genuinely
+            // unexpected ones, log the detail + Anthropic request_id (previously a silent dead end), and
+            // return a friendly message — never the raw Anthropic JSON, which leaked details to the client.
+            const classified = classifyAgentError(err);
+            console.error(`[claude-assist] ${classified.logLine}`);
+            return c.json({ error: classified.message, code: classified.code }, classified.status);
         } finally {
             clearTimeout(timeout);
             // Best-effort COGS metering on every path (success, summary-only, timeout, error). A
