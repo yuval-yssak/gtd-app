@@ -42,6 +42,10 @@
         "#api/syncApi": {
             "test": "./src/api/syncApi.mock.ts",
             "default": "./src/api/syncApi.ts"
+        },
+        "#api/assistApi": {
+            "test": "./src/api/assistApi.mock.ts",
+            "default": "./src/api/assistApi.ts"
         }
     },
     "devDependencies": {

@@ -4,6 +4,7 @@ import { mongoDBConfig } from '../config.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
+import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -84,6 +85,7 @@ async function loadDataAccess(customDBName?: string) {
         apiTokensDAO.init(dbClient, resolvedDBName),
         webhookSubscriptionsDAO.init(dbClient, resolvedDBName),
         webhookDeliveriesDAO.init(dbClient, resolvedDBName),
+        claudeUsageDAO.init(dbClient, resolvedDBName),
     ]);
     // Convert any legacy single-cursor-per-device rows to per-(device, user) shape.
     // Idempotent + boot-only — see deviceSyncStateMigration.ts.

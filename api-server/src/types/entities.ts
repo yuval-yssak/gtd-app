@@ -670,7 +670,11 @@ export type ApiTokenScope =
     | 'contexts.write'
     | 'reassign'
     | 'reassign.accept'
-    | 'webhooks.manage';
+    | 'webhooks.manage'
+    // Gates the Lane A Claude-assist endpoints (`/v1/claude/assist` + `/apply`). A distinct scope
+    // (not `items.write`) so a token can be granted the agent surface without broad write access,
+    // and so agent usage is independently auditable/revocable.
+    | 'claude.assist';
 
 /** Default scopes minted onto a token when the caller did not specify any. */
 export const DEFAULT_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];
@@ -693,6 +697,7 @@ export const MINTABLE_API_TOKEN_SCOPES: ReadonlySet<ApiTokenScope> = new Set([
     'reassign',
     'reassign.accept',
     'webhooks.manage',
+    'claude.assist',
 ]);
 
 /**
@@ -718,4 +723,27 @@ export interface ApiTokenInterface {
     lastUsedTs?: string;
     /** Set when the token was revoked. Once set, the token can never authenticate again. */
     revokedTs?: string;
+}
+
+/**
+ * Per-user-per-day Claude token-spend ledger (`claudeUsage` collection). One document per
+ * `(user, day)`; the `_id` is the deterministic `${user}:${day}` key so the post-call increment
+ * is a single atomic upsert. This is COGS instrumentation — the Lane A `/v1/claude/assist` handler
+ * checks the running cost against the daily cap before each call and increments after, recording
+ * spend even on a partial or failed loop.
+ */
+export interface ClaudeUsageInterface {
+    /** `${user}:${day}` — deterministic upsert key. */
+    _id: string;
+    user: string; // Better Auth user ID
+    /** UTC calendar day, `YYYY-MM-DD`. */
+    day: string;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheCreationTokens: number;
+    /** Running USD estimate, summed from per-call usage at the model's published rates. */
+    estimatedCostUsd: number;
+    callCount: number;
+    updatedTs: string;
 }

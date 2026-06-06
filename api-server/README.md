@@ -145,6 +145,7 @@ External integrations and the local MCP server. All endpoints take `Authorizatio
 | `POST` | `/v1/reassign` | `reassign` (caller) + `reassign.accept` (recipient via `X-Reassign-Recipient-Token`) |
 | `POST` | `/v1/operations/batch` | every scope required by any op in the batch |
 | `POST/GET/DELETE` | `/v1/webhooks[…]` | `webhooks.manage` |
+| `POST` | `/v1/claude/assist`, `/v1/claude/assist/apply` | `claude.assist` |
 | `GET` | `/v1/me` | any minted scope |
 
 Public-API mutations record an `OperationInterface` with `deviceId="api:<tokenId>"` and reuse the same SSE / web-push / GCal pushback / webhook pipeline as `/sync/push` — first-party clients see public-API writes live without any extra wiring. `/v1/reassign` is the bearer-token analog of the in-app device-multi-session check: the caller's `reassign`-scoped token signs the request and the recipient's `reassign.accept`-scoped token rides along in `X-Reassign-Recipient-Token`. Without both, the route refuses.
@@ -355,6 +356,11 @@ CALENDAR_WEBHOOK_CRON_SECRET=<random string>
 VAPID_PUBLIC_KEY=...
 VAPID_PRIVATE_KEY=...
 VAPID_SUBJECT=mailto:admin@example.com
+
+# Claude assist (Lane A — "Clarify with Claude", issue #21)
+ANTHROPIC_API_KEY=sk-ant-api03-...            # Anthropic API key (see "Claude assist setup" below)
+EXECUTE_TOKEN_SIGNING_KEY=<32+ char random>   # HMAC key for short-lived executeTokens
+CLAUDE_ASSIST_DAILY_COST_CAP_USD=1.00         # optional; per-user daily spend cap (default 1.00)
 ```
 
 **Dev defaults** (applied when `NODE_ENV !== 'production'`):
@@ -362,7 +368,26 @@ VAPID_SUBJECT=mailto:admin@example.com
 - `BETTER_AUTH_URL` — `http://localhost:4000`
 - `CLIENT_URL` — `http://localhost:4173`
 - `CALENDAR_ENCRYPTION_KEY` — zeros (insecure, dev only)
+- `EXECUTE_TOKEN_SIGNING_KEY` — dev placeholder (insecure; production throws if a real key < 32 chars isn't set)
 - Web Push keys — optional; warnings if missing
+- `ANTHROPIC_API_KEY` — none; the Claude-assist endpoints throw `502` until it is set (the rest of the server runs fine without it)
+
+## Claude assist setup (Anthropic API key)
+
+The `/v1/claude/assist` endpoints call the Anthropic API, which is **billed separately from any Claude Pro/Max subscription** — there is no free quota from a subscription; the API is prepaid, pay-per-token.
+
+1. Sign in at **console.anthropic.com** (the developer console, distinct from claude.ai).
+2. Create an **Organization**, then (recommended) a **Workspace** per environment (prod / staging / dev) so each has its own key and its own spend cap.
+3. **Billing → add a payment method and buy credits** (the API is prepaid; enable auto-reload for production so calls don't stall when the balance runs low).
+4. **Billing → Limits**: set a monthly spend cap + an 80% alert email on the workspace.
+5. **API Keys → Create Key** (e.g. `gtd-api-prod`). Copy it immediately — it's shown once.
+6. Set it as `ANTHROPIC_API_KEY` (Cloud Run secret in prod/staging; `.env` for local dev). Also set `EXECUTE_TOKEN_SIGNING_KEY` to a 32+ char random string.
+
+**Cost & limits:**
+- Model is **Sonnet 4.6** ($3 / 1M input, $15 / 1M output). A typical clarify call is a fraction of a cent; prompt caching (already wired on the stable prompt prefix) cuts repeat-call input cost ~90%.
+- Three guardrails stack: per-request `max_tokens`; the per-user daily cost cap in this server (`CLAUDE_ASSIST_DAILY_COST_CAP_USD`, returns `402` before any spend); and the workspace monthly cap in the Anthropic console.
+- Anthropic enforces **tiered rate limits** (RPM / input-TPM / output-TPM) that grow with cumulative spend; new accounts start at Tier 1. Hitting one returns `429` with `retry-after` (the SDK auto-retries once).
+- Pricing and tier thresholds change over time — confirm current figures on the console before budgeting seriously.
 
 ## Testing
 

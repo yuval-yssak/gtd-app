@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { publicCors, strictCors } from './auth/corsProfiles.js';
+import { assistCors, publicCors, strictCors } from './auth/corsProfiles.js';
 import { v1RequestLogger } from './lib/v1Logger.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
@@ -11,6 +11,7 @@ import { maintenanceRoutes } from './routes/maintenance.js';
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
 import { tokensRoutes } from './routes/tokens.js';
+import { v1ClaudeRoutes } from './routes/v1/claude.js';
 import { v1Routes } from './routes/v1/index.js';
 import { webhookRoutes } from './routes/webhooks.js';
 
@@ -42,6 +43,15 @@ const app = new Hono()
     .route('/maintenance', maintenanceRoutes)
     .use('/calendar/*', strictCors())
     .route('/calendar', calendarRoutes)
+    // /v1/claude/* — the ONE cookie-authed exception under /v1 (dual-auth: bearer OR first-party
+    // session cookie). Mounted SEPARATELY and BEFORE v1Routes: Hono runs a sibling sub-router's
+    // catch-all `.use('*')` for any matching path, so leaving claude inside v1Routes would let
+    // v1ItemsRoutes' bearer-only middleware 401 a session request before the dual-auth ran (see
+    // routes/v1/index.ts). It gets the credentialed assistCors profile (echoed origin +
+    // Allow-Credentials) instead of the relaxed publicCors below, plus the shared v1 request logger.
+    .use('/v1/claude/*', assistCors())
+    .use('/v1/claude/*', v1RequestLogger())
+    .route('/v1', v1ClaudeRoutes)
     // /v1 is the public bearer-authed surface — relaxed CORS so external integrations can call it
     // from any origin. The bearer token is the auth gate.
     .use('/v1/*', publicCors())

@@ -1,0 +1,47 @@
+.sheetHandle {
+    width: 2rem;
+    height: 0.25rem;
+    border-radius: 0.125rem;
+    background: var(--gtd-sheet-handle);
+    margin: 0.5rem auto 0.75rem;
+}
+
+.body {
+    padding: 0 1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.loadingBox {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 2rem 1rem;
+    justify-content: center;
+}
+
+.fieldRow {
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+}
+
+.fieldLabel {
+    min-width: 6rem;
+    flex-shrink: 0;
+}
+
+.footer {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    padding-top: 0.5rem;
+}
+
+.askAgainRow {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+}

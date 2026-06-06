@@ -34,31 +34,19 @@ function extractClientIp(c: Context): string {
 }
 
 /**
- * Authenticates `/v1/*` requests via `Authorization: Bearer gtd_<token>`.
- * Sets `c.var.apiAuth.{userId, tokenId, scopes}` on success; returns 401 otherwise.
+ * Resolves an `Authorization: Bearer gtd_<token>` header to a populated `apiAuth` value, or null
+ * when no valid bearer token is present. Extracted so the dual-auth assist middleware can reuse the
+ * exact bearer resolution (scope backfill, legacy `items.clarify` bridge, fire-and-forget
+ * `lastUsedTs` bump) without duplicating it — keeping the two auth paths from drifting.
  *
- * Scope backfill: tokens minted before issue #19 step 7 do not carry `scopes`. Rather than run a
- * one-shot migration, we lazily backfill on first authenticated use — populating both the in-row
- * value (so subsequent reads are O(1)) and the request's `apiAuth.scopes`. New tokens already
- * carry scopes from `issueApiToken`, so the backfill is a transient measure.
- *
- * Anonymous-bucket consumption: failed-auth requests consume from the IP-keyed anon bucket
- * (30/min, see `rateLimitMiddleware.ts`). Successful-auth requests do NOT touch the anon bucket —
- * they're scoped by `tokenId` via `authenticatedRateLimit` instead. This split prevents a noisy
- * test environment from accidentally exhausting the anon bucket with valid tokens.
- *
- * lastUsedTs is bumped fire-and-forget so a transient Mongo blip can't 500 every authenticated call.
+ * Returns null (rather than throwing) so callers can decide the fallback: `authenticateBearer`
+ * returns 401, while `authenticateBearerOrSession` falls through to cookie-session resolution.
+ * Honors the no-token-cache revocation guardrail — `resolveBearerToken` hits Mongo every call.
  */
-export const authenticateBearer: MiddlewareHandler<{ Variables: BearerVariables }> = async (c, next) => {
-    const token = await resolveBearerToken(c.req.header('Authorization'));
+export async function resolveBearerApiAuth(authorizationHeader: string | undefined): Promise<BearerVariables['apiAuth'] | null> {
+    const token = await resolveBearerToken(authorizationHeader);
     if (!token) {
-        const result = tryConsume(defaultStore, `anon:${extractClientIp(c)}`, ANON_BUCKET, Date.now());
-        if (!result.allowed) {
-            console.log('[rate-limit]', { bucket: 'anon', ip: extractClientIp(c), route: c.req.path, method: c.req.method });
-            c.header('Retry-After', String(result.retryAfterSec));
-            return c.json({ error: 'Rate limit exceeded. Slow down and retry after a brief pause.', code: 'rate_limited' }, 429);
-        }
-        return c.json({ error: 'Unauthorized', code: 'unauthorized' }, 401);
+        return null;
     }
 
     const storedScopes = token.scopes ?? DEFAULT_API_TOKEN_SCOPES;
@@ -76,11 +64,42 @@ export const authenticateBearer: MiddlewareHandler<{ Variables: BearerVariables 
     // TypeScript widens the literal to `string` and `c.set('apiAuth', …)` rejects the mixed array.
     const scopes = storedScopes.includes('items.clarify') && !storedScopes.includes('items.write') ? [...storedScopes, 'items.write' as const] : storedScopes;
 
-    c.set('apiAuth', { userId: token.user, tokenId: token._id, scopes });
-
     void apiTokensDAO.touchLastUsed(token._id, dayjs().toISOString()).catch((err) => {
         console.error('[apiTokens] touchLastUsed failed', { tokenId: token._id, err });
     });
+
+    return { userId: token.user, tokenId: token._id, scopes };
+}
+
+/**
+ * Authenticates `/v1/*` requests via `Authorization: Bearer gtd_<token>`.
+ * Sets `c.var.apiAuth.{userId, tokenId, scopes}` on success; returns 401 otherwise.
+ *
+ * Scope backfill: tokens minted before issue #19 step 7 do not carry `scopes`. Rather than run a
+ * one-shot migration, we lazily backfill on first authenticated use — populating both the in-row
+ * value (so subsequent reads are O(1)) and the request's `apiAuth.scopes`. New tokens already
+ * carry scopes from `issueApiToken`, so the backfill is a transient measure.
+ *
+ * Anonymous-bucket consumption: failed-auth requests consume from the IP-keyed anon bucket
+ * (30/min, see `rateLimitMiddleware.ts`). Successful-auth requests do NOT touch the anon bucket —
+ * they're scoped by `tokenId` via `authenticatedRateLimit` instead. This split prevents a noisy
+ * test environment from accidentally exhausting the anon bucket with valid tokens.
+ *
+ * lastUsedTs is bumped fire-and-forget so a transient Mongo blip can't 500 every authenticated call.
+ */
+export const authenticateBearer: MiddlewareHandler<{ Variables: BearerVariables }> = async (c, next) => {
+    const apiAuth = await resolveBearerApiAuth(c.req.header('Authorization'));
+    if (!apiAuth) {
+        const result = tryConsume(defaultStore, `anon:${extractClientIp(c)}`, ANON_BUCKET, Date.now());
+        if (!result.allowed) {
+            console.log('[rate-limit]', { bucket: 'anon', ip: extractClientIp(c), route: c.req.path, method: c.req.method });
+            c.header('Retry-After', String(result.retryAfterSec));
+            return c.json({ error: 'Rate limit exceeded. Slow down and retry after a brief pause.', code: 'rate_limited' }, 429);
+        }
+        return c.json({ error: 'Unauthorized', code: 'unauthorized' }, 401);
+    }
+
+    c.set('apiAuth', apiAuth);
 
     await next();
     return;

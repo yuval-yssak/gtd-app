@@ -6,7 +6,7 @@
  */
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { publicCors, strictCors } from '../auth/corsProfiles.js';
+import { assistCors, publicCors, strictCors } from '../auth/corsProfiles.js';
 import { clientUrl } from '../config.js';
 
 // `clientUrl` is captured at module-load time from process.env.CLIENT_URL — we use the captured
@@ -129,6 +129,76 @@ describe('publicCors (/v1 bearer-authed routes)', () => {
             },
         });
         expect(res.headers.get('access-control-allow-headers')?.toLowerCase()).toContain('authorization');
+    });
+});
+
+describe('assistCors (/v1/claude/* — the one credentialed /v1 exception)', () => {
+    // Mirror index.ts's exact mount order: assistCors on /v1/claude/*, the claude route mounted
+    // FIRST, then publicCors on /v1/* and the rest of /v1. Because the claude route fully handles
+    // its request before the later publicCors `.use('/v1/*')` runs, publicCors can't clobber the
+    // credentialed Allow-Origin back to `*`.
+    function buildAssistApp() {
+        return new Hono()
+            .use('/v1/claude/*', assistCors())
+            .post('/v1/claude/assist', (c) => c.json({ ok: true }))
+            .use('/v1/*', publicCors())
+            .post('/v1/items', (c) => c.json({ ok: true }));
+    }
+
+    beforeEach(() => {
+        vi.stubEnv('NODE_ENV', 'production');
+    });
+
+    it('echoes the SPA origin and sends Access-Control-Allow-Credentials on preflight', async () => {
+        const app = buildAssistApp();
+        const res = await app.request('/v1/claude/assist', {
+            method: 'OPTIONS',
+            headers: { Origin: SPA_ORIGIN, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Content-Type' },
+        });
+        expect(res.status).toBe(204);
+        expect(res.headers.get('access-control-allow-origin')).toBe(SPA_ORIGIN);
+        expect(res.headers.get('access-control-allow-credentials')).toBe('true');
+    });
+
+    it('rejects a foreign origin in production: no Allow-Origin header (CSRF backstop)', async () => {
+        // Load-bearing: the session cookie is sameSite:'none' in prod (cross-domain SPA↔API), so it
+        // rides cross-site. Pinning the origin to clientUrl is what stops a malicious page from
+        // making a credentialed request that reads the proposal + minted executeToken. Echoing any
+        // origin here would be a full read+write CSRF on a money-spending endpoint.
+        const app = buildAssistApp();
+        const res = await app.request('/v1/claude/assist', {
+            method: 'OPTIONS',
+            headers: { Origin: 'https://evil.example', 'Access-Control-Request-Method': 'POST' },
+        });
+        expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    });
+
+    it('does NOT let publicCors clobber the credentialed headers on the actual POST', async () => {
+        // The bug this guards: publicCors is mounted on /v1/* after the claude route. The claude
+        // route handles the request first and returns, so publicCors never runs to reset Allow-Origin
+        // to `*` (illegal with credentials) — the pinned origin + credentials survive to the response.
+        const app = buildAssistApp();
+        const res = await app.request('/v1/claude/assist', { method: 'POST', headers: { Origin: SPA_ORIGIN } });
+        expect(res.status).toBe(200);
+        expect(res.headers.get('access-control-allow-origin')).toBe(SPA_ORIGIN);
+        expect(res.headers.get('access-control-allow-credentials')).toBe('true');
+    });
+
+    it('still allows a no-Origin (bearer) request — external callers keep working', async () => {
+        const app = buildAssistApp();
+        const res = await app.request('/v1/claude/assist', { method: 'POST' });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ ok: true });
+    });
+
+    it('leaves the rest of /v1 on publicCors (no credentials)', async () => {
+        const app = buildAssistApp();
+        const res = await app.request('/v1/items', {
+            method: 'OPTIONS',
+            headers: { Origin: 'https://example.com', 'Access-Control-Request-Method': 'POST' },
+        });
+        expect(res.headers.get('access-control-allow-origin')).toBe('*');
+        expect(res.headers.get('access-control-allow-credentials')).toBeNull();
     });
 });
 
