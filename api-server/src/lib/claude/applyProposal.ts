@@ -75,6 +75,11 @@ export async function applyItemPatch(payload: ExecuteTokenPayload, submittedPatc
     const merged = sanitizeStaleFields({ ...existing, ...submittedPatch, updatedTs: dayjs().toISOString() } as ItemInterface, submittedPatch);
 
     try {
+        // `tokenId` is either a real bearer token id (`api:<id>`) or, for a first-party session
+        // caller, `session:<sessionId>` → `api:session:<sessionId>`. Either way the deviceId starts
+        // with `api:`, which is the prefix `applyAndPublishOperation` keys on to fan the op out to ALL
+        // of the user's devices (including the originator) — required since the client doesn't write
+        // IDB optimistically and must receive its own op via pull/SSE.
         await applyAndPublishOperation(
             payload.user,
             { entityType: 'item', opType: 'update', entityId: existing._id as string, snapshot: merged },

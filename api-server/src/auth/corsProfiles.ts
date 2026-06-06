@@ -42,3 +42,27 @@ export function publicCors() {
         allowMethods: ['GET', 'POST', 'PATCH', 'OPTIONS'],
     });
 }
+
+/**
+ * CORS for the Claude-assist routes (`/v1/claude/*`) — the FIRST credentialed CORS profile on `/v1`.
+ *
+ * These routes are dual-auth (`authenticateBearerOrSession`): the first-party SPA reaches them with
+ * its Better Auth session cookie, which requires `Access-Control-Allow-Credentials: true` and a
+ * SPECIFIC allowed origin (the wildcard `*` is illegal alongside credentials).
+ *
+ * The session cookie is `sameSite: 'none'` in production (SPA and API live on different domains —
+ * see `betterAuth.ts`), so it DOES ride cross-site. We therefore pin the allowed origin to the SPA's
+ * `clientUrl` in production — exactly as `strictCors` does — so a malicious origin cannot make a
+ * credentialed request that rides the victim's session and reads the response (the proposal + minted
+ * `executeToken`). Bearer callers are unaffected: they carry no cookie, so a pinned/absent
+ * Allow-Origin doesn't gate them (the browser only enforces CORS for cookie-bearing reads, and a
+ * server-to-server bearer caller isn't a browser). Dev echoes any origin for local tooling.
+ */
+export function assistCors() {
+    return cors({
+        origin: (origin) => (process.env.NODE_ENV !== 'production' ? origin : origin === clientUrl ? origin : null),
+        credentials: true,
+        allowHeaders: ['Authorization', 'Content-Type', 'X-Device-Id'],
+        allowMethods: ['POST', 'OPTIONS'],
+    });
+}

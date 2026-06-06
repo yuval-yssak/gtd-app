@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
-import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddleware.js';
+import { authenticateBearerOrSession } from '../../auth/assistAuthMiddleware.js';
+import type { BearerVariables } from '../../auth/bearerMiddleware.js';
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
@@ -21,6 +22,11 @@ import { isOverDailyCap, recordUsage } from '../../lib/claude/spend.js';
  * Both endpoints are gated on the dedicated `claude.assist` scope. The agent always acts as the
  * account that OWNS the target item (`item.user`), never the caller's session — the handler loads
  * the item, verifies ownership, and scopes every downstream read to `item.user`.
+ *
+ * Auth is DUAL (`authenticateBearerOrSession`): an external bearer token (must carry the
+ * `claude.assist` scope) OR the first-party Better Auth session cookie (which synthesises the scope
+ * — the user acting on their own data). This is the one cookie-authed exception under `/v1`; it
+ * relies on the credentialed `assistCors()` profile (see `index.ts`).
  */
 
 // Wall-clock ceiling for the whole loop. A stuck call fails fast rather than holding the request.
@@ -61,7 +67,7 @@ function withExecuteTokens(proposal: ClarifyProposal, ownerUserId: string, itemI
 }
 
 export const v1ClaudeRoutes = new Hono<{ Variables: BearerVariables }>()
-    .use('*', authenticateBearer)
+    .use('*', authenticateBearerOrSession)
     .use('*', authenticatedRateLimit())
     .post('/claude/assist', requireScope('claude.assist'), async (c) => {
         const { userId } = c.var.apiAuth;
