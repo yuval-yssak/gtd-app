@@ -4,12 +4,17 @@
  * tool-use loop is driven by scripted responses. Covers the clarify happy-path (one tool call then
  * a structured proposal), the multi-account ownership guard (404), and the scope guard (403). */
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+dayjs.extend(utc);
+
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
+import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ClaudeRoutes } from '../routes/v1/claude.js';
@@ -57,6 +62,7 @@ beforeEach(async () => {
         db.collection('apiTokens').deleteMany({}),
         db.collection('calendarIntegrations').deleteMany({}),
         db.collection('calendarSyncConfigs').deleteMany({}),
+        db.collection('claudeUsage').deleteMany({}),
     ]);
     __resetDefaultStoreForTests();
     messagesCreate.mockReset();
@@ -558,5 +564,108 @@ describe('getCalendarEvents tool (gated on a connected calendar)', () => {
         await assist(plaintext, id);
         const [firstCallParams] = messagesCreate.mock.calls[0] as [{ tools: Array<{ name: string }> }];
         expect(firstCallParams.tools.map((t) => t.name)).not.toContain('getCalendarEvents');
+    });
+});
+
+describe('spend cap + metering (COGS)', () => {
+    it('records a claudeUsage row after a successful clarify', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'meter me', 'ext-meter');
+
+        scriptProposal({ summary: 'ok', proposedSideEffects: [] });
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(200);
+
+        const day = dayjs.utc().format('YYYY-MM-DD');
+        const usage = await db.collection('claudeUsage').findOne({ _id: `${userId}:${day}` });
+        expect(usage).not.toBeNull();
+        expect(usage).toMatchObject({ user: userId, day, callCount: 1 });
+        // The single scripted proposal call reported 80 in / 40 out tokens.
+        expect((usage as { inputTokens: number }).inputTokens).toBe(80);
+        // Exact cost at Sonnet 4.6 rates: (80*3 + 40*15) / 1e6 = 0.00084.
+        expect((usage as { estimatedCostUsd: number }).estimatedCostUsd).toBeCloseTo(0.00084, 8);
+    });
+
+    it('accumulates usage across two clarify calls (atomic $inc, not overwrite)', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'twice', 'ext-twice');
+
+        scriptProposal({ summary: 'one', proposedSideEffects: [] });
+        expect((await assist(plaintext, id)).status).toBe(200);
+        scriptProposal({ summary: 'two', proposedSideEffects: [] });
+        expect((await assist(plaintext, id)).status).toBe(200);
+
+        const day = dayjs.utc().format('YYYY-MM-DD');
+        const usage = await db.collection('claudeUsage').findOne({ _id: `${userId}:${day}` });
+        expect(usage).toMatchObject({ callCount: 2 });
+        // Two calls of 80 input tokens each → 160, proving $inc not $set.
+        expect((usage as { inputTokens: number }).inputTokens).toBe(160);
+    });
+
+    it('still returns 200 (and the proposal) when usage metering fails', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'meter fails', 'ext-meterfail');
+
+        // Force the metering write to throw; the response must be unaffected.
+        const spy = vi.spyOn(claudeUsageDAO, 'updateOne').mockRejectedValueOnce(new Error('mongo down'));
+        scriptProposal({ summary: 'ok', proposedSideEffects: [] });
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(200);
+        expect((await res.json()) as { summary: string }).toMatchObject({ summary: 'ok' });
+        spy.mockRestore();
+    });
+
+    it('meters partial usage when the model call throws (agent_error path)', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'throws mid-loop', 'ext-throw');
+
+        // First turn (100 in / 20 out) succeeds and is accumulated; the next model call throws.
+        messagesCreate
+            .mockResolvedValueOnce({
+                stop_reason: 'tool_use',
+                content: [{ type: 'tool_use', id: 'toolu_1', name: 'listPeople', input: {} }],
+                usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            })
+            .mockRejectedValueOnce(new Error('upstream 529'));
+
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(502);
+        // The tokens spent before the throw are still metered (finally-block recording).
+        const day = dayjs.utc().format('YYYY-MM-DD');
+        const usage = await db.collection('claudeUsage').findOne({ _id: `${userId}:${day}` });
+        expect(usage).not.toBeNull();
+        expect((usage as { inputTokens: number }).inputTokens).toBe(100);
+    });
+
+    it('rejects with 402 when the user is already over the daily cap, without calling Claude', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'over cap', 'ext-overcap');
+
+        // Pre-seed today's row at/over the default $1.00 cap.
+        const now = dayjs().toISOString();
+        const day = dayjs.utc().format('YYYY-MM-DD');
+        await db.collection('claudeUsage').insertOne({
+            _id: `${userId}:${day}`,
+            user: userId,
+            day,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheCreationTokens: 0,
+            estimatedCostUsd: 5,
+            callCount: 3,
+            updatedTs: now,
+        });
+
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(402);
+        expect((await res.json()) as { code: string }).toMatchObject({ code: 'daily_spend_cap_reached' });
+        // No model call should happen once the cap is hit.
+        expect(messagesCreate).not.toHaveBeenCalled();
     });
 });

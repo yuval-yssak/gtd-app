@@ -15,9 +15,9 @@ export interface AssistUsage {
     cacheCreationTokens: number;
 }
 
-export interface AssistLoopResult {
-    proposal: ClarifyProposal;
-    usage: AssistUsage;
+/** A fresh zeroed usage accumulator. The caller owns it so partial spend survives a thrown loop. */
+export function emptyUsage(): AssistUsage {
+    return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
 }
 
 const SYSTEM_PROMPT = `You are the "Clarify with Claude" assistant inside a Getting Things Done (GTD) app. You help the user process a single inbox item into a well-formed next action.
@@ -74,21 +74,25 @@ function summaryOnly(summary: string): ClarifyProposal {
     return { summary, proposedSideEffects: [] };
 }
 
+interface ClarifyParams {
+    item: ItemInterface;
+    ownerUserId: string;
+    instruction: string | undefined;
+    signal: AbortSignal;
+    /** Caller-owned accumulator: the loop mutates it as it goes, so partial spend is metered even if it throws. */
+    usage: AssistUsage;
+}
+
 /**
- * Runs the bounded clarify tool-use loop and returns the structured proposal plus accumulated
- * token usage. All tool reads are scoped to `ownerUserId` (the item's owner). The loop never
- * writes anything — it only produces a proposal for the caller to gate behind an executeToken.
+ * Runs the bounded clarify tool-use loop and returns the structured proposal. All tool reads are
+ * scoped to `ownerUserId` (the item's owner). The loop never writes anything — it only produces a
+ * proposal for the caller to gate behind an executeToken. Token usage accumulates into the
+ * caller-owned `usage` accumulator (so the handler can meter spend even on a timeout/error throw).
  *
  * `signal` (a request-level AbortController) bounds wall-clock time so a stuck call fails fast.
  */
-export async function runClarifyLoop(
-    item: ItemInterface,
-    ownerUserId: string,
-    instruction: string | undefined,
-    signal: AbortSignal,
-): Promise<AssistLoopResult> {
+export async function runClarifyLoop({ item, ownerUserId, instruction, signal, usage }: ClarifyParams): Promise<ClarifyProposal> {
     const client = getAnthropicClient();
-    const usage: AssistUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
     const messages: Anthropic.MessageParam[] = [{ role: 'user', content: buildInitialUserMessage(item, instruction) }];
 
     // Resolve calendar access ONCE, up front: keeps the tool list (and thus the cached prefix)
@@ -115,7 +119,7 @@ export async function runClarifyLoop(
             const proposal = extractProposal(response.content);
             // A malformed/absent proposal still costs tokens; surface a safe summary-only result
             // rather than throwing, so the caller can meter and return a graceful response.
-            return { proposal: proposal ?? summaryOnly('Could not produce a structured proposal.'), usage };
+            return proposal ?? summaryOnly('Could not produce a structured proposal.');
         }
 
         // Echo the assistant turn (tool_use blocks included), then answer each tool call.
@@ -136,5 +140,5 @@ export async function runClarifyLoop(
     }
 
     // Exhausted the tool budget without a final proposal — never invent a write.
-    return { proposal: summaryOnly('Reached the tool-call limit before producing a full proposal.'), usage };
+    return summaryOnly('Reached the tool-call limit before producing a full proposal.');
 }

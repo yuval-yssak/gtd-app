@@ -3,10 +3,11 @@ import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddl
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
-import { runClarifyLoop } from '../../lib/claude/agentLoop.js';
+import { emptyUsage, runClarifyLoop } from '../../lib/claude/agentLoop.js';
 import { applyItemPatch } from '../../lib/claude/applyProposal.js';
 import { hashPayload, signExecuteToken, verifyExecuteToken } from '../../lib/claude/executeToken.js';
 import { type ClarifyProposal, PROPOSABLE_ITEM_FIELDS, type ProposableItemField, type ProposedItemPatch } from '../../lib/claude/proposalSchema.js';
+import { isOverDailyCap, recordUsage } from '../../lib/claude/spend.js';
 
 /**
  * Lane A — synchronous, single-turn Claude "Clarify with Claude" agent (issue #21).
@@ -80,10 +81,18 @@ export const v1ClaudeRoutes = new Hono<{ Variables: BearerVariables }>()
         }
         const ownerUserId = item.user;
 
+        // Spend cap (COGS) — checked BEFORE the model call so an over-budget user spends nothing.
+        if (await isOverDailyCap(ownerUserId)) {
+            return c.json({ error: "You've reached today's Claude usage limit. Try again tomorrow.", code: 'daily_spend_cap_reached' }, 402);
+        }
+
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), ASSIST_TIMEOUT_MS);
+        // Caller-owned usage accumulator: the loop mutates it as it goes, so tokens spent before a
+        // timeout/error throw are still metered. Recorded in `finally` on every exit path.
+        const usage = emptyUsage();
         try {
-            const { proposal } = await runClarifyLoop(item, ownerUserId, instruction, controller.signal);
+            const proposal = await runClarifyLoop({ item, ownerUserId, instruction, signal: controller.signal, usage });
             return c.json(withExecuteTokens(proposal, ownerUserId, item._id as string), 200);
         } catch (err) {
             if (controller.signal.aborted) {
@@ -93,6 +102,11 @@ export const v1ClaudeRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json({ error: message, code: 'agent_error' }, 502);
         } finally {
             clearTimeout(timeout);
+            // Best-effort COGS metering on every path (success, summary-only, timeout, error). A
+            // metering failure must not change the response.
+            await recordUsage(ownerUserId, usage).catch((e) =>
+                console.warn(`[claude-assist] usage metering failed: ${e instanceof Error ? e.message : 'unknown'}`),
+            );
         }
     })
     .post('/claude/assist/apply', requireScope('claude.assist'), async (c) => {
