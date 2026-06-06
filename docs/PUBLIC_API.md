@@ -80,6 +80,7 @@ Each token carries a `scopes` array — the capabilities it is permitted to exer
 | `reassign` | `POST /v1/reassign` — moves entities OUT of this user to another. |
 | `reassign.accept` | Authorises another user's `reassign`-scoped token to move entities INTO this user. Sent in `X-Reassign-Recipient-Token`; never carried by the calling bearer. |
 | `webhooks.manage` | `POST /v1/webhooks`, `GET /v1/webhooks`, `DELETE /v1/webhooks/:id` |
+| `claude.assist` | `POST /v1/claude/assist`, `POST /v1/claude/assist/apply` — the "Clarify with Claude" agent. A distinct scope (not `items.write`) so the agent surface is grantable and auditable independently of broad write access. |
 
 Default scopes when omitted: `['items.capture', 'items.read']` (capture-and-list — the minimum useful set for an inbox-only Raycast/iOS Shortcut style integration).
 
@@ -509,6 +510,77 @@ Requires the `items.write` scope.
 
 - Trashing a `routine`-generated item advances the series (next instance is generated), mirroring the in-app `clarifyToTrash` flow.
 - An `OperationInterface` (`opType: 'update'`, not `delete`) is logged with `deviceId = "api:<tokenId>"` so all the user's devices pull the trashed state on their next sync.
+
+---
+
+## Claude assist (Lane A)
+
+The "Clarify with Claude" agent. `POST /v1/claude/assist` runs a bounded, single-turn Claude tool-use loop over the item's GTD context and returns a **reviewable proposal** — it never writes. `POST /v1/claude/assist/apply` redeems a short-lived signed `executeToken` from that proposal to perform the approved write through the normal operations log (so undo / cross-device sync / Google Calendar pushback all apply). Both endpoints require the **`claude.assist`** scope.
+
+**Ownership rule:** the agent always acts as the account that **owns the item** (`item.user`), never the active session. For a bearer token the caller must own the target item; otherwise the request returns `404 not_found` (existence is not leaked across accounts).
+
+### `POST /v1/claude/assist` — clarify an item
+
+**Request body**
+
+```json
+{ "itemId": "uuid-…", "instruction": "clarify this into a next action" }
+```
+
+`instruction` is optional free text. The agent may read the user's people, work contexts, items, and (if a Google Calendar is connected) calendar events to ground its proposal. No write happens here.
+
+**Response** (`200`)
+
+```json
+{
+    "summary": "Turn this into a next action to follow up with Dana.",
+    "proposedItemPatch": { "title": "Follow up with Dana on the deck", "status": "nextAction", "energy": "low" },
+    "proposedSideEffects": [
+        { "kind": "itemPatch", "preview": "Follow up with Dana on the deck", "executeToken": "<signed token>" }
+    ]
+}
+```
+
+`proposedItemPatch` (optional) is the change the agent suggests; each `proposedSideEffect` carries a human `preview` and a short-lived `executeToken` the client redeems on confirm. The client may **edit the patch values** before applying — the same token still applies. Changing the *target* (a field the proposal didn't authorize) requires re-running assist.
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `200` | — | Proposal returned. |
+| `400` | `invalid_request` | `itemId` missing. |
+| `402` | `daily_spend_cap_reached` | Per-user daily Claude budget reached; no call was made. |
+| `403` | `forbidden_scope` | Token lacks `claude.assist`. |
+| `404` | `not_found` | Item doesn't exist or isn't owned by the caller. |
+| `502` | `agent_error` | The model call failed. |
+| `504` | `agent_timeout` | The agent exceeded its wall-clock budget. |
+
+### `POST /v1/claude/assist/apply` — redeem an executeToken
+
+**Request body**
+
+```json
+{ "executeToken": "<token from a proposal>", "patch": { "title": "My edited title", "status": "nextAction" } }
+```
+
+`patch` is the (possibly edited) values to write. Every field must be within the token's authorized set **and** the agent-proposable allowlist — calendar-owned and identity fields can never be written this way. The write flows through the operations log (`deviceId = "api:<tokenId>"`).
+
+**Response** (`200`)
+
+```json
+{ "applied": true, "item": { "id": "uuid-…", "status": "nextAction", "title": "My edited title" } }
+```
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `200` | — | Applied. |
+| `400` | `invalid_request` | `executeToken` missing, or the patch is empty. |
+| `400` | `execute_token_target_mismatch` | The patch changes a field the approval didn't authorize — re-run assist. |
+| `400` | `invalid_execute_token` | Token tampered or malformed. |
+| `400` | `invalid_operation` | The resulting item failed validation (e.g. a field invalid for the new status). |
+| `403` | `forbidden` | The token was minted for a different account. |
+| `404` | `item_not_found` | The item no longer exists. |
+| `410` | `execute_token_expired` | The approval expired (~10 min TTL) — re-run assist. |
+
+---
 
 ## Webhooks
 

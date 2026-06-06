@@ -145,6 +145,7 @@ External integrations and the local MCP server. All endpoints take `Authorizatio
 | `POST` | `/v1/reassign` | `reassign` (caller) + `reassign.accept` (recipient via `X-Reassign-Recipient-Token`) |
 | `POST` | `/v1/operations/batch` | every scope required by any op in the batch |
 | `POST/GET/DELETE` | `/v1/webhooks[…]` | `webhooks.manage` |
+| `POST` | `/v1/claude/assist`, `/v1/claude/assist/apply` | `claude.assist` |
 | `GET` | `/v1/me` | any minted scope |
 
 Public-API mutations record an `OperationInterface` with `deviceId="api:<tokenId>"` and reuse the same SSE / web-push / GCal pushback / webhook pipeline as `/sync/push` — first-party clients see public-API writes live without any extra wiring. `/v1/reassign` is the bearer-token analog of the in-app device-multi-session check: the caller's `reassign`-scoped token signs the request and the recipient's `reassign.accept`-scoped token rides along in `X-Reassign-Recipient-Token`. Without both, the route refuses.
