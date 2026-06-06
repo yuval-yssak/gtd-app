@@ -103,6 +103,14 @@ test.describe('Lane A Claude-assist guard paths (/v1/claude/assist)', () => {
                 expect(badToken.status()).toBe(400);
                 expect((await badToken.json()) as { code: string }).toMatchObject({ code: 'invalid_execute_token' });
             });
+
+            // Dual-auth (Phase 1): the first-party COOKIE SESSION reaches the assist route with NO
+            // Authorization header. A missing itemId returns 400 invalid_request — which only happens
+            // AFTER authenticateBearerOrSession resolves the session, so this proves the cookie path
+            // (and the credentialed assistCors) works at the deploy level without reaching the model.
+            const sessionAssist = await page.request.post(`${API_URL}/v1/claude/assist`, { data: {} });
+            expect(sessionAssist.status()).toBe(400);
+            expect((await sessionAssist.json()) as { code: string }).toMatchObject({ code: 'invalid_request' });
         });
     });
 });
