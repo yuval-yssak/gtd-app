@@ -69,35 +69,50 @@ export interface ClarifyProposal {
 }
 
 /**
+ * `T | null` in a structured-output schema. The Anthropic structured-output validator (strict
+ * json_schema) requires EVERY property listed under `properties` to also appear in `required` — it
+ * has no notion of an "optional" property, and a schema that leaves properties out of `required` is
+ * rejected with `invalid_request_error: "Schema is too complex."`. Optionality is therefore expressed
+ * by making the field required but its value nullable. We use `anyOf: [realType, {type:'null'}]`
+ * rather than the JSON-Schema `type: ['string','null']` shorthand because the latter is rejected when
+ * the node also carries an `enum` (the enum members don't match the multi-type declaration). The model
+ * emits `null` for any field it is not changing; `extractProposal` (agentLoop.ts) strips those nulls
+ * so the rest of the apply pipeline still sees a patch of only the changed fields.
+ */
+const nullable = (schema: Record<string, unknown>) => ({ anyOf: [schema, { type: 'null' }] });
+
+/**
  * The json_schema passed via `output_config.format` so the model's final turn is a valid
  * `ClarifyProposal`. `additionalProperties: false` everywhere (required by the structured-output
- * feature) keeps the model from inventing fields the apply handler doesn't understand.
+ * feature) keeps the model from inventing fields the apply handler doesn't understand, and every
+ * property is `required` with optional ones made `nullable()` per the validator contract above.
  */
 export const CLARIFY_PROPOSAL_SCHEMA = {
     type: 'object',
     properties: {
         summary: { type: 'string' },
-        proposedItemPatch: {
+        proposedItemPatch: nullable({
             type: 'object',
             properties: {
-                title: { type: 'string' },
-                notes: { type: 'string' },
-                status: { type: 'string', enum: ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done', 'trash'] },
-                workContextIds: { type: 'array', items: { type: 'string' } },
-                peopleIds: { type: 'array', items: { type: 'string' } },
-                waitingForPersonId: { type: 'string' },
-                energy: { type: 'string', enum: ['low', 'medium', 'high'] },
-                time: { type: 'integer' },
-                focus: { type: 'boolean' },
-                urgent: { type: 'boolean' },
-                expectedBy: { type: 'string' },
-                ignoreBefore: { type: 'string' },
-                timeStart: { type: 'string' },
-                timeEnd: { type: 'string' },
-                allDay: { type: 'boolean' },
+                title: nullable({ type: 'string' }),
+                notes: nullable({ type: 'string' }),
+                status: nullable({ type: 'string', enum: ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done', 'trash'] }),
+                workContextIds: nullable({ type: 'array', items: { type: 'string' } }),
+                peopleIds: nullable({ type: 'array', items: { type: 'string' } }),
+                waitingForPersonId: nullable({ type: 'string' }),
+                energy: nullable({ type: 'string', enum: ['low', 'medium', 'high'] }),
+                time: nullable({ type: 'integer' }),
+                focus: nullable({ type: 'boolean' }),
+                urgent: nullable({ type: 'boolean' }),
+                expectedBy: nullable({ type: 'string' }),
+                ignoreBefore: nullable({ type: 'string' }),
+                timeStart: nullable({ type: 'string' }),
+                timeEnd: nullable({ type: 'string' }),
+                allDay: nullable({ type: 'boolean' }),
             },
+            required: [...PROPOSABLE_ITEM_FIELDS],
             additionalProperties: false,
-        },
+        }),
         proposedSideEffects: {
             type: 'array',
             items: {
@@ -111,6 +126,6 @@ export const CLARIFY_PROPOSAL_SCHEMA = {
             },
         },
     },
-    required: ['summary', 'proposedSideEffects'],
+    required: ['summary', 'proposedItemPatch', 'proposedSideEffects'],
     additionalProperties: false,
 } as const;

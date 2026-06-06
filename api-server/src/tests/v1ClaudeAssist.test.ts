@@ -205,6 +205,81 @@ describe('POST /v1/claude/assist (clarify, read-only)', () => {
         expect(firstCallParams.output_config.format.type).toBe('json_schema');
     });
 
+    it('strips null patch fields the structured-output schema forces the model to emit', async () => {
+        // The strict json_schema makes the model emit EVERY patch field, nulling the unchanged ones
+        // (the validator has no "optional property" — see proposalSchema.ts). The route must compact
+        // those back out so only the genuinely-changed fields reach the executeToken + apply layer.
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'call dentist', 'ext-nulls');
+
+        scriptProposal({
+            summary: 'A short phone call — make it a next action.',
+            proposedItemPatch: {
+                title: 'Call dentist',
+                notes: null,
+                status: 'nextAction',
+                workContextIds: null,
+                peopleIds: null,
+                waitingForPersonId: null,
+                energy: 'low',
+                time: 5,
+                focus: false,
+                urgent: null,
+                expectedBy: null,
+                ignoreBefore: null,
+                timeStart: null,
+                timeEnd: null,
+                allDay: null,
+            },
+            proposedSideEffects: [],
+        });
+
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(200);
+        const returned = (await res.json()) as { proposedItemPatch: Record<string, unknown> };
+        // Only the non-null fields survive — no `notes: null`, no `urgent: null`, etc.
+        expect(returned.proposedItemPatch).toEqual({ title: 'Call dentist', status: 'nextAction', energy: 'low', time: 5, focus: false });
+    });
+
+    it('preserves falsy-but-valid patch values through compaction', async () => {
+        // Compaction strips ONLY null/undefined — falsy real values (0, '', [], false) are genuine
+        // changes and must survive, or "clear the notes" / "0-minute task" silently vanish.
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'tidy up', 'ext-falsy');
+
+        scriptProposal({
+            summary: 'Clear notes, zero the estimate, empty the contexts.',
+            proposedItemPatch: { title: 'Tidy up', notes: '', time: 0, focus: false, workContextIds: [], status: null, energy: null },
+            proposedSideEffects: [],
+        });
+
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(200);
+        const returned = (await res.json()) as { proposedItemPatch: Record<string, unknown> };
+        expect(returned.proposedItemPatch).toEqual({ title: 'Tidy up', notes: '', time: 0, focus: false, workContextIds: [] });
+    });
+
+    it('drops an all-null patch entirely (no executeToken minted)', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'nothing to change', 'ext-allnull');
+
+        scriptProposal({
+            summary: 'Nothing to change here.',
+            proposedItemPatch: { title: null, notes: null, status: null, energy: null, time: null, focus: null, urgent: null },
+            proposedSideEffects: [],
+        });
+
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(200);
+        const returned = (await res.json()) as { proposedItemPatch?: unknown; proposedSideEffects: Array<{ kind: string }> };
+        // An all-null patch collapses to nothing, so no itemPatch side-effect/executeToken is minted.
+        expect(returned.proposedItemPatch).toBeUndefined();
+        expect(returned.proposedSideEffects.find((s) => s.kind === 'itemPatch')).toBeUndefined();
+    });
+
     it('scopes tool reads to the item owner, not other users data', async () => {
         const { userId } = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
@@ -494,6 +569,36 @@ describe('getCalendarEvents tool (gated on a connected calendar)', () => {
         const serialized = JSON.stringify(secondCallParams.messages);
         expect(serialized).toContain('Daily Standup');
         expect(serialized).not.toContain('refreshToken');
+    });
+
+    it('feeds a failed getCalendarEvents back as an error tool_result instead of failing the request', async () => {
+        // getCalendarEvents is the only tool with an external dependency, so it carries an 8s internal
+        // timeout. A failure/timeout must degrade to an `is_error` tool_result the model adapts to —
+        // clarify still returns 200, never a 5xx. The reject below simulates exactly what the timeout
+        // throws, exercising the same dispatcher error-envelope path without waiting 8 real seconds.
+        const { userId } = await login();
+        await seedCalendar(userId);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'check my schedule', 'ext-cal-fail');
+
+        listEvents.mockRejectedValueOnce(new Error('getCalendarEvents timed out after 8000ms'));
+        scriptToolThenProposal(
+            'getCalendarEvents',
+            { since: '2026-06-08T00:00:00Z', until: '2026-06-09T00:00:00Z' },
+            { summary: 'Could not read your calendar; proceeding without it.', proposedSideEffects: [] },
+        );
+
+        const res = await assist(plaintext, id);
+        expect(res.status).toBe(200);
+
+        // The failure surfaced to the model as an error tool_result on the next user turn (not a throw).
+        const [secondCallParams] = messagesCreate.mock.calls[1] as [
+            { messages: Array<{ role: string; content: Array<{ is_error?: boolean; content?: string }> }> },
+        ];
+        const lastUserTurn = secondCallParams.messages.at(-1);
+        const toolResult = Array.isArray(lastUserTurn?.content) ? lastUserTurn.content[0] : undefined;
+        expect(toolResult?.is_error).toBe(true);
+        expect(toolResult?.content).toContain('timed out');
     });
 
     it('applies a calendar side-effect expressed as item calendar fields, through the op-log', async () => {
