@@ -94,6 +94,36 @@ function scriptToolThenProposal(toolName: string, toolInput: unknown, proposal: 
         });
 }
 
+/** A single-turn final proposal (no tool call). */
+function scriptProposal(proposal: unknown) {
+    messagesCreate.mockResolvedValueOnce({
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: JSON.stringify(proposal) }],
+        usage: { input_tokens: 80, output_tokens: 40, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    });
+}
+
+function apply(plaintext: string, executeToken: string, patch?: unknown) {
+    return app.fetch(
+        new Request('http://localhost:4000/v1/claude/assist/apply', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${plaintext}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ executeToken, ...(patch !== undefined ? { patch } : {}) }),
+        }),
+    );
+}
+
+/** Runs assist, returns the itemPatch side-effect's executeToken + the proposed patch. */
+async function assistAndGetToken(plaintext: string, itemId: string, patch: Record<string, unknown>) {
+    scriptProposal({ summary: 'clarified', proposedItemPatch: patch, proposedSideEffects: [] });
+    const res = await assist(plaintext, itemId);
+    expect(res.status).toBe(200);
+    const proposal = (await res.json()) as { proposedSideEffects: Array<{ kind: string; executeToken?: string }> };
+    const side = proposal.proposedSideEffects.find((s) => s.kind === 'itemPatch');
+    if (!side?.executeToken) throw new Error('expected an itemPatch side-effect with an executeToken');
+    return side.executeToken;
+}
+
 describe('POST /v1/claude/assist (clarify, read-only)', () => {
     it('runs the tool loop and returns the structured proposal', async () => {
         const { userId } = await login();
@@ -109,7 +139,16 @@ describe('POST /v1/claude/assist (clarify, read-only)', () => {
 
         const res = await assist(plaintext, id, 'clarify this');
         expect(res.status).toBe(200);
-        expect(await res.json()).toEqual(proposal);
+        const returned = (await res.json()) as {
+            summary: string;
+            proposedItemPatch: unknown;
+            proposedSideEffects: Array<{ kind: string; executeToken?: string }>;
+        };
+        expect(returned.summary).toBe(proposal.summary);
+        expect(returned.proposedItemPatch).toEqual(proposal.proposedItemPatch);
+        // The handler mints an executeToken side-effect for the proposed patch (step c).
+        expect(returned.proposedSideEffects[0]).toMatchObject({ kind: 'itemPatch' });
+        expect(typeof returned.proposedSideEffects[0]?.executeToken).toBe('string');
         // The loop made exactly two model calls (one tool turn + final proposal).
         expect(messagesCreate).toHaveBeenCalledTimes(2);
         // Structured-output + tools must actually be wired into the request (guards a refactor
@@ -236,6 +275,122 @@ describe('POST /v1/claude/assist (clarify, read-only)', () => {
                 method: 'POST',
                 headers: { Authorization: `Bearer ${plaintext}`, 'Content-Type': 'application/json' },
                 body: JSON.stringify({}),
+            }),
+        );
+        expect(res.status).toBe(400);
+        expect((await res.json()) as { code: string }).toMatchObject({ code: 'invalid_request' });
+    });
+});
+
+describe('POST /v1/claude/assist/apply (redeem executeToken)', () => {
+    it('applies an edited patch with the same target and writes through the op-log', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'raw inbox text', 'ext-apply');
+
+        const token = await assistAndGetToken(plaintext, id, { title: 'Model title', status: 'nextAction' });
+
+        // Edit the payload VALUES (same target fields) — should be accepted on the same token.
+        const res = await apply(plaintext, token, { title: 'My edited title', status: 'nextAction' });
+        expect(res.status).toBe(200);
+        expect((await res.json()) as { applied: boolean }).toMatchObject({ applied: true });
+
+        // The write landed on the item AND went through the op-log (so sync/undo work).
+        const updated = await db.collection('items').findOne({ _id: id });
+        expect(updated).toMatchObject({ title: 'My edited title', status: 'nextAction' });
+        const op = await db.collection('operations').findOne({ entityId: id, opType: 'update', deviceId: { $regex: '^api:' } });
+        expect(op).not.toBeNull();
+    });
+
+    it('rejects a patch that changes the target (a field outside the authorized set)', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'raw', 'ext-target');
+
+        // Token authorizes only { title }. Submitting `energy` widens the target → reject.
+        const token = await assistAndGetToken(plaintext, id, { title: 'Just the title' });
+        const res = await apply(plaintext, token, { title: 'ok', energy: 'high' });
+        expect(res.status).toBe(400);
+        expect((await res.json()) as { code: string }).toMatchObject({ code: 'execute_token_target_mismatch' });
+    });
+
+    it('rejects non-proposable fields (calendarEventId, _id) — never writable via apply', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'raw', 'ext-nonproposable');
+
+        const token = await assistAndGetToken(plaintext, id, { title: 'ok' });
+        // GCal-owned / identity fields are outside PROPOSABLE_ITEM_FIELDS — never writable via apply.
+        const res = await apply(plaintext, token, { calendarEventId: 'evil', _id: 'hijack' });
+        expect(res.status).toBe(400);
+        expect((await res.json()) as { code: string }).toMatchObject({ code: 'execute_token_target_mismatch' });
+    });
+
+    it('rejects an empty patch (a no-op write is not allowed)', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'raw', 'ext-empty');
+
+        const token = await assistAndGetToken(plaintext, id, { title: 'ok' });
+        const res = await apply(plaintext, token, {});
+        expect(res.status).toBe(400);
+        expect((await res.json()) as { code: string }).toMatchObject({ code: 'invalid_request' });
+    });
+
+    it('rejects a tampered token', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'raw', 'ext-tamper');
+
+        const token = await assistAndGetToken(plaintext, id, { title: 'x' });
+        const tampered = `${token}x`;
+        const res = await apply(plaintext, tampered, { title: 'x' });
+        expect(res.status).toBe(400);
+        expect((await res.json()) as { code: string }).toMatchObject({ code: 'invalid_execute_token' });
+    });
+
+    it('rejects an expired token', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+
+        // Mint a token directly with an issue time far in the past so it is already expired.
+        const { signExecuteToken, hashPayload } = await import('../lib/claude/executeToken.js');
+        const past = Date.now() - 60 * 60 * 1000;
+        const expired = signExecuteToken(
+            { kind: 'itemPatch', user: userId, target: { itemId: 'whatever', fields: ['title'] }, payloadHash: hashPayload({ title: 'x' }) },
+            past,
+        );
+
+        const res = await apply(plaintext, expired, { title: 'x' });
+        expect(res.status).toBe(410);
+        expect((await res.json()) as { code: string }).toMatchObject({ code: 'execute_token_expired' });
+    });
+
+    it('rejects a token whose owner is a different account', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+
+        const { signExecuteToken, hashPayload } = await import('../lib/claude/executeToken.js');
+        const foreign = signExecuteToken({
+            kind: 'itemPatch',
+            user: 'a-different-user',
+            target: { itemId: 'x', fields: ['title'] },
+            payloadHash: hashPayload({ title: 'x' }),
+        });
+
+        const res = await apply(plaintext, foreign, { title: 'x' });
+        expect(res.status).toBe(403);
+        expect((await res.json()) as { code: string }).toMatchObject({ code: 'forbidden' });
+    });
+
+    it('returns 400 when executeToken is missing', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/claude/assist/apply', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${plaintext}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ patch: { title: 'x' } }),
             }),
         );
         expect(res.status).toBe(400);
