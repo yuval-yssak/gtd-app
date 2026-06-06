@@ -160,10 +160,32 @@ describe('validateOperation — status×field matrix', () => {
         expect(result.extra?.field).toBe('energy');
     });
 
+    it('rejects allDay on a nextAction item (calendar-only flag)', () => {
+        // allDay is meaningful only on a calendar event; an inert flag on a to-do is a sign of an
+        // agent/client bug, so the matrix rejects it on active non-calendar statuses.
+        const snapshot = baseItem({ status: 'nextAction', allDay: true });
+        const result = validateOperation(baseOp({}, snapshot));
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.extra?.field).toBe('allDay');
+    });
+
+    it('accepts allDay on a calendar item', () => {
+        const snapshot = baseItem({ status: 'calendar', timeStart: '2026-05-27', timeEnd: '2026-05-28', allDay: true });
+        const result = validateOperation(baseOp({}, snapshot));
+        expect(result.ok).toBe(true);
+    });
+
+    it('preserves allDay on a trash item (audit trail)', () => {
+        const snapshot = baseItem({ status: 'trash', timeStart: '2026-05-27', timeEnd: '2026-05-28', allDay: true });
+        const result = validateOperation(baseOp({}, snapshot));
+        expect(result.ok).toBe(true);
+    });
+
     it('preserves status-specific fields on a done item (audit trail)', () => {
         // `done` is archival — it keeps whatever fields the item carried at completion so
         // historical queries (timeStart for routine instances, energy for retrospectives) work.
-        const snapshot = baseItem({ status: 'done', energy: 'low', timeStart: '2026-05-09T10:00:00Z', timeEnd: '2026-05-09T11:00:00Z' });
+        const snapshot = baseItem({ status: 'done', energy: 'low', timeStart: '2026-05-09T10:00:00Z', timeEnd: '2026-05-09T11:00:00Z', allDay: true });
         const result = validateOperation(baseOp({}, snapshot));
         expect(result.ok).toBe(true);
     });

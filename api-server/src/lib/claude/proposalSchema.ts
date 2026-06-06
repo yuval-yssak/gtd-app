@@ -22,8 +22,9 @@ export const PROPOSABLE_ITEM_FIELDS = [
     'ignoreBefore',
     // Calendar fields — let the agent clarify an inbox item into a calendar entry. The write still
     // goes through the op-log, so GCal pushback creates/updates the event (no direct provider write).
-    // `timeStart`/`timeEnd` are status-specific (calendar-only) and matrix-gated by the op validator;
-    // `allDay` is a universal field and inert without those times, so it carries no write risk alone.
+    // All three are status-specific (calendar-only) and matrix-gated by the op validator: proposing
+    // any of them without a status:calendar move will 400 at apply, so the agent must emit them only
+    // alongside `status: 'calendar'` (see the system prompt's calendar guidance).
     'timeStart',
     'timeEnd',
     'allDay',

@@ -141,9 +141,8 @@ export const v1ClaudeRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json({ error: 'This approval does not belong to the current account.', code: 'forbidden' }, 403);
         }
 
-        if (verified.payload.kind !== 'itemPatch') {
-            return c.json({ error: 'Unsupported approval kind.', code: 'invalid_request' }, 400);
-        }
+        // No kind check: `itemPatch` is the only ExecuteTokenKind today (a calendar change is an
+        // itemPatch with status:calendar). Re-add a guard here if a second kind is introduced.
 
         // The patch is the (possibly edited) values to write. A missing/empty patch is rejected by
         // applyItemPatch (a no-op write is not allowed) rather than silently applied.

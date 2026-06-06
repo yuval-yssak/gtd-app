@@ -518,6 +518,39 @@ describe('POST /v1/claude/assist/apply (redeem executeToken)', () => {
         expect(res.status).toBe(400);
         expect((await res.json()) as { code: string }).toMatchObject({ code: 'invalid_request' });
     });
+
+    it('sanitizes a residual allDay off the existing row when moving calendar → nextAction (no queue jam)', async () => {
+        // Now that allDay is matrix-gated to status:calendar, a calendar item carrying allDay:true that
+        // the agent moves to nextAction would 400 (status_field_violation) — jamming the op — unless
+        // sanitizeStaleFields strips the residual flag. The patch does NOT mention allDay; the existing
+        // row does. This is the queue-jam failure mode from project_sync_push_routine_schema_jam.
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const now = dayjs().toISOString();
+        const id = 'cal-to-na-allday';
+        await itemsDAO.insertOne({
+            _id: id,
+            user: userId,
+            status: 'calendar',
+            title: 'all-day event to demote',
+            timeStart: '2026-05-27',
+            timeEnd: '2026-05-28',
+            allDay: true,
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        // The agent decides it's really a to-do: move to nextAction. allDay is not in the patch.
+        const token = await assistAndGetToken(plaintext, id, { status: 'nextAction', title: 'Demoted to-do' });
+        const res = await apply(plaintext, token, { status: 'nextAction', title: 'Demoted to-do' });
+        expect(res.status).toBe(200);
+
+        const updated = await db.collection('items').findOne({ _id: id });
+        expect(updated).toMatchObject({ status: 'nextAction', title: 'Demoted to-do' });
+        // The stale calendar-only fields are gone — not persisted on a nextAction item.
+        expect(updated?.allDay).toBeUndefined();
+        expect(updated?.timeStart).toBeUndefined();
+    });
 });
 
 describe('getCalendarEvents tool (gated on a connected calendar)', () => {

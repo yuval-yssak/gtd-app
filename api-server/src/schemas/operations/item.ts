@@ -132,6 +132,7 @@ const STATUS_SPECIFIC_FIELDS = [
     'ignoreBefore',
     'timeStart',
     'timeEnd',
+    'allDay',
     'calendarEventId',
     'calendarIntegrationId',
     'calendarInstanceEventId',
@@ -149,7 +150,7 @@ const ALL_STATUS_SPECIFIC: ReadonlySet<StatusSpecificField> = new Set(STATUS_SPE
 export const STATUS_FIELD_MATRIX: Record<ItemInterface['status'], ReadonlySet<StatusSpecificField>> = {
     inbox: new Set(),
     nextAction: new Set(['workContextIds', 'peopleIds', 'energy', 'time', 'focus', 'urgent', 'expectedBy', 'ignoreBefore']),
-    calendar: new Set(['timeStart', 'timeEnd', 'calendarEventId', 'calendarIntegrationId', 'calendarInstanceEventId', 'workContextIds', 'peopleIds']),
+    calendar: new Set(['timeStart', 'timeEnd', 'allDay', 'calendarEventId', 'calendarIntegrationId', 'calendarInstanceEventId', 'workContextIds', 'peopleIds']),
     waitingFor: new Set(['waitingForPersonId', 'peopleIds', 'expectedBy', 'ignoreBefore']),
     somedayMaybe: new Set(),
     done: ALL_STATUS_SPECIFIC,

@@ -8,14 +8,17 @@ import type { ProposableItemField } from './proposalSchema.js';
  * sees or produces a token: the route mints it AFTER the loop, from the model's structured proposal.
  *
  * The token's authority is the `target`, not the payload values. Editing the payload (e.g. tweaking
- * the proposed title) reuses the same token; changing the target (a different item, a field outside
- * the authorized set, a different kind) must re-issue — see verify + the apply handler (§8.1).
+ * the proposed title) reuses the same token; changing the target (a different item or a field outside
+ * the authorized set) must re-issue — see verify + the apply handler (§8.1).
  */
 
 const TOKEN_VERSION = 1;
 const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-export type ExecuteTokenKind = 'itemPatch' | 'calendarSideEffect';
+// A calendar change is expressed as an `itemPatch` that sets status:calendar + timeStart/timeEnd, so
+// `itemPatch` is the only kind. Kept as a single-member type (not inlined) so a future server-side
+// side-effect kind can be added back here, at the schema enum, and in the apply switch together.
+export type ExecuteTokenKind = 'itemPatch';
 
 export interface ExecuteTokenTarget {
     /** Item the write applies to. */
@@ -36,15 +39,25 @@ export interface ExecuteTokenPayload {
     exp: number;
 }
 
+let devFallbackWarned = false;
+
 function getSigningKey(): Buffer {
     const key = process.env.EXECUTE_TOKEN_SIGNING_KEY ?? '';
-    // Require a reasonably strong key. In production a missing/weak key is a hard error so we never
-    // sign tokens with the public in-repo fallback; outside production we fall back for local dev.
-    if (key.length >= 32) {
+    // Measure raw bytes, not UTF-8 code points: a key of 32 multi-byte chars is fine, but `.length`
+    // would also pass a string that's shorter in bytes for some encodings. 32 bytes = the sha256
+    // block/key floor we want for the HMAC. In production a missing/weak key is a hard error so we
+    // never sign with the public in-repo fallback; outside production we fall back for local dev.
+    if (Buffer.byteLength(key, 'utf8') >= 32) {
         return Buffer.from(key, 'utf8');
     }
     if (process.env.NODE_ENV === 'production') {
-        throw new Error('EXECUTE_TOKEN_SIGNING_KEY must be set (>= 32 chars) in production');
+        throw new Error('EXECUTE_TOKEN_SIGNING_KEY must be set (>= 32 bytes) in production');
+    }
+    // Never silent: warn once so a developer isn't surprised that tokens are signed with a public,
+    // in-repo key (anyone can forge them) when they forgot to set EXECUTE_TOKEN_SIGNING_KEY locally.
+    if (!devFallbackWarned) {
+        devFallbackWarned = true;
+        console.warn('[claude-assist] EXECUTE_TOKEN_SIGNING_KEY unset/weak — using the public dev fallback key. Set a 32+ byte key.');
     }
     return Buffer.from('dev-execute-token-signing-key-placeholder', 'utf8');
 }
