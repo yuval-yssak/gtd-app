@@ -469,6 +469,7 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
                 <AddCalendarDialog
                     integrationId={integration._id}
                     availableCalendars={availableToAdd}
+                    isFirstCalendar={configs.length === 0}
                     onClose={() => setIsAddCalendarOpen(false)}
                     withActiveAccountSession={withActiveAccountSession}
                     onAdded={() => {
@@ -634,12 +635,14 @@ function SyncConfigList({ configs, resolveCalendarName, actions }: SyncConfigLis
 interface AddCalendarDialogProps {
     integrationId: string;
     availableCalendars: GoogleCalendar[];
+    // When this is the integration's first calendar, mark it default so new app-created items have a sync target.
+    isFirstCalendar: boolean;
     onClose: () => void;
     onAdded: () => void;
     withActiveAccountSession: WithActiveAccountSession;
 }
 
-function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded, withActiveAccountSession }: AddCalendarDialogProps) {
+function AddCalendarDialog({ integrationId, availableCalendars, isFirstCalendar, onClose, onAdded, withActiveAccountSession }: AddCalendarDialogProps) {
     const [selectedId, setSelectedId] = useState(defaultCalendarId(availableCalendars) ?? '');
     const [isSaving, startSaving] = useTransition();
     const [saveError, setSaveError] = useState<string | null>(null);
@@ -652,7 +655,9 @@ function AddCalendarDialog({ integrationId, availableCalendars, onClose, onAdded
         startSaving(async () => {
             try {
                 const displayName = availableCalendars.find((c) => c.id === selectedId)?.name;
-                await withActiveAccountSession(() => createSyncConfig(integrationId, { calendarId: selectedId, ...(displayName ? { displayName } : {}) }));
+                await withActiveAccountSession(() =>
+                    createSyncConfig(integrationId, { calendarId: selectedId, isDefault: isFirstCalendar, ...(displayName ? { displayName } : {}) }),
+                );
                 onAdded();
             } catch (err) {
                 console.error('[calendar] add sync config failed:', err);

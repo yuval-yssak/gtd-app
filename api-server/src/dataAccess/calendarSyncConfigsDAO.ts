@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { MongoClient } from 'mongodb';
+import { hasAtLeastOne } from '../lib/typeUtils.js';
 import type { CalendarSyncConfigInterface } from '../types/entities.js';
 import AbstractDAO from './abstractDAO.js';
 
@@ -39,6 +40,28 @@ class CalendarSyncConfigsDAO extends AbstractDAO<CalendarSyncConfigInterface> {
         // Clear isDefault on all sibling configs first, then set the target.
         await this.updateMany({ integrationId, _id: { $ne: configId } as never }, { $set: { isDefault: false, updatedTs: now } });
         await this.updateOne({ _id: configId } as never, { $set: { isDefault: true, updatedTs: now } });
+    }
+
+    /**
+     * Enforces the invariant that an integration with at least one enabled config always has exactly one default.
+     * No-op when a default already exists or no enabled configs remain. Promotes the oldest enabled config otherwise,
+     * so a deterministic survivor is chosen after the default is added/disabled/removed by another code path.
+     */
+    async ensureDefaultExists(integrationId: string): Promise<void> {
+        const enabled = await this.findEnabledByIntegration(integrationId);
+        if (!hasAtLeastOne(enabled) || enabled.some((config) => config.isDefault)) {
+            return;
+        }
+        // Oldest enabled config wins; tie-break on _id so same-millisecond sequential adds resolve deterministically
+        // (findEnabledByIntegration is unsorted, so without this the winner would depend on storage order).
+        const oldest = enabled.reduce((earliest, config) => {
+            const created = dayjs(config.createdTs);
+            const earliestCreated = dayjs(earliest.createdTs);
+            if (created.isBefore(earliestCreated)) return config;
+            if (created.isSame(earliestCreated) && config._id < earliest._id) return config;
+            return earliest;
+        });
+        await this.setDefault(oldest._id, integrationId);
     }
 
     async upsertSyncToken(configId: string, syncToken: string, lastSyncedTs: string): Promise<void> {

@@ -2079,6 +2079,47 @@ describe('POST /calendar/integrations/:id/sync-configs', () => {
         expect(created.enabled).toBe(true);
     });
 
+    it('promotes the first config to default even when isDefault is omitted', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/integrations/int-1/sync-configs',
+            sessionCookie,
+            body: { calendarId: 'primary' },
+        });
+        expect(res.status).toBe(201);
+
+        const configs = await calendarSyncConfigsDAO.findByIntegration('int-1');
+        expect(configs.filter((c) => c.isDefault)).toHaveLength(1);
+        const [only] = configs;
+        if (!only) throw new Error('expected one sync config');
+        expect(only.isDefault).toBe(true);
+    });
+
+    it('does not steal default when a second config is added without isDefault', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId); // sync-config-1 (primary) is default
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/integrations/int-1/sync-configs',
+            sessionCookie,
+            body: { calendarId: 'work@group.calendar.google.com' },
+        });
+        expect(res.status).toBe(201);
+
+        const configs = await calendarSyncConfigsDAO.findByIntegration('int-1');
+        const defaults = configs.filter((c) => c.isDefault);
+        expect(defaults).toHaveLength(1);
+        const [def] = defaults;
+        if (!def) throw new Error('expected one default config');
+        expect(def.calendarId).toBe('primary');
+    });
+
     it('returns 409 when calendarId already exists for this integration', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -2170,6 +2211,32 @@ describe('PATCH /calendar/integrations/:integrationId/sync-configs/:configId', (
         expect(updated?.enabled).toBe(false);
         expect(updated?.displayName).toBe('Personal');
     });
+
+    it('promotes another enabled config to default when the default is disabled', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const integration = makeIntegration(userId);
+        await calendarIntegrationsDAO.insertEncrypted(integration);
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, integration._id)); // sync-config-1, default
+        await calendarSyncConfigsDAO.insertOne(
+            makeSyncConfig(userId, integration._id, { _id: 'sync-config-2', calendarId: 'work@group.calendar.google.com', isDefault: false }),
+        );
+
+        const res = await authenticatedRequest(app, {
+            method: 'PATCH',
+            path: '/calendar/integrations/int-1/sync-configs/sync-config-1',
+            sessionCookie,
+            body: { enabled: false },
+        });
+        expect(res.status).toBe(200);
+
+        const configs = await calendarSyncConfigsDAO.findByIntegration('int-1');
+        const defaults = configs.filter((c) => c.isDefault);
+        expect(defaults).toHaveLength(1);
+        const [def] = defaults;
+        if (!def) throw new Error('expected one default config');
+        expect(def._id).toBe('sync-config-2');
+    });
 });
 
 describe('DELETE /calendar/integrations/:integrationId/sync-configs/:configId', () => {
@@ -2215,6 +2282,76 @@ describe('DELETE /calendar/integrations/:integrationId/sync-configs/:configId', 
 
         const item = await itemsDAO.findOne({ _id: 'item-ref' });
         expect(item?.calendarSyncConfigId).toBeUndefined();
+    });
+
+    it('promotes a remaining enabled config to default when the default is deleted', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const integration = makeIntegration(userId);
+        await calendarIntegrationsDAO.insertEncrypted(integration);
+        // sync-config-1 is the default; sync-config-2 is a non-default sibling.
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, integration._id));
+        await calendarSyncConfigsDAO.insertOne(
+            makeSyncConfig(userId, integration._id, { _id: 'sync-config-2', calendarId: 'work@group.calendar.google.com', isDefault: false }),
+        );
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1/sync-configs/sync-config-1',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const configs = await calendarSyncConfigsDAO.findByIntegration('int-1');
+        const defaults = configs.filter((c) => c.isDefault);
+        expect(defaults).toHaveLength(1);
+        const [def] = defaults;
+        if (!def) throw new Error('expected one default config');
+        expect(def._id).toBe('sync-config-2');
+    });
+
+    it('leaves the existing default intact when a non-default config is deleted', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const integration = makeIntegration(userId);
+        await calendarIntegrationsDAO.insertEncrypted(integration);
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, integration._id)); // sync-config-1, default
+        await calendarSyncConfigsDAO.insertOne(
+            makeSyncConfig(userId, integration._id, { _id: 'sync-config-2', calendarId: 'work@group.calendar.google.com', isDefault: false }),
+        );
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1/sync-configs/sync-config-2',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const configs = await calendarSyncConfigsDAO.findByIntegration('int-1');
+        const defaults = configs.filter((c) => c.isDefault);
+        expect(defaults).toHaveLength(1);
+        const [def] = defaults;
+        if (!def) throw new Error('expected one default config');
+        expect(def._id).toBe('sync-config-1');
+    });
+
+    it('does not promote any enabled config when the only config is disabled (no-op guard)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId); // sync-config-1, default + only config
+
+        const res = await authenticatedRequest(app, {
+            method: 'PATCH',
+            path: '/calendar/integrations/int-1/sync-configs/sync-config-1',
+            sessionCookie,
+            body: { enabled: false },
+        });
+        expect(res.status).toBe(200);
+
+        // ensureDefaultExists hits its empty-enabled guard and is a no-op: no enabled config is default.
+        // (The disabled row keeps its isDefault flag — disabling never clears it — and is re-promoted only on re-enable.)
+        const enabledDefaults = (await calendarSyncConfigsDAO.findByIntegration('int-1')).filter((c) => c.enabled && c.isDefault);
+        expect(enabledDefaults).toHaveLength(0);
     });
 
     it('clears calendarSyncConfigId from routines when config is deleted', async () => {

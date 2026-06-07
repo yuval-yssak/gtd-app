@@ -1006,6 +1006,10 @@ calendarRoutes.post('/integrations/:id/sync-configs', authenticateRequest, async
 
     if (isDefault) {
         await calendarSyncConfigsDAO.setDefault(configId, integrationId);
+    } else {
+        // Guarantee the integration always has a default — promotes this config when it's the first enabled one,
+        // so a calendar added without an explicit isDefault (e.g. the "Add calendar" flow) can't leave the integration defaultless.
+        await calendarSyncConfigsDAO.ensureDefaultExists(integrationId);
     }
 
     // Start receiving push notifications for this calendar (best-effort — sync still works without it).
@@ -1057,6 +1061,9 @@ calendarRoutes.patch('/integrations/:integrationId/sync-configs/:configId', auth
 
     if (body.isDefault === true) {
         await calendarSyncConfigsDAO.setDefault(configId, integrationId);
+    } else if (disablingWatch) {
+        // Disabling the current default would strand the integration without one — promote another enabled config.
+        await calendarSyncConfigsDAO.ensureDefaultExists(integrationId);
     }
 
     // Manage webhook channel lifecycle when enabled state changes.
@@ -1103,6 +1110,8 @@ calendarRoutes.delete('/integrations/:integrationId/sync-configs/:configId', aut
     await clearSyncConfigReferences(userId, configId, now);
 
     await calendarSyncConfigsDAO.deleteByOwner(configId, userId);
+    // Removing the default leaves the integration defaultless — promote a remaining enabled config.
+    await calendarSyncConfigsDAO.ensureDefaultExists(integrationId);
     return c.json({ ok: true });
 });
 
