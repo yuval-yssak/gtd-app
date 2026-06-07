@@ -137,13 +137,14 @@ describe('createToken', () => {
 });
 
 describe('MINTABLE_API_TOKEN_SCOPES', () => {
-    // Load-bearing invariant of the Phase 2 client surface: the legacy `items.clarify` scope is
-    // still in the type union (so chips on legacy stored tokens render correctly) but must never
-    // be advertised in the mint UI. A unit test pins this contract directly — the e2e flow asserts
-    // `items.write` is checkable, not that `items.clarify` is absent.
-    it('does not advertise the legacy items.clarify scope to the mint UI', () => {
-        expect(MINTABLE_API_TOKEN_SCOPES).not.toContain<ApiTokenScope>('items.clarify');
+    // The write surface is exposed under `items.write` (the former `items.clarify` scope was
+    // retired and its stored rows migrated to `items.write` server-side). Keep the negative pin —
+    // a regression that re-introduces the retired literal to the mint UI must fail. Compared as a
+    // plain string since `items.clarify` is no longer a member of the `ApiTokenScope` union.
+    it('advertises items.write and never re-introduces the retired items.clarify scope', () => {
+        expect(MINTABLE_API_TOKEN_SCOPES).toContain<ApiTokenScope>('items.write');
         expect(MINTABLE_API_TOKEN_SCOPES.length).toBeGreaterThan(0);
+        expect(MINTABLE_API_TOKEN_SCOPES as string[]).not.toContain('items.clarify');
     });
 
     // The cross-account reassign gesture is a two-token proof: the source-side token carries

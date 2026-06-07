@@ -74,7 +74,7 @@ async function newUserWithToken(who: 'alice' | 'bob' = 'alice', label = 'test'):
     // Mint with the full scope set so the existing exhaustive endpoint coverage in this file
     // doesn't have to thread scopes through every callsite. Scope-specific behaviour is exercised
     // in `v1Clarify.test.ts`.
-    const { plaintext, record } = await issueApiToken(userId, label, ['items.capture', 'items.read', 'items.clarify']);
+    const { plaintext, record } = await issueApiToken(userId, label, ['items.capture', 'items.read', 'items.write']);
     return { plaintext, userId, tokenId: record._id };
 }
 

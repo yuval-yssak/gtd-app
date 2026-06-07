@@ -69,15 +69,12 @@ function parseScopes(raw: CreateBody): { ok: true; scopes: ApiTokenScope[] } | {
     const seen = new Set<ApiTokenScope>();
     for (const s of raw.scopes) {
         if (typeof s !== 'string' || !MINTABLE_API_TOKEN_SCOPES.has(s as ApiTokenScope)) {
-            // `items.clarify` is the most common reason a caller lands here post-extension —
-            // surface a hint pointing at its replacement instead of the bare allowed-list dump.
-            const hint = s === 'items.clarify' ? ' Use `items.write` instead.' : '';
             return {
                 ok: false,
                 error: {
                     code: 'invalid_scopes',
                     status: 400,
-                    message: `unknown scope ${JSON.stringify(s)}; allowed: ${[...MINTABLE_API_TOKEN_SCOPES].join(', ')}.${hint}`,
+                    message: `unknown scope ${JSON.stringify(s)}; allowed: ${[...MINTABLE_API_TOKEN_SCOPES].join(', ')}.`,
                 },
             };
         }

@@ -650,18 +650,11 @@ export interface WebhookDeliveryInterface {
  * `/v1/reassign` route requires both — the calling token's `reassign` plus the recipient
  * token's `reassign.accept` (sent in `X-Reassign-Recipient-Token`). This is the bearer-token
  * analog of the device-multi-session check enforced by the in-app `/sync/reassign`.
- *
- * `items.clarify` is the **legacy** scope: it appears on tokens minted before the Phase 2 scope
- * extension. Old tokens carrying it are auto-backfilled to `items.write` at auth time
- * (`bearerMiddleware.ts`), and the type stays in the union so reads from Mongo still narrow
- * cleanly. The mint allowlist (`MINTABLE_API_TOKEN_SCOPES`) excludes it so new tokens never
- * receive it again.
  */
 export type ApiTokenScope =
     | 'items.capture'
     | 'items.read'
     | 'items.write'
-    | 'items.clarify'
     | 'routines.read'
     | 'routines.write'
     | 'people.read'
@@ -679,11 +672,7 @@ export type ApiTokenScope =
 /** Default scopes minted onto a token when the caller did not specify any. */
 export const DEFAULT_API_TOKEN_SCOPES: ApiTokenScope[] = ['items.capture', 'items.read'];
 
-/**
- * Allowlist enforced by the token mint endpoint. `items.clarify` is intentionally excluded —
- * callers asking for it get a 400 with a hint to use `items.write` instead. Stored tokens that
- * already carry `items.clarify` keep working via the backfill in `bearerMiddleware.ts`.
- */
+/** Allowlist enforced by the token mint endpoint. Currently every scope is mintable. */
 export const MINTABLE_API_TOKEN_SCOPES: ReadonlySet<ApiTokenScope> = new Set([
     'items.capture',
     'items.read',

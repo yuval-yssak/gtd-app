@@ -44,7 +44,7 @@ Two parallel auth modes share the same user identity space.
 - Resolution: `resolveBearerToken(authorizationHeader)` looks up by `tokenHash` and rejects revoked rows.
 - Middleware: `authenticateBearer` (`src/auth/bearerMiddleware.ts`) parses `Authorization: Bearer gtd_<…>` and sets `c.var.apiAuth = { userId, tokenId, scopes }`. Bumps `lastUsedTs` fire-and-forget. On failed auth, consumes from the IP-keyed anon rate-limit bucket so a flood of bad credentials cannot exhaust tokenHash lookups.
 - Production token-mint UI lives at `Settings → Personal API tokens`. Per-user cap of 20 active tokens. For local dev, `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) is the convenience shortcut.
-- **Scopes**: `items.capture`, `items.read`, `items.clarify`, `webhooks.manage`. Default-mint is `[items.capture, items.read]`. Pre-scopes tokens are lazily backfilled on first authenticated use.
+- **Scopes**: `items.capture`, `items.read`, `items.write`, `webhooks.manage` (plus per-entity read/write + `reassign*`). Default-mint is `[items.capture, items.read]`. Pre-scopes tokens are lazily backfilled on first authenticated use.
 
 > ⚠️ **Do not add an in-process token cache** in `apiTokens.ts` or `bearerMiddleware.ts` without
 > also wiring an invalidation channel (SSE/Redis pub-sub). Revocation today goes straight to

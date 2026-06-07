@@ -36,8 +36,8 @@ function extractClientIp(c: Context): string {
 /**
  * Resolves an `Authorization: Bearer gtd_<token>` header to a populated `apiAuth` value, or null
  * when no valid bearer token is present. Extracted so the dual-auth assist middleware can reuse the
- * exact bearer resolution (scope backfill, legacy `items.clarify` bridge, fire-and-forget
- * `lastUsedTs` bump) without duplicating it — keeping the two auth paths from drifting.
+ * exact bearer resolution (scope backfill, fire-and-forget `lastUsedTs` bump) without duplicating
+ * it — keeping the two auth paths from drifting.
  *
  * Returns null (rather than throwing) so callers can decide the fallback: `authenticateBearer`
  * returns 401, while `authenticateBearerOrSession` falls through to cookie-session resolution.
@@ -56,19 +56,11 @@ export async function resolveBearerApiAuth(authorizationHeader: string | undefin
             console.error('[apiTokens] scopes backfill failed', { tokenId: token._id, err });
         });
     }
-    // Phase 2 legacy bridge: pre-extension tokens carry `items.clarify` for what is now
-    // `items.write`. We backfill in-memory only — leaving the stored row untouched keeps the
-    // mint endpoint's "no new items.clarify" rule simple and means revocation/auditing of legacy
-    // tokens still works against the original scope string.
-    // The `as const` narrows the literal back to `ApiTokenScope` inside the spread; without it
-    // TypeScript widens the literal to `string` and `c.set('apiAuth', …)` rejects the mixed array.
-    const scopes = storedScopes.includes('items.clarify') && !storedScopes.includes('items.write') ? [...storedScopes, 'items.write' as const] : storedScopes;
-
     void apiTokensDAO.touchLastUsed(token._id, dayjs().toISOString()).catch((err) => {
         console.error('[apiTokens] touchLastUsed failed', { tokenId: token._id, err });
     });
 
-    return { userId: token.user, tokenId: token._id, scopes };
+    return { userId: token.user, tokenId: token._id, scopes: storedScopes };
 }
 
 /**

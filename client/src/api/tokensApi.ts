@@ -1,16 +1,10 @@
 import { API_SERVER } from '../constants/globals';
 
-/**
- * Capability scopes the API understands. `items.clarify` is the legacy form: tokens minted before
- * the Phase 2 scope extension carry it, the server backfills `items.write` in-memory at auth time,
- * and the mint endpoint rejects new tokens that ask for it. Kept in the type union so the settings
- * UI can display it on legacy rows; `MINTABLE_API_TOKEN_SCOPES` is the set users can actually pick.
- */
+/** Capability scopes the API understands. `MINTABLE_API_TOKEN_SCOPES` is the set users can pick when minting. */
 export type ApiTokenScope =
     | 'items.capture'
     | 'items.read'
     | 'items.write'
-    | 'items.clarify'
     | 'routines.read'
     | 'routines.write'
     | 'people.read'
@@ -21,7 +15,7 @@ export type ApiTokenScope =
     | 'reassign.accept'
     | 'webhooks.manage';
 
-/** Scopes the user can pick when minting a new token. Excludes the legacy `items.clarify`. */
+/** Scopes the user can pick when minting a new token. */
 export const MINTABLE_API_TOKEN_SCOPES: ApiTokenScope[] = [
     'items.capture',
     'items.read',

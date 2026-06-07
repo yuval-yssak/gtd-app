@@ -1,10 +1,8 @@
 /** PATCH /v1/items/:id (clarify) + token scopes — issue #19 step 7.
  *
- * Phase 2 (api-overhaul-v1) renamed the gating scope from `items.clarify` to `items.write`.
- * The tests below intentionally still issue tokens with `items.clarify` — they exercise the
- * in-memory backfill bridge in `bearerMiddleware.ts` for every clarify-related scenario, so
- * removing it here would silently drop bridge coverage. Modernize only when the bridge itself
- * is being removed (Phase 3+). New scope-coverage tests live in `itemsClarifyBackfill.test.ts`. */
+ * The clarify/complete write surface is gated by the `items.write` scope. (The former
+ * `items.clarify` scope was retired; legacy stored rows are migrated to `items.write` at boot —
+ * see `loaders/apiTokenScopeMigration.ts`.) */
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -77,7 +75,7 @@ async function patch(plaintext: string, id: string, body: unknown): Promise<Resp
 describe('PATCH /v1/items/:id', () => {
     it('clarifies an inbox item to nextAction with metadata', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
 
         const res = await patch(plaintext, id, { status: 'nextAction', energy: 'low', time: 5, urgent: true });
@@ -95,7 +93,7 @@ describe('PATCH /v1/items/:id', () => {
     // are folded into the matrix-coverage tests below.
     it('accepts status: calendar with timeStart + timeEnd (Phase 3 broadened surface)', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'calendar', timeStart: '2099-04-01T10:00:00Z', timeEnd: '2099-04-01T11:00:00Z' });
         expect(res.status).toBe(200);
@@ -106,7 +104,7 @@ describe('PATCH /v1/items/:id', () => {
 
     it('accepts status: done via PATCH (the POST /complete shortcut is still available)', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'done' });
         expect(res.status).toBe(200);
@@ -116,7 +114,7 @@ describe('PATCH /v1/items/:id', () => {
 
     it('rejects forbidden fields (e.g., user, contentHash)', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { user: 'someone-else' });
         expect(res.status).toBe(400);
@@ -125,7 +123,7 @@ describe('PATCH /v1/items/:id', () => {
 
     it('rejects empty bodies with empty_body', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, {});
         expect(res.status).toBe(400);
@@ -134,14 +132,14 @@ describe('PATCH /v1/items/:id', () => {
 
     it('returns 404 for items that do not exist', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const res = await patch(plaintext, '00000000-0000-0000-0000-000000000000', { status: 'nextAction' });
         expect(res.status).toBe(404);
     });
 
     it('Phase 3 broadened: status transitions from non-inbox items now succeed (e.g. nextAction → waitingFor)', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         // Seed an item directly in nextAction status — patch attempt to transition it elsewhere now succeeds.
         const itemId = '11111111-1111-1111-1111-111111111111';
         await itemsDAO.insertOne({
@@ -162,7 +160,7 @@ describe('PATCH /v1/items/:id', () => {
 
     it('rejects field type errors via Zod (energy / focus / time) with invalid_operation', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         // Phase 3 — Zod validates types, surfaces a single `invalid_operation` code with a path
         // that pinpoints the offending field. The hand-rolled per-field codes are gone.
@@ -186,7 +184,7 @@ describe('PATCH /v1/items/:id', () => {
     // the offending cell so callers can branch on it.
     it('rejects PATCH { status: "somedayMaybe", expectedBy } with status_field_violation', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'somedayMaybe', expectedBy: '2026-06-01' });
         expect(res.status).toBe(400);
@@ -200,7 +198,7 @@ describe('PATCH /v1/items/:id', () => {
 
     it('rejects PATCH { status: "nextAction", waitingForPersonId } with status_field_violation', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'nextAction', waitingForPersonId: 'p-1' });
         expect(res.status).toBe(400);
@@ -209,7 +207,7 @@ describe('PATCH /v1/items/:id', () => {
 
     it('rejects PATCH { status: "waitingFor", energy } with status_field_violation', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'waitingFor', energy: 'low' });
         expect(res.status).toBe(400);
@@ -218,7 +216,7 @@ describe('PATCH /v1/items/:id', () => {
 
     it('accepts PATCH { status: "waitingFor", waitingForPersonId, expectedBy } — all allowed', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
         const res = await patch(plaintext, id, { status: 'waitingFor', waitingForPersonId: 'p-1', expectedBy: '2026-06-01' });
         expect(res.status).toBe(200);
@@ -237,7 +235,7 @@ describe('POST /v1/items/:id/complete — preserves historical fields', () => {
     // the status flag and updatedTs change.
     it('preserves prior status-specific fields when completing a populated nextAction item', async () => {
         const userId = await login();
-        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const itemId = '22222222-2222-2222-2222-222222222222';
         await itemsDAO.insertOne({
             _id: itemId,
@@ -290,7 +288,7 @@ describe('Token scopes', () => {
 
     it('clarify-scoped token can PATCH but not capture-only token', async () => {
         const userId = await login();
-        const { plaintext: clarifyToken } = await issueApiToken(userId, 'clarify', ['items.capture', 'items.read', 'items.clarify']);
+        const { plaintext: clarifyToken } = await issueApiToken(userId, 'clarify', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(clarifyToken, 'ext-1');
 
         const { plaintext: captureOnly } = await issueApiToken(userId, 'capture', ['items.capture']);

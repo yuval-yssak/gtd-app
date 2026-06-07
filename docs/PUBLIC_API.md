@@ -88,8 +88,6 @@ Default scopes when omitted: `['items.capture', 'items.read']` (capture-and-list
 
 A request hitting an endpoint that the token's scopes do not cover returns `403` with `code: forbidden_scope`. Pre-scopes tokens (issued before this surface shipped) are backfilled to the default set on first authenticated use.
 
-**Legacy `items.clarify` scope:** before the public-API overhaul there was a single `items.clarify` scope covering both PATCH and complete. Tokens minted with that scope continue to work — the bearer middleware backfills `items.write` in-memory at auth time. New mints reject `items.clarify` with `400 invalid_scopes` and a hint pointing at `items.write`.
-
 ### Token lifecycle
 
 | Action | Effect |

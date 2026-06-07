@@ -4,3 +4,4 @@
 - [Bootstrap responses must reflect post-hook state](feedback_response_reflects_persisted_state.md) — POST/PATCH that fire post-write hooks may flip state before responding; always re-read or pre-validate so the response matches what's persisted
 - [Stale snapshot after in-place heal causes duplicate ops](feedback_stale_snapshot_after_inplace_heal.md) — When a sub-call heals an entity in place, the outer function's remaining uses of the same snapshot re-trigger the heal and pollute the op log
 - [Test DB ppid isolation](project_test_db_ppid_isolation.md) — test DBs namespaced by process.ppid under NODE_ENV=test for concurrent runs; sync-audit config has no teardown so it leaks namespaced DBs
+- [Boot-migration review checklist](feedback_boot_migration_review_checklist.md) — loaders/*Migration.ts: check bridge-removal deploy safety, $addToSet-then-$pull ordering, stale operator-name comments

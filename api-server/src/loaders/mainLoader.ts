@@ -16,6 +16,7 @@ import sentEmailsDAO from '../dataAccess/sentEmailsDAO.js';
 import webhookDeliveriesDAO from '../dataAccess/webhookDeliveriesDAO.js';
 import webhookSubscriptionsDAO from '../dataAccess/webhookSubscriptionsDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { migrateLegacyClarifyScope } from './apiTokenScopeMigration.js';
 import { dedupeCalendarItemsPerEvent } from './calendarItemDuplicateMigration.js';
 import { migrateDeviceSyncStateToPerUserCursor } from './deviceSyncStateMigration.js';
 import { dedupeActiveRoutinesPerGCalSeries } from './routineDuplicateMigration.js';
@@ -87,6 +88,9 @@ async function loadDataAccess(customDBName?: string) {
         webhookDeliveriesDAO.init(dbClient, resolvedDBName),
         claudeUsageDAO.init(dbClient, resolvedDBName),
     ]);
+    // Persist the legacy items.clarify → items.write scope rewrite so stored tokens match what auth
+    // enforces (the in-memory backfill bridge has been removed). Idempotent + boot-only.
+    await migrateLegacyClarifyScope(db);
     // Convert any legacy single-cursor-per-device rows to per-(device, user) shape.
     // Idempotent + boot-only — see deviceSyncStateMigration.ts.
     await migrateDeviceSyncStateToPerUserCursor(db);

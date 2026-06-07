@@ -7,3 +7,4 @@
 - [React keys by display name](feedback_react_keys_by_display_name.md) — list rows keyed by chip label / person / context name (not _id); duplicate names collide since helpers return lossy string[]. Flag it.
 - [Client ItemStatus union duplicated](project_client_item_status_union_duplicated.md) — MyDB.ts exports EnergyLevel but NOT ItemStatus; status union is inlined across files. A new local copy is convention, not a fresh violation.
 - [Humanize enums via existing label map](feedback_humanize_enum_via_existing_label_map.md) — presenter switches leak raw enums (energy low/medium/high) via String() default; reuse existing label maps + require a test per enum field.
+- [Retired-scope negative pin](feedback_retired_scope_negative_pin.md) — removing a union literal: keep a `.not.toContain('X')` pin (don't swap for weaker positive assertion) + render-test the out-of-union value at the network boundary.

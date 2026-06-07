@@ -472,8 +472,7 @@ async function trashItem({ userId, tokenId, itemId }: TrashContext): Promise<Tra
 // set; the apply pipeline's `strict: true` mode enforces every type, the status×field matrix,
 // and `floatingDateTime` rules via `RoutineSnapshotSchema`/`ItemSnapshotSchema`.
 //
-// Requires the `items.write` scope. Tokens minted before the Phase 2 scope extension carry
-// the legacy `items.clarify` scope; `bearerMiddleware` backfills it to `items.write` in-memory.
+// Requires the `items.write` scope.
 
 // User-settable fields. Server-managed (`_id`, `user`, `createdTs`, `updatedTs`, `routineId`,
 // `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `externalId`)

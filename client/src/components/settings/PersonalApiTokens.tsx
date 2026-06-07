@@ -38,8 +38,6 @@ const SCOPE_DESCRIPTIONS: Record<ApiTokenScope, string> = {
     'items.capture': 'Create inbox items',
     'items.read': 'List, search, and read items',
     'items.write': 'Clarify, update, and complete items',
-    // Legacy scope; not selectable on new tokens. Description used only for chips on existing rows.
-    'items.clarify': 'Clarify and complete items (legacy — use items.write)',
     'routines.read': 'List and read routines',
     'routines.write': 'Create, update, pause/resume, and split routines',
     'people.read': 'List and read people',
@@ -263,6 +261,10 @@ function TokenRow({ token, onRevoke, isRevoking }: TokenRowProps) {
                     <Box className={styles.primaryLine}>
                         <Box component="span">{token.label}</Box>
                         {showUnusedChip && <Chip size="small" variant="outlined" label="unused" data-testid="unusedTokenChip" />}
+                        {/* Render the raw scope string — never index SCOPE_DESCRIPTIONS here. `scopes` is
+                            typed ApiTokenScope[] but populated from untyped network JSON, so a row can carry
+                            a value outside the current union (e.g. a not-yet-migrated legacy scope). The raw
+                            label keeps that chip rendering instead of crashing on a missing description key. */}
                         {token.scopes.map((scope) => (
                             <Chip key={scope} size="small" variant="outlined" label={scope} data-testid="tokenScopeChip" />
                         ))}
