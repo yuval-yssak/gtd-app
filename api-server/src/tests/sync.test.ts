@@ -350,7 +350,12 @@ describe('GET /sync/pull', () => {
         // Explicit-ack protocol: server records `ackedTs` (what the client has durably persisted),
         // not the response's `serverTs`. Client typically passes `ackedTs === since === IDB cursor`.
         const ackedTs = '2025-01-15T00:00:00.000Z';
-        await pull(cookie, { since: ackedTs, ackedTs, deviceId: 'dev-2' });
+        // Assert the pull itself succeeded before inspecting its DB side-effect. The handler awaits
+        // the deviceSyncState upsert before responding, so a 200 guarantees the row exists; without
+        // this guard a transient 500 (e.g. a Mongo hiccup under CI load) surfaces downstream as a
+        // cryptic `state === undefined` instead of the real HTTP failure.
+        const res = await pull(cookie, { since: ackedTs, ackedTs, deviceId: 'dev-2' });
+        expect(res.status).toBe(200);
 
         const state = await db.collection('deviceSyncState').findOne({ _id: `dev-2::${userId}` });
         expect(state?.lastSyncedTs).toBe(ackedTs);
@@ -361,7 +366,9 @@ describe('GET /sync/pull', () => {
     it('pull without deviceId does not create a deviceSyncState doc', async () => {
         const cookie = await loginAsAlice();
 
-        await pull(cookie);
+        // Guard the negative assertion: a 500 would also leave zero docs, falsely "passing".
+        const res = await pull(cookie);
+        expect(res.status).toBe(200);
 
         expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
     });
