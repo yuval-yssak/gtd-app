@@ -27,6 +27,7 @@ const mockAppData: AppData = {
     isCalendarSyncing: false,
     // Identity passthrough in Storybook — no real session to pivot. Runs the wrapped mutation as-is.
     withActiveAccountSession: (task) => task(),
+    withOwnerSession: (_userId, task) => task(),
 };
 
 const MockAppDataDecorator: Decorator = (Story) => (

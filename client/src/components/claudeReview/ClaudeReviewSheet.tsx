@@ -23,6 +23,13 @@ interface ClaudeReviewSheetProps {
     onClose: () => void;
     /** Called after a successful apply so the host can pull the server-side write back into IDB. */
     onApplied: () => Promise<void>;
+    /**
+     * Pins the Better Auth session to `item.userId` for the assist/apply calls — the reviewed item
+     * may belong to a non-active signed-in account, and the assist endpoints resolve the owner from
+     * the session cookie. Without the pivot the server returns 404 not_found (assist) or 403 forbidden
+     * (apply) when the cookie points at a different account.
+     */
+    withOwnerSession: <T>(userId: string, task: () => Promise<T>) => Promise<T>;
 }
 
 type Phase = 'loading' | 'loaded' | 'error';
@@ -37,7 +44,7 @@ function errorViewOf(err: unknown): ReviewErrorView {
  * shows the rewritten title + humanized fields, and offers Apply / inline-Edit / Skip / Apply-All /
  * Ask-again. Only the server-prepended token-bearing side-effect is appliable in v1.
  */
-export function ClaudeReviewSheet({ item, people, workContexts, onClose, onApplied }: ClaudeReviewSheetProps) {
+export function ClaudeReviewSheet({ item, people, workContexts, onClose, onApplied, withOwnerSession }: ClaudeReviewSheetProps) {
     const [phase, setPhase] = useState<Phase>('loading');
     const [proposal, setProposal] = useState<ClarifyProposal | null>(null);
     const [editedPatch, setEditedPatch] = useState<ProposedItemPatch | null>(null);
@@ -65,7 +72,10 @@ export function ClaudeReviewSheet({ item, people, workContexts, onClose, onAppli
         setSkipped(false);
         setEditing(false);
         try {
-            const result = await assist(item._id, withInstruction);
+            // Pivot the session to the item's OWNER (item.userId), which may be a non-active signed-in
+            // account. The assist endpoint resolves the acting user from the session cookie, so under
+            // the ambient session it would 404 (findByOwnerAndId misses) on a cross-account item.
+            const result = await withOwnerSession(item.userId, () => assist(item._id, withInstruction));
             // Drop the result if a newer request started or the sheet unmounted while in flight.
             if (!mounted.current || seq !== requestSeq.current) {
                 return;
@@ -97,7 +107,9 @@ export function ClaudeReviewSheet({ item, people, workContexts, onClose, onAppli
         }
         setIsApplying(true);
         try {
-            await applyProposal(token, patch);
+            // Same owner pivot as assist (item.userId) — the apply endpoint also resolves the owner from
+            // the session, so a cross-account redemption would otherwise 403 (token owner ≠ session user).
+            await withOwnerSession(item.userId, () => applyProposal(token, patch));
             await onApplied();
             onClose(); // unmounts the sheet — no setState afterward (the catch/finally guard mounted).
         } catch (err) {

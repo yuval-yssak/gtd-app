@@ -250,7 +250,7 @@ function InboxBottomSheet({ item, onClose, onClarifyClaude, onEdit, onDone, onNe
 
 function InboxPage() {
     const { db } = Route.useRouteContext();
-    const { account, items, workContexts, people, routines, refreshItems, syncAndRefresh, isInitialSyncing } = useAppData();
+    const { account, items, workContexts, people, routines, refreshItems, syncAndRefresh, isInitialSyncing, withOwnerSession } = useAppData();
     const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -260,7 +260,7 @@ function InboxPage() {
 
     // Claude "Clarify" review sheet. onApplied pulls from the server (not just refreshItems): the
     // apply endpoint writes through the op-log server-side, so the change comes back via a sync pull.
-    const review = useClaudeReview({ people, workContexts, onApplied: syncAndRefresh });
+    const review = useClaudeReview({ people, workContexts, onApplied: syncAndRefresh, withOwnerSession });
 
     const [draft, setDraft] = useState('');
     const [notes, setNotes] = useState('');
