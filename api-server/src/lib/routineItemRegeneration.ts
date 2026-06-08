@@ -7,6 +7,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import { GCAL_OWNED_ROUTINE_KEYS, type ItemInterface, type OperationInterface, type RoutineInterface } from '../types/entities.js';
 import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
+import { hasAtLeastOne } from './typeUtils.js';
 
 /**
  * Extracts the GCal-owned slice (organizer/creator/attendees/responseStatus/eventType) from either
@@ -250,49 +251,86 @@ export async function propagateRoutineTitleToItems(routine: RoutineInterface, us
 }
 
 /**
- * Regenerates future calendar items when the routine's schedule (rrule, timeOfDay, or duration)
- * changes at the GCal master level: trashes existing future items (so their IDs stay in the sync
- * log) and inserts fresh items on the new occurrence dates. Done + transformed items keep their
- * claim on the date so we don't produce duplicates alongside them.
+ * Reconciles future calendar items to the routine's current schedule (rrule, timeOfDay, duration),
+ * emitting only the DELTA: trashes future live items whose occurrence date the schedule no longer
+ * produces (or whose timing/title drifted), and inserts items for newly-required dates. Done +
+ * transformed items keep their claim on a date so we never duplicate one the user already disposed of.
  *
- * Trash-and-insert rather than in-place update because rrule changes can add/remove occurrences,
- * not just shift them. Doing it as two clean phases (trash existing, create new) avoids a fragile
- * per-date alignment and mirrors the client's `deleteAndRegenerateFutureItems`.
+ * Idempotent by design: when the schedule is unchanged, every required date is already covered by a
+ * matching live item and no date is orphaned → zero ops. This is the load-bearing property. A naive
+ * trash-all-then-recreate (the prior implementation) made an unchanged GCal re-report rewrite the
+ * whole instance set every webhook fire — e.g. a self-referential "this and following" split that
+ * oscillates its rrule churned 45 items into 45 trash + 45 fresh rows on each sync.
  */
 export async function regenerateFutureRoutineItems(routine: RoutineInterface, userId: string, now: string, timeZone?: string): Promise<OperationInterface[]> {
     if (!routine.calendarItemTemplate) {
         return [];
     }
-    // Paused routines: trash future items (if any) but never insert new ones. This preserves the
-    // invariant that a paused routine has zero future open items, even if the caller forgot the check.
-    const trashedOps = await trashExistingFutureItems(routine, userId, now);
-    if (!routine.active) {
-        return trashedOps;
-    }
-    const createdOps = await insertFreshFutureItems(routine, userId, now, timeZone);
+    const liveByDate = await futureLiveItemsByDate(routine, userId);
+    // Paused routines hold zero future open items: every live item is an orphan, nothing is required.
+    const required = routine.active ? await requiredDatesNotAlreadyClaimed(routine, userId) : new Set<string>();
+    const trashedOps = await trashOrphanedItems(routine, userId, now, liveByDate, required);
+    const createdOps = await createMissingOccurrences(routine, userId, now, timeZone, liveByDate, required);
     return [...trashedOps, ...createdOps];
 }
 
-/** Moves every future `calendar`-status item for this routine to `trash`, recording an op per item. */
-async function trashExistingFutureItems(routine: RoutineInterface, userId: string, now: string): Promise<OperationInterface[]> {
+/** Future `calendar`-status items for the routine, indexed by their `YYYY-MM-DD` occurrence date. */
+async function futureLiveItemsByDate(routine: RoutineInterface, userId: string): Promise<Map<string, ItemInterface>> {
     const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
     const future = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar', timeStart: { $gte: todayStr } });
-    const futureIds = future.map((i) => i._id).filter((id): id is string => Boolean(id));
-    if (!futureIds.length) {
+    return new Map(future.map((item) => [(item.timeStart ?? '').slice(0, 10), item]));
+}
+
+/**
+ * Dates the routine must cover now, minus dates one of its own DISPOSED items already holds: a
+ * `done`/transformed item the user disposed of keeps its claim forever, so creation must skip it. This
+ * routine's OWN live calendar items are deliberately NOT a veto — they're the keep/drift candidates
+ * handled downstream. Building the claim set by QUERY exclusion (rather than deleting every `liveByDate`
+ * date from an all-items set afterward) is essential: a date carrying BOTH a live item and a coexisting
+ * `done` item must stay vetoed, else a drifted live row would spawn a duplicate beside the done one.
+ * Cross-routine collisions are not handled here — the `(user, calendarInstanceEventId)` unique index
+ * plus `insertFreshOccurrence`'s duplicate-key swallow own that case.
+ */
+async function requiredDatesNotAlreadyClaimed(routine: RoutineInterface, userId: string): Promise<Set<string>> {
+    const claimed = await dateSetClaimedByDisposedItems(routine._id, userId);
+    return new Set(
+        getValidFutureOccurrences(routine)
+            .map((d) => d.toISOString().slice(0, 10))
+            .filter((date) => !claimed.has(date)),
+    );
+}
+
+/** Moves every future `calendar`-status item for this routine to `trash`, recording an op per item. */
+/**
+ * Trashes only the live items the current schedule no longer wants: a date the rrule no longer
+ * produces, or one whose timing/title drifted from what the routine would now generate (so the stale
+ * row is replaced by a fresh one in `createMissingOccurrences`). A live item matching its required
+ * date is left untouched — this is what makes an unchanged re-report a no-op.
+ */
+async function trashOrphanedItems(
+    routine: RoutineInterface,
+    userId: string,
+    now: string,
+    liveByDate: Map<string, ItemInterface>,
+    required: Set<string>,
+): Promise<OperationInterface[]> {
+    const orphans = [...liveByDate].filter(([date, item]) => !required.has(date) || itemDriftsFromSchedule(item, routine, now)).map(([, item]) => item);
+    if (!hasAtLeastOne(orphans)) {
         return [];
     }
+    const orphanIds = orphans.map((i) => i._id).filter((id): id is string => Boolean(id));
     // Free `calendarInstanceEventId` on trash. The `(user, calendarInstanceEventId)` unique index is
     // partial on the field's PRESENCE (not status), so a trashed item keeps reserving its instance id —
     // which then E11000-blocks a replacement routine (e.g. a "this and following" split successor, or a
     // disconnect→reconnect re-import) from regenerating that same occurrence. Clearing it here releases
     // the id so the live routine can claim it. `insertFreshOccurrence` swallows the collision silently,
     // so without this the occurrence would vanish from the app with no error.
-    await itemsDAO.updateMany({ _id: { $in: futureIds }, user: userId } as never, {
+    await itemsDAO.updateMany({ _id: { $in: orphanIds }, user: userId } as never, {
         $set: { status: 'trash', updatedTs: now },
         $unset: { calendarInstanceEventId: '' },
     });
     const ops = await Promise.all(
-        future.map(async (item) => {
+        orphans.map(async (item) => {
             const itemId = item._id;
             if (!itemId) {
                 return null;
@@ -308,14 +346,37 @@ async function trashExistingFutureItems(routine: RoutineInterface, userId: strin
 }
 
 /**
- * Inserts a fresh calendar item for each valid rrule occurrence in the horizon, skipping any
- * date that still has a non-trash item for this routine (e.g. a `done` or transformed-to-nextAction
- * item) so we never duplicate an occurrence the user has already disposed of or re-homed.
+ * True when a live item no longer reflects the routine's current generation for its date — its
+ * start/end timing or title drifted (e.g. GCal moved the master time, renamed the series, or changed
+ * duration). Timing/title are the only fields a schedule change can move; comparing them avoids
+ * trashing a still-correct item (which would defeat idempotency) while still replacing a stale one.
  */
-async function insertFreshFutureItems(routine: RoutineInterface, userId: string, now: string, timeZone?: string): Promise<OperationInterface[]> {
-    const claimedDates = await dateSetClaimedByNonTrashItems(routine._id, userId);
-    const occurrences = getValidFutureOccurrences(routine).filter((d) => !claimedDates.has(d.toISOString().slice(0, 10)));
-    const ops = await Promise.all(occurrences.map((date) => insertFreshOccurrence(routine, userId, now, date, timeZone)));
+function itemDriftsFromSchedule(item: ItemInterface, routine: RoutineInterface, now: string): boolean {
+    const date = (item.timeStart ?? '').slice(0, 10);
+    const desired = buildCalendarItem(item.user, routine, dayjs.utc(date).toDate(), now);
+    return item.timeStart !== desired.timeStart || item.timeEnd !== desired.timeEnd || item.title !== desired.title;
+}
+
+/**
+ * Inserts a fresh calendar item for each required date not already covered by a surviving live item.
+ * `required` has already excluded dates held by a disposed item of this routine (done/transformed), so
+ * we never duplicate an occurrence the user has already completed or re-homed.
+ */
+async function createMissingOccurrences(
+    routine: RoutineInterface,
+    userId: string,
+    now: string,
+    timeZone: string | undefined,
+    liveByDate: Map<string, ItemInterface>,
+    required: Set<string>,
+): Promise<OperationInterface[]> {
+    // A live item survives (is not recreated) only when its date is required AND it didn't drift —
+    // mirror that exact predicate so a drifted item, just trashed above, gets a fresh replacement.
+    const survivingDates = new Set(
+        [...liveByDate].filter(([date, item]) => required.has(date) && !itemDriftsFromSchedule(item, routine, now)).map(([date]) => date),
+    );
+    const missing = [...required].filter((date) => !survivingDates.has(date)).map((date) => dayjs.utc(date).toDate());
+    const ops = await Promise.all(missing.map((date) => insertFreshOccurrence(routine, userId, now, date, timeZone)));
     return ops.filter((op): op is OperationInterface => op !== null);
 }
 
@@ -350,8 +411,16 @@ async function insertFreshOccurrence(
     return recordOperation(userId, { entityType: 'item', entityId: item._id, snapshot: item, opType: 'create', now });
 }
 
-/** Dates still held by non-trash items of this routine — mirrors the client horizon generator's dedup. */
-async function dateSetClaimedByNonTrashItems(routineId: string, userId: string): Promise<Set<string>> {
-    const surviving = await itemsDAO.findArray({ user: userId, routineId, status: { $ne: 'trash' } });
-    return new Set(surviving.map((i) => (i.timeStart ?? '').slice(0, 10)).filter((d): d is string => Boolean(d)));
+/**
+ * Dates held by this routine's DISPOSED items — `done` or transformed-to-nextAction/etc. (any non-trash
+ * status that is NOT a live `calendar` item). These keep their date claim forever so we never recreate an
+ * occurrence the user already completed or re-homed. This routine's own live `calendar` items are excluded
+ * on purpose — they are the keep/drift candidates the reconcile handles directly, not a creation veto.
+ * Excluding them at the QUERY level (rather than deleting their dates afterward) is what preserves the
+ * claim of a `done` item that shares a date with a live one: the live row's presence can't unmask it.
+ * Scoped to this routine only; cross-routine date collisions are the instance-id index's responsibility.
+ */
+async function dateSetClaimedByDisposedItems(routineId: string, userId: string): Promise<Set<string>> {
+    const disposed = await itemsDAO.findArray({ user: userId, routineId, status: { $nin: ['trash', 'calendar'] } });
+    return new Set(disposed.map((i) => (i.timeStart ?? '').slice(0, 10)).filter((d): d is string => Boolean(d)));
 }

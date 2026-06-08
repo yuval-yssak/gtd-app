@@ -1828,11 +1828,21 @@ async function findExistingRoutineForEvent(
         calendarIntegrationId: source.integration._id,
     });
     if (hasAtLeastOne(byEventId)) {
+        // A "this and all following" split leaves TWO routines on one bare id: the capped base
+        // (no calendarRebasedEventId) and the live successor (carries calendarRebasedEventId). The
+        // BARE master must resolve to the base only — the successor is owned exclusively by phase 2's
+        // findSplitSuccessorByRebasedId. Without this exclusion, the bare master lands on the live
+        // successor and rewrites it with the capped base's rrule/active state; phase 2 then reactivates
+        // it, so the routine flip-flops every webhook fire (rrule oscillates bare↔UNTIL) and
+        // propagateMasterScheduleChanges trashes+recreates all future items each sync. Prefer the
+        // non-successor; fall back to the full set only when every match is a successor (no base present).
+        const baseOnly = byEventId.filter((routine) => !routine.calendarRebasedEventId);
+        const candidates = hasAtLeastOne(baseOnly) ? baseOnly : byEventId;
         // When duplicate routines linger on the same series, an inbound master update must land on the
         // live one — never on a paused/replaced dead duplicate. Among live routines (or, if none are
         // live, among all), prefer the most-recently-updated so selection is deterministic.
-        const live = byEventId.filter((routine) => routine.active);
-        return pickMostRecentlyUpdated(hasAtLeastOne(live) ? live : byEventId);
+        const live = candidates.filter((routine) => routine.active);
+        return pickMostRecentlyUpdated(hasAtLeastOne(live) ? live : candidates);
     }
     // Skip restore for cancelled masters — there's nothing to restore TO, and the caller will
     // immediately deactivate. Restoring then deactivating would emit a redundant op + flap.

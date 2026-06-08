@@ -8,6 +8,7 @@
  * produce items the client would also produce.
  */
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
+import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +18,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { pauseRoutine } from '../lib/routineComposites.js';
 import { buildRoutineItemSnapshot } from '../lib/routineItemGeneration.js';
+import { regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
 import { v1OperationsRoutes } from '../routes/v1/operations.js';
@@ -658,5 +660,162 @@ describe('Pause + resume composite — item generation', () => {
         const after = await getItemsForRoutine(userId, routine._id);
         // Same set of items; no new one inserted.
         expect(after.map((i) => i._id).sort()).toEqual(beforeIds.sort());
+    });
+});
+
+// `regenerateFutureRoutineItems` reconciles by occurrence date rather than trashing-and-recreating
+// the whole future set. The load-bearing property is idempotency: a re-run with an UNCHANGED schedule
+// must be a no-op (no ops, no churn). The prior trash-all-then-recreate implementation rewrote every
+// item each call, which — under a routine whose rrule oscillated every GCal sync — produced the
+// duplicate-rows + web-push storm this fix addresses.
+describe('regenerateFutureRoutineItems — idempotency & delta reconciliation', () => {
+    const TZ = 'Asia/Jerusalem';
+
+    async function seedDailyCalendarRoutine(userId: string, overrides: Partial<RoutineInterface> = {}): Promise<RoutineInterface> {
+        const now = dayjs().toISOString();
+        const routine: RoutineInterface = {
+            _id: 'regen-idem-routine',
+            user: userId,
+            title: 'Daily standup',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            createdTs: now,
+            updatedTs: now,
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            calendarEventId: 'regen-idem-master',
+            ...overrides,
+        };
+        await routinesDAO.insertOne(routine);
+        return routine;
+    }
+
+    it('a second run with an unchanged schedule emits zero ops and keeps every item id', async () => {
+        const userId = await login();
+        const routine = await seedDailyCalendarRoutine(userId);
+
+        const firstOps = await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        expect(firstOps.length).toBeGreaterThan(0);
+        const seededIds = (await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' })).map((i) => i._id).sort();
+
+        const secondOps = await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        // No-op: nothing trashed, nothing created.
+        expect(secondOps).toHaveLength(0);
+        const liveIds = (await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' })).map((i) => i._id).sort();
+        expect(liveIds).toEqual(seededIds);
+        const trashed = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'trash' });
+        expect(trashed).toHaveLength(0);
+    });
+
+    it('a time-of-day change reconciles items (drifted rows trashed, fresh rows created)', async () => {
+        const userId = await login();
+        const routine = await seedDailyCalendarRoutine(userId);
+        await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        const before = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        expect(before.length).toBeGreaterThan(0);
+        expect(before.every((i) => (i.timeStart ?? '').endsWith('T09:00:00'))).toBe(true);
+
+        // Shift the master time → every existing item drifts and must be replaced at the new time.
+        const moved: RoutineInterface = { ...routine, calendarItemTemplate: { timeOfDay: '14:30', duration: 30 } };
+        await regenerateFutureRoutineItems(moved, userId, dayjs().toISOString(), TZ);
+
+        const live = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        expect(live.length).toBe(before.length);
+        expect(live.every((i) => (i.timeStart ?? '').endsWith('T14:30:00'))).toBe(true);
+        // The old 09:00 rows were trashed, not left as duplicates alongside the new 14:30 rows.
+        const trashed = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'trash' });
+        expect(trashed.length).toBe(before.length);
+    });
+
+    it('a paused routine trashes future items and creates none', async () => {
+        const userId = await login();
+        const routine = await seedDailyCalendarRoutine(userId);
+        await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        expect((await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' })).length).toBeGreaterThan(0);
+
+        const paused: RoutineInterface = { ...routine, active: false };
+        await regenerateFutureRoutineItems(paused, userId, dayjs().toISOString(), TZ);
+
+        expect(await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' })).toHaveLength(0);
+        expect((await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'trash' })).length).toBeGreaterThan(0);
+    });
+
+    // Invariant: a `done` item keeps its date claim even when a drifted live row is co-located on the
+    // same date — the end state is exactly one `done` row and zero recreated `calendar` rows there. Two
+    // layers enforce this: (1) the veto query (`dateSetClaimedByDisposedItems`) excludes the date from
+    // `required` so the live row is trashed-not-recreated, and (2) the `(user, calendarInstanceEventId)`
+    // unique index backstops recreation since the done row keeps its instance id. This pins the invariant
+    // regardless of which layer fires.
+    it('a done item on a required date is never duplicated, even alongside a co-located live item', async () => {
+        const userId = await login();
+        const routine = await seedDailyCalendarRoutine(userId);
+        await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        const live = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        const [first] = live;
+        if (!first?._id) throw new Error('expected at least one generated item');
+        const claimedDate = (first.timeStart ?? '').slice(0, 10);
+        // Mark this occurrence done — it now holds the date claim (kept forever).
+        await itemsDAO.replaceById(first._id, { ...first, status: 'done', updatedTs: dayjs().toISOString() });
+        // Co-locate a SEPARATE live calendar row on the same date, drifted off the 09:00 schedule. This is
+        // the row whose date the old code wrongly un-vetoed, then recreated beside the done one.
+        await itemsDAO.insertOne({
+            ...first,
+            _id: randomUUID(),
+            status: 'calendar',
+            timeStart: `${claimedDate}T07:00:00`,
+            timeEnd: `${claimedDate}T07:30:00`,
+            calendarInstanceEventId: undefined,
+            updatedTs: dayjs().toISOString(),
+        });
+
+        await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+
+        // The co-located live row is trashed and nothing is recreated on the done date; the done item
+        // stands alone there.
+        const onDate = await itemsDAO.findArray({
+            user: userId,
+            routineId: routine._id,
+            timeStart: { $gte: `${claimedDate}T00:00:00`, $lt: `${claimedDate}T23:59:59` },
+        });
+        expect(onDate.filter((i) => i.status === 'calendar')).toHaveLength(0);
+        expect(onDate.filter((i) => i.status === 'done')).toHaveLength(1);
+    });
+
+    // A drifted-AND-required date must yield exactly ONE fresh live row — the stale one trashed, a single
+    // replacement created — never a duplicate and never a gap.
+    it('a drifted required date yields exactly one fresh live row', async () => {
+        const userId = await login();
+        const routine = await seedDailyCalendarRoutine(userId);
+        await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        const moved: RoutineInterface = { ...routine, calendarItemTemplate: { timeOfDay: '14:30', duration: 30 } };
+        await regenerateFutureRoutineItems(moved, userId, dayjs().toISOString(), TZ);
+
+        const live = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        const datesWithMultipleLive = [...Map.groupBy(live, (i) => (i.timeStart ?? '').slice(0, 10))].filter(([, items]) => items.length > 1);
+        expect(datesWithMultipleLive).toHaveLength(0);
+        expect(live.every((i) => (i.timeStart ?? '').endsWith('T14:30:00'))).toBe(true);
+    });
+
+    // All-day routines exercise the date-only instance-id path, where freeing calendarInstanceEventId on
+    // trash is strictly required (the date-only id collides on the partial-on-presence unique index).
+    it('an all-day routine is idempotent and frees the instance id on drift', async () => {
+        const userId = await login();
+        const routine = await seedDailyCalendarRoutine(userId, { calendarItemTemplate: { allDay: true } });
+        const firstOps = await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        expect(firstOps.length).toBeGreaterThan(0);
+        const seeded = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        expect(seeded.every((i) => i.allDay === true && typeof i.calendarInstanceEventId === 'string')).toBe(true);
+
+        // Re-run unchanged → no-op.
+        const secondOps = await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        expect(secondOps).toHaveLength(0);
+
+        // Shift the rrule weekday so every date drifts → old all-day rows trashed with their instance id freed.
+        const moved: RoutineInterface = { ...routine, rrule: 'FREQ=WEEKLY;BYDAY=MO' };
+        await regenerateFutureRoutineItems(moved, userId, dayjs().toISOString(), TZ);
+        const trashed = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'trash' });
+        expect(trashed.length).toBeGreaterThan(0);
+        expect(trashed.every((i) => i.calendarInstanceEventId === undefined)).toBe(true);
     });
 });

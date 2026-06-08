@@ -11,6 +11,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { applyEntityOp } from '../lib/applyEntityOp.js';
 import { gcalCreationInFlight, maybePushToGCal } from '../lib/calendarPushback.js';
+import { regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import * as sseConnections from '../lib/sseConnections.js';
 import * as webPush from '../lib/webPush.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
@@ -4201,6 +4202,97 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         // The base stays capped+inactive — never two active rows on the bare id (would violate the
         // uniq_active_routine_per_gcal_series partial index).
         expect(routines.find((r) => r._id === 'routine-base')?.active).toBe(false);
+    });
+
+    // Regression (Engineering-2 duplicate): a self-referential split (capped base + live successor on one
+    // bare id) made the BARE master resolve to the live successor in phase 1 — rewriting it with the base's
+    // capped rrule — while phase 2 reactivated it via the rebased id. The rrule oscillated bare↔UNTIL every
+    // webhook fire, tripping `scheduleChanged` so `regenerateFutureRoutineItems` trashed+recreated ALL the
+    // successor's future items each sync (the user saw stale duplicate rows + a web-push storm). The fix:
+    // (1) phase 1 excludes the successor (bare master lands on the base only), and (2) regen reconciles by
+    // occurrence date so an unchanged schedule is a no-op. Assert the successor's items are STABLE across
+    // cycles — same ids, no fresh trash generation.
+    it('a self-referential split does not churn the successor items across syncs', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareId = 'self-ref-split-master';
+        const rebasedId = `${bareId}_R20260604T060000Z`;
+        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-base-sr',
+                active: false,
+                rrule: 'FREQ=WEEKLY;BYDAY=TH;UNTIL=20260603T205959Z',
+                calendarEventId: bareId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+            }),
+        );
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-successor-sr',
+                active: true,
+                rrule: 'FREQ=WEEKLY;BYDAY=TH',
+                calendarEventId: bareId,
+                calendarRebasedEventId: rebasedId,
+                splitFromRoutineId: 'routine-base-sr',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+            }),
+        );
+
+        const splitBatch = {
+            events: [
+                {
+                    id: bareId,
+                    title: 'Upcoming POCs',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed' as const,
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TH;UNTIL=20260603T205959Z'],
+                },
+                {
+                    id: rebasedId,
+                    title: 'Upcoming POCs',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed' as const,
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TH'],
+                },
+            ],
+            nextSyncToken: 'tok-self-ref',
+        };
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue(splitBatch);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue(splitBatch);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents').mockResolvedValue({ resourceId: 'res-1', expiration: dayjs().add(7, 'day').toISOString() });
+
+        // Seed the successor's future items the way onboarding would, then capture their ids. Pre-inserted
+        // routines carry no items, so without this the churn (which trashes EXISTING items) has nothing to act on.
+        const successor = await routinesDAO.findByOwnerAndId('routine-successor-sr', userId);
+        if (!successor) throw new Error('expected the seeded successor routine');
+        await regenerateFutureRoutineItems(successor, userId, dayjs().toISOString(), 'Asia/Jerusalem');
+        const seeded = await itemsDAO.findArray({ user: userId, routineId: 'routine-successor-sr', status: 'calendar' });
+        expect(seeded.length).toBeGreaterThan(0);
+        const seededIds = seeded.map((i) => i._id).sort();
+
+        // Two sync cycles re-deliver the identical split batch — must NOT churn the seeded items.
+        for (let cycle = 0; cycle < 2; cycle++) {
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+        }
+
+        const liveAfter = await itemsDAO.findArray({ user: userId, routineId: 'routine-successor-sr', status: 'calendar' });
+        // Same exact item ids — not trashed and recreated with fresh uuids each sync.
+        expect(liveAfter.map((i) => i._id).sort()).toEqual(seededIds);
+        // No trash generation produced for the successor's items across either cycle.
+        const trashed = await itemsDAO.findArray({ user: userId, routineId: 'routine-successor-sr', status: 'trash' });
+        expect(trashed).toHaveLength(0);
     });
 
     // Backfilling `calendarRebasedEventId` onto a pre-rollout successor (what the heal pass does for the
