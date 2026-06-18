@@ -3422,6 +3422,285 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
     });
 });
 
+// ─── Full-sync reconciliation sweep (self-healing of missed deletions) ──────
+//
+// A single (non-recurring) GCal event that is hard-deleted while sync is down (expired syncToken,
+// disconnected integration, or the event aged past timeMin before a post-deletion delta arrived)
+// never delivers a `cancelled` tombstone — so the reactive trash path in upsertCalendarItem can
+// never fire. The full-sync reconciliation sweep heals this: it trashes any in-window calendar item
+// whose calendarEventId is absent from the authoritative full-sync snapshot. The sweep MUST run only
+// on full syncs (incremental deltas are not snapshots), must stay window-bounded, and must shield
+// items whose create/update may still be propagating to GCal's index.
+describe('POST /calendar/integrations/:id/sync — full-sync reconciliation sweep', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    /** Seeds a future, already-synced (so past the reconcile grace window) calendar item linked to sync-config-1. */
+    async function seedLinkedFutureItem(userId: string, id: string, eventId: string, overrides: Partial<ItemInterface> = {}) {
+        const futureTs = dayjs().add(2, 'day').toISOString();
+        const oldTs = dayjs().subtract(1, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: id,
+            user: userId,
+            status: 'calendar',
+            title: id,
+            timeStart: futureTs,
+            timeEnd: futureTs,
+            calendarEventId: eventId,
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+            ...overrides,
+        });
+        return futureTs;
+    }
+
+    it('trashes an orphaned future item when its event is absent from the full-sync snapshot', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedLinkedFutureItem(userId, 'item-vanished', 'evt-gone');
+
+        // Full sync returns NO events — the linked event has been deleted on GCal.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-vanished' });
+        expect(item?.status).toBe('trash');
+        // Stamped like a reactive cancellation so the trash view shows the "Cancelled in Calendar" badge.
+        expect(item?.cancelledByGCal).toBe(true);
+
+        // An operation must be recorded so other devices converge on the trash on their next pull.
+        const ops = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-vanished' });
+        const [trashOp] = ops;
+        if (!trashOp) throw new Error('expected a recorded trash operation for the reconciled item');
+        expect(trashOp.snapshot?.status).toBe('trash');
+    });
+
+    it('trashes a vanished ALL-DAY item (timeStart is YYYY-MM-DD, not an ISO datetime)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // All-day item dated two days out — `timeStart`/`timeEnd` are bare `YYYY-MM-DD`. This is the
+        // case a lexicographic Mongo `$gte` against the ISO-datetime `timeMin` would mishandle; the
+        // dayjs window filter must still place it inside the window and trash it.
+        const futureDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+        await seedLinkedFutureItem(userId, 'item-allday', 'evt-allday-gone', { timeStart: futureDate, timeEnd: futureDate, allDay: true });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-allday' });
+        expect(item?.status).toBe('trash');
+    });
+
+    it('shields a just-created item with no lastPushedToGCalTs via the updatedTs grace fallback', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Item created in-app seconds ago that has NOT yet been pushed to GCal (no lastPushedToGCalTs).
+        // The grace guard falls back to `updatedTs`, so the freshly-created item is shielded from a
+        // false trash while its push to GCal is still in flight.
+        await seedLinkedFutureItem(userId, 'item-fresh-noPush', 'evt-fresh-noPush', { updatedTs: dayjs().toISOString() });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-fresh-noPush' });
+        expect(item?.status).toBe('calendar');
+    });
+
+    it('does NOT trash a non-routine item whose calendarEventId is in instance form (can never match the master-only snapshot)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // A non-routine item carrying an instance-form id (`<master>_<YYYYMMDDTHHMMSSZ>`).
+        // `listEventsFull` is master-only and `normalizeMasterEventId` doesn't strip the instance
+        // suffix, so this id could never appear in the snapshot — trashing on its absence would be a
+        // false positive. The bare-master-form guard must exclude it.
+        await seedLinkedFutureItem(userId, 'item-instanceform', 'mastermtg_20260620T120000Z');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-instanceform' });
+        expect(item?.status).toBe('calendar');
+    });
+
+    it('does NOT trash a non-routine item whose calendarEventId is in ALL-DAY instance form (_YYYYMMDD, no T)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // All-day instance suffix has no `T<time>Z` component — exercises the regex's optional group.
+        await seedLinkedFutureItem(userId, 'item-instanceform-allday', 'mastermtg_20260620');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-instanceform-allday' });
+        expect(item?.status).toBe('calendar');
+    });
+
+    it('does NOT trash an item whose event is still present in the snapshot', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const futureTs = await seedLinkedFutureItem(userId, 'item-present', 'evt-live');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'evt-live',
+                    title: 'item-present',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: dayjs().subtract(1, 'day').toISOString(),
+                    status: 'confirmed',
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-present' });
+        expect(item?.status).toBe('calendar');
+    });
+
+    it('does NOT run the sweep on an incremental sync (a delta is not an authoritative snapshot)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const { config } = await insertIntegrationWithConfig(userId);
+        // A stored syncToken forces the incremental path.
+        await calendarSyncConfigsDAO.upsertSyncToken(config._id, 'tok-existing', dayjs().subtract(1, 'hour').toISOString());
+        await seedLinkedFutureItem(userId, 'item-incr', 'evt-incr');
+
+        // Incremental returns an empty delta — nothing changed. The orphan must survive: an empty
+        // delta means "no changes seen", not "the event is gone".
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue({ events: [], nextSyncToken: 'tok-incr-next' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-incr' });
+        expect(item?.status).toBe('calendar');
+    });
+
+    it('runs the sweep on the 410-fallback full sync after an expired syncToken', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const { config } = await insertIntegrationWithConfig(userId);
+        await calendarSyncConfigsDAO.upsertSyncToken(config._id, 'tok-stale', dayjs().subtract(1, 'hour').toISOString());
+        await seedLinkedFutureItem(userId, 'item-410', 'evt-410-gone');
+
+        // Incremental throws 410 → falls back to a full sync, which returns no events. The orphan
+        // strands forever today (the new token is minted post-deletion); the sweep is the only heal.
+        const { SyncTokenInvalidError } = await import('../calendarProviders/CalendarProvider.js');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockRejectedValue(new SyncTokenInvalidError());
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-410-next' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-410' });
+        expect(item?.status).toBe('trash');
+        expect(item?.cancelledByGCal).toBe(true);
+    });
+
+    it('leaves items outside the snapshot window untouched (past timeStart, routine-managed, other config)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const oldTs = dayjs().subtract(1, 'day').toISOString();
+        const pastTs = dayjs().subtract(2, 'day').toISOString();
+
+        // Past item: before timeMin, so outside the [timeMin, ∞) snapshot — the full sync never
+        // claimed authority over it.
+        await itemsDAO.insertOne({
+            _id: 'item-past',
+            user: userId,
+            status: 'calendar',
+            title: 'past',
+            timeStart: pastTs,
+            timeEnd: pastTs,
+            calendarEventId: 'evt-past',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            createdTs: pastTs,
+            updatedTs: oldTs,
+        });
+        // Routine-managed future item: lifecycle owned by the routine path, never the standalone sweep.
+        await itemsDAO.insertOne({
+            _id: 'item-routine',
+            user: userId,
+            status: 'calendar',
+            title: 'routine occ',
+            timeStart: dayjs().add(2, 'day').toISOString(),
+            timeEnd: dayjs().add(2, 'day').toISOString(),
+            calendarEventId: 'evt-routine',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            routineId: 'routine-1',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+        // Future item on a DIFFERENT sync config: not part of this config's snapshot.
+        await itemsDAO.insertOne({
+            _id: 'item-othercfg',
+            user: userId,
+            status: 'calendar',
+            title: 'other cfg',
+            timeStart: dayjs().add(2, 'day').toISOString(),
+            timeEnd: dayjs().add(2, 'day').toISOString(),
+            calendarEventId: 'evt-othercfg',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-OTHER',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        expect((await itemsDAO.findOne({ _id: 'item-past' }))?.status).toBe('calendar');
+        expect((await itemsDAO.findOne({ _id: 'item-routine' }))?.status).toBe('calendar');
+        expect((await itemsDAO.findOne({ _id: 'item-othercfg' }))?.status).toBe('calendar');
+    });
+
+    it('shields a just-pushed item from a false trash while its create propagates to GCal', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Item pushed to GCal seconds ago — its create may not be in GCal's list index yet. Trashing
+        // it now would be a false positive; the grace window protects it.
+        await seedLinkedFutureItem(userId, 'item-fresh', 'evt-fresh', { lastPushedToGCalTs: dayjs().toISOString() });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const item = await itemsDAO.findOne({ _id: 'item-fresh' });
+        expect(item?.status).toBe('calendar');
+    });
+});
+
 // ─── Phase 1c: GCal-owned field-level merge + all-day + cancelledByGCal ───
 //
 // Covers the inbound paths in routes/calendar.ts: createNewCalendarItem (all-day inbound),

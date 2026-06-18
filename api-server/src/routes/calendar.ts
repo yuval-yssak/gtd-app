@@ -99,6 +99,29 @@ function isOwnEcho(lastPushedTs: string, eventUpdated: string): boolean {
     return Math.abs(dayjs(eventUpdated).diff(dayjs(lastPushedTs), 'second')) < ECHO_WINDOW_SECONDS;
 }
 
+// Grace period that shields the full-sync reconciliation sweep from a create/update still
+// propagating to GCal's list index. An item just pushed to GCal can be absent from a full-sync
+// response for several seconds before Google indexes it; trashing it then would be a false
+// positive. A real deletion simply heals on the next full sync after the grace window, so erring
+// long here is safe — the cost of a wrong trash (losing a live item) dwarfs one sync of latency.
+const RECONCILE_GRACE_SECONDS = 120;
+
+/** True if the item was created/pushed so recently that its GCal event may not be in the snapshot yet. */
+function isRecentlyTouchedForReconcile(item: ItemInterface, now: string): boolean {
+    const lastTouch = item.lastPushedToGCalTs ?? item.updatedTs;
+    return Boolean(lastTouch) && dayjs(now).diff(dayjs(lastTouch), 'second') < RECONCILE_GRACE_SECONDS;
+}
+
+/**
+ * True when an event id carries a recurring-series INSTANCE suffix (`_<YYYYMMDD>` all-day or
+ * `_<YYYYMMDDTHHMMSSZ>` timed) — the form GCal returns for individual occurrences. Such an id is
+ * never returned by `listEventsFull` (master-only), so the reconciliation sweep must not judge it
+ * "vanished". Mirrors the suffix `buildCalendarInstanceEventId` produces.
+ */
+function isInstanceFormEventId(eventId: string): boolean {
+    return /_\d{8}(T\d{6}Z)?$/.test(eventId);
+}
+
 /** Start of today (00:00) in the given IANA timezone, returned as ISO. */
 function startOfTodayInTz(nowIso: string, timeZone: string): string {
     return dayjs(nowIso).tz(timeZone).startOf('day').toISOString();
@@ -1416,7 +1439,7 @@ async function syncSingleCalendar(
 
     const source: CalendarSource = { integration, config };
     const syncResult = await fetchEventsWithSyncToken(config, provider, ctx.now);
-    await importCalendarEvents(source, syncResult.events, ctx);
+    await importCalendarEvents(source, syncResult.events, ctx, syncResult.fullSyncTimeMin);
     await calendarSyncConfigsDAO.upsertSyncToken(config._id, syncResult.nextSyncToken, ctx.now);
 
     return linkedRoutines.length;
@@ -1437,12 +1460,22 @@ async function fetchEventsWithSyncToken(config: CalendarSyncConfigInterface, pro
             if (err instanceof SyncTokenInvalidError) {
                 console.warn(`[calendar] syncToken expired for config ${config._id}, falling back to full sync`);
                 await calendarSyncConfigsDAO.upsertSyncToken(config._id, '', config.lastSyncedTs ?? dayjs(0).toISOString());
-                return provider.listEventsFull(config.calendarId, timeMin);
+                return fullSyncFrom(provider, config.calendarId, timeMin);
             }
             throw err;
         }
     }
-    return provider.listEventsFull(config.calendarId, timeMin);
+    return fullSyncFrom(provider, config.calendarId, timeMin);
+}
+
+/**
+ * Runs a full event sync and stamps `fullSyncTimeMin` on the result, marking the `events` array as
+ * an authoritative snapshot of `[timeMin, ∞)`. The importer uses this to drive its reconciliation
+ * sweep — see `EventSyncResult.fullSyncTimeMin`.
+ */
+async function fullSyncFrom(provider: GoogleCalendarProvider, calendarId: string, timeMin: string): Promise<EventSyncResult> {
+    const result = await provider.listEventsFull(calendarId, timeMin);
+    return { ...result, fullSyncTimeMin: timeMin };
 }
 
 // ── Calendar event import ─────────────────────────────────────────────────────
@@ -1455,8 +1488,13 @@ async function fetchEventsWithSyncToken(config: CalendarSyncConfigInterface, pro
  *   field, but still need to deactivate the corresponding routine.
  * - Instances whose recurringEventId belongs to a linked routine are skipped (managed by exception sync).
  * - All other events are upserted as individual calendar items.
+ *
+ * When `fullSyncTimeMin` is provided, `events` is an authoritative snapshot of `[fullSyncTimeMin, ∞)`
+ * (a full sync), so a reconciliation sweep trashes orphaned local items whose GCal event vanished
+ * within that window. It is `undefined` on incremental deltas, which are not snapshots — the sweep
+ * must never run on them.
  */
-async function importCalendarEvents(source: CalendarSource, events: GCalEvent[], ctx: SyncContext): Promise<void> {
+async function importCalendarEvents(source: CalendarSource, events: GCalEvent[], ctx: SyncContext, fullSyncTimeMin?: string): Promise<void> {
     // Fetch existing linked routines so we can also route events that match a known routine
     // calendarEventId — handles cancelled masters that arrive without a `recurrence` field.
     const existingLinkedRoutines = await routinesDAO.findArray({
@@ -1495,6 +1533,71 @@ async function importCalendarEvents(source: CalendarSource, events: GCalEvent[],
     // duplicate standalone items alongside the routine-generated ones).
     const eventsToUpsert = regularEvents.filter((e) => !e.recurringEventId || !routineEventIds.has(normalizeMasterEventId(e.recurringEventId)));
     await Promise.all(eventsToUpsert.map((event) => upsertCalendarItem(event, source, ctx)));
+
+    // On a full sync only, trash local items whose GCal event vanished from the snapshot window.
+    // Heals deletions missed while sync was down (expired syncToken, disconnected integration, event
+    // aged past `timeMin` before a post-deletion delta arrived) — the reactive cancelled-tombstone
+    // path can never fire for those, so without this the orphaned item lingers forever.
+    if (fullSyncTimeMin) {
+        await reconcileVanishedCalendarItems(source, events, fullSyncTimeMin, ctx);
+    }
+}
+
+/**
+ * Window-scoped reconciliation: trashes non-routine `calendar` items whose `timeStart` falls inside
+ * the full-sync window `[timeMin, ∞)` but whose `calendarEventId` was NOT in the returned event set.
+ * Such an item's GCal event is provably gone (a full sync with `showDeleted` is an authoritative
+ * snapshot of the window), so it is stamped `cancelledByGCal: true` via the same path as a reactive
+ * cancellation. Window-bounded by `timeStart >= timeMin` so it never touches items outside the range
+ * Google actually returned (e.g. past items, or events on a different sync config).
+ */
+async function reconcileVanishedCalendarItems(source: CalendarSource, events: GCalEvent[], timeMin: string, ctx: SyncContext): Promise<void> {
+    // Normalize the returned ids the same way they're stored, so a rebased `_R<…>` suffix never makes
+    // a still-present event look vanished. `listEventsFull` is `singleEvents:false`, so this set holds
+    // bare MASTER ids — never per-instance ids.
+    const presentEventIds = new Set(events.map((e) => normalizeMasterEventId(e.id)));
+    const linkedItems = await itemsDAO.findArray({
+        user: ctx.userId,
+        status: 'calendar',
+        calendarSyncConfigId: source.config._id,
+        routineId: { $exists: false },
+        calendarEventId: { $exists: true },
+    });
+    const vanished = linkedItems.filter((item) => isVanishedInWindow(item, presentEventIds, timeMin, ctx.now));
+    await Promise.all(
+        vanished.map((item) => {
+            console.log(
+                `[gcal-sync] reconcile: trashing orphaned calendar item — GCal event vanished | itemId=${item._id} eventId=${item.calendarEventId} title="${item.title}"`,
+            );
+            return trashItem(item, ctx, { cancelledByGCal: true });
+        }),
+    );
+}
+
+/**
+ * True when a linked calendar item should be trashed by the full-sync reconciliation sweep: its
+ * event start is inside the snapshot window AND its master event id is absent from the snapshot AND
+ * it isn't still propagating to GCal.
+ */
+function isVanishedInWindow(item: ItemInterface, presentMasterEventIds: Set<string>, timeMin: string, now: string): boolean {
+    // Window check in code with dayjs rather than a Mongo `$gte` on `timeStart`: that field is a
+    // UTC-offset ISO datetime for timed events but a bare `YYYY-MM-DD` for all-day ones, so a
+    // lexicographic string compare against `timeMin` is unreliable across the two forms.
+    const inWindow = Boolean(item.timeStart) && !dayjs(item.timeStart).isBefore(dayjs(timeMin));
+    if (!inWindow || !item.calendarEventId) {
+        return false;
+    }
+    // Only bare-master-form ids are comparable against the master-only `listEventsFull` snapshot. An
+    // instance-form id (`<master>_<YYYYMMDD[THHMMSSZ]>`) is never returned as its own master, so
+    // trashing on its absence would be a false positive — skip it. (Routine-generated instances are
+    // already excluded by the `routineId` query filter; this guards a non-routine item that happens
+    // to carry an instance-form id.)
+    const eventId = normalizeMasterEventId(item.calendarEventId);
+    if (isInstanceFormEventId(eventId)) {
+        return false;
+    }
+    // Shield items whose create/update may still be propagating to GCal's list index.
+    return !presentMasterEventIds.has(eventId) && !isRecentlyTouchedForReconcile(item, now);
 }
 
 /** True when a raw GCal master id carries the `_R<YYYYMMDD[THHMMSS[Z]]>` rebased-master suffix. */

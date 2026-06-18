@@ -4,6 +4,14 @@ import type { GCalAttendee, GCalEventType, GCalPerson, GCalResponseStatus, Routi
 export interface EventSyncResult {
     events: GCalEvent[];
     nextSyncToken: string;
+    /**
+     * Lower bound of the window a FULL sync covered (`timeMin`), in ISO. Present only on full syncs;
+     * absent on incremental (syncToken) deltas. Its presence proves the `events` array is an
+     * authoritative snapshot of `[fullSyncTimeMin, ∞)` — which lets the importer reconcile orphaned
+     * local items against it (trash items whose GCal event vanished). An incremental delta is NOT a
+     * snapshot, so the sweep must never run on one.
+     */
+    fullSyncTimeMin?: string;
 }
 
 /** Thrown when Google returns 410 Gone, meaning the stored syncToken is no longer valid. */
