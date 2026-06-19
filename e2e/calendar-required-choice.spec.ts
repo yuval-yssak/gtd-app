@@ -92,4 +92,35 @@ test.describe('calendar required-choice', () => {
             await expect(page.getByText('No calendar selected — choose one')).toHaveCount(0);
         });
     });
+
+    test('?calendarConnected=<id> auto-opens the picker against that exact integration', async ({ browser }) => {
+        // The OAuth callback redirects to /settings?calendarConnected=<persistedId>. The picker must
+        // open against the row whose _id matches that param — the guard against the disconnect/reconnect
+        // 404 where it would otherwise target a stale id that no longer exists server-side.
+        const email = `choose-by-id-${dayjs().valueOf()}@example.com`;
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const userId = (await gtd.getActiveAccountId(page)) as string;
+            const seeded = await seedIntegrationWithoutConfigs(userId);
+
+            await page.goto(`${SETTINGS_URL}?calendarConnected=${seeded.integrationId}`);
+
+            // Dialog auto-opens from the redirect param — no CTA click needed.
+            await expect(page.getByRole('dialog', { name: 'Choose a calendar to sync' })).toBeVisible({ timeout: 10_000 });
+        });
+    });
+
+    test('?calendarConnected with a stale (unknown) id still auto-opens against the live integration', async ({ browser }) => {
+        // Legacy/stale redirect path: the param names an id that no longer exists (e.g. a pre-fix "1",
+        // or a phantom id from a since-deleted integration). pickConnectedIntegration falls back to the
+        // newest live integration so the user can still pick a calendar instead of being stuck.
+        const email = `choose-stale-id-${dayjs().valueOf()}@example.com`;
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const userId = (await gtd.getActiveAccountId(page)) as string;
+            await seedIntegrationWithoutConfigs(userId);
+
+            await page.goto(`${SETTINGS_URL}?calendarConnected=does-not-exist`);
+
+            await expect(page.getByRole('dialog', { name: 'Choose a calendar to sync' })).toBeVisible({ timeout: 10_000 });
+        });
+    });
 });

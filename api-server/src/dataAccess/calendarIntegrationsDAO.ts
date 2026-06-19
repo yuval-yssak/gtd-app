@@ -24,8 +24,14 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
      * Reconnect path: a row marked `'suspended'` or `'revoked'` by the auth-escalation flow is
      * cleared back to `'active'` here, and all three escalation timestamps are unset, so
      * completing OAuth is the user-facing way to recover from a revoked integration.
+     *
+     * @returns the persisted integration `_id`. On reconnect the upsert matches an existing
+     * `(user, provider)` row and keeps its original `_id` (via `$setOnInsert`), so the caller-supplied
+     * `_id` is a phantom that never reaches the DB. Returning the real id lets the OAuth callback
+     * redirect with an id the client can actually use — closing the disconnect/reconnect race where
+     * the picker posted `createSyncConfig` against a never-persisted id and got a 404.
      */
-    async upsertEncrypted(integration: CalendarIntegrationInterface): Promise<void> {
+    async upsertEncrypted(integration: CalendarIntegrationInterface): Promise<string> {
         const { _id, createdTs, ...rest } = integration;
         const encryptedRest = {
             ...rest,
@@ -35,15 +41,18 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
         };
         // $setOnInsert preserves createdTs and _id on reconnect — only $set on mutable fields.
         // $unset clears any prior escalation timestamps so a reconnected integration looks fresh.
-        await this.updateOne(
+        // findOneAndUpdate (returnDocument:'after') hands back the surviving row so we learn the
+        // real _id whether this was an insert (new _id) or an update (existing _id retained).
+        const persisted = await this._collection.findOneAndUpdate(
             { user: integration.user, provider: integration.provider },
             {
                 $set: encryptedRest,
                 $setOnInsert: { _id, createdTs },
                 $unset: { suspendedAt: '', revokedAt: '', lastAuthErrorAt: '' },
             },
-            { upsert: true },
+            { upsert: true, returnDocument: 'after' },
         );
+        return persisted?._id ?? _id;
     }
 
     /**

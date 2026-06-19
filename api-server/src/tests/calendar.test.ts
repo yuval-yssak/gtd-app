@@ -267,17 +267,20 @@ describe('GET /calendar/auth/google/callback', () => {
             }),
         );
         expect(res.status).toBe(302);
-        expect(res.headers.get('location')).toContain('calendarConnected=1');
 
         const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
         expect(integrations).toHaveLength(1);
-        expect(integrations[0]!.user).toBe(userId);
-        expect(integrations[0]!.provider).toBe('google');
-        expect(integrations[0]!.accessToken).toBe('test-at');
-        expect(integrations[0]!.refreshToken).toBe('test-rt');
+        // Redirect carries the persisted integration id so the client picker targets the real row.
+        const [persisted] = integrations;
+        if (!persisted) throw new Error('expected one integration');
+        expect(res.headers.get('location')).toContain(`calendarConnected=${persisted._id}`);
+        expect(persisted.user).toBe(userId);
+        expect(persisted.provider).toBe('google');
+        expect(persisted.accessToken).toBe('test-at');
+        expect(persisted.refreshToken).toBe('test-rt');
         // Step 2: integrations no longer carry a `calendarId` field — the user picks one or more
         // calendars via ChooseCalendarDialog after the redirect, which creates CalendarSyncConfig rows.
-        expect(integrations[0]!.calendarId).toBeUndefined();
+        expect(persisted.calendarId).toBeUndefined();
     });
 
     it('redirects to settings with calendarConnectError=mismatch when authorized email differs from login_hint', async () => {
@@ -412,7 +415,6 @@ describe('GET /calendar/auth/google/callback', () => {
             }),
         );
         expect(res.status).toBe(302);
-        expect(res.headers.get('location')).toContain('calendarConnected=1');
 
         // Integration attached to BOB, not alice.
         expect(await calendarIntegrationsDAO.findByUserDecrypted(aliceId)).toHaveLength(0);
@@ -420,6 +422,8 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(bobIntegrations).toHaveLength(1);
         const [bobIntegration] = bobIntegrations;
         if (!bobIntegration) throw new Error('expected one integration for bob');
+        // Redirect carries the persisted integration id (bob's, the resolved owner).
+        expect(res.headers.get('location')).toContain(`calendarConnected=${bobIntegration._id}`);
         expect(bobIntegration.user).toBe(bobId);
         expect(bobIntegration.accessToken).toBe('bob-at');
     });
@@ -487,8 +491,11 @@ describe('GET /calendar/auth/google/callback', () => {
             }),
         );
         expect(res.status).toBe(302);
-        expect(res.headers.get('location')).toContain('calendarConnected=1');
-        expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toHaveLength(1);
+        const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        expect(integrations).toHaveLength(1);
+        const [persisted] = integrations;
+        if (!persisted) throw new Error('expected one integration');
+        expect(res.headers.get('location')).toContain(`calendarConnected=${persisted._id}`);
     });
 
     it('persists tokens.scope as grantedScopes on the integration', async () => {
@@ -6322,6 +6329,27 @@ describe('calendarIntegrationsDAO.upsertEncrypted', () => {
         // updatedTs should reflect the reconnect.
         expect(integrations[0]!.updatedTs).toBe(laterNow);
     });
+
+    it('returns the persisted _id — the new id on insert, the surviving id on reconnect', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        // First connect: inserts, so the returned id is the one we supplied.
+        const insertedId = await calendarIntegrationsDAO.upsertEncrypted(makeIntegration(userId, { _id: 'int-first' }));
+        expect(insertedId).toBe('int-first');
+
+        // Reconnect supplies a fresh phantom id, but the (user, provider) row already exists, so the
+        // upsert keeps the original _id — and upsertEncrypted must hand that surviving id back, not the
+        // phantom. This is what lets the OAuth callback redirect with an id the client can actually use.
+        const reconnectId = await calendarIntegrationsDAO.upsertEncrypted(makeIntegration(userId, { _id: 'int-phantom' }));
+        expect(reconnectId).toBe('int-first');
+
+        const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        expect(integrations).toHaveLength(1);
+        const [persisted] = integrations;
+        if (!persisted) throw new Error('expected one integration');
+        expect(persisted._id).toBe('int-first');
+    });
 });
 
 // ─── Webhook receiver ──────────────────────────────────────────────────────
@@ -10957,7 +10985,6 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
             }),
         );
         expect(res.status).toBe(302);
-        expect(res.headers.get('location')).toContain('calendarConnected=1');
 
         // Reconnect produced exactly one integration row, with a fresh id distinct from 'int-OLD-account'.
         const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
@@ -10965,6 +10992,8 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         const liveIntegration = integrations[0];
         if (!liveIntegration) throw new Error('expected one live integration');
         expect(liveIntegration._id).not.toBe('int-OLD-account');
+        // Redirect carries the live integration id so the client picker targets the real row.
+        expect(res.headers.get('location')).toContain(`calendarConnected=${liveIntegration._id}`);
 
         // Repair pass fired: the orphaned markers on the item and routine are cleared so pushback
         // can flow again (otherwise both entities would be permanently un-pushable).

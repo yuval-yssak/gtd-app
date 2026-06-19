@@ -40,7 +40,7 @@ import {
 } from '../../api/calendarApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getCalendarIntegrationsResource, type IntegrationWithDetails, invalidateCalendarIntegrationsResource } from '../../data/calendarIntegrationsResource';
-import { hasAtLeastOne } from '../../lib/typeUtils';
+import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import type { StoredAccount } from '../../types/MyDB';
 import { buildCalendarPickerRows, defaultCalendarId } from './calendarPickerOrder';
 
@@ -63,7 +63,31 @@ function formatSaveCalendarError(err: unknown): string {
     if (msg.includes('409')) {
         return 'This calendar is already being synced. Choose a different calendar.';
     }
+    // 404 = the integration this dialog opened against no longer exists server-side (a stale row from
+    // a disconnect/reconnect). The parent re-reads the integration list; tell the user to retry. Note
+    // this message surfaces only on the row-level "Choose calendar" re-entry — the auto-opened post-
+    // OAuth dialog unmounts (onStaleIntegration closes it) before its isMountedRef-guarded saveError
+    // renders, so there the user instead lands back on the refreshed "No calendar selected" CTA.
+    if (isStaleIntegrationError(err)) {
+        return 'This connection is no longer available — it was refreshed. Reopen "Choose a calendar" and try again.';
+    }
     return 'Failed to save calendar selection. Please try again.';
+}
+
+/** True when an `apiFetch` Error reports a 404 — the integration id is stale (disconnect/reconnect race). */
+export function isStaleIntegrationError(err: unknown): boolean {
+    return err instanceof Error && err.message.includes('404');
+}
+
+/**
+ * Picks which integration the post-OAuth picker opens against. `connectedId` is the persisted id the
+ * server put in the `calendarConnected` redirect param — prefer the row that matches it exactly so the
+ * picker never targets a stale id that no longer exists server-side (the disconnect/reconnect 404).
+ * Falls back to the newest-by-createdTs row for the legacy redirect that carried a bare "1".
+ */
+export function pickConnectedIntegration(details: NonEmptyArray<IntegrationWithDetails>, connectedId: string): IntegrationWithDetails {
+    const matched = details.find((d) => d.integration._id === connectedId);
+    return matched ?? details.reduce((a, b) => (a.integration.createdTs > b.integration.createdTs ? a : b));
 }
 
 function formatAddCalendarError(err: unknown): string {
@@ -122,14 +146,16 @@ export function CalendarIntegrations() {
     }, []);
 
     useEffect(() => {
-        // After the OAuth redirect lands (calendarConnected set), auto-open the picker for the most
-        // recently connected integration, then strip the query param so a reload doesn't reopen it.
-        // `details` already holds the resolved integrations — no extra fetch needed here.
+        // After the OAuth redirect lands (calendarConnected set), auto-open the picker, then strip
+        // the query param so a reload doesn't reopen it. `details` already holds the resolved
+        // integrations — no extra fetch needed here.
         if (!calendarConnected || !hasAtLeastOne(details)) {
             return;
         }
-        const newest = details.reduce((a, b) => (a.integration.createdTs > b.integration.createdTs ? a : b));
-        setChooseCalendarFor(newest.integration);
+        // calendarConnected carries the PERSISTED integration id; target that exact row so the picker
+        // never opens against a stale id that no longer exists server-side (the disconnect/reconnect 404).
+        const target = pickConnectedIntegration(details, calendarConnected);
+        setChooseCalendarFor(target.integration);
         // Functional `search` form strips only this param without clobbering siblings (e.g. an
         // existing calendarConnectError the user hasn't dismissed yet).
         navigate({ to: '/settings', search: (prev) => ({ ...prev, calendarConnected: undefined }), replace: true }).catch(() => {});
@@ -188,6 +214,12 @@ export function CalendarIntegrations() {
                         setChooseCalendarFor(null);
                         refreshIntegrations();
                         syncAndRefresh().catch(() => {});
+                    }}
+                    onStaleIntegration={() => {
+                        // Stale integration id (disconnect/reconnect race): close the dialog and re-read
+                        // the list so the next attempt targets the live integration row.
+                        setChooseCalendarFor(null);
+                        refreshIntegrations();
                     }}
                     withActiveAccountSession={withActiveAccountSession}
                 />
@@ -698,11 +730,13 @@ interface ChooseCalendarDialogProps {
     integration: CalendarIntegration;
     onClose: () => void;
     onSaved: () => void;
+    /** Called when the save fails with a 404 — the integration id is stale, so the parent re-reads the list. */
+    onStaleIntegration: () => void;
     withActiveAccountSession: WithActiveAccountSession;
 }
 
 /** Shown after the OAuth callback redirect — lets the user pick an initial calendar to sync. */
-function ChooseCalendarDialog({ integration, onClose, onSaved, withActiveAccountSession }: ChooseCalendarDialogProps) {
+function ChooseCalendarDialog({ integration, onClose, onSaved, onStaleIntegration, withActiveAccountSession }: ChooseCalendarDialogProps) {
     const { calendars, isLoading, fetchError: calendarFetchError } = useCalendarList(integration._id);
     const [selectedId, setSelectedId] = useState('');
     const [isSaving, setIsSaving] = useState(false);
@@ -738,6 +772,11 @@ function ChooseCalendarDialog({ integration, onClose, onSaved, withActiveAccount
             onSaved();
         } catch (err) {
             console.error('[calendar] save initial sync config failed:', err);
+            // A 404 means this dialog's integration id is stale (disconnect/reconnect race). Re-read the
+            // list so the row reflects the live integration before the user retries.
+            if (isStaleIntegrationError(err)) {
+                onStaleIntegration();
+            }
             if (isMountedRef.current) {
                 setSaveError(formatSaveCalendarError(err));
             }

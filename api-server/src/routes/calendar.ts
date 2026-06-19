@@ -358,7 +358,9 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
         ...(grantedScopes ? { grantedScopes } : {}),
     };
 
-    await calendarIntegrationsDAO.upsertEncrypted(integration);
+    // Use the PERSISTED id (the surviving row's _id on reconnect), not the phantom randomUUID above —
+    // the redirect carries it so the client's calendar picker targets a row that actually exists.
+    const persistedIntegrationId = await calendarIntegrationsDAO.upsertEncrypted(integration);
     // Reconnect repair pass: clear lastKnown* markers that point at integrations the user no longer
     // has. Without this, an item/routine that was unlinked under one Google account stays "pinned"
     // to that account's integration id forever — a reconnect to a DIFFERENT Google account would
@@ -374,8 +376,10 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
         return renderPopupCloser(c, { ok: true });
     }
 
-    // Redirect back to client settings page so the user sees the new integration.
-    return c.redirect(`${clientUrl}/settings?calendarConnected=1`);
+    // Redirect back to client settings page so the user sees the new integration. The integration id
+    // rides along so the picker opens against the persisted row, not whichever row a stale resource
+    // cache happened to hold (the disconnect/reconnect 404 race).
+    return c.redirect(`${clientUrl}/settings?calendarConnected=${encodeURIComponent(persistedIntegrationId)}`);
 });
 
 /**
