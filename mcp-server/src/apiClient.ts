@@ -51,6 +51,8 @@ export interface ApiClient {
     environment(): GtdEnvironment;
     /** The normalised `apiBase` URL — pairs with `environment()` so tool output is unambiguous. */
     apiBase(): string;
+    /** Browsable web-app origin for this environment, or `null` when it can't be derived (custom hosts). Used to stamp entity deep links. */
+    webBase(): string | null;
 }
 
 const DEFAULT_ACCOUNT_LABEL = 'default';
@@ -60,6 +62,7 @@ export function createApiClient(config: McpConfig): ApiClient {
         listAccounts: () => [...config.tokens.keys()],
         environment: () => config.environment,
         apiBase: () => config.apiBase,
+        webBase: () => config.webBase,
         async request(method, path, body, query, opts) {
             const account = opts?.account ?? DEFAULT_ACCOUNT_LABEL;
             const token = resolveToken(config, account);

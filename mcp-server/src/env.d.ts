@@ -3,6 +3,7 @@
 declare namespace NodeJS {
     interface ProcessEnv {
         GTD_API_BASE?: string;
+        GTD_WEB_BASE?: string;
         GTD_API_TOKEN?: string;
     }
 }

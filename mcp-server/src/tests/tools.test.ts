@@ -8,6 +8,7 @@ import { _meToolsForTesting } from '../tools/me.js';
 import { _peopleToolsForTesting } from '../tools/people.js';
 import { _reassignToolsForTesting } from '../tools/reassign.js';
 import { _routineToolsForTesting } from '../tools/routines.js';
+import { defineTool, registerOne } from '../tools/types.js';
 import { _workContextToolsForTesting } from '../tools/workContexts.js';
 
 /**
@@ -35,7 +36,13 @@ interface RecordedCall {
  */
 function makeFakeApi(
     responses: Record<string, unknown> = {},
-    options: { accountResponses?: Record<string, unknown | GtdApiError>; accounts?: string[]; environment?: GtdEnvironment; apiBase?: string } = {},
+    options: {
+        accountResponses?: Record<string, unknown | GtdApiError>;
+        accounts?: string[];
+        environment?: GtdEnvironment;
+        apiBase?: string;
+        webBase?: string | null;
+    } = {},
 ): { api: ApiClient; calls: RecordedCall[] } {
     const calls: RecordedCall[] = [];
     const api: ApiClient = {
@@ -56,6 +63,7 @@ function makeFakeApi(
         listAccounts: () => options.accounts ?? ['default'],
         environment: () => options.environment ?? 'local',
         apiBase: () => options.apiBase ?? 'http://localhost:4000',
+        webBase: () => options.webBase ?? null,
     };
     return { api, calls };
 }
@@ -388,5 +396,40 @@ describe('me tools', () => {
         );
         const result = (await t.listAccounts.handler({}, api)) as { accounts: { account: string }[] };
         expect(result.accounts.map((r) => r.account)).toEqual(['work', 'default', 'old']);
+    });
+});
+
+describe('registerOne URL decoration (end-to-end)', () => {
+    // Minimal McpServer stub that captures the callback registerOne wires up, so we can invoke it
+    // and assert the decorated `url` survives serialization into the MCP tool result text.
+    function captureRegistered(toolName: string, handlerResult: unknown, webBase: string | null) {
+        let captured: ((args: unknown) => Promise<{ content: { type: string; text: string }[] }>) | undefined;
+        const server = {
+            registerTool: (_name: string, _config: unknown, callback: typeof captured) => {
+                captured = callback;
+            },
+        };
+        const { api } = makeFakeApi({}, { webBase: webBase ?? undefined });
+        const tool = defineTool({ name: toolName, description: 'test', inputSchema: {}, handler: async () => handlerResult });
+        // biome-ignore lint/suspicious/noExplicitAny: the stub matches registerOne's structural McpServer use.
+        registerOne(server as any, tool, api);
+        if (!captured) throw new Error('registerOne did not register a callback');
+        return captured;
+    }
+
+    it('stamps the url into the serialized content for an item tool when webBase is set', async () => {
+        const callback = captureRegistered('gtd_capture', { _id: 'xyz', title: 'hi' }, 'https://staging.getting-things-done.app');
+        const out = await callback({});
+        const [block] = out.content;
+        if (!block) throw new Error('expected one content block');
+        expect(JSON.parse(block.text)).toEqual({ _id: 'xyz', title: 'hi', url: 'https://staging.getting-things-done.app/item/xyz' });
+    });
+
+    it('omits the url when webBase is null (custom env with no override)', async () => {
+        const callback = captureRegistered('gtd_capture', { _id: 'xyz' }, null);
+        const out = await callback({});
+        const [block] = out.content;
+        if (!block) throw new Error('expected one content block');
+        expect(JSON.parse(block.text)).toEqual({ _id: 'xyz' });
     });
 });

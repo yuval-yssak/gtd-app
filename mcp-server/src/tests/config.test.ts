@@ -4,9 +4,9 @@ import { classifyEnvironment, collectTokensFromEnv, loadConfig } from '../config
 describe('loadConfig', () => {
     const origEnv = { ...process.env };
     beforeEach(() => {
-        // Strip every GTD_API_TOKEN_* key so each test starts from a clean slate.
+        // Strip every GTD_API_TOKEN_* key (plus base/web-base overrides) so each test starts clean.
         for (const key of Object.keys(process.env)) {
-            if (key === 'GTD_API_BASE' || key === 'GTD_API_TOKEN' || key.startsWith('GTD_API_TOKEN_')) {
+            if (key === 'GTD_API_BASE' || key === 'GTD_WEB_BASE' || key === 'GTD_API_TOKEN' || key.startsWith('GTD_API_TOKEN_')) {
                 delete process.env[key];
             }
         }
@@ -49,6 +49,21 @@ describe('loadConfig', () => {
         process.env.GTD_API_TOKEN = 'gtd_t';
         process.env.GTD_API_BASE = 'https://api.example.com';
         expect(loadConfig().environment).toBe('custom');
+    });
+
+    it('derives webBase from the environment (staging) and leaves it null for custom hosts', () => {
+        process.env.GTD_API_TOKEN = 'gtd_t';
+        process.env.GTD_API_BASE = 'https://api-staging.getting-things-done.app';
+        expect(loadConfig().webBase).toBe('https://staging.getting-things-done.app');
+        process.env.GTD_API_BASE = 'https://api.example.com';
+        expect(loadConfig().webBase).toBeNull();
+    });
+
+    it('honours a GTD_WEB_BASE override even for custom hosts', () => {
+        process.env.GTD_API_TOKEN = 'gtd_t';
+        process.env.GTD_API_BASE = 'https://api.example.com';
+        process.env.GTD_WEB_BASE = 'https://gtd.internal.example/';
+        expect(loadConfig().webBase).toBe('https://gtd.internal.example');
     });
 });
 

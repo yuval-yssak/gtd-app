@@ -1,0 +1,1 @@
+- [v1 response envelope shapes drift from tool-name maps](project_v1_envelope_shapes.md) — Any MCP-layer feature keyed by tool name to a v1 response shape must account for composite endpoints that return non-bare shapes (split → `{head,tail}`).

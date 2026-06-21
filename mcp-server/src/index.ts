@@ -17,14 +17,29 @@ import { registerWorkContextTools } from './tools/workContexts.js';
  * lifecycle.
  */
 
+/**
+ * Server-level usage guidance surfaced to every MCP client. Lives here (not in any user's local
+ * memory) so the URL-surfacing behaviour ships with the server and works for all operators.
+ */
+const SERVER_INSTRUCTIONS = [
+    'After creating or editing an item or routine, item and routine tool responses include a `url` field — a direct',
+    'web-app link to that entity. Always show the user this `url` at the end of your reply so they can jump straight to it.',
+    'The `gtd_batch` tool returns only `{ ok, count }` with no entity, so it carries no `url`; when a batch creates or',
+    'updates items/routines, construct the link yourself from each op as `<web-app-origin>/item/<entityId>` or',
+    '`<web-app-origin>/routine/<entityId>` (infer the origin from a `url` returned by any other tool in the session).',
+].join(' ');
+
 async function main(): Promise<void> {
     const config = loadConfig();
     const api = createApiClient(config);
 
-    const server = new McpServer({
-        name: 'gtd-mcp',
-        version: '0.1.0',
-    });
+    const server = new McpServer(
+        {
+            name: 'gtd-mcp',
+            version: '0.1.0',
+        },
+        { instructions: SERVER_INSTRUCTIONS },
+    );
 
     registerItemTools(server, api);
     registerRoutineTools(server, api);

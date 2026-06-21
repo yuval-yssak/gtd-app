@@ -11,6 +11,7 @@ import { createApiClient, GtdApiError } from '../apiClient.js';
 const config = {
     apiBase: 'http://localhost:4000',
     environment: 'local' as const,
+    webBase: 'http://localhost:4173',
     tokens: new Map([
         ['default', 'gtd_default_token'],
         ['work', 'gtd_work_token'],
@@ -117,7 +118,12 @@ describe('apiClient', () => {
     it('strips trailing slash from apiBase', async () => {
         const fetchMock = vi.mocked(globalThis.fetch);
         fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
-        const api = createApiClient({ apiBase: 'http://localhost:4000/', environment: 'local', tokens: new Map([['default', 't']]) });
+        const api = createApiClient({
+            apiBase: 'http://localhost:4000/',
+            environment: 'local',
+            webBase: 'http://localhost:4173',
+            tokens: new Map([['default', 't']]),
+        });
         await api.request('GET', '/v1/items');
         const [url] = fetchMock.mock.calls[0] ?? [];
         expect(String(url)).toBe('http://localhost:4000/v1/items');
@@ -132,13 +138,16 @@ describe('apiClient', () => {
         const api = createApiClient(config);
         expect(api.environment()).toBe('local');
         expect(api.apiBase()).toBe('http://localhost:4000');
+        expect(api.webBase()).toBe('http://localhost:4173');
         const prodApi = createApiClient({
             apiBase: 'https://api.getting-things-done.app',
             environment: 'production',
+            webBase: 'https://getting-things-done.app',
             tokens: new Map([['default', 't']]),
         });
         expect(prodApi.environment()).toBe('production');
         expect(prodApi.apiBase()).toBe('https://api.getting-things-done.app');
+        expect(prodApi.webBase()).toBe('https://getting-things-done.app');
     });
 
     it('GtdApiError exposes status, code, and body', () => {

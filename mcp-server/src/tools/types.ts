@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { type ZodRawShape, type z, z as zod } from 'zod';
 import { type ApiClient, GtdApiError, type RequestOptions } from '../apiClient.js';
+import { decorateWithUrls } from './webUrl.js';
 
 /**
  * Shared id schema — non-empty AFTER trim, so callers can't 404 the API with `id: '   '`.
@@ -93,8 +94,11 @@ export function registerOne<Shape extends ZodRawShape>(server: McpServer, tool: 
         (async (args: unknown) => {
             try {
                 const result = await tool.handler(args as ParsedArgs<Shape>, api);
+                // Stamp a browsable deep link onto item/routine responses so the model surfaces a
+                // clickable URL without depending on any user's local memory (no-op for other tools).
+                const decorated = decorateWithUrls(tool.name, result, api.webBase());
                 return {
-                    content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+                    content: [{ type: 'text', text: JSON.stringify(decorated, null, 2) }],
                 };
             } catch (err) {
                 return formatError(err);

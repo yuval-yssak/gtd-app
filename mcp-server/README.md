@@ -47,6 +47,10 @@ Add `--scope user` to register the server globally for your user (default scope 
 
 For staging or production, swap `GTD_API_BASE` to `https://api-staging.getting-things-done.app` or `https://api.getting-things-done.app`.
 
+#### Web-app deep links (`url` field)
+
+Item and routine tool responses include a `url` — a direct web-app link to that entity (e.g. `https://staging.getting-things-done.app/item/<id>`) — so any MCP client surfaces a clickable link to what it just created or edited, with no per-user setup. The web origin is derived from `GTD_API_BASE` (`local` → `http://localhost:4173`, `staging`/`production` → their web hosts). For a self-hosted or preview deployment (`custom` environment), set `GTD_WEB_BASE` to your web-app origin to enable the links; without it, `custom` deployments omit `url`. People and work contexts have no per-entity page in the web app, so they carry no `url`. `gtd_batch` returns only `{ ok, count }` and no `url`.
+
 #### Claude Desktop / manual config
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop) or your `claude_code_config` MCP block:
