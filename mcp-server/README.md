@@ -10,11 +10,14 @@ Auth is a personal API token. The server is a thin shim — every write goes thr
 
 ```bash
 cd mcp-server
-npm install
-npm run build
+npm install   # the `prepare` hook compiles dist/ automatically
 ```
 
-The compiled entrypoint lives at `mcp-server/dist/index.js`.
+The compiled entrypoint lives at `mcp-server/dist/index.js` (the launch command runs
+this artifact). `npm install` runs `prepare` → `tsc`, so `dist/` is always rebuilt on
+install. **After editing source, run `npm run build` and restart the MCP client** (Claude
+CLI / Desktop) — a running session holds the old `dist/` process for its lifetime and
+won't pick up changes until relaunched.
 
 ### 2. Mint a personal API token
 

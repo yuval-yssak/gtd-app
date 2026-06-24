@@ -13,12 +13,35 @@ class ApiTokensDAO extends AbstractDAO<ApiTokenInterface> {
             { key: { tokenHash: 1 }, unique: true },
             // List-tokens-for-user view in settings.
             { key: { user: 1 } },
+            // GC for OAuth access tokens: expire rows once `expiresTs` passes. Partial so personal
+            // tokens (no `expiresTs`) are never touched. TTL is housekeeping only — expiry is ALSO
+            // enforced in `findActiveUnexpiredByHash` so a not-yet-reaped row can't authenticate.
+            { key: { expiresTs: 1 }, expireAfterSeconds: 0, partialFilterExpression: { expiresTs: { $exists: true } } },
         ]);
     }
 
     /** Returns the token row for `tokenHash`, or null if missing or revoked. */
     async findActiveByHash(tokenHash: string): Promise<ApiTokenInterface | null> {
         return this._collection.findOne({ tokenHash, revokedTs: { $exists: false } });
+    }
+
+    /**
+     * Returns the token row for `tokenHash` only if it is neither revoked nor expired, else null.
+     * Expiry is evaluated inside this single Mongo read — honoring the no-cache revocation guardrail
+     * while adding OAuth access-token TTL enforcement. Personal tokens (no `expiresTs`) pass the
+     * `$or` absent-branch unconditionally, so this is a strict superset of `findActiveByHash` for them.
+     */
+    async findActiveUnexpiredByHash(tokenHash: string, nowIso: string): Promise<ApiTokenInterface | null> {
+        return this._collection.findOne({
+            tokenHash,
+            revokedTs: { $exists: false },
+            $or: [{ expiresTs: { $exists: false } }, { expiresTs: { $gt: nowIso } }],
+        });
+    }
+
+    /** Revokes a token by its `_id` regardless of owner. Used by OAuth refresh rotation to kill a prior/leaked access token. */
+    async revokeByIdUnscoped(tokenId: string, now: string): Promise<void> {
+        await this._collection.updateOne({ _id: tokenId }, { $set: { revokedTs: now } });
     }
 
     /** Best-effort lastUsedTs bump — never blocks the request lifecycle. Errors are caller's responsibility. */

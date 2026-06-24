@@ -51,6 +51,32 @@ export async function issueApiToken(userId: string, label: string, scopes: ApiTo
 }
 
 /**
+ * Issues a short-lived OAuth access token for the remote MCP flow. Same `gtd_` hashed-token row as
+ * a personal token — so it flows through the exact same `resolveBearerToken`/`authenticateBearer`
+ * read path (revocation + scope checks inherited for free) — but tagged `kind:'oauth_access'` with
+ * an `expiresTs`, so `findActiveUnexpiredByHash` rejects it once the TTL passes. `oauthClientId`
+ * binds it to the registered client (surfaces as `AuthInfo.clientId`). The `label` is namespaced so
+ * these never look like user-minted personal tokens in any listing.
+ */
+export async function issueOAuthAccessToken(userId: string, clientId: string, scopes: ApiTokenScope[], ttlSec: number): Promise<CreateTokenResult> {
+    const plaintext = generateTokenPlaintext();
+    const now = dayjs();
+    const record: ApiTokenInterface = {
+        _id: randomUUID(),
+        user: userId,
+        tokenHash: hashToken(plaintext),
+        label: `mcp-oauth:${clientId}`,
+        createdTs: now.toISOString(),
+        scopes,
+        kind: 'oauth_access',
+        oauthClientId: clientId,
+        expiresTs: now.add(ttlSec, 'second').toISOString(),
+    };
+    await apiTokensDAO.insertOne(record);
+    return { plaintext, record };
+}
+
+/**
  * Resolves a `Bearer gtd_…` header to an active token row, or returns null when the header is
  * missing/malformed/unknown/revoked. Constant-time matters less here than for password checks
  * because the hashed lookup itself is the auth gate, but we still avoid early returns that leak
@@ -64,5 +90,8 @@ export async function resolveBearerToken(authorizationHeader: string | undefined
     if (scheme !== 'Bearer' || !value || !value.startsWith(TOKEN_PREFIX)) {
         return null;
     }
-    return apiTokensDAO.findActiveByHash(hashToken(value));
+    // Expiry-aware so OAuth access tokens (kind:'oauth_access', carrying `expiresTs`) stop
+    // authenticating the instant their TTL passes — enforced inside the Mongo read, preserving the
+    // no-cache revocation guardrail. Personal tokens have no `expiresTs` and are unaffected.
+    return apiTokensDAO.findActiveUnexpiredByHash(hashToken(value), dayjs().toISOString());
 }

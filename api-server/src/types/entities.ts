@@ -730,6 +730,77 @@ export interface ApiTokenInterface {
     lastUsedTs?: string;
     /** Set when the token was revoked. Once set, the token can never authenticate again. */
     revokedTs?: string;
+    /**
+     * Set on OAuth-issued access tokens (the remote MCP flow); absent on personal settings-minted
+     * tokens, which never expire. ISO datetime. Auth resolution rejects tokens whose `expiresTs`
+     * is in the past — enforced INSIDE the Mongo query so the no-cache revocation guardrail holds.
+     */
+    expiresTs?: string;
+    /** Token provenance. Absent ⇒ 'personal'. 'oauth_access' ⇒ short-lived, issued via /mcp-oauth/token. */
+    kind?: 'personal' | 'oauth_access';
+    /** For `kind:'oauth_access'`: the `oauthClients._id` that obtained it (surfaces as AuthInfo.clientId). */
+    oauthClientId?: string;
+}
+
+/**
+ * A registered OAuth 2.1 client (RFC 7591 Dynamic Client Registration) for the remote MCP flow.
+ * `_id` IS the `client_id`. MCP clients are public (PKCE-only) by default — `clientSecretHash` is
+ * absent for those. Only the sha256 hash of any secret is stored; the plaintext is returned once.
+ */
+export interface OAuthClientInterface {
+    _id: string;
+    /** sha256 hex of the client secret. Absent ⇒ public client (token_endpoint_auth_method 'none'). */
+    clientSecretHash?: string;
+    clientName?: string;
+    /** Exact-match allowlist — the open-redirect gate. A redirect_uri must equal one of these verbatim. */
+    redirectUris: string[];
+    grantTypes: string[];
+    tokenEndpointAuthMethod: 'none' | 'client_secret_post' | 'client_secret_basic';
+    /** Scopes this client may request. The granted token's scopes are bounded by this set. */
+    scopes: ApiTokenScope[];
+    createdTs: string;
+}
+
+/**
+ * A one-time OAuth authorization code (Authorization Code + PKCE). `_id` is the sha256 hash of the
+ * code plaintext — the raw code is never stored. Bound to the user resolved at `/authorize` and to
+ * the client/redirect/PKCE-challenge so `/token` can verify the redemption. Consumed atomically
+ * (single `findOneAndUpdate` setting `consumedTs`) to defeat replay; ~60s TTL.
+ */
+export interface OAuthAuthCodeInterface {
+    _id: string;
+    user: string;
+    clientId: string;
+    redirectUri: string;
+    /** S256 PKCE challenge (base64url). `plain` is never accepted. */
+    codeChallenge: string;
+    codeChallengeMethod: 'S256';
+    scopes: ApiTokenScope[];
+    /** ISO datetime, ~now+60s. Redemption requires `expiresTs > now`. */
+    expiresTs: string;
+    /** Set on first redemption. A second redemption finds it set → `invalid_grant` (replay guard). */
+    consumedTs?: string;
+    createdTs: string;
+}
+
+/**
+ * A rotating OAuth refresh token. `_id` is the sha256 hash of the refresh plaintext. Rotated on
+ * every use (OAuth 2.1): redemption sets `rotatedToId` atomically; a second redemption of the same
+ * row (reuse) signals compromise → the whole family is revoked. Pairs with the access token it
+ * minted via `accessTokenId` so rotation can revoke the prior access token.
+ */
+export interface OAuthRefreshTokenInterface {
+    _id: string;
+    user: string;
+    clientId: string;
+    scopes: ApiTokenScope[];
+    /** The `apiTokens._id` of the access token this refresh currently pairs with (revoked on rotation). */
+    accessTokenId?: string;
+    /** Set when this refresh token is rotated. Its presence at redemption time = reuse → revoke family. */
+    rotatedToId?: string;
+    revokedTs?: string;
+    expiresTs?: string;
+    createdTs: string;
 }
 
 /**

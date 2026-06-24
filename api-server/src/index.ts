@@ -8,6 +8,8 @@ import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
 import { deviceRoutes } from './routes/devices.js';
 import { maintenanceRoutes } from './routes/maintenance.js';
+import { mcpRoutes } from './routes/mcp.js';
+import { authorizationServerMetadata, mcpOAuthRoutes, protectedResourceMetadata } from './routes/mcpOAuth.js';
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
 import { tokensRoutes } from './routes/tokens.js';
@@ -64,6 +66,22 @@ const app = new Hono()
     // Bearer-only token mint would be a chicken-and-egg.
     .use('/account/tokens/*', strictCors())
     .route('/account/tokens', tokensRoutes)
+    // Remote MCP server (OAuth 2.1 + Streamable HTTP). Mounted top-level, OUTSIDE /v1, so the Claude
+    // client's well-known discovery paths resolve at the API origin and the bearer model is distinct
+    // from the public REST surface. See routes/mcpOAuth.ts + routes/mcp.ts.
+    //
+    // OAuth Authorization Server + Protected Resource metadata (RFC 8414 / 9728). The `/mcp`-suffixed
+    // protected-resource path is what `WWW-Authenticate` points clients at.
+    .get('/.well-known/oauth-authorization-server', (c) => c.json(authorizationServerMetadata()))
+    .get('/.well-known/oauth-protected-resource', (c) => c.json(protectedResourceMetadata()))
+    .get('/.well-known/oauth-protected-resource/mcp', (c) => c.json(protectedResourceMetadata()))
+    // OAuth endpoints. /register + /token are XHR'd cross-origin by the client (publicCors, PKCE-gated);
+    // /authorize + its login/decision POSTs are top-level browser navigations (CORS irrelevant).
+    .use('/mcp-oauth/*', publicCors())
+    .route('/mcp-oauth', mcpOAuthRoutes)
+    // The MCP resource endpoint itself — bearer-gated (OAuth access token OR personal token).
+    .use('/mcp', publicCors())
+    .route('/mcp', mcpRoutes)
     .get('/version', (c) => c.json({ commitHash: COMMIT_HASH }));
 
 // Exported for Hono RPC — client imports this type to get a fully-typed fetch client

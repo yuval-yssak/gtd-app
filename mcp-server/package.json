@@ -6,6 +6,7 @@
     "description": "Local stdio MCP server that exposes the GTD /v1 public API as MCP tools",
     "scripts": {
         "build": "tsc",
+        "prepare": "tsc",
         "start": "node dist/index.js",
         "dev": "tsx watch src/index.ts",
         "lint": "biome check",

@@ -8,6 +8,9 @@ import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import oauthAuthCodesDAO from '../dataAccess/oauthAuthCodesDAO.js';
+import oauthClientsDAO from '../dataAccess/oauthClientsDAO.js';
+import oauthRefreshTokensDAO from '../dataAccess/oauthRefreshTokensDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
@@ -87,6 +90,9 @@ async function loadDataAccess(customDBName?: string) {
         webhookSubscriptionsDAO.init(dbClient, resolvedDBName),
         webhookDeliveriesDAO.init(dbClient, resolvedDBName),
         claudeUsageDAO.init(dbClient, resolvedDBName),
+        oauthClientsDAO.init(dbClient, resolvedDBName),
+        oauthAuthCodesDAO.init(dbClient, resolvedDBName),
+        oauthRefreshTokensDAO.init(dbClient, resolvedDBName),
     ]);
     // Persist the legacy items.clarify → items.write scope rewrite so stored tokens match what auth
     // enforces (the in-memory backfill bridge has been removed). Idempotent + boot-only.
