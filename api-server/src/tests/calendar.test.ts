@@ -4076,7 +4076,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
         const tomorrowAt10 = dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
@@ -4128,7 +4133,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
         const tomorrowAt10 = dayjs().add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
@@ -4395,7 +4405,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
 
         const bareMasterId = 'mleem99efhim4a0tsh3s86797o';
         const suffixedMasterId = `${bareMasterId}_R20260519T123000`;
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
 
         await routinesDAO.insertOne(
             makeRoutine(userId, {
@@ -4449,7 +4464,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
 
         const bareId = 'split-converge-master';
         const rebasedId = `${bareId}_R20260604T060000Z`;
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
 
         // Pre-existing state: a capped base routine (the historical segment) + an active open successor
         // already onboarded and keyed on the raw rebased id.
@@ -4541,7 +4561,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
 
         const bareId = 'self-ref-split-master';
         const rebasedId = `${bareId}_R20260604T060000Z`;
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
 
         await routinesDAO.insertOne(
             makeRoutine(userId, {
@@ -4629,7 +4654,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
 
         const bareId = 'split-backfill-master';
         const rebasedId = `${bareId}_R20260604T060000Z`;
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
 
         await routinesDAO.insertOne(
             makeRoutine(userId, {
@@ -4728,7 +4758,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
             }),
         );
 
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
                 {
@@ -4784,7 +4819,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
             }),
         );
 
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
                 {
@@ -4832,7 +4872,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
             }),
         );
 
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
                 {
@@ -4868,7 +4913,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         await insertIntegrationWithConfig(userId);
 
         const sharedEventId = 'race-master-event';
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
 
         // Simulate the concurrent winner: the first time our insert runs for a routine bound to this
         // series, slip a rival active routine into the DB first (so the real insert collides on the
@@ -4935,7 +4985,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
         // Non-E11000 failure on the create insert.
         vi.spyOn(routinesDAO, 'insertOne').mockRejectedValueOnce(new Error('mongo blip — not a duplicate key'));
 
@@ -4968,7 +5023,12 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
 
         const bareMasterId = 'mleem99efhim4a0tsh3s86797o';
         const suffixedMasterId = `${bareMasterId}_R20260519T123000`;
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
         const tomorrowAt930 = dayjs(tomorrowAt9).add(30, 'minute').toISOString();
 
         await routinesDAO.insertOne(
@@ -9554,7 +9614,12 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
             }),
         );
 
-        const tomorrowAt9 = dayjs().add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) — NOT the server's
+        // local tz — so `extractLocalTime` round-trips the inbound master's start to exactly "09:00",
+        // matching makeRoutine's `calendarItemTemplate.timeOfDay`. Under TZ=UTC (CI), the old
+        // `dayjs().hour(9)` produced 09:00 UTC = 12:00 Jerusalem, so the inferred schedule differed from
+        // the stored template → the sync regenerated (churned) items instead of converging. See line ~8817.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
                 {
