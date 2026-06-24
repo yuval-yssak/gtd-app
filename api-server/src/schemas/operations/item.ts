@@ -45,6 +45,7 @@ export const ItemSnapshotSchema = z
         lastKnownCalendarEventId: nonEmptyString.optional(),
         lastKnownCalendarIntegrationId: nonEmptyString.optional(),
         lastKnownCalendarSyncConfigId: nonEmptyString.optional(),
+        lastKnownCalendarAccountEmail: nonEmptyString.optional(),
         // GCal instance event id for routine-generated calendar items. Pushed back when the client
         // re-edits the item locally (e.g. drag in week view).
         calendarInstanceEventId: nonEmptyString.optional(),

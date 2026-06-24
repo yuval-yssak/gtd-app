@@ -105,12 +105,21 @@ export interface ItemInterface {
      * strong-key relink without depending on title+time fallback. All three are cleared atomically
      * the moment relink restores the live `calendar*` fields (`tryRestoreFromLastKnownEventId`).
      * The integration id is also used by the OAuth reconnect repair pass
-     * (`clearOrphanedLastKnownMarkers`) to drop markers pointing at integrations the user no longer
-     * owns — otherwise a cross-account reconnect would leave the item permanently un-pushable.
+     * (`reconcileLastKnownMarkers`): on a same-account reconnect it rewrites this id to the new
+     * integration so the relink still fires; on a different-account reconnect it wipes the markers
+     * (otherwise the item would be permanently un-pushable). Same-vs-different is decided by
+     * `lastKnownCalendarAccountEmail` below.
      */
     lastKnownCalendarEventId?: string;
     lastKnownCalendarIntegrationId?: string;
     lastKnownCalendarSyncConfigId?: string;
+    /**
+     * The Google account email (lowercased) that owned the integration when these markers were stamped
+     * at disconnect. Lets the reconnect repair pass distinguish a same-account reconnect (rewrite the
+     * markers) from a different-account one (wipe them). Absent on legacy markers ⇒ treated as unknown,
+     * which falls back to the safe wipe.
+     */
+    lastKnownCalendarAccountEmail?: string;
     /**
      * Set on routine-generated calendar items so exception sync can locate them even after their
      * `timeStart` has been shifted by a prior exception. Format: `<masterEventId>_<YYYYMMDDTHHMMSSZ>`
@@ -247,13 +256,15 @@ export interface RoutineInterface {
      * strong-key relink without depending on the title+rrule+timeOfDay fallback. All three are
      * cleared atomically the moment relink restores the live `calendar*` fields
      * (`tryRestoreRoutineFromLastKnownEventId`). The integration id is also used by the OAuth
-     * reconnect repair pass (`clearOrphanedLastKnownMarkers`) to drop markers pointing at
-     * integrations the user no longer owns — otherwise a cross-account reconnect would leave the
-     * routine permanently un-pushable.
+     * reconnect repair pass (`reconcileLastKnownMarkers`): same-account reconnect rewrites it to the
+     * new integration so the relink fires; different-account reconnect wipes the markers (else the
+     * routine is permanently un-pushable). Same-vs-different is decided by `lastKnownCalendarAccountEmail`.
      */
     lastKnownCalendarEventId?: string;
     lastKnownCalendarIntegrationId?: string;
     lastKnownCalendarSyncConfigId?: string;
+    /** See `ItemInterface.lastKnownCalendarAccountEmail` — origin Google account email of these markers. */
+    lastKnownCalendarAccountEmail?: string;
     /**
      * Ref to the routine this was split from via a "this and all following" edit.
      * Set on the new tail routine; points back to the original (head) routine.
@@ -529,6 +540,13 @@ export interface CalendarIntegrationInterface {
      *     OAuth (`upsertEncrypted`) clears status back to `'active'`.
      */
     status?: 'active' | 'suspended' | 'revoked';
+    /**
+     * The Google account email this integration authorized (lowercased). Set from the OAuth callback's
+     * `authorizedEmail`. Used to tell a same-account reconnect (rewrite the disconnect markers to the
+     * new integration id) from a genuinely different-account reconnect (wipe the now-orphaned markers).
+     * Absent on legacy rows → callers treat the identity as unknown and fall back to the safe wipe.
+     */
+    accountEmail?: string;
     suspendedAt?: string; // ISO datetime — set when first invalid_grant detected
     revokedAt?: string; // ISO datetime — set when 24h grace expires
     lastAuthErrorAt?: string; // ISO datetime — bumped on every invalid_grant occurrence

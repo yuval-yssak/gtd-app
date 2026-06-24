@@ -53,6 +53,9 @@ export interface StoredItem {
     lastKnownCalendarEventId?: string;
     lastKnownCalendarIntegrationId?: string;
     lastKnownCalendarSyncConfigId?: string;
+    // Origin Google account email of the markers — lets the server tell a same-account reconnect
+    // (rewrite the markers) from a different-account one (wipe). Round-trips through sync untouched.
+    lastKnownCalendarAccountEmail?: string;
     // Set on routine-generated calendar items so exception sync can locate them by GCal instance id
     // even after `timeStart` has been shifted by a prior exception. Format: `<masterEventId>_<YYYYMMDDTHHMMSSZ>`.
     calendarInstanceEventId?: string;
@@ -110,6 +113,9 @@ export interface StoredRoutine {
     lastKnownCalendarEventId?: string;
     lastKnownCalendarIntegrationId?: string;
     lastKnownCalendarSyncConfigId?: string;
+    // Origin Google account email of the markers — lets the server tell a same-account reconnect
+    // (rewrite the markers) from a different-account one (wipe). Round-trips through sync untouched.
+    lastKnownCalendarAccountEmail?: string;
     /** Ref to the routine this was split from ("this and all following" edit). */
     splitFromRoutineId?: string;
     /** Raw GCal rebased-master id (`<bareId>_R<anchor>`) for split-successor routines — see RoutineInterface. */

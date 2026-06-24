@@ -1777,6 +1777,42 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(createSpy).not.toHaveBeenCalled();
     });
 
+    it('skips disconnect-kept routines (lastKnownCalendarEventId set) — never pushes them as a gtd* clone', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // A routine unlinked by disconnect-with-keep: no calendarEventId, but a lastKnown* marker awaiting
+        // inbound relink. The backfill must NOT push it — doing so mints a gtd* clone master on Google.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, { _id: 'routine-kept', lastKnownCalendarEventId: 'gcal-master-real', lastKnownCalendarIntegrationId: 'int-OLD' }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { pushedRoutines: number };
+        expect(body.pushedRoutines).toBe(0);
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
+    it('skips disconnect-kept calendar items (lastKnownCalendarEventId set) during backfill', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertUnlinkedItem(userId, { _id: 'item-kept', lastKnownCalendarEventId: 'gcal-evt-real', lastKnownCalendarIntegrationId: 'int-OLD' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { pushedItems: number };
+        expect(body.pushedItems).toBe(0);
+        expect(createSpy).not.toHaveBeenCalled();
+    });
+
     it('only backfills onto the default config when multiple configs exist', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -12444,6 +12480,99 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         expect(itemsB.length).toBeLessThanOrEqual(1);
         const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-cross-account' });
         expect(allForRoutine.length).toBeLessThanOrEqual(2);
+    });
+
+    it('same-account reconnect: markers are REWRITTEN to the live integration, not wiped (no gtd* clone)', async () => {
+        // The duplicate-event bug: disconnect-with-keep on account A, reconnect to the SAME account A.
+        // The disconnect markers (lastKnownCalendar*) carry the origin email; the reconnect's authorized
+        // email matches it, so the markers must be REWRITTEN to the new integration id (every reconnect
+        // mints a new id) — NOT wiped. Wiping would let the outbound backfill push the routine as a fresh
+        // gtd* clone master alongside the real one that still lives on Google.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-same-account',
+                lastKnownCalendarEventId: 'gcal-master-real',
+                lastKnownCalendarIntegrationId: 'int-OLD-deleted',
+                lastKnownCalendarSyncConfigId: 'sync-config-OLD',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+            }),
+        );
+
+        // Drive the OAuth reconnect for the SAME account (alice@example.com).
+        const redirectRes = await authenticatedRequest(app, { method: 'GET', path: '/calendar/auth/google?login_hint=alice@example.com', sessionCookie });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'A2-at', refresh_token: 'A2-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+        const callbackRes = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-A2&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(callbackRes.status).toBe(302);
+
+        const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        const [liveIntegration] = integrations;
+        if (!liveIntegration) throw new Error('expected reconnected integration');
+
+        const afterRepair = await routinesDAO.findByOwnerAndId('routine-same-account', userId);
+        // Marker survives — the real master id is intact so the inbound pull can strong-key relink.
+        expect(afterRepair?.lastKnownCalendarEventId).toBe('gcal-master-real');
+        // And its integration id is repointed at the LIVE integration (not the deleted one, not absent).
+        expect(afterRepair?.lastKnownCalendarIntegrationId).toBe(liveIntegration._id);
+
+        // The rewrite must record a convergence op — otherwise peer devices keep the dead int-OLD-deleted
+        // marker in their local IDB forever and their pushback stays skipped. Assert the latest recorded op
+        // carries the rewritten (live) integration id.
+        const repairOps = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-same-account' });
+        const [latestRepairOp] = repairOps.sort((a, b) => b.ts.localeCompare(a.ts));
+        if (!latestRepairOp) throw new Error('expected a repair op for routine-same-account');
+        expect(latestRepairOp.snapshot?.lastKnownCalendarIntegrationId).toBe(liveIntegration._id);
+    });
+
+    it('cross-account reconnect: a STAMPED different-account marker is wiped (not rewritten)', async () => {
+        // Genuine cross-account: disconnect-with-keep stamped origin email `other@example.com`, then reconnect
+        // authorizes `alice@example.com`. The origin master will never arrive inbound under alice's account,
+        // so the marker is a true orphan and must be WIPED (so the entity becomes pushable again) — proving
+        // the $ne wipe path fires on a stamped (non-legacy) cross-account marker, not just legacy ones.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-other-account',
+                lastKnownCalendarEventId: 'gcal-master-other',
+                lastKnownCalendarIntegrationId: 'int-OTHER-deleted',
+                lastKnownCalendarSyncConfigId: 'sync-config-OTHER',
+                lastKnownCalendarAccountEmail: 'other@example.com',
+            }),
+        );
+
+        // Reconnect authorizes alice@example.com — a DIFFERENT account than the marker's origin.
+        const redirectRes = await authenticatedRequest(app, { method: 'GET', path: '/calendar/auth/google?login_hint=alice@example.com', sessionCookie });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+        const { google } = await import('googleapis');
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'B-at', refresh_token: 'B-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+        const callbackRes = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-B&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(callbackRes.status).toBe(302);
+
+        const afterRepair = await routinesDAO.findByOwnerAndId('routine-other-account', userId);
+        // True orphan — all markers wiped so the routine is pushable again under the new account.
+        expect(afterRepair?.lastKnownCalendarEventId).toBeUndefined();
+        expect(afterRepair?.lastKnownCalendarIntegrationId).toBeUndefined();
+        expect(afterRepair?.lastKnownCalendarAccountEmail).toBeUndefined();
     });
 });
 

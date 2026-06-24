@@ -76,7 +76,7 @@ function parseUnlinkAction(raw: string | undefined): UnlinkAction | null {
 }
 export type SyncContext = { userId: string; now: string; ops: OperationInterface[]; timeZone?: string };
 type RoutineSyncCtx = { userId: string; since: string; now: string; calendarId: string; ops: OperationInterface[]; timeZone?: string };
-type UnlinkSideEffectCtx = { userId: string; now: string };
+type UnlinkSideEffectCtx = { userId: string; now: string; accountEmail?: string };
 /** Groups the integration + sync config identity needed by import/upsert functions. */
 export type CalendarSource = { integration: CalendarIntegrationInterface; config: CalendarSyncConfigInterface };
 // Discriminated union to distinguish network failures from missing-token responses in the OAuth flow.
@@ -356,18 +356,21 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
         // Reconnect overwrites prior grantedScopes verbatim (no union with the existing list) so a
         // narrowed re-consent is reflected accurately. Absent ⇒ legacy/permissive downstream.
         ...(grantedScopes ? { grantedScopes } : {}),
+        // Persist the authorized account (lowercased) so reconcileLastKnownMarkers can tell a same-account
+        // reconnect from a different-account one. authorizedConnectIsValid above guarantees it's non-null.
+        ...(authorizedEmail ? { accountEmail: authorizedEmail.toLowerCase() } : {}),
     };
 
     // Use the PERSISTED id (the surviving row's _id on reconnect), not the phantom randomUUID above —
     // the redirect carries it so the client's calendar picker targets a row that actually exists.
     const persistedIntegrationId = await calendarIntegrationsDAO.upsertEncrypted(integration);
-    // Reconnect repair pass: clear lastKnown* markers that point at integrations the user no longer
-    // has. Without this, an item/routine that was unlinked under one Google account stays "pinned"
-    // to that account's integration id forever — a reconnect to a DIFFERENT Google account would
-    // never deliver an inbound event id matching the marker, and pushback would permanently skip
-    // the entity. The repair runs on every successful OAuth completion (cheap: scoped by user).
-    // Scoped to `ownerUserId` (the resolved Google-identity owner), matching the integration above.
-    await clearOrphanedLastKnownMarkers(ownerUserId);
+    // Reconnect repair pass: reconcile lastKnown* markers against the just-persisted integration.
+    // Same-account reconnect → rewrite the markers' (stale, since-deleted) integration id to the live
+    // one so the inbound strong-key relink still fires; cross-account → wipe true orphans. Critically,
+    // this must NOT blanket-wipe on a same-account reconnect — wiping the marker re-opens the duplicate
+    // push that creates a `gtd*` clone master alongside the real one. Runs on every OAuth completion,
+    // scoped to `ownerUserId` (the resolved Google-identity owner), matching the integration above.
+    await reconcileLastKnownMarkers(ownerUserId);
 
     // intent=rsvp branch: the OAuth ran in a popup launched by MeetingDetails. Serve a tiny HTML
     // page that posts a message to window.opener and closes itself — saves the parent a 500ms poll
@@ -401,47 +404,116 @@ setTimeout(() => window.close(), 100);
 }
 
 /**
- * Clears `lastKnown*` calendar markers from items and routines whose recorded
- * `lastKnownCalendarIntegrationId` no longer matches any live integration the user owns. Called
- * after each successful OAuth completion — covers the cross-account reconnect case where the
- * user disconnects integration A and later connects integration B. Without this, those entities
- * would be permanently un-pushable (pushback skips them while a marker is set).
+ * Reconciles `lastKnown*` calendar markers on items and routines after an OAuth completion. A marker
+ * is set by disconnect-with-keep ($rename of `calendarEventId → lastKnownCalendarEventId`) and is what
+ * the pushback duplicate-suppression guard reads to skip an outbound push and wait for the inbound pull
+ * to strong-key restore the real link. Two cases, keyed on whether the user still has a LIVE integration:
  *
- * Also unsets `calendarInstanceEventId` on any routine-generated item whose owning routine was
- * orphaned. The instance id is derived from the OLD master event id (account A's series) and is
- * meaningless after a reconnect to a different account — leaving it in place causes the preferred
- * exception lookup to miss against account B's exceptions, then the fallback's `originalDate`
- * match works on the first move but the second move misses (item's `timeStart` already shifted),
- * triggering a duplicate create-on-miss. Clearing it forces the next inbound sync to either
- * re-mint via regeneration or take create-on-miss exactly once.
+ *  - **Same-account reconnect (live integration exists).** Disconnect HARD-DELETES the integration row,
+ *    so reconnect mints a NEW integration `_id` (`upsertEncrypted` inserts, since the old `(user, provider)`
+ *    row is gone). The marker's `lastKnownCalendarIntegrationId` therefore points at the now-dead old id.
+ *    We must NOT wipe it — wiping destroys the guard, and the next outbound backfill then pushes the routine
+ *    as a fresh `gtd*` clone master ALONGSIDE the real master that still lives on Google (the duplicate-event
+ *    bug). Instead we REWRITE the marker's integration/config ids to the live integration so the strong-key
+ *    relink (`tryRestoreRoutineFromLastKnownEventId`, matched on `lastKnownCalendarEventId`) still fires on
+ *    the next inbound pull. `(user, provider)` is unique, so there is at most one live Google integration to
+ *    rewrite to. `lastKnownCalendarEventId` is preserved — it's the real master id the inbound pull matches.
+ *
+ *  - **Cross-account orphan (no live integration for the provider).** The user disconnected account A and is
+ *    now on a different account B (or none): account A's master will never arrive inbound, so the marker is a
+ *    true orphan that would leave the entity permanently un-pushable. Here we WIPE the marker (and the
+ *    routine items' stale `calendarInstanceEventId`, derived from A's defunct master id — see below).
+ *
+ * `calendarInstanceEventId` wipe (orphan case only): the instance id is derived from the OLD master event id
+ * (account A's series) and is meaningless after a reconnect to a different account — leaving it in place causes
+ * the preferred exception lookup to miss against account B's exceptions, then the fallback's `originalDate`
+ * match works on the first move but the second misses (item's `timeStart` already shifted), triggering a
+ * duplicate create-on-miss. Clearing it forces the next inbound sync to re-mint via regeneration or take
+ * create-on-miss exactly once. On the same-account rewrite path the instance ids stay valid (same master),
+ * so they are left intact.
  */
-async function clearOrphanedLastKnownMarkers(userId: string): Promise<void> {
-    const liveIntegrationIds = (await calendarIntegrationsDAO.findArray({ user: userId })).map((i) => i._id);
-    const orphanFilter = { user: userId, lastKnownCalendarIntegrationId: { $exists: true, $nin: liveIntegrationIds } } as const;
-    const unsetMarkers = {
-        $unset: { lastKnownCalendarEventId: '', lastKnownCalendarIntegrationId: '', lastKnownCalendarSyncConfigId: '' },
-        $set: { updatedTs: dayjs().toISOString() },
-    } as const;
+async function reconcileLastKnownMarkers(userId: string): Promise<void> {
+    const liveIntegrations = await calendarIntegrationsDAO.findArray({ user: userId });
+    const liveGoogleIntegration = liveIntegrations.find((i) => i.provider === 'google');
+    const liveEmail = liveGoogleIntegration?.accountEmail?.toLowerCase();
+    const liveIds = liveIntegrations.map((i) => i._id);
 
-    // Snapshot the orphaned entities first so we can record per-entity operations after the wipe.
-    // Without ops, other devices would keep the stale `lastKnown*` markers in their local IDB and
-    // their pushback would stay permanently skipped — defeating the whole purpose of the repair pass.
-    const [orphanItems, orphanRoutines] = await Promise.all([itemsDAO.findArray(orphanFilter), routinesDAO.findArray(orphanFilter)]);
-    if (!hasAtLeastOne(orphanItems) && !hasAtLeastOne(orphanRoutines)) {
+    // A marker is "stale" when its integration id is dead (every reconnect mints a new id, since
+    // disconnect hard-deletes the row). Split stale markers two ways, keyed on the ORIGIN account:
+    //   - same-account reconnect (marker's origin email == the reconnected live email) → REWRITE the
+    //     integration id to the live one so the inbound strong-key relink still fires. Wiping here would
+    //     re-open the duplicate `gtd*`-clone push.
+    //   - everything else (different account, or unknown/legacy origin, or no live Google integration)
+    //     → WIPE: a true orphan whose master will never arrive inbound under the current account.
+    //       Caveat: for a legacy marker (stamped before this field existed) on a genuine SAME-account
+    //       reconnect, wiping is NOT strictly correct — it re-opens the duplicate push. But absent the
+    //       origin email we cannot prove same-account, so wipe is the least-bad default; it self-resolves
+    //       the first time the user disconnects/reconnects post-deploy (the new marker carries the email).
+    const orphanFilter: StaleMarkerFilter = {
+        user: userId,
+        lastKnownCalendarIntegrationId: { $exists: true, $nin: liveIds },
+        // Exclude the same-account markers from the wipe set (only when we have a live email to compare).
+        ...(liveEmail ? { lastKnownCalendarAccountEmail: { $ne: liveEmail } } : {}),
+    };
+
+    // Rewrite only fires when we have a live Google integration with a known email to match against.
+    if (liveGoogleIntegration && liveEmail) {
+        const sameAccountFilter: StaleMarkerFilter = {
+            user: userId,
+            lastKnownCalendarIntegrationId: { $exists: true, $nin: liveIds },
+            lastKnownCalendarAccountEmail: liveEmail,
+        };
+        await rewriteMarkersToLiveIntegration(userId, sameAccountFilter, liveGoogleIntegration._id);
+    }
+    await wipeOrphanedMarkersForFilter(userId, orphanFilter);
+}
+
+/** The stale-marker filter shape — identical fields on items and routines, so it types as both. */
+type StaleMarkerFilter = {
+    user: string;
+    lastKnownCalendarIntegrationId: { $exists: true; $nin: string[] };
+    lastKnownCalendarAccountEmail?: string | { $ne: string };
+};
+
+/**
+ * Same-account reconnect: repoint stale markers at the live integration's id so the strong-key relink
+ * still matches on the next inbound pull. Preserves `lastKnownCalendarEventId` (the real master id)
+ * and `calendarInstanceEventId` (still valid — same master). Records ops so peers converge.
+ */
+async function rewriteMarkersToLiveIntegration(userId: string, filter: StaleMarkerFilter, liveIntegrationId: string): Promise<void> {
+    const [staleItems, staleRoutines] = await Promise.all([itemsDAO.findArray(filter), routinesDAO.findArray(filter)]);
+    if (!hasAtLeastOne(staleItems) && !hasAtLeastOne(staleRoutines)) {
         return;
     }
-    await Promise.all([itemsDAO.updateMany(orphanFilter, unsetMarkers), routinesDAO.updateMany(orphanFilter, unsetMarkers)]);
-    // Cross-account hygiene: wipe `calendarInstanceEventId` on items whose routine just had its
-    // marker cleared. Their instance ids were derived from the defunct master event id.
-    const orphanedRoutineIds = orphanRoutines.map((r) => r._id);
-    const refreshedItems = hasAtLeastOne(orphanedRoutineIds) ? await clearStaleInstanceIdsForRoutines(userId, orphanedRoutineIds) : [];
-    await recordRepairOpsForOrphans(userId, [...orphanItems, ...refreshedItems], orphanRoutines);
+    const set = { $set: { lastKnownCalendarIntegrationId: liveIntegrationId, updatedTs: dayjs().toISOString() } } as const;
+    await Promise.all([itemsDAO.updateMany(filter, set), routinesDAO.updateMany(filter, set)]);
+    await recordRepairOpsForOrphans(userId, staleItems, staleRoutines);
+}
+
+/**
+ * Cross-account / unknown-origin orphan: clear the markers entirely (and routine items' now-defunct
+ * instance ids, derived from the prior account's master). Records ops so peers converge.
+ */
+async function wipeOrphanedMarkersForFilter(userId: string, filter: StaleMarkerFilter): Promise<void> {
+    const [staleItems, staleRoutines] = await Promise.all([itemsDAO.findArray(filter), routinesDAO.findArray(filter)]);
+    if (!hasAtLeastOne(staleItems) && !hasAtLeastOne(staleRoutines)) {
+        return;
+    }
+    const unsetMarkers = {
+        $unset: { lastKnownCalendarEventId: '', lastKnownCalendarIntegrationId: '', lastKnownCalendarSyncConfigId: '', lastKnownCalendarAccountEmail: '' },
+        $set: { updatedTs: dayjs().toISOString() },
+    } as const;
+    await Promise.all([itemsDAO.updateMany(filter, unsetMarkers), routinesDAO.updateMany(filter, unsetMarkers)]);
+    // Wipe each orphaned routine's items' stale instance ids too — they point at the defunct master.
+    const orphanedRoutineIds = staleRoutines.map((r) => r._id);
+    const instanceClearedItems = hasAtLeastOne(orphanedRoutineIds) ? await clearStaleInstanceIdsForRoutines(userId, orphanedRoutineIds) : [];
+    await recordRepairOpsForOrphans(userId, [...staleItems, ...instanceClearedItems], staleRoutines);
 }
 
 /**
  * For each given routineId, unsets `calendarInstanceEventId` on all of its items and returns the
  * post-wipe snapshots so the caller can record ops. Overlap with `orphanItems` from
- * `clearOrphanedLastKnownMarkers` is fine — `recordRepairOpsForOrphans` dedupes by `_id`.
+ * `reconcileLastKnownMarkers` is fine — `recordRepairOpsForOrphans` dedupes by `_id`.
  */
 async function clearStaleInstanceIdsForRoutines(userId: string, routineIds: NonEmptyArray<string>): Promise<ItemInterface[]> {
     const filter = { user: userId, routineId: { $in: routineIds }, calendarInstanceEventId: { $exists: true } } as const;
@@ -699,11 +771,11 @@ calendarRoutes.get('/all-sync-configs', authenticateRequest, async (c) => {
  */
 type CalendarLinkDAO = { updateMany: (filter: object, update: object) => Promise<unknown> };
 
-async function renameOrUnsetCalendarLinkFields(dao: CalendarLinkDAO, baseFilter: object, now: string): Promise<void> {
-    await Promise.all([renameCalendarLinkFieldsToLastKnown(dao, baseFilter, now), unsetUnpushedCalendarLinkFields(dao, baseFilter, now)]);
+async function renameOrUnsetCalendarLinkFields(dao: CalendarLinkDAO, baseFilter: object, now: string, accountEmail?: string): Promise<void> {
+    await Promise.all([renameCalendarLinkFieldsToLastKnown(dao, baseFilter, now, accountEmail), unsetUnpushedCalendarLinkFields(dao, baseFilter, now)]);
 }
 
-async function renameCalendarLinkFieldsToLastKnown(dao: CalendarLinkDAO, baseFilter: object, now: string): Promise<void> {
+async function renameCalendarLinkFieldsToLastKnown(dao: CalendarLinkDAO, baseFilter: object, now: string, accountEmail?: string): Promise<void> {
     await dao.updateMany(
         { ...baseFilter, calendarEventId: { $exists: true } },
         {
@@ -712,7 +784,9 @@ async function renameCalendarLinkFieldsToLastKnown(dao: CalendarLinkDAO, baseFil
                 calendarIntegrationId: 'lastKnownCalendarIntegrationId',
                 calendarSyncConfigId: 'lastKnownCalendarSyncConfigId',
             },
-            $set: { updatedTs: now },
+            // Stamp the origin account so a later reconnect can tell same-account (rewrite markers) from
+            // a different-account one (wipe them). Lowercased to match the integration's stored form.
+            $set: { updatedTs: now, ...(accountEmail ? { lastKnownCalendarAccountEmail: accountEmail.toLowerCase() } : {}) },
         },
     );
 }
@@ -785,8 +859,8 @@ async function trashItemsForIntegration(userId: string, integrationId: string, n
  */
 async function applyUnlinkSideEffects(action: UnlinkAction, integrationId: string, routines: RoutineInterface[], ctx: UnlinkSideEffectCtx): Promise<void> {
     if (action === 'keepLinkedEntities') {
-        await unlinkItems(ctx.userId, integrationId, ctx.now);
-        await unlinkRoutines(ctx.userId, routines, ctx.now);
+        await unlinkItems(ctx.userId, integrationId, ctx.now, ctx.accountEmail);
+        await unlinkRoutines(ctx.userId, routines, ctx.now, ctx.accountEmail);
         return;
     }
     // removeLinkedEntities: trash items first, then trash routines + cascade their generated items.
@@ -799,13 +873,13 @@ async function applyUnlinkSideEffects(action: UnlinkAction, integrationId: strin
  * to the integration, leaving the item's status untouched. Records ops for cross-device convergence.
  * Parallel to `unlinkRoutines` — both publish the cleared snapshot via the operation log.
  */
-async function unlinkItems(userId: string, integrationId: string, now: string): Promise<void> {
+async function unlinkItems(userId: string, integrationId: string, now: string, accountEmail?: string): Promise<void> {
     const linked = await itemsDAO.findArray({ user: userId, calendarIntegrationId: integrationId });
     const ids = linked.map((item) => item._id).filter((id): id is string => Boolean(id));
     if (!hasAtLeastOne(ids)) {
         return;
     }
-    await renameOrUnsetCalendarLinkFields(itemsDAO, { _id: { $in: ids }, user: userId }, now);
+    await renameOrUnsetCalendarLinkFields(itemsDAO, { _id: { $in: ids }, user: userId }, now, accountEmail);
     // Re-fetch by stable IDs so snapshots reflect the cleared fields.
     const updated = await itemsDAO.findArray({ _id: { $in: ids }, user: userId });
     await Promise.all(
@@ -849,8 +923,8 @@ function buildLocalProvider(): GoogleCalendarProvider {
 }
 
 /** Clears calendarEventId and calendarIntegrationId from routines in the DB and records operations so other devices sync the cleared fields. */
-async function unlinkRoutines(userId: string, routines: RoutineInterface[], now: string): Promise<void> {
-    await Promise.all(routines.map((r) => renameOrUnsetCalendarLinkFields(routinesDAO, { _id: r._id, user: userId }, now)));
+async function unlinkRoutines(userId: string, routines: RoutineInterface[], now: string, accountEmail?: string): Promise<void> {
+    await Promise.all(routines.map((r) => renameOrUnsetCalendarLinkFields(routinesDAO, { _id: r._id, user: userId }, now, accountEmail)));
     // Record the unlinked state so other devices learn about the cleared calendarEventId/calendarIntegrationId.
     // TOCTOU note: the updateOne + findByOwnerAndId pair is non-atomic; a concurrent write between
     // the two could produce a snapshot that doesn't match the persisted document. This is an
@@ -883,7 +957,11 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
     const provider = buildProvider(integration, userId);
     const linkedRoutines = await routinesDAO.findArray({ user: userId, calendarIntegrationId: integrationId });
 
-    await applyUnlinkSideEffects(action, integrationId, linkedRoutines, { userId, now });
+    await applyUnlinkSideEffects(action, integrationId, linkedRoutines, {
+        userId,
+        now,
+        ...(integration.accountEmail ? { accountEmail: integration.accountEmail } : {}),
+    });
     // Stop all webhook channels before deleting configs so Google stops sending notifications.
     const configs = await calendarSyncConfigsDAO.findByIntegration(integrationId);
     await Promise.all(configs.map((cfg) => teardownWatch(cfg, provider, integration._id).catch(() => {})));
@@ -1374,6 +1452,11 @@ async function runOutboundBackfill(ctx: PushContext, userId: string): Promise<Ba
             status: 'calendar',
             calendarEventId: { $exists: false },
             routineId: { $exists: false },
+            // Belt-and-suspenders: a disconnect-kept entity carries a `lastKnownCalendarEventId` marker and
+            // must NOT be pushed outbound — that mints a `gtd*` clone master alongside the real one it should
+            // relink to. The per-entity pushback guard already skips these; excluding them here makes the
+            // backfill structurally incapable of pushing them even if that guard regresses.
+            lastKnownCalendarEventId: { $exists: false },
         }),
         routinesDAO.findArray({
             user: userId,
@@ -1381,6 +1464,8 @@ async function runOutboundBackfill(ctx: PushContext, userId: string): Promise<Ba
             calendarEventId: { $exists: false },
             // Mirror handleRoutinePush's inactive-skip semantics — capped/paused routines don't push.
             active: { $ne: false },
+            // Same disconnect-kept guard as the items query above — never push a marker-bearing routine.
+            lastKnownCalendarEventId: { $exists: false },
         }),
     ]);
     if (items.length + routines.length === 0) {

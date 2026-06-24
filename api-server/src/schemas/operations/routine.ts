@@ -93,6 +93,7 @@ export const RoutineSnapshotSchema = z
         lastKnownCalendarEventId: nonEmptyString.optional(),
         lastKnownCalendarIntegrationId: nonEmptyString.optional(),
         lastKnownCalendarSyncConfigId: nonEmptyString.optional(),
+        lastKnownCalendarAccountEmail: nonEmptyString.optional(),
         splitFromRoutineId: nonEmptyString.optional(),
         // Raw GCal rebased-master id for split-successor routines — see entities.ts.
         calendarRebasedEventId: nonEmptyString.optional(),
