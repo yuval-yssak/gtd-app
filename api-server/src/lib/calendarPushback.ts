@@ -433,7 +433,7 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
  * and surfaces the recorded operation so the caller can include it in any downstream notify
  * fan-out (web push, etc.) without round-tripping the DB.
  */
-export type PushOutcome = { status: 'created' | 'already-linked' | 'skipped'; eventId?: string; recordedOp?: OperationInterface };
+export type PushOutcome = { status: 'created' | 'already-linked' | 'skipped' | 'relinked'; eventId?: string; recordedOp?: OperationInterface };
 
 /** Creates a new Google Calendar event for an app-created calendar item. */
 async function pushNewItemToGCal(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory, sendUpdates: 'all' | 'none'): Promise<void> {

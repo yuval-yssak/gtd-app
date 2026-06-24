@@ -559,6 +559,41 @@ export const devLoginRoutes = new Hono()
         return c.json({ ok: true, opsRecorded: ctx.ops.length });
     })
 
+    // POST /dev/calendar/simulate-backfill-relink — drives the relink-first backfill path
+    // (`simulateBackfillRelink`) with a caller-supplied `masters` set standing in for
+    // `provider.listEventsFull` (which needs a live Google account). Used by the
+    // calendar-backfill-relink e2e: seed a naked routine + a real recurring master, then assert the
+    // routine relinks onto the master instead of minting a `gtd*` clone. Mirrors the trust boundary
+    // of the other simulate-* routes (dev-only module, unmountable in prod).
+    .post('/calendar/simulate-backfill-relink', async (c) => {
+        const { default: calendarIntegrationsDAO } = await import('../dataAccess/calendarIntegrationsDAO.js');
+        const { default: calendarSyncConfigsDAO } = await import('../dataAccess/calendarSyncConfigsDAO.js');
+        const { simulateBackfillRelink } = await import('./calendar.js');
+        const body = await c.req.json<{
+            userId: string;
+            integrationId: string;
+            syncConfigId: string;
+            masters: Parameters<typeof simulateBackfillRelink>[0];
+        }>();
+        if (!body.userId || !body.integrationId || !body.syncConfigId || !Array.isArray(body.masters)) {
+            return c.json({ error: 'userId, integrationId, syncConfigId, masters[] required' }, 400);
+        }
+        const integration = await calendarIntegrationsDAO.findOne({ _id: body.integrationId, user: body.userId });
+        const config = await calendarSyncConfigsDAO.findOne({ _id: body.syncConfigId, user: body.userId });
+        if (!integration || !config) {
+            return c.json({ error: 'integration or syncConfig not found' }, 404);
+        }
+        const now = dayjs().toISOString();
+        const ctx: Parameters<typeof simulateBackfillRelink>[2] = {
+            userId: body.userId,
+            now,
+            ops: [],
+            ...(config.timeZone ? { timeZone: config.timeZone } : {}),
+        };
+        const result = await simulateBackfillRelink(body.masters, { integration, config }, ctx);
+        return c.json({ ok: true, ...result, opsRecorded: ctx.ops.length });
+    })
+
     // POST /dev/api-tokens — issue a personal API token for the currently logged-in user.
     // Stand-in for a settings-page mint UI: the dev runs this from a browser/curl with their
     // session cookie and pastes the resulting plaintext into their MCP env file. Production has

@@ -1940,6 +1940,296 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(linked?.calendarEventId).toBe(expectedId);
     });
 
+    // ── Idempotent backfill: relink naked routines onto real twins instead of cloning ──────────
+    // These exercise runOutboundBackfill's relink-first path (matchExistingMasterForRoutine). To
+    // reproduce the production bug (the real master is NOT in the incremental delta but IS on the
+    // calendar), the config carries a syncToken so inbound sync takes the incremental path
+    // (listEventsIncremental → empty), while the matcher's full-master fetch (listEventsFull)
+    // returns the live twin. A naked recurring master (rrule, BYDAY=MO, 09:00 Jerusalem/30min)
+    // matches makeRoutine's default template.
+    describe('relink-first (matchExistingMasterForRoutine)', () => {
+        const masterStart = '2025-06-09T09:00:00+03:00'; // 09:00 Jerusalem / 30-min → makeRoutine default template
+        const masterEnd = '2025-06-09T09:30:00+03:00';
+        const masterUpdated = '2025-06-09T08:00:00.000Z';
+
+        async function insertIntegrationWithSyncedConfig(userId: string) {
+            const integration = makeIntegration(userId);
+            await calendarIntegrationsDAO.insertEncrypted(integration);
+            // syncToken present → inbound sync uses the incremental path, so the unmodified real master
+            // never re-imports inbound (matching the disconnect/reconnect repro this fix targets).
+            await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, integration._id, { syncToken: 'tok-existing' }));
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue({ events: [], nextSyncToken: 'tok-next' });
+        }
+
+        function makeMaster(overrides: Partial<GCalEvent> = {}): GCalEvent {
+            return {
+                id: 'real-native-gcal-id',
+                title: 'Standup',
+                timeStart: masterStart,
+                timeEnd: masterEnd,
+                updated: masterUpdated,
+                status: 'confirmed',
+                recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                ...overrides,
+            };
+        }
+
+        it('(i-a) empty master list → CREATE (genuine never-synced app routine)', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-create-1' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-full' });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-created-1');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { pushedRoutines: number; relinkedRoutines: number };
+            expect(body.pushedRoutines).toBe(1);
+            expect(body.relinkedRoutines).toBe(0);
+
+            expect(createSpy).toHaveBeenCalledOnce();
+            const updated = await routinesDAO.findByOwnerAndId('routine-create-1', userId);
+            expect(updated?.calendarEventId).toBe('gcal-created-1');
+            expect(updated?.calendarIntegrationId).toBe('int-1');
+            expect(updated?.calendarSyncConfigId).toBe('sync-config-1');
+        });
+
+        it('(i-b) non-matching master present → CREATE', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-create-2' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            // Different title → not a twin.
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [makeMaster({ title: 'A different meeting' })],
+                nextSyncToken: 'tok-full',
+            });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-created-2');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { pushedRoutines: number; relinkedRoutines: number };
+            expect(body.pushedRoutines).toBe(1);
+            expect(body.relinkedRoutines).toBe(0);
+            expect(createSpy).toHaveBeenCalledOnce();
+        });
+
+        it('(ii) matching native-id master → RELINK, no clone minted', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-relink-1' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [makeMaster()], nextSyncToken: 'tok-full' });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { pushedRoutines: number; relinkedRoutines: number };
+            expect(body.pushedRoutines).toBe(0);
+            expect(body.relinkedRoutines).toBe(1);
+
+            // No clone master pushed to Google.
+            expect(createSpy).not.toHaveBeenCalled();
+            const relinked = await routinesDAO.findByOwnerAndId('routine-relink-1', userId);
+            expect(relinked?.calendarEventId).toBe('real-native-gcal-id');
+            expect(relinked?.calendarIntegrationId).toBe('int-1');
+            expect(relinked?.calendarSyncConfigId).toBe('sync-config-1');
+            // Exactly one routine on that event id — the active-partial unique index holds.
+            const onEvent = await routinesDAO.findArray({ user: userId, calendarEventId: 'real-native-gcal-id' });
+            expect(onEvent).toHaveLength(1);
+            // One op recorded so other devices learn about the relink.
+            const ops = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-relink-1' });
+            expect(ops).toHaveLength(1);
+            expect(ops[0]!.snapshot).toMatchObject({ calendarEventId: 'real-native-gcal-id' });
+        });
+
+        it('(ii-allday) all-day naked routine + all-day master → RELINK', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            await routinesDAO.insertOne(
+                makeRoutine(userId, { _id: 'routine-allday', title: 'OOO', calendarItemTemplate: { allDay: true }, rrule: 'FREQ=DAILY' }),
+            );
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [
+                    makeMaster({
+                        id: 'real-allday-id',
+                        title: 'OOO',
+                        allDay: true,
+                        timeStart: '2025-06-09',
+                        timeEnd: '2025-06-10',
+                        recurrence: ['RRULE:FREQ=DAILY'],
+                    }),
+                ],
+                nextSyncToken: 'tok-full',
+            });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { relinkedRoutines: number };
+            expect(body.relinkedRoutines).toBe(1);
+            expect(createSpy).not.toHaveBeenCalled();
+            const relinked = await routinesDAO.findByOwnerAndId('routine-allday', userId);
+            expect(relinked?.calendarEventId).toBe('real-allday-id');
+        });
+
+        it('(iii) capped-only master (UNTIL) → CREATE (B1 full-master fetch guarantees live twins are seen, so create is safe)', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-capped-create' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            // The only master with this title/template is capped (past UNTIL) → not a live twin → CREATE.
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [makeMaster({ recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20250101T000000Z'] })],
+                nextSyncToken: 'tok-full',
+            });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-created-3');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { pushedRoutines: number; relinkedRoutines: number };
+            expect(body.pushedRoutines).toBe(1);
+            expect(body.relinkedRoutines).toBe(0);
+            expect(createSpy).toHaveBeenCalledOnce();
+        });
+
+        it('skips a master already backing another routine (knownRoutineEventIds) → CREATE', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            // An existing linked routine already owns the only matching master. The naked routine must
+            // NOT be relinked onto it (that would collide on the unique index / split pairs) → CREATE.
+            await routinesDAO.insertOne(
+                makeRoutine(userId, {
+                    _id: 'routine-owner',
+                    calendarEventId: 'real-native-gcal-id',
+                    calendarIntegrationId: 'int-1',
+                    calendarSyncConfigId: 'sync-config-1',
+                }),
+            );
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-naked-skip' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [makeMaster()], nextSyncToken: 'tok-full' });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-created-4');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { pushedRoutines: number; relinkedRoutines: number };
+            expect(body.relinkedRoutines).toBe(0);
+            expect(body.pushedRoutines).toBe(1);
+            expect(createSpy).toHaveBeenCalledOnce();
+        });
+
+        it('(idempotency) sync twice with twin present → relink once, second run is a no-op', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-idem' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [makeMaster()], nextSyncToken: 'tok-full' });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent');
+
+            const res1 = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res1.status).toBe(200);
+            expect(((await res1.json()) as { relinkedRoutines: number }).relinkedRoutines).toBe(1);
+
+            const res2 = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res2.status).toBe(200);
+            // Second run: the routine is now linked, so the backfill query excludes it — nothing to do.
+            const body2 = (await res2.json()) as { pushedRoutines: number; relinkedRoutines: number };
+            expect(body2.relinkedRoutines).toBe(0);
+            expect(body2.pushedRoutines).toBe(0);
+            expect(createSpy).not.toHaveBeenCalled();
+            const onEvent = await routinesDAO.findArray({ user: userId, calendarEventId: 'real-native-gcal-id' });
+            expect(onEvent).toHaveLength(1);
+        });
+
+        it('(dangling integrationId) routine with calendarIntegrationId but no calendarEventId → NOT eligible → CREATE skipped (no clone)', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            // Eligibility requires BOTH calendarEventId and calendarIntegrationId absent (matching the
+            // relink `$set` filter). A routine carrying a dangling integrationId must be excluded entirely
+            // — neither relinked nor cloned — so it can't fall through to a `gtd*` create.
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-dangling', calendarIntegrationId: 'int-OLD' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [makeMaster()], nextSyncToken: 'tok-full' });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { pushedRoutines: number; relinkedRoutines: number };
+            expect(body.relinkedRoutines).toBe(0);
+            expect(body.pushedRoutines).toBe(0);
+            expect(createSpy).not.toHaveBeenCalled();
+            // Unchanged — still naked-but-dangling, awaiting the inbound restore path.
+            const unchanged = await routinesDAO.findByOwnerAndId('routine-dangling', userId);
+            expect(unchanged?.calendarEventId).toBeUndefined();
+        });
+
+        it('(rebased-suffix master) a `_R<anchor>` split successor is never a backfill twin → CREATE', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-rebased' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            // The only matching master carries an `_R<anchor>` rebased suffix — the live tail of a GCal
+            // split, owned by the split path. The backfill matcher must skip it and CREATE instead.
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [makeMaster({ id: 'real-native-gcal-id_R20250609T060000Z' })],
+                nextSyncToken: 'tok-full',
+            });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('gcal-created-rebased');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { pushedRoutines: number; relinkedRoutines: number };
+            expect(body.relinkedRoutines).toBe(0);
+            expect(body.pushedRoutines).toBe(1);
+            expect(createSpy).toHaveBeenCalledOnce();
+        });
+
+        it('(multiple twins) two matching open masters → relinks onto exactly one (first wins), no clone', async () => {
+            const sessionCookie = await loginAsAlice();
+            const userId = await getUserId(sessionCookie);
+            await insertIntegrationWithSyncedConfig(userId);
+            await routinesDAO.insertOne(makeRoutine(userId, { _id: 'routine-multi' }));
+
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            // Two distinct open masters share the same title/rrule/template. The matcher takes the first;
+            // the contract is "relink onto one, never clone".
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [makeMaster({ id: 'twin-A' }), makeMaster({ id: 'twin-B' })],
+                nextSyncToken: 'tok-full',
+            });
+            const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent');
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const body = (await res.json()) as { relinkedRoutines: number };
+            expect(body.relinkedRoutines).toBe(1);
+            expect(createSpy).not.toHaveBeenCalled();
+            const relinked = await routinesDAO.findByOwnerAndId('routine-multi', userId);
+            expect(relinked?.calendarEventId).toBe('twin-A');
+        });
+    });
+
     it('trashes an existing item when its GCal event is cancelled', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

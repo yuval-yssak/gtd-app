@@ -9,7 +9,7 @@ dayjs.extend(timezone);
 import { google } from 'googleapis';
 import { type Context, Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
-import type { EventSyncResult, GCalEvent, GCalException } from '../calendarProviders/CalendarProvider.js';
+import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException } from '../calendarProviders/CalendarProvider.js';
 import { SyncTokenInvalidError } from '../calendarProviders/CalendarProvider.js';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import { clientUrl } from '../config.js';
@@ -1397,7 +1397,7 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
                   },
                   userId,
               )
-            : { pushedItems: 0, pushedRoutines: 0, recordedOps: [] };
+            : { pushedItems: 0, pushedRoutines: 0, relinkedRoutines: 0, recordedOps: [] };
 
         // Both the inbound import path and the backfill path produce ops via recordOperation; we
         // need both fed into the SSE + web push fan-out so live tabs refresh AND closed-tab
@@ -1406,7 +1406,7 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
         const allOps = [...ops, ...backfill.recordedOps];
         if (allOps.length > 0) {
             console.log(
-                `[calendar] manual sync produced ops — notifying SSE + push | userId=${userId} inboundOps=${ops.length} pushedItems=${backfill.pushedItems} pushedRoutines=${backfill.pushedRoutines}`,
+                `[calendar] manual sync produced ops — notifying SSE + push | userId=${userId} inboundOps=${ops.length} pushedItems=${backfill.pushedItems} pushedRoutines=${backfill.pushedRoutines} relinkedRoutines=${backfill.relinkedRoutines}`,
             );
             notifyUserViaSse(userId, { type: 'update', ts: now });
             await notifyViaWebPush(userId, null, allOps, now).catch((err) => {
@@ -1420,6 +1420,7 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
             syncedCalendars: configs.length,
             pushedItems: backfill.pushedItems,
             pushedRoutines: backfill.pushedRoutines,
+            relinkedRoutines: backfill.relinkedRoutines,
         });
     } catch (err) {
         console.error(`[calendar] sync failed for integration ${integrationId}:`, err);
@@ -1434,6 +1435,7 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 interface BackfillResult {
     pushedItems: number;
     pushedRoutines: number;
+    relinkedRoutines: number;
     recordedOps: OperationInterface[];
 }
 
@@ -1462,6 +1464,12 @@ async function runOutboundBackfill(ctx: PushContext, userId: string): Promise<Ba
             user: userId,
             routineType: 'calendar',
             calendarEventId: { $exists: false },
+            // Eligibility MUST match relinkRoutineToEvent's conditional `$set` filter (which requires
+            // BOTH calendarEventId and calendarIntegrationId absent). A routine with a dangling
+            // calendarIntegrationId (eventId absent, integrationId present) would otherwise pass the
+            // twin match but fail the relink `$set` → fall through to a `gtd*` clone create — exactly
+            // the duplicate this fix prevents.
+            calendarIntegrationId: { $exists: false },
             // Mirror handleRoutinePush's inactive-skip semantics — capped/paused routines don't push.
             active: { $ne: false },
             // Same disconnect-kept guard as the items query above — never push a marker-bearing routine.
@@ -1469,17 +1477,95 @@ async function runOutboundBackfill(ctx: PushContext, userId: string): Promise<Ba
         }),
     ]);
     if (items.length + routines.length === 0) {
-        return { pushedItems: 0, pushedRoutines: 0, recordedOps: [] };
+        return { pushedItems: 0, pushedRoutines: 0, relinkedRoutines: 0, recordedOps: [] };
     }
     console.log(`[calendar] backfilling | userId=${userId} items=${items.length} routines=${routines.length}`);
     const itemOutcomes = await pushPaced(items, (item) => pushItemToGCalWithContext(item, ctx, userId));
-    const routineOutcomes = await pushPaced(routines, (routine) => pushRoutineToGCalWithContext(routine, ctx, userId));
+
+    // Relink-first for routines: before minting a `gtd*` clone for a naked routine, match it against
+    // the calendar's full live recurring-master list and relink onto the real twin if one exists.
+    // Gated on `routines.length > 0` so the extra full-master fetch is skipped when there's nothing
+    // to backfill. See matchExistingMasterForRoutine + docs/plans/gcal-backfill-idempotent-push.md.
+    const { outcomes: routineOutcomes, matcherOps } = await backfillRoutines(routines, ctx, userId);
+
     const all = [...itemOutcomes, ...routineOutcomes];
     const pushedItems = itemOutcomes.filter((o) => o.status === 'created').length;
     const pushedRoutines = routineOutcomes.filter((o) => o.status === 'created').length;
-    const recordedOps = all.flatMap((o) => (o.recordedOp ? [o.recordedOp] : []));
-    console.log(`[calendar] backfill complete | pushedItems=${pushedItems} pushedRoutines=${pushedRoutines}`);
-    return { pushedItems, pushedRoutines, recordedOps };
+    const relinkedRoutines = routineOutcomes.filter((o) => o.status === 'relinked').length;
+    const recordedOps = [...all.flatMap((o) => (o.recordedOp ? [o.recordedOp] : [])), ...matcherOps];
+    console.log(`[calendar] backfill complete | pushedItems=${pushedItems} pushedRoutines=${pushedRoutines} relinkedRoutines=${relinkedRoutines}`);
+    return { pushedItems, pushedRoutines, relinkedRoutines, recordedOps };
+}
+
+/**
+ * The set of bare master ids that already back a linked routine for this integration. Masters in this
+ * set are off-limits to the relink matcher — keeps it away from split base/successor pairs. Mirrors
+ * the `knownRoutineEventIds` set in importCalendarEvents (stored ids are always bare-master form).
+ */
+async function loadKnownRoutineEventIds(userId: string, integrationId: string): Promise<Set<string>> {
+    const linkedRoutines = await routinesDAO.findArray({ user: userId, calendarIntegrationId: integrationId, calendarEventId: { $exists: true } });
+    return new Set(linkedRoutines.map((r) => r.calendarEventId).filter((id): id is string => Boolean(id)));
+}
+
+/**
+ * Backfills naked routines relink-first. Fetches the default calendar's full recurring-master list
+ * once (only reached when ≥1 naked routine exists), then for each routine tries a relink against a
+ * live twin; on no match, creates as before via `pushRoutineToGCalWithContext`. Ops recorded by the
+ * matcher (relinks) are returned separately so the caller can fold them into the notify fan-out —
+ * `relinkRoutineToEvent` records into the local `SyncContext`, not into the `PushOutcome`.
+ */
+async function backfillRoutines(
+    routines: RoutineInterface[],
+    ctx: PushContext,
+    userId: string,
+): Promise<{ outcomes: PushOutcome[]; matcherOps: OperationInterface[] }> {
+    if (!hasAtLeastOne(routines)) {
+        return { outcomes: [], matcherOps: [] };
+    }
+    const timeMin = startOfTodayInTz(dayjs().toISOString(), ctx.timeZone);
+    const masters = (await fullSyncFrom(ctx.provider, ctx.config.calendarId, timeMin)).events;
+    const knownRoutineEventIds = await loadKnownRoutineEventIds(userId, ctx.integration._id);
+
+    const syncCtx: SyncContext = { userId, now: dayjs().toISOString(), ops: [], timeZone: ctx.timeZone };
+    const source: CalendarSource = { integration: ctx.integration, config: ctx.config };
+
+    const outcomes = await pushPaced(routines, async (routine) => {
+        const relinked = await matchExistingMasterForRoutine(routine, masters, knownRoutineEventIds, source, syncCtx);
+        if (relinked) {
+            return relinked.calendarEventId ? { status: 'relinked', eventId: relinked.calendarEventId } : { status: 'relinked' };
+        }
+        return pushRoutineToGCalWithContext(routine, ctx, userId);
+    });
+    return { outcomes, matcherOps: syncCtx.ops };
+}
+
+/**
+ * E2E/dev seam for the relink-first backfill: runs `matchExistingMasterForRoutine` over a
+ * caller-supplied master list (standing in for `provider.listEventsFull`, the same way
+ * `reconcileAndApplyRoutineExceptions` stands in for `getExceptions`) so the production
+ * disconnect/reconnect repro can be exercised without a live Google account. Only the relink branch
+ * runs — a real create needs Google, so callers that want to assert "no clone" check `wouldCreate`.
+ * Returns counts plus the recorded ops. Exported solely for the `/dev/calendar/simulate-backfill-relink`
+ * route; production goes through `runOutboundBackfill`.
+ */
+export async function simulateBackfillRelink(
+    masters: GCalEvent[],
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<{ relinked: number; wouldCreate: number }> {
+    const naked = await routinesDAO.findArray({
+        user: ctx.userId,
+        routineType: 'calendar',
+        calendarEventId: { $exists: false },
+        calendarIntegrationId: { $exists: false },
+        active: { $ne: false },
+        lastKnownCalendarEventId: { $exists: false },
+    });
+    const knownRoutineEventIds = await loadKnownRoutineEventIds(ctx.userId, source.integration._id);
+
+    const results = await Promise.all(naked.map((routine) => matchExistingMasterForRoutine(routine, masters, knownRoutineEventIds, source, ctx)));
+    const relinked = results.filter(Boolean).length;
+    return { relinked, wouldCreate: naked.length - relinked };
 }
 
 /** Sequentially pushes each entity through `push`, sleeping between calls to pace under GCal's rate limit. */
@@ -1562,7 +1648,7 @@ async function fetchEventsWithSyncToken(config: CalendarSyncConfigInterface, pro
  * an authoritative snapshot of `[timeMin, ∞)`. The importer uses this to drive its reconciliation
  * sweep — see `EventSyncResult.fullSyncTimeMin`.
  */
-async function fullSyncFrom(provider: GoogleCalendarProvider, calendarId: string, timeMin: string): Promise<EventSyncResult> {
+async function fullSyncFrom(provider: CalendarProvider, calendarId: string, timeMin: string): Promise<EventSyncResult> {
     const result = await provider.listEventsFull(calendarId, timeMin);
     return { ...result, fullSyncTimeMin: timeMin };
 }
@@ -2135,6 +2221,112 @@ async function relinkRoutineToEvent(
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routine._id, snapshot: relinked, opType: 'update', now: ctx.now }));
     console.log(`[gcal-sync] relinked naked routine to GCal event | routineId=${routine._id} eventId=${event.id} title="${event.title}"`);
     return relinked;
+}
+
+/**
+ * Backfill-time guard against minting a `gtd*` clone master for a naked routine whose REAL twin
+ * already lives on the calendar but wasn't in the sync delta (the disconnect/reconnect incremental
+ * case — see docs/plans/gcal-backfill-idempotent-push.md). Matches the naked routine against a
+ * pre-fetched full master list using the SAME naked-match keys as `findExistingRoutineForEvent`
+ * (title + open rrule + timeOfDay/duration-or-allDay), then relinks instead of creating.
+ *
+ * Returns the relinked routine, or `undefined` when no live twin exists (caller falls through to
+ * `pushRoutineToGCalWithContext`, which creates as before).
+ *
+ * Safety (mirrors §4 of the plan):
+ *  - Only OPEN masters are eligible (`isOpenRrule`) — a capped/historical master has no overlapping
+ *    future instances, so creating a fresh series is harmless and correct for a genuine never-synced
+ *    routine. Restricting to open masters also keeps relink to a link-only `$set`, dodging the
+ *    stale-UNTIL structural merge gate entirely.
+ *  - Masters already backing a routine (`knownRoutineEventIds`) are excluded so the matcher never
+ *    targets a split base/successor master (no re-trigger of split-churn / convergence bugs).
+ *  - `relinkRoutineToEvent` is TOCTOU-safe; an E11000 from the active-partial unique index (a
+ *    concurrent webhook claimed it) is swallowed → `undefined` → caller's own create guard runs.
+ *
+ * The `timeOfDay` match depends on `source.config.timeZone` being the calendar's real timezone. On
+ * the manual-sync route this holds because `syncSingleCalendar → refreshTimeZone` mutates it in place
+ * before `runOutboundBackfill` runs; the `?? 'UTC'` fallback is therefore unreachable in production
+ * but a future caller that skips that refresh would silently fall to UTC and miss matches.
+ */
+async function matchExistingMasterForRoutine(
+    routine: RoutineInterface,
+    masters: GCalEvent[],
+    knownRoutineEventIds: Set<string>,
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<RoutineInterface | undefined> {
+    const timeZone = source.config.timeZone ?? 'UTC';
+    const twin = masters.find((event) => isLiveTwinForRoutine(event, routine, knownRoutineEventIds, timeZone));
+    if (!twin) {
+        return undefined;
+    }
+    // Persist the BARE master id — the rest of the system keys on it (`buildCalendarInstanceEventId`,
+    // reconcile sweeps). A raw `_R<…>` rebased suffix is already excluded by `isLiveTwinForRoutine`,
+    // so normalize is a no-op here, but make the stored value explicitly bare-form to match the
+    // importer (`importRecurringEventAsRoutine`) and guard against provider id quirks.
+    const bareTwin: GCalEvent = { ...twin, id: normalizeMasterEventId(twin.id) };
+    try {
+        return await relinkRoutineToEvent(routine, bareTwin, source, ctx);
+    } catch (err) {
+        // The active-partial unique index rejected the relink — a concurrent path already claimed this
+        // series. Treat as "already linked" and let the caller skip the create.
+        if (isDuplicateKeyError(err)) {
+            console.warn(`[gcal-sync] matchExistingMasterForRoutine raced E11000 — skipping create | routineId=${routine._id} eventId=${twin.id}`);
+            return undefined;
+        }
+        throw err;
+    }
+}
+
+/**
+ * True when `event` is a live recurring-master twin of the naked `routine`: an open master not
+ * already backing another routine, with the same title, the same (UNTIL-normalized) rrule, and a
+ * matching template shape (timeOfDay+duration, or all-day). Mirrors the naked-match keys used by
+ * `findExistingRoutineForEvent`.
+ */
+function isLiveTwinForRoutine(event: GCalEvent, routine: RoutineInterface, knownRoutineEventIds: Set<string>, timeZone: string): boolean {
+    const rrule = extractRrule(event.recurrence ?? []);
+    if (!rrule || !isOpenRrule(rrule)) {
+        return false;
+    }
+    // A `_R<anchor>` rebased master is the live tail of a "this and all following" split — owned
+    // exclusively by the split-detection path (findSplitSuccessorByRebasedId). Relinking a naked
+    // routine onto it would re-trigger the split-churn/convergence bugs, so it is never a backfill twin.
+    if (hasRebasedSuffix(event.id)) {
+        return false;
+    }
+    if (knownRoutineEventIds.has(normalizeMasterEventId(event.id))) {
+        return false;
+    }
+    if (event.title !== routine.title || stripUntil(rrule) !== stripUntil(routine.rrule)) {
+        return false;
+    }
+    return matchesNakedTemplate(event, routine, timeZone);
+}
+
+/** Strips a trailing `;UNTIL=…` (or leading `UNTIL=…;`) clause so two open/capped rrules compare on shape alone. */
+function stripUntil(rrule: string): string {
+    return rrule
+        .split(';')
+        .filter((part) => !part.startsWith('UNTIL='))
+        .join(';');
+}
+
+/**
+ * True when the GCal master's template shape equals the naked routine's `calendarItemTemplate`.
+ * Branches on `event.allDay` for the same reason as `buildNakedTemplateMatch`: an all-day routine
+ * stores `{ allDay: true }` (no timeOfDay/duration), so comparing timed fields would never match.
+ */
+function matchesNakedTemplate(event: GCalEvent, routine: RoutineInterface, timeZone: string): boolean {
+    const template = routine.calendarItemTemplate;
+    if (event.allDay) {
+        return template?.allDay === true;
+    }
+    if (!template || template.allDay) {
+        return false;
+    }
+    const { timeOfDay, duration } = buildTimedTemplate(event, timeZone);
+    return template.timeOfDay === timeOfDay && template.duration === duration;
 }
 
 async function createRoutineFromGCal(
