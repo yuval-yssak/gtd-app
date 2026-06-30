@@ -150,12 +150,23 @@ describe('PATCH /v1/items/:id', () => {
             createdTs: '2026-01-01T00:00:00.000Z',
             updatedTs: '2026-01-01T00:00:00.000Z',
         });
-        // Transition to waitingFor (must include waitingForPersonId, valid under the matrix).
+        // Transition to waitingFor with a named person (valid under the matrix; person is optional).
         const res = await patch(plaintext, itemId, { status: 'waitingFor', waitingForPersonId: 'p-1' });
         expect(res.status).toBe(200);
         const stored = await itemsDAO.findByOwnerAndId(itemId, userId);
         expect(stored?.status).toBe('waitingFor');
         expect(stored?.waitingForPersonId).toBe('p-1');
+    });
+
+    it('accepts PATCH { status: "waitingFor" } with no person — waitingForPersonId is optional', async () => {
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
+        const id = await createInboxItem(plaintext, 'ext-1');
+        const res = await patch(plaintext, id, { status: 'waitingFor' });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(id, userId);
+        expect(stored?.status).toBe('waitingFor');
+        expect(stored?.waitingForPersonId).toBeUndefined();
     });
 
     it('rejects field type errors via Zod (energy / focus / time) with invalid_operation', async () => {
@@ -182,15 +193,28 @@ describe('PATCH /v1/items/:id', () => {
     // `status_field_violation` (the canonical code from `validateOperation`), replacing the
     // legacy hand-rolled `incompatible_field_for_status`. `extra: { status, field }` carries
     // the offending cell so callers can branch on it.
-    it('rejects PATCH { status: "somedayMaybe", expectedBy } with status_field_violation', async () => {
+    it('accepts PATCH { status: "somedayMaybe", expectedBy, ignoreBefore } — both deferral dates are allowed', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
-        const res = await patch(plaintext, id, { status: 'somedayMaybe', expectedBy: '2026-06-01' });
+        const res = await patch(plaintext, id, { status: 'somedayMaybe', expectedBy: '2026-06-01', ignoreBefore: '2026-05-15' });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(id, userId);
+        expect(stored?.status).toBe('somedayMaybe');
+        expect(stored?.expectedBy).toBe('2026-06-01');
+        expect(stored?.ignoreBefore).toBe('2026-05-15');
+    });
+
+    it('rejects PATCH { status: "somedayMaybe", workContextIds } with status_field_violation', async () => {
+        // somedayMaybe gained expectedBy/ignoreBefore but still rejects schedule/context fields.
+        const userId = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
+        const id = await createInboxItem(plaintext, 'ext-1');
+        const res = await patch(plaintext, id, { status: 'somedayMaybe', workContextIds: ['ctx-1'] });
         expect(res.status).toBe(400);
         const body = (await res.json()) as { code: string; error: string };
         expect(body.code).toBe('status_field_violation');
-        expect(body.error).toContain('expectedBy');
+        expect(body.error).toContain('workContextIds');
         // Item must not have been updated.
         const stored = await itemsDAO.findByOwnerAndId(id, userId);
         expect(stored?.status).toBe('inbox');

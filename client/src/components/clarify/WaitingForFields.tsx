@@ -4,6 +4,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import type { StoredPerson } from '../../types/MyDB';
+import { TicklerDateFields } from './TicklerDateFields';
 import type { WaitingForFormState } from './types';
 import styles from './WaitingForFields.module.css';
 
@@ -14,67 +15,44 @@ interface Props {
 }
 
 export function WaitingForFields({ value, onChange, people }: Props) {
-    if (people.length === 0) {
-        return (
-            <Typography
-                variant="body2"
-                sx={{
-                    color: 'text.secondary',
-                }}
-            >
-                No people yet — add contacts in the{' '}
-                <Link to="/people" className={styles.peopleLink}>
-                    People
-                </Link>{' '}
-                section first.
-            </Typography>
-        );
-    }
-
     return (
         <Stack
             sx={{
                 gap: 2,
             }}
         >
+            {/* The person is optional — a waitingFor item can be blocked on something other than a
+                named contact (e.g. "waiting for a part to arrive"). The "— No one —" entry clears it. */}
             <TextField
                 select
-                label="Waiting for"
+                label="Waiting for (optional)"
                 value={value.waitingForPersonId}
                 onChange={(e) => onChange({ waitingForPersonId: e.target.value })}
                 size="small"
-                required
                 className={styles.waitingForSelect}
             >
+                <MenuItem value="">— No one —</MenuItem>
                 {people.map((p) => (
                     <MenuItem key={p._id} value={p._id}>
                         {p.name}
                     </MenuItem>
                 ))}
             </TextField>
-            <Stack
-                direction={{ xs: 'column', sm: 'row' }}
-                sx={{
-                    gap: 2,
-                }}
-            >
-                <TextField
-                    label="Expected by"
-                    type="date"
-                    value={value.expectedBy}
-                    onChange={(e) => onChange({ expectedBy: e.target.value })}
-                    size="small"
-                    slotProps={{ inputLabel: { shrink: true } }}
-                />
-                <TextField
-                    label="Ignore before"
-                    type="date"
-                    value={value.ignoreBefore}
-                    onChange={(e) => onChange({ ignoreBefore: e.target.value })}
-                    size="small"
-                    slotProps={{ inputLabel: { shrink: true } }}
-                />
-            </Stack>
+            {people.length === 0 && (
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'text.secondary',
+                    }}
+                >
+                    No people yet — add contacts in the{' '}
+                    <Link to="/people" className={styles.peopleLink}>
+                        People
+                    </Link>{' '}
+                    section to name who you're waiting on.
+                </Typography>
+            )}
+            <TicklerDateFields value={value} onChange={onChange} />
         </Stack>
     );
 }

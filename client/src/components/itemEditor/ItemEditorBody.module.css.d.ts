@@ -8,7 +8,6 @@ declare const styles: {
     readonly preview: string;
     readonly previewClickable: string;
     readonly sectionLabel: string;
-    readonly somedayEmpty: string;
     readonly statusChips: string;
     readonly statusLabel: string;
     readonly tabs: string;

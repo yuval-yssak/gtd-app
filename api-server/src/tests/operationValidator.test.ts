@@ -365,7 +365,7 @@ describe('assertStatusFieldRules — exhaustive status × field matrix', () => {
         nextAction: new Set(['workContextIds', 'peopleIds', 'energy', 'time', 'focus', 'urgent', 'expectedBy', 'ignoreBefore']),
         calendar: new Set(['timeStart', 'timeEnd', 'calendarEventId', 'calendarIntegrationId', 'workContextIds', 'peopleIds']),
         waitingFor: new Set(['waitingForPersonId', 'peopleIds', 'expectedBy', 'ignoreBefore']),
-        somedayMaybe: new Set(),
+        somedayMaybe: new Set(['expectedBy', 'ignoreBefore']),
         done: ALL_FIELDS_SET,
         trash: ALL_FIELDS_SET,
     };

@@ -22,7 +22,8 @@ function ControlledWaitingForFields({ initial, people }: { initial: WaitingForFo
     return <WaitingForFields value={value} onChange={(patch) => setValue((prev) => ({ ...prev, ...patch }))} people={people} />;
 }
 
-/** No people in the system — the person selector shows an informational message. */
+/** No people in the system — the (optional) person selector still renders with a "— No one —"
+ *  option plus a hint to add contacts; the deadline/tickler dates remain usable. */
 export const NoPeople: Story = {
     render: () => <ControlledWaitingForFields initial={emptyWaitingForState} people={[]} />,
 };

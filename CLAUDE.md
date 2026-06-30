@@ -74,10 +74,11 @@ All server-side interfaces live in `api-server/src/types/entities.ts`. Client-si
 - `inbox` — title only
 - `nextAction` — `workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`
 - `calendar` — `timeStart`, `timeEnd`, `calendarEventId`, `calendarIntegrationId`
-- `waitingFor` — `waitingForPersonId`, `peopleIds`, `expectedBy`, `ignoreBefore`
+- `waitingFor` — `waitingForPersonId` (optional — an item can be blocked on something other than a named person), `peopleIds`, `expectedBy`, `ignoreBefore`
+- `somedayMaybe` — `expectedBy`, `ignoreBefore` (optional; both omittable for a plain title-only parked item)
 - `done` / `trash` — no additional fields
 
-**Tickler pattern:** `ignoreBefore` (ISO date) hides an item from all lists until that date. It only applies to `nextAction` and `waitingFor` items — `calendar` items ignore `ignoreBefore` entirely (it has no effect on visibility or filtering). Separate from calendar `timeStart` to avoid semantic overloading.
+**Tickler pattern:** `ignoreBefore` (ISO date) hides an item from all lists until that date. It applies to `nextAction`, `waitingFor`, and `somedayMaybe` items — `calendar` items ignore `ignoreBefore` entirely (it has no effect on visibility or filtering). Separate from calendar `timeStart` to avoid semantic overloading.
 
 **Routine-generated next-action items** are always created with `ignoreBefore = expectedBy`, so they stay in the tickler until their due date. There is no configurable lead-days offset.
 

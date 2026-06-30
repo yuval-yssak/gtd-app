@@ -153,7 +153,7 @@ export const STATUS_FIELD_MATRIX: Record<ItemInterface['status'], ReadonlySet<St
     nextAction: new Set(['workContextIds', 'peopleIds', 'energy', 'time', 'focus', 'urgent', 'expectedBy', 'ignoreBefore']),
     calendar: new Set(['timeStart', 'timeEnd', 'allDay', 'calendarEventId', 'calendarIntegrationId', 'calendarInstanceEventId', 'workContextIds', 'peopleIds']),
     waitingFor: new Set(['waitingForPersonId', 'peopleIds', 'expectedBy', 'ignoreBefore']),
-    somedayMaybe: new Set(),
+    somedayMaybe: new Set(['expectedBy', 'ignoreBefore']),
     done: ALL_STATUS_SPECIFIC,
     trash: ALL_STATUS_SPECIFIC,
 };

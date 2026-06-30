@@ -3,10 +3,19 @@ import type { ReassignItemEditPatch } from '../api/syncApi';
 import type { CalendarOption } from '../hooks/useCalendarOptions';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type { EnergyLevel, StoredItem } from '../types/MyDB';
-import type { CalendarFormState, NextActionFormState, WaitingForFormState } from './clarify/types';
+import type { CalendarFormState, NextActionFormState, SomedayMaybeFormState, WaitingForFormState } from './clarify/types';
 import { buildCalendarMeta, type CalendarMeta } from './clarify/types';
 
 export type EditableStatus = 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash';
+
+/** The four per-status form states the editor maintains, bundled so the merge/patch builders take
+ *  one cohesive "editor forms" argument instead of a growing list of positional form params. */
+export interface EditorForms {
+    na: NextActionFormState;
+    cal: CalendarFormState;
+    wf: WaitingForFormState;
+    sm: SomedayMaybeFormState;
+}
 
 export type ItemEditorChrome = 'dialog' | 'popover' | 'expand' | 'page';
 
@@ -34,8 +43,10 @@ export function shouldDetachFromRoutine(previous: EditableStatus, next: Editable
     return next !== 'done' && next !== 'trash';
 }
 
-/** Returns true when the selected status requires a field that isn't filled in the form. */
-export function isSaveDisabled(title: string, status: EditableStatus, cal: CalendarFormState, wf: WaitingForFormState): boolean {
+/** Returns true when the selected status requires a field that isn't filled in the form.
+ *  Only calendar (date/time validity) and a non-empty title gate the save — every other status,
+ *  including waitingFor (the person is optional) and somedayMaybe, has no required field. */
+export function isSaveDisabled(title: string, status: EditableStatus, cal: CalendarFormState): boolean {
     if (!title.trim()) {
         return true;
     }
@@ -53,9 +64,7 @@ export function isSaveDisabled(title: string, status: EditableStatus, cal: Calen
     if (status === 'calendar' && !cal.allDay && cal.startTime && cal.endTime && cal.endTime < cal.startTime) {
         return true;
     }
-    if (status === 'waitingFor' && !wf.waitingForPersonId) {
-        return true;
-    }
+    // waitingFor has no required field — the person is optional, so the only gate is a non-empty title.
     return false;
 }
 
@@ -175,9 +184,20 @@ export function applyWaitingForForm(item: StoredItem, wf: WaitingForFormState): 
     const { waitingForPersonId: _wfp, expectedBy: _eb, ignoreBefore: _ib, ...rest } = item;
     return {
         ...rest,
-        waitingForPersonId: wf.waitingForPersonId,
+        // Omit waitingForPersonId when blank — the person is optional and a '' would fail the op
+        // validator's NonEmptyString rule.
+        ...(wf.waitingForPersonId ? { waitingForPersonId: wf.waitingForPersonId } : {}),
         ...(wf.expectedBy ? { expectedBy: wf.expectedBy } : {}),
         ...(wf.ignoreBefore ? { ignoreBefore: wf.ignoreBefore } : {}),
+    };
+}
+
+export function applySomedayMaybeForm(item: StoredItem, sm: SomedayMaybeFormState): StoredItem {
+    const { expectedBy: _eb, ignoreBefore: _ib, ...rest } = item;
+    return {
+        ...rest,
+        ...(sm.expectedBy ? { expectedBy: sm.expectedBy } : {}),
+        ...(sm.ignoreBefore ? { ignoreBefore: sm.ignoreBefore } : {}),
     };
 }
 
@@ -244,9 +264,7 @@ export function buildEditPatch(
     trimmedTitle: string,
     trimmedNotes: string,
     status: EditableStatus,
-    na: NextActionFormState,
-    cal: CalendarFormState,
-    wf: WaitingForFormState,
+    forms: EditorForms,
 ): ReassignItemEditPatch {
     const patch: ReassignItemEditPatch = {};
     if (trimmedTitle !== item.title) {
@@ -257,13 +275,16 @@ export function buildEditPatch(
         patch.notes = trimmedNotes;
     }
     if (status === 'calendar') {
-        addCalendarPatchFields(patch, item, cal);
+        addCalendarPatchFields(patch, item, forms.cal);
     }
     if (status === 'nextAction') {
-        addNextActionPatchFields(patch, item, na);
+        addNextActionPatchFields(patch, item, forms.na);
     }
     if (status === 'waitingFor') {
-        addWaitingForPatchFields(patch, item, wf);
+        addWaitingForPatchFields(patch, item, forms.wf);
+    }
+    if (status === 'somedayMaybe') {
+        addSomedayMaybePatchFields(patch, item, forms.sm);
     }
     return patch;
 }
@@ -352,6 +373,8 @@ function addNextActionPatchFields(patch: ReassignItemEditPatch, item: StoredItem
 
 function addWaitingForPatchFields(patch: ReassignItemEditPatch, item: StoredItem, wf: WaitingForFormState): void {
     if (wf.waitingForPersonId !== (item.waitingForPersonId ?? '')) {
+        // Empty string is the clear sentinel the PATCH route understands — emit it so removing the
+        // person on an item that had one actually unsets the field.
         patch.waitingForPersonId = wf.waitingForPersonId;
     }
     if (wf.expectedBy !== (item.expectedBy ?? '')) {
@@ -359,6 +382,15 @@ function addWaitingForPatchFields(patch: ReassignItemEditPatch, item: StoredItem
     }
     if (wf.ignoreBefore !== (item.ignoreBefore ?? '')) {
         patch.ignoreBefore = wf.ignoreBefore;
+    }
+}
+
+function addSomedayMaybePatchFields(patch: ReassignItemEditPatch, item: StoredItem, sm: SomedayMaybeFormState): void {
+    if (sm.expectedBy !== (item.expectedBy ?? '')) {
+        patch.expectedBy = sm.expectedBy;
+    }
+    if (sm.ignoreBefore !== (item.ignoreBefore ?? '')) {
+        patch.ignoreBefore = sm.ignoreBefore;
     }
 }
 
@@ -375,24 +407,20 @@ function arraysSetEqual(a: string[], b: string[]): boolean {
     return b.every((v) => setA.has(v));
 }
 
-export function mergeFormsIntoItem(
-    item: StoredItem,
-    status: EditableStatus,
-    na: NextActionFormState,
-    cal: CalendarFormState,
-    wf: WaitingForFormState,
-    calendarOptions: CalendarOption[],
-): StoredItem {
+export function mergeFormsIntoItem(item: StoredItem, status: EditableStatus, forms: EditorForms, calendarOptions: CalendarOption[]): StoredItem {
     if (status === 'nextAction') {
-        return applyNextActionForm(item, na);
+        return applyNextActionForm(item, forms.na);
     }
     if (status === 'calendar') {
-        return applyCalendarForm(item, cal, calendarOptions);
+        return applyCalendarForm(item, forms.cal, calendarOptions);
     }
     if (status === 'waitingFor') {
-        return applyWaitingForForm(item, wf);
+        return applyWaitingForForm(item, forms.wf);
     }
-    // inbox, somedayMaybe, done, trash — no extra fields beyond title/notes
+    if (status === 'somedayMaybe') {
+        return applySomedayMaybeForm(item, forms.sm);
+    }
+    // inbox, done, trash — no extra fields beyond title/notes
     return item;
 }
 

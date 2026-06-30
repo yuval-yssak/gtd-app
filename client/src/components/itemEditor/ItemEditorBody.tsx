@@ -39,13 +39,16 @@ import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } 
 import { AccountPicker } from '../AccountPicker';
 import { CalendarFields } from '../clarify/CalendarFields';
 import { NextActionFields } from '../clarify/NextActionFields';
+import { TicklerDateFields } from '../clarify/TicklerDateFields';
 import {
     buildCalendarMeta,
     buildNextActionMeta,
+    buildSomedayMaybeMeta,
     buildWaitingForMeta,
     type CalendarFormState,
     emptyCalendar,
     type NextActionFormState,
+    type SomedayMaybeFormState,
     type WaitingForFormState,
 } from '../clarify/types';
 import { WaitingForFields } from '../clarify/WaitingForFields';
@@ -55,6 +58,7 @@ import {
     buildEditPatch,
     decideSavePath,
     type EditableStatus,
+    type EditorForms,
     type ItemEditorChrome,
     isSaveDisabled,
     mergeFormsIntoItem,
@@ -228,8 +232,14 @@ export function ItemEditorBody({
         expectedBy: item.expectedBy ?? '',
         ignoreBefore: item.ignoreBefore ?? '',
     });
+    const [smForm, setSmForm] = useState<SomedayMaybeFormState>({
+        expectedBy: item.expectedBy ?? '',
+        ignoreBefore: item.ignoreBefore ?? '',
+    });
 
-    const saveDisabled = isSaveDisabled(title, status, calForm, wfForm) || isSaving;
+    // Bundle the per-status forms so the merge/patch builders take one cohesive argument.
+    const forms: EditorForms = { na: naForm, cal: calForm, wf: wfForm, sm: smForm };
+    const saveDisabled = isSaveDisabled(title, status, calForm) || isSaving;
 
     function onSave() {
         if (isSaving) {
@@ -251,7 +261,7 @@ export function ItemEditorBody({
             return;
         }
         if (path.kind === 'reassign') {
-            startReassignInBackground(buildEditPatch(item, trimmedTitle, trimmedNotes, status, naForm, calForm, wfForm), trimmedTitle);
+            startReassignInBackground(buildEditPatch(item, trimmedTitle, trimmedNotes, status, forms), trimmedTitle);
             onClose();
             return;
         }
@@ -292,7 +302,7 @@ export function ItemEditorBody({
         const statusChanged = status !== item.status;
         const path = decideSavePath(ownerChanged, statusChanged);
         if (path.kind !== 'saveInPlace') return false;
-        const merged = mergeFormsIntoItem({ ...item, title: trimmedTitle, notes: trimmedNotes }, status, naForm, calForm, wfForm, visibleCalendarOptions);
+        const merged = mergeFormsIntoItem({ ...item, title: trimmedTitle, notes: trimmedNotes }, status, forms, visibleCalendarOptions);
         // Treat the live attendees state as the post-edit attendee set — attendee-editor changes
         // bypass Save (they queue their own ops) but a parallel title edit still needs the prompt.
         return shouldFireSendUpdatesDialog(
@@ -366,7 +376,7 @@ export function ItemEditorBody({
     }
 
     async function saveInPlace(itemNormalized: StoredItem, gcalMeta: { sendUpdates: 'all' | 'none' } | undefined) {
-        const merged = mergeFormsIntoItem(itemNormalized, status, naForm, calForm, wfForm, visibleCalendarOptions);
+        const merged = mergeFormsIntoItem(itemNormalized, status, forms, visibleCalendarOptions);
         // Fold in the live attendee state — it lives outside the form because the meeting-details
         // editor mutates it asynchronously and shouldn't be lost on Save.
         const withAttendees = liveAttendees && liveAttendees.length > 0 ? { ...merged, attendees: liveAttendees } : merged;
@@ -414,7 +424,7 @@ export function ItemEditorBody({
                 await clarifyToWaitingFor(db, baseItem, buildWaitingForMeta(wfForm));
                 break;
             case 'somedayMaybe':
-                await clarifyToSomedayMaybe(db, baseItem);
+                await clarifyToSomedayMaybe(db, baseItem, buildSomedayMaybeMeta(smForm));
                 break;
             case 'done':
                 // `buildClarifyToDoneOpts` is a named helper so a refactor that drops the
@@ -605,9 +615,24 @@ export function ItemEditorBody({
             )}
 
             {status === 'somedayMaybe' && (
-                <Box className={styles.somedayEmpty}>
-                    <Typography variant="body2">Parked for later review. No schedule or context — just title and notes.</Typography>
-                </Box>
+                <>
+                    <Divider />
+                    <Stack
+                        sx={{
+                            gap: 2,
+                        }}
+                    >
+                        <Typography
+                            variant="body2"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
+                            Parked for later review. Optionally set a deadline or hide it from review until a date.
+                        </Typography>
+                        <TicklerDateFields value={smForm} onChange={(patch) => setSmForm((f) => ({ ...f, ...patch }))} />
+                    </Stack>
+                </>
             )}
 
             {renderActions ? (

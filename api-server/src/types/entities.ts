@@ -64,17 +64,19 @@ export interface ItemInterface {
      */
     peopleIds?: string[];
     /**
-     * Ref to PersonInterface._id. The specific person being waited on (`waitingFor` items only).
+     * Ref to PersonInterface._id. The specific person being waited on. Optional even on `waitingFor`
+     * items — a delegated/blocked item need not name a person (e.g. "waiting for a part to arrive").
      */
     waitingForPersonId?: string;
     /**
-     * Deadline date (one-day resolution, ISO date string). Relevant for `nextAction` and `waitingFor` items.
+     * Deadline date (one-day resolution, ISO date string). Relevant for `nextAction`, `waitingFor`,
+     * and `somedayMaybe` items.
      */
     expectedBy?: string;
     /**
      * Tickler date (ISO date string). Item is hidden from all lists until this date passes.
-     * Only applies to `nextAction` and `waitingFor` items — `calendar` items ignore this field.
-     * Separate from `timeStart` to avoid overloading.
+     * Applies to `nextAction`, `waitingFor`, and `somedayMaybe` items — `calendar` items ignore
+     * this field. Separate from `timeStart` to avoid overloading.
      */
     ignoreBefore?: string;
     /**

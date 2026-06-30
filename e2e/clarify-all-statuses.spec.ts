@@ -56,6 +56,50 @@ test.describe('clarify to all statuses', () => {
         });
     });
 
+    test('clarify to waiting-for with NO person — person is optional', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wfnp-${dayjs().valueOf()}@example.com`, async (page) => {
+            const inbox = await gtd.collect(page, 'Wait for the part to arrive');
+            const expectedBy = dayjs().add(10, 'day').format('YYYY-MM-DD');
+
+            // No waitingForPersonId in the meta — a waitingFor item need not name a person.
+            const wfItem = await gtd.clarifyToWaitingFor(page, inbox, { expectedBy });
+            expect(wfItem.status).toBe('waitingFor');
+            expect(wfItem.waitingForPersonId).toBeUndefined();
+            expect(wfItem.expectedBy).toBe(expectedBy);
+
+            await gtd.flush(page);
+            expect(await gtd.queuedOps(page)).toHaveLength(0);
+
+            const bootstrap = await gtd.fetchBootstrap(page);
+            const serverItem = bootstrap.items.find((i) => i._id === wfItem._id);
+            expect(serverItem?.status).toBe('waitingFor');
+            expect(serverItem?.waitingForPersonId).toBeUndefined();
+            expect(serverItem?.expectedBy).toBe(expectedBy);
+        });
+    });
+
+    test('clarify to someday/maybe with expectedBy and ignoreBefore', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `sm-${dayjs().valueOf()}@example.com`, async (page) => {
+            const inbox = await gtd.collect(page, 'Learn to sail someday');
+            const expectedBy = dayjs().add(90, 'day').format('YYYY-MM-DD');
+            const ignoreBefore = dayjs().add(30, 'day').format('YYYY-MM-DD');
+
+            const smItem = await gtd.clarifyToSomedayMaybe(page, inbox, { expectedBy, ignoreBefore });
+            expect(smItem.status).toBe('somedayMaybe');
+            expect(smItem.expectedBy).toBe(expectedBy);
+            expect(smItem.ignoreBefore).toBe(ignoreBefore);
+
+            await gtd.flush(page);
+            expect(await gtd.queuedOps(page)).toHaveLength(0);
+
+            const bootstrap = await gtd.fetchBootstrap(page);
+            const serverItem = bootstrap.items.find((i) => i._id === smItem._id);
+            expect(serverItem?.status).toBe('somedayMaybe');
+            expect(serverItem?.expectedBy).toBe(expectedBy);
+            expect(serverItem?.ignoreBefore).toBe(ignoreBefore);
+        });
+    });
+
     test('clarify to trash', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `trash-${dayjs().valueOf()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Junk mail');

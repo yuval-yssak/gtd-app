@@ -81,8 +81,8 @@ const updateItem = defineTool({
         '- inbox: title/notes only\n' +
         '- nextAction: workContextIds, peopleIds, energy, time, focus, urgent, expectedBy, ignoreBefore\n' +
         '- calendar: timeStart, timeEnd, calendarEventId, calendarIntegrationId, workContextIds, peopleIds\n' +
-        '- waitingFor: waitingForPersonId, peopleIds, expectedBy, ignoreBefore\n' +
-        '- somedayMaybe: title/notes only\n' +
+        '- waitingFor: waitingForPersonId (optional — a waitingFor item need not name a person), peopleIds, expectedBy, ignoreBefore\n' +
+        '- somedayMaybe: expectedBy, ignoreBefore\n' +
         'Caller-supplied fields incompatible with the target status return 400 status_field_violation with extra:{status,field}.',
     inputSchema: {
         id: idSchema,
@@ -96,8 +96,11 @@ const updateItem = defineTool({
         time: z.number().nonnegative().optional(),
         focus: z.boolean().optional(),
         urgent: z.boolean().optional(),
-        expectedBy: z.string().optional().describe('YYYY-MM-DD or ISO datetime. Allowed only on nextAction / waitingFor.'),
-        ignoreBefore: z.string().optional().describe('YYYY-MM-DD. Tickler — hides item until this date. Allowed only on nextAction / waitingFor.'),
+        expectedBy: z.string().optional().describe('YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe.'),
+        ignoreBefore: z
+            .string()
+            .optional()
+            .describe('YYYY-MM-DD. Tickler — hides item until this date. Allowed on nextAction / waitingFor / somedayMaybe.'),
         timeStart: z.string().optional().describe('Floating ISO datetime. Allowed only on calendar items.'),
         timeEnd: z.string().optional().describe('Floating ISO datetime. Allowed only on calendar items.'),
         calendarEventId: z.string().optional(),

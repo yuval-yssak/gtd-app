@@ -115,14 +115,17 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
 }
 
 export interface WaitingForMeta {
-    waitingForPersonId: string;
+    // Optional — a waitingFor item need not name a person (e.g. blocked on a delivery, not someone).
+    waitingForPersonId?: string;
     peopleIds?: string[];
     expectedBy?: string;
     ignoreBefore?: string;
 }
 
 export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredItem, meta: WaitingForMeta): Promise<StoredItem> {
-    // Strip calendar/nextAction-specific fields that don't apply to waitingFor
+    // Strip calendar/nextAction-specific fields that don't apply to waitingFor. Also drop any
+    // pre-existing waitingForPersonId — meta carries it only when set, so spreading `...meta`
+    // over a stripped base means clearing the person (meta omits the key) actually unsets it.
     const {
         timeStart: _ts,
         timeEnd: _te,
@@ -135,6 +138,7 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
         focus: _f,
         urgent: _u,
         allDay: _ad,
+        waitingForPersonId: _wfp,
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'waitingFor', ...meta, updatedTs: nowIso() };
@@ -168,8 +172,15 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
     return updated;
 }
 
-export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
-    // Someday/Maybe carries the same shape as inbox — no schedule, context, or waitingFor metadata.
+// Someday/Maybe carries only the two deferral dates — no schedule, context, or person metadata.
+export interface SomedayMaybeMeta {
+    expectedBy?: string;
+    ignoreBefore?: string;
+}
+
+export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: StoredItem, meta: SomedayMaybeMeta = {}): Promise<StoredItem> {
+    // Strip every status-specific field (including expectedBy/ignoreBefore) off the base, then
+    // re-apply the two deferral dates from meta — so an unset date in the form actually clears it.
     const {
         workContextIds: _wc,
         energy: _e,
@@ -187,7 +198,7 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
         allDay: _ad,
         ...rest
     } = item;
-    const updated: StoredItem = { ...rest, status: 'somedayMaybe', updatedTs: nowIso() };
+    const updated: StoredItem = { ...rest, status: 'somedayMaybe', ...meta, updatedTs: nowIso() };
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;

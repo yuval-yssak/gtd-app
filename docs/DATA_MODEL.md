@@ -20,13 +20,14 @@ Every item has exactly one status at a time.
 | `inbox` | Freshly captured; not yet clarified |
 | `nextAction` | Actionable; do it as soon as possible |
 | `calendar` | Can only happen in a specific time window (meeting, appointment) |
-| `waitingFor` | Delegated; waiting for another person to act |
+| `waitingFor` | Delegated/blocked; waiting on another person — or on an external event — to act |
+| `somedayMaybe` | Parked for later review; may carry deferral dates but no schedule or context |
 | `done` | Completed |
 | `trash` | Discarded |
 
 ### Tickler pattern (`ignoreBefore`)
 
-A `nextAction` or `waitingFor` item can carry an `ignoreBefore` date. The item is hidden from all active lists until that date arrives, then surfaces automatically. This is the GTD "tickler file" — a way to defer something without cluttering today's view.
+A `nextAction`, `waitingFor`, or `somedayMaybe` item can carry an `ignoreBefore` date. The item is hidden from all active lists until that date arrives, then surfaces automatically. This is the GTD "tickler file" — a way to defer something without cluttering today's view.
 
 > `ignoreBefore` is a separate field from the calendar `timeStart`/`timeEnd` pair to keep their semantics unambiguous.
 
@@ -51,7 +52,7 @@ Contexts are named entities (their own collection), so they can be renamed and m
 A **person** is a named contact referenced by items. Uses:
 
 - `peopleIds` on any item — to associate collaborators or stakeholders
-- `waitingForPersonId` on `waitingFor` items — the specific person being waited on
+- `waitingForPersonId` on `waitingFor` items — the specific person being waited on (optional; a `waitingFor` item may be blocked on an external event rather than a person)
 - `externalCalendarId` — link to their Google Calendar for scheduling
 
 | Field | Purpose |

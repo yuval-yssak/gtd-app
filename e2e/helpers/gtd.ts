@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import type { NextActionFilters } from '../../client/src/db/itemHelpers';
-import type { CalendarMeta, NextActionMeta, WaitingForMeta } from '../../client/src/db/itemMutations';
+import type { CalendarMeta, NextActionMeta, SomedayMaybeMeta, WaitingForMeta } from '../../client/src/db/itemMutations';
 import type {
     StoredDeviceMeta,
     StoredItem,
@@ -121,15 +121,15 @@ const gtdImpl = {
             item,
         ),
 
-    clarifyToSomedayMaybe: (page: Page, item: StoredItem): Promise<StoredItem> =>
+    clarifyToSomedayMaybe: (page: Page, item: StoredItem, meta: SomedayMaybeMeta = {}): Promise<StoredItem> =>
         page.evaluate(
-            (i) =>
+            ([i, m]) =>
                 (
                     window as unknown as {
-                        __gtd: { clarifyToSomedayMaybe(i: StoredItem): Promise<StoredItem> };
+                        __gtd: { clarifyToSomedayMaybe(i: StoredItem, m: SomedayMaybeMeta): Promise<StoredItem> };
                     }
-                ).__gtd.clarifyToSomedayMaybe(i as StoredItem),
-            item,
+                ).__gtd.clarifyToSomedayMaybe(i as StoredItem, m as SomedayMaybeMeta),
+            [item, meta] as const,
         ),
 
     // ── Update / remove ──────────────────────────────────────────────────────

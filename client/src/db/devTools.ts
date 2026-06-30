@@ -10,7 +10,7 @@ import { getActiveAccount } from './accountHelpers';
 import { getOrCreateDeviceId } from './deviceId';
 import type { NextActionFilters } from './itemHelpers';
 import { getActiveNextActions, getItemsByUser, getOverdueItems, getUpcomingCalendarItems } from './itemHelpers';
-import type { CalendarMeta, NextActionMeta, WaitingForMeta } from './itemMutations';
+import type { CalendarMeta, NextActionMeta, SomedayMaybeMeta, WaitingForMeta } from './itemMutations';
 import {
     clarifyToCalendar,
     clarifyToDone,
@@ -68,7 +68,7 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         clarifyToCalendar: (item: StoredItem, meta: CalendarMeta) => clarifyToCalendar(db, item, meta),
         clarifyToWaitingFor: (item: StoredItem, meta: WaitingForMeta) => clarifyToWaitingFor(db, item, meta),
         clarifyToInbox: (item: StoredItem) => clarifyToInbox(db, item),
-        clarifyToSomedayMaybe: (item: StoredItem) => clarifyToSomedayMaybe(db, item),
+        clarifyToSomedayMaybe: (item: StoredItem, meta: SomedayMaybeMeta = {}) => clarifyToSomedayMaybe(db, item, meta),
         clarifyToDone: (item: StoredItem) => clarifyToDone(db, item),
         clarifyToTrash: (item: StoredItem) => clarifyToTrash(db, item),
         updateItem: (item: StoredItem) => updateItem(db, item),

@@ -147,7 +147,7 @@ The full item shape is `ItemInterface` in `api-server/src/types/entities.ts`. Th
 | `updatedTs` | string | Server-assigned on every write. Conflict-resolution anchor. |
 | `externalId` | string? | Caller-provided dedupe key. Unique per `(user, externalId)`. |
 
-GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `waitingForPersonId`, calendar linkage) are now **writable** through `PATCH /v1/items/:id` and `POST /v1/operations/batch` — subject to the status×field matrix (e.g. `expectedBy` is only valid on `nextAction` / `waitingFor` / `done` / `trash`; `timeStart`/`timeEnd` only on `calendar` / `done` / `trash`). Server-managed fields (`routineId`, `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `externalId`) remain off-limits — caller-supplied values are rejected with `400 forbidden_field`.
+GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `waitingForPersonId`, calendar linkage) are now **writable** through `PATCH /v1/items/:id` and `POST /v1/operations/batch` — subject to the status×field matrix (e.g. `expectedBy` / `ignoreBefore` are valid on `nextAction` / `waitingFor` / `somedayMaybe` / `done` / `trash`; `timeStart`/`timeEnd` only on `calendar` / `done` / `trash`; `waitingForPersonId` is optional even on `waitingFor`). Server-managed fields (`routineId`, `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `externalId`) remain off-limits — caller-supplied values are rejected with `400 forbidden_field`.
 
 ## Endpoints
 

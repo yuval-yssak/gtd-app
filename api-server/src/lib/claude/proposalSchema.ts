@@ -2,7 +2,7 @@ import type { EnergyLevel, ItemStatus } from '../../types/entities.js';
 
 /**
  * The set of item fields the clarify agent is allowed to propose changing. Deliberately scoped to
- * the GTD-clarify fields (the status×field matrix for `nextAction`/`waitingFor`/`calendar`): no
+ * the GTD-clarify fields (the status×field matrix for `nextAction`/`waitingFor`/`calendar`/`somedayMaybe`): no
  * GCal-owned fields (`organizer`, `attendees`, `meetingLink`, …), no sync-internal anchors
  * (`lastPushedToGCalTs`, `contentHash`, …), and no ownership/identity fields (`_id`, `user`,
  * `createdTs`). The apply handler re-validates that every submitted patch field is in this set.

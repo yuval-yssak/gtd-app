@@ -1,10 +1,22 @@
 import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
-import { emptyCalendar, emptyNextAction, emptyWaitingFor } from '../components/clarify/types';
+import {
+    buildSomedayMaybeMeta,
+    buildWaitingForMeta,
+    type CalendarFormState,
+    emptyCalendar,
+    emptyNextAction,
+    emptySomedayMaybe,
+    emptyWaitingFor,
+    type NextActionFormState,
+    type SomedayMaybeFormState,
+    type WaitingForFormState,
+} from '../components/clarify/types';
 import {
     applyCalendarForm,
     applyCalendarPatch,
     buildEditPatch,
+    type EditorForms,
     isSaveDisabled,
     mergeFormsIntoItem,
     normalizeTitleAndNotes,
@@ -16,6 +28,17 @@ import {
 } from '../components/editItemDialogLogic';
 import type { CalendarOption } from '../hooks/useCalendarOptions';
 import type { StoredItem } from '../types/MyDB';
+
+/** Builds an EditorForms from the empty defaults, overriding only the form(s) a test cares about.
+ *  Keeps the merge/patch call sites terse now that the builders take one bundled forms argument. */
+function formsWith(overrides: { na?: NextActionFormState; cal?: CalendarFormState; wf?: WaitingForFormState; sm?: SomedayMaybeFormState }): EditorForms {
+    return {
+        na: overrides.na ?? emptyNextAction,
+        cal: overrides.cal ?? emptyCalendar,
+        wf: overrides.wf ?? emptyWaitingFor,
+        sm: overrides.sm ?? emptySomedayMaybe,
+    };
+}
 
 const BASE_ITEM: StoredItem = {
     _id: 'item-1',
@@ -77,58 +100,55 @@ describe('stripRoutineId', () => {
 
 describe('isSaveDisabled', () => {
     it('disables save when title is blank', () => {
-        expect(isSaveDisabled('   ', 'inbox', emptyCalendar, emptyWaitingFor)).toBe(true);
+        expect(isSaveDisabled('   ', 'inbox', emptyCalendar)).toBe(true);
     });
 
     it('disables save for calendar status without a date', () => {
-        expect(isSaveDisabled('ok', 'calendar', emptyCalendar, emptyWaitingFor)).toBe(true);
+        expect(isSaveDisabled('ok', 'calendar', emptyCalendar)).toBe(true);
     });
 
     it('enables save for calendar status once a date is present', () => {
-        expect(isSaveDisabled('ok', 'calendar', { ...emptyCalendar, date: '2026-05-04' }, emptyWaitingFor)).toBe(false);
+        expect(isSaveDisabled('ok', 'calendar', { ...emptyCalendar, date: '2026-05-04' })).toBe(false);
     });
 
-    it('disables save for waitingFor status without a person', () => {
-        expect(isSaveDisabled('ok', 'waitingFor', emptyCalendar, emptyWaitingFor)).toBe(true);
-    });
-
-    it('enables save for waitingFor status with a person', () => {
-        expect(isSaveDisabled('ok', 'waitingFor', emptyCalendar, { ...emptyWaitingFor, waitingForPersonId: 'p-1' })).toBe(false);
+    it('enables save for waitingFor status with no person (the person is optional)', () => {
+        // Regression: a waitingFor item no longer requires a person — only the title gates the save.
+        expect(isSaveDisabled('ok', 'waitingFor', emptyCalendar)).toBe(false);
     });
 
     it('enables save for status types with no required fields', () => {
-        expect(isSaveDisabled('ok', 'inbox', emptyCalendar, emptyWaitingFor)).toBe(false);
-        expect(isSaveDisabled('ok', 'somedayMaybe', emptyCalendar, emptyWaitingFor)).toBe(false);
-        expect(isSaveDisabled('ok', 'done', emptyCalendar, emptyWaitingFor)).toBe(false);
-        expect(isSaveDisabled('ok', 'trash', emptyCalendar, emptyWaitingFor)).toBe(false);
+        expect(isSaveDisabled('ok', 'inbox', emptyCalendar)).toBe(false);
+        expect(isSaveDisabled('ok', 'somedayMaybe', emptyCalendar)).toBe(false);
+        expect(isSaveDisabled('ok', 'done', emptyCalendar)).toBe(false);
+        expect(isSaveDisabled('ok', 'trash', emptyCalendar)).toBe(false);
     });
 
     it('disables save when the calendar end time is before the start time on the same date', () => {
         const cal = { ...emptyCalendar, date: '2026-05-04', startTime: '14:00', endTime: '13:00' };
-        expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(true);
+        expect(isSaveDisabled('ok', 'calendar', cal)).toBe(true);
     });
 
     it('enables save when start and end times match (zero-duration is permitted)', () => {
         const cal = { ...emptyCalendar, date: '2026-05-04', startTime: '14:00', endTime: '14:00' };
-        expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(false);
+        expect(isSaveDisabled('ok', 'calendar', cal)).toBe(false);
     });
 
     it('disables save when an all-day end date is before the start date', () => {
         const cal = { ...emptyCalendar, date: '2026-05-04', allDay: true, endDate: '2026-05-03' };
-        expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(true);
+        expect(isSaveDisabled('ok', 'calendar', cal)).toBe(true);
     });
 
     it('enables save for all-day with endDate empty (single-day) or endDate ≥ date', () => {
         const single = { ...emptyCalendar, date: '2026-05-04', allDay: true, endDate: '' };
-        expect(isSaveDisabled('ok', 'calendar', single, emptyWaitingFor)).toBe(false);
+        expect(isSaveDisabled('ok', 'calendar', single)).toBe(false);
         const multi = { ...emptyCalendar, date: '2026-05-04', allDay: true, endDate: '2026-05-06' };
-        expect(isSaveDisabled('ok', 'calendar', multi, emptyWaitingFor)).toBe(false);
+        expect(isSaveDisabled('ok', 'calendar', multi)).toBe(false);
     });
 
     it('does not flag end<start time when the form is in all-day mode (times are ignored)', () => {
         // Toggling allDay on after entering an inverted time range used to disable save spuriously.
         const cal = { ...emptyCalendar, date: '2026-05-04', startTime: '14:00', endTime: '13:00', allDay: true };
-        expect(isSaveDisabled('ok', 'calendar', cal, emptyWaitingFor)).toBe(false);
+        expect(isSaveDisabled('ok', 'calendar', cal)).toBe(false);
     });
 });
 
@@ -251,8 +271,8 @@ describe('applyCalendarForm', () => {
 
 describe('mergeFormsIntoItem', () => {
     it('returns the item unchanged for statuses without status-specific fields', () => {
-        for (const status of ['inbox', 'somedayMaybe', 'done', 'trash'] as const) {
-            expect(mergeFormsIntoItem(BASE_ITEM, status, emptyNextAction, emptyCalendar, emptyWaitingFor, [])).toBe(BASE_ITEM);
+        for (const status of ['inbox', 'done', 'trash'] as const) {
+            expect(mergeFormsIntoItem(BASE_ITEM, status, formsWith({}), [])).toBe(BASE_ITEM);
         }
     });
 
@@ -260,9 +280,7 @@ describe('mergeFormsIntoItem', () => {
         const updated = mergeFormsIntoItem(
             BASE_ITEM,
             'calendar',
-            emptyNextAction,
-            { ...emptyCalendar, date: '2026-06-01', startTime: '11:00', endTime: '11:30' },
-            emptyWaitingFor,
+            formsWith({ cal: { ...emptyCalendar, date: '2026-06-01', startTime: '11:00', endTime: '11:30' } }),
             [],
         );
         // Any date/time change proves the calendar branch ran.
@@ -270,7 +288,7 @@ describe('mergeFormsIntoItem', () => {
     });
 
     it('persists allDay on the merged item when the form toggles all-day on', () => {
-        const updated = mergeFormsIntoItem(BASE_ITEM, 'calendar', emptyNextAction, { ...emptyCalendar, date: '2026-06-01', allDay: true }, emptyWaitingFor, []);
+        const updated = mergeFormsIntoItem(BASE_ITEM, 'calendar', formsWith({ cal: { ...emptyCalendar, date: '2026-06-01', allDay: true } }), []);
         expect(updated.allDay).toBe(true);
         // Date-only string proves the all-day branch ran (timed would emit ISO datetimes).
         expect(updated.timeStart).toBe('2026-06-01');
@@ -282,14 +300,38 @@ describe('mergeFormsIntoItem', () => {
         const updated = mergeFormsIntoItem(
             previouslyAllDay,
             'calendar',
-            emptyNextAction,
-            { ...emptyCalendar, date: '2026-06-01', startTime: '09:00', endTime: '10:00', allDay: false },
-            emptyWaitingFor,
+            formsWith({ cal: { ...emptyCalendar, date: '2026-06-01', startTime: '09:00', endTime: '10:00', allDay: false } }),
             [],
         );
         expect(updated.allDay).toBeUndefined();
         // exactOptionalPropertyTypes: the key must be missing, not set to undefined.
         expect('allDay' in updated).toBe(false);
+    });
+
+    it('omits waitingForPersonId when the waitingFor form has no person', () => {
+        const wfItem: StoredItem = { ...BASE_ITEM, status: 'waitingFor' };
+        const merged = mergeFormsIntoItem(wfItem, 'waitingFor', formsWith({ wf: { ...emptyWaitingFor, expectedBy: '2026-07-01' } }), []);
+        expect('waitingForPersonId' in merged).toBe(false);
+        expect(merged.expectedBy).toBe('2026-07-01');
+    });
+
+    it('clears a previously-set waitingForPersonId when the in-place form blanks the person', () => {
+        const wfItem: StoredItem = { ...BASE_ITEM, status: 'waitingFor', waitingForPersonId: 'p-1' };
+        const merged = mergeFormsIntoItem(wfItem, 'waitingFor', formsWith({ wf: emptyWaitingFor }), []);
+        // The strip-then-respread path must drop the key entirely — '' must never reach the snapshot.
+        expect('waitingForPersonId' in merged).toBe(false);
+    });
+
+    it('applies expectedBy/ignoreBefore to a somedayMaybe item', () => {
+        const merged = mergeFormsIntoItem(BASE_ITEM, 'somedayMaybe', formsWith({ sm: { expectedBy: '2026-08-01', ignoreBefore: '2026-07-15' } }), []);
+        expect(merged.expectedBy).toBe('2026-08-01');
+        expect(merged.ignoreBefore).toBe('2026-07-15');
+    });
+
+    it('clears a previously-set somedayMaybe ignoreBefore when the form blanks it', () => {
+        const parked: StoredItem = { ...BASE_ITEM, status: 'somedayMaybe', ignoreBefore: '2026-07-15' };
+        const merged = mergeFormsIntoItem(parked, 'somedayMaybe', formsWith({ sm: emptySomedayMaybe }), []);
+        expect('ignoreBefore' in merged).toBe(false);
     });
 });
 
@@ -447,26 +489,24 @@ describe('buildEditPatch', () => {
             CALENDAR_ITEM.title,
             CALENDAR_ITEM.notes ?? '',
             'calendar',
-            emptyNextAction,
             // Same wall-clock as item.timeStart/timeEnd (UTC ISO ↔ local form depends on TZ; the
             // helper compares by computed ISO so we feed back values that round-trip cleanly).
-            calForm('2026-05-04', dayJsHHmm('2026-05-04T09:00:00.000Z'), dayJsHHmm('2026-05-04T09:30:00.000Z')),
-            emptyWaitingFor,
+            formsWith({ cal: calForm('2026-05-04', dayJsHHmm('2026-05-04T09:00:00.000Z'), dayJsHHmm('2026-05-04T09:30:00.000Z')) }),
         );
         expect(patch).toEqual({});
     });
 
     it('emits title only when the trimmed title differs from the original', () => {
-        const patch = buildEditPatch(CALENDAR_ITEM, 'New title', CALENDAR_ITEM.notes ?? '', 'calendar', emptyNextAction, emptyCalendar, emptyWaitingFor);
+        const patch = buildEditPatch(CALENDAR_ITEM, 'New title', CALENDAR_ITEM.notes ?? '', 'calendar', formsWith({}));
         expect(patch.title).toBe('New title');
         expect(patch.notes).toBeUndefined();
     });
 
     it('emits notes when changed; emits "" when cleared', () => {
-        const cleared = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, '', 'calendar', emptyNextAction, emptyCalendar, emptyWaitingFor);
+        const cleared = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, '', 'calendar', formsWith({}));
         expect(cleared.notes).toBe('');
 
-        const updated = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, 'new notes', 'calendar', emptyNextAction, emptyCalendar, emptyWaitingFor);
+        const updated = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, 'new notes', 'calendar', formsWith({}));
         expect(updated.notes).toBe('new notes');
     });
 
@@ -478,9 +518,7 @@ describe('buildEditPatch', () => {
             CALENDAR_ITEM.title,
             CALENDAR_ITEM.notes ?? '',
             'calendar',
-            emptyNextAction,
-            calForm('2026-05-04', dayJsHHmm('2026-05-04T09:00:00.000Z'), dayJsHHmm('2026-05-04T09:30:00.000Z')),
-            emptyWaitingFor,
+            formsWith({ cal: calForm('2026-05-04', dayJsHHmm('2026-05-04T09:00:00.000Z'), dayJsHHmm('2026-05-04T09:30:00.000Z')) }),
         );
         expect(sameTime.timeStart).toBeUndefined();
         expect(sameTime.timeEnd).toBeUndefined();
@@ -490,9 +528,7 @@ describe('buildEditPatch', () => {
             CALENDAR_ITEM.title,
             CALENDAR_ITEM.notes ?? '',
             'calendar',
-            emptyNextAction,
-            calForm('2026-05-04', dayJsHHmm('2026-05-04T10:00:00.000Z'), dayJsHHmm('2026-05-04T11:00:00.000Z')),
-            emptyWaitingFor,
+            formsWith({ cal: calForm('2026-05-04', dayJsHHmm('2026-05-04T10:00:00.000Z'), dayJsHHmm('2026-05-04T11:00:00.000Z')) }),
         );
         expect(newTime.timeStart).toBeDefined();
         expect(newTime.timeEnd).toBeDefined();
@@ -509,7 +545,7 @@ describe('buildEditPatch', () => {
             focus: false, // unchanged
             expectedBy: '2026-12-31', // unchanged
         };
-        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', naChange, emptyCalendar, emptyWaitingFor);
+        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', formsWith({ na: naChange }));
         expect(patch.workContextIds).toEqual(['ctx-1', 'ctx-2']);
         expect(patch.peopleIds).toBeUndefined(); // unchanged
         expect(patch.energy).toBe('high');
@@ -530,7 +566,7 @@ describe('buildEditPatch', () => {
             focus: false,
             expectedBy: '2026-12-31',
         };
-        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', naCleared, emptyCalendar, emptyWaitingFor);
+        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', formsWith({ na: naCleared }));
         expect(patch.energy).toBe('');
     });
 
@@ -545,7 +581,7 @@ describe('buildEditPatch', () => {
             focus: false,
             expectedBy: '2026-12-31',
         };
-        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', naCleared, emptyCalendar, emptyWaitingFor);
+        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', formsWith({ na: naCleared }));
         expect(patch.time).toBe('');
     });
 
@@ -560,7 +596,7 @@ describe('buildEditPatch', () => {
             focus: false,
             expectedBy: '2026-12-31',
         };
-        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', naCleared, emptyCalendar, emptyWaitingFor);
+        const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', formsWith({ na: naCleared }));
         expect(patch.workContextIds).toEqual([]);
         expect(patch.peopleIds).toEqual([]);
     });
@@ -573,15 +609,15 @@ describe('buildEditPatch', () => {
             itemNoExpectedBy.title,
             '',
             'nextAction',
-            {
-                ...emptyNextAction,
-                workContextIds: itemNoExpectedBy.workContextIds ?? [],
-                peopleIds: itemNoExpectedBy.peopleIds ?? [],
-                energy: 'medium',
-                time: '15',
-            },
-            emptyCalendar,
-            emptyWaitingFor,
+            formsWith({
+                na: {
+                    ...emptyNextAction,
+                    workContextIds: itemNoExpectedBy.workContextIds ?? [],
+                    peopleIds: itemNoExpectedBy.peopleIds ?? [],
+                    energy: 'medium',
+                    time: '15',
+                },
+            }),
         );
         expect(patch.expectedBy).toBeUndefined();
     });
@@ -595,8 +631,31 @@ describe('buildEditPatch', () => {
         delete wfItem.workContextIds;
         delete wfItem.peopleIds;
         const wf = { waitingForPersonId: 'p-2', expectedBy: '2026-12-31', ignoreBefore: '' };
-        const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', emptyNextAction, emptyCalendar, wf);
+        const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf }));
         expect(patch.waitingForPersonId).toBe('p-2');
+    });
+
+    it('emits waitingForPersonId="" (clear sentinel) when the person is removed', () => {
+        const wfItem: StoredItem = { ...NEXT_ACTION_ITEM, status: 'waitingFor', waitingForPersonId: 'p-1' };
+        delete wfItem.workContextIds;
+        delete wfItem.peopleIds;
+        const wf = { waitingForPersonId: '', expectedBy: '', ignoreBefore: '' };
+        const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf }));
+        expect(patch.waitingForPersonId).toBe('');
+    });
+
+    it('emits expectedBy/ignoreBefore for a somedayMaybe item', () => {
+        const parked: StoredItem = {
+            _id: 's-1',
+            userId: 'user-1',
+            status: 'somedayMaybe',
+            title: 'Learn sailing',
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        };
+        const patch = buildEditPatch(parked, parked.title, '', 'somedayMaybe', formsWith({ sm: { expectedBy: '2026-09-01', ignoreBefore: '2026-08-01' } }));
+        expect(patch.expectedBy).toBe('2026-09-01');
+        expect(patch.ignoreBefore).toBe('2026-08-01');
     });
 
     // ── all-day calendar patch fields ─────────────────────────────────────────
@@ -604,7 +663,7 @@ describe('buildEditPatch', () => {
 
     it('emits allDay=true and date-only timeStart/timeEnd when the form switches a timed item to all-day', () => {
         const cal = { ...emptyCalendar, date: '2026-05-27', allDay: true };
-        const patch = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, CALENDAR_ITEM.notes ?? '', 'calendar', emptyNextAction, cal, emptyWaitingFor);
+        const patch = buildEditPatch(CALENDAR_ITEM, CALENDAR_ITEM.title, CALENDAR_ITEM.notes ?? '', 'calendar', formsWith({ cal }));
         expect(patch.allDay).toBe(true);
         expect(patch.timeStart).toBe('2026-05-27');
         expect(patch.timeEnd).toBe('2026-05-28');
@@ -613,7 +672,7 @@ describe('buildEditPatch', () => {
     it('emits allDay=false when the form switches an all-day item back to timed', () => {
         const allDayItem: StoredItem = { ...CALENDAR_ITEM, allDay: true, timeStart: '2026-05-27', timeEnd: '2026-05-28' };
         const cal = { ...emptyCalendar, date: '2026-05-27', startTime: '09:00', endTime: '10:00', allDay: false };
-        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', emptyNextAction, cal, emptyWaitingFor);
+        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', formsWith({ cal }));
         expect(patch.allDay).toBe(false);
         // ISO datetimes prove the timed branch ran.
         expect(patch.timeStart).toBeDefined();
@@ -623,7 +682,7 @@ describe('buildEditPatch', () => {
     it('omits allDay when the form stays all-day and dates are unchanged', () => {
         const allDayItem: StoredItem = { ...CALENDAR_ITEM, allDay: true, timeStart: '2026-05-27', timeEnd: '2026-05-28' };
         const cal = { ...emptyCalendar, date: '2026-05-27', allDay: true };
-        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', emptyNextAction, cal, emptyWaitingFor);
+        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', formsWith({ cal }));
         expect(patch.allDay).toBeUndefined();
         expect(patch.timeStart).toBeUndefined();
         expect(patch.timeEnd).toBeUndefined();
@@ -632,11 +691,26 @@ describe('buildEditPatch', () => {
     it('emits a multi-day timeEnd when the all-day form extends endDate', () => {
         const allDayItem: StoredItem = { ...CALENDAR_ITEM, allDay: true, timeStart: '2026-05-27', timeEnd: '2026-05-28' };
         const cal = { ...emptyCalendar, date: '2026-05-27', endDate: '2026-05-29', allDay: true };
-        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', emptyNextAction, cal, emptyWaitingFor);
+        const patch = buildEditPatch(allDayItem, allDayItem.title, allDayItem.notes ?? '', 'calendar', formsWith({ cal }));
         // Inclusive endDate 2026-05-29 → exclusive 2026-05-30.
         expect(patch.timeEnd).toBe('2026-05-30');
         // allDay flag was already set on the item, so the toggle-state diff stays silent.
         expect(patch.allDay).toBeUndefined();
+    });
+});
+
+describe('buildWaitingForMeta / buildSomedayMaybeMeta', () => {
+    it('omits waitingForPersonId when blank but keeps the dates', () => {
+        expect(buildWaitingForMeta({ waitingForPersonId: '', expectedBy: '2026-07-01', ignoreBefore: '' })).toEqual({ expectedBy: '2026-07-01' });
+    });
+
+    it('includes waitingForPersonId when present', () => {
+        expect(buildWaitingForMeta({ waitingForPersonId: 'p-1', expectedBy: '', ignoreBefore: '' })).toEqual({ waitingForPersonId: 'p-1' });
+    });
+
+    it('emits only the non-blank somedayMaybe dates', () => {
+        expect(buildSomedayMaybeMeta({ expectedBy: '2026-08-01', ignoreBefore: '' })).toEqual({ expectedBy: '2026-08-01' });
+        expect(buildSomedayMaybeMeta(emptySomedayMaybe)).toEqual({});
     });
 });
 

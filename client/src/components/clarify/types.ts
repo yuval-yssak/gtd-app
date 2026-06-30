@@ -59,6 +59,14 @@ export interface WaitingForFormState {
 
 export const emptyWaitingFor: WaitingForFormState = { waitingForPersonId: '', expectedBy: '', ignoreBefore: '' };
 
+// Someday/Maybe carries the same two deferral dates as waitingFor (no person, no schedule).
+export interface SomedayMaybeFormState {
+    expectedBy: string;
+    ignoreBefore: string;
+}
+
+export const emptySomedayMaybe: SomedayMaybeFormState = { expectedBy: '', ignoreBefore: '' };
+
 // ── Meta builders ─────────────────────────────────────────────────────────────
 // These convert form state into the shape expected by the clarify mutations.
 // exactOptionalPropertyTypes: omit undefined keys rather than assigning them.
@@ -111,7 +119,16 @@ function buildTimedCalendarMeta(form: CalendarFormState): Pick<CalendarMeta, 'ti
 
 export function buildWaitingForMeta(form: WaitingForFormState) {
     return {
-        waitingForPersonId: form.waitingForPersonId,
+        // The person is optional — omit the key entirely when unset so a blank string never reaches
+        // the snapshot (the op validator requires a NonEmptyString when the field is present).
+        ...(form.waitingForPersonId && { waitingForPersonId: form.waitingForPersonId }),
+        ...(form.expectedBy && { expectedBy: form.expectedBy }),
+        ...(form.ignoreBefore && { ignoreBefore: form.ignoreBefore }),
+    };
+}
+
+export function buildSomedayMaybeMeta(form: SomedayMaybeFormState) {
+    return {
         ...(form.expectedBy && { expectedBy: form.expectedBy }),
         ...(form.ignoreBefore && { ignoreBefore: form.ignoreBefore }),
     };
