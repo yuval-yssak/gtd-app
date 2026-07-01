@@ -333,6 +333,15 @@ describe('mergeFormsIntoItem', () => {
         const merged = mergeFormsIntoItem(parked, 'somedayMaybe', formsWith({ sm: emptySomedayMaybe }), []);
         expect('ignoreBefore' in merged).toBe(false);
     });
+
+    // The waitingFor form no longer exposes an `Ignore before` input, so its ignoreBefore always seeds
+    // empty. Editing a waitingFor item that carries a legacy tickler date must therefore clear it —
+    // never silently re-persist a value the user can no longer see or edit.
+    it('clears a previously-set waitingFor ignoreBefore (field no longer shown, seeds empty)', () => {
+        const waiting: StoredItem = { ...BASE_ITEM, status: 'waitingFor', ignoreBefore: '2026-08-01' };
+        const merged = mergeFormsIntoItem(waiting, 'waitingFor', formsWith({ wf: emptyWaitingFor }), []);
+        expect('ignoreBefore' in merged).toBe(false);
+    });
 });
 
 describe('applyCalendarPatch', () => {
@@ -642,6 +651,16 @@ describe('buildEditPatch', () => {
         const wf = { waitingForPersonId: '', expectedBy: '', ignoreBefore: '' };
         const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf }));
         expect(patch.waitingForPersonId).toBe('');
+    });
+
+    // The waitingFor form seeds ignoreBefore empty (the `Ignore before` input was removed), so editing
+    // a waitingFor item that already carries a tickler date must emit the clear sentinel to unset it.
+    it('emits ignoreBefore="" (clear sentinel) for a waitingFor item that had a tickler date', () => {
+        const wfItem: StoredItem = { ...NEXT_ACTION_ITEM, status: 'waitingFor', ignoreBefore: '2026-08-01' };
+        delete wfItem.workContextIds;
+        delete wfItem.peopleIds;
+        const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf: emptyWaitingFor }));
+        expect(patch.ignoreBefore).toBe('');
     });
 
     it('emits expectedBy/ignoreBefore for a somedayMaybe item', () => {

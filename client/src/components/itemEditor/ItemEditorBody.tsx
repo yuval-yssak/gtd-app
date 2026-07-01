@@ -230,7 +230,9 @@ export function ItemEditorBody({
     const [wfForm, setWfForm] = useState<WaitingForFormState>({
         waitingForPersonId: item.waitingForPersonId ?? '',
         expectedBy: item.expectedBy ?? '',
-        ignoreBefore: item.ignoreBefore ?? '',
+        // WaitingFor no longer exposes an `Ignore before` input — seed it empty so editing a waiting
+        // item never re-persists a hidden tickler date the user can't see.
+        ignoreBefore: '',
     });
     const [smForm, setSmForm] = useState<SomedayMaybeFormState>({
         expectedBy: item.expectedBy ?? '',

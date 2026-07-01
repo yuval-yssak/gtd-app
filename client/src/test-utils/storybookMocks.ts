@@ -207,5 +207,6 @@ export const emptyWaitingForState: WaitingForFormState = {
 export const filledWaitingForState: WaitingForFormState = {
     waitingForPersonId: 'person-2',
     expectedBy: '2024-04-20',
-    ignoreBefore: '2024-04-10',
+    // WaitingFor no longer renders an `Ignore before` input, so the mock leaves it empty.
+    ignoreBefore: '',
 };

@@ -52,7 +52,8 @@ export function WaitingForFields({ value, onChange, people }: Props) {
                     section to name who you're waiting on.
                 </Typography>
             )}
-            <TicklerDateFields value={value} onChange={onChange} />
+            {/* WaitingFor shows only `Expected by` — a waiting item has no tickler/hide-until date. */}
+            <TicklerDateFields value={value} onChange={onChange} showIgnoreBefore={false} />
         </Stack>
     );
 }

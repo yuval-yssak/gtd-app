@@ -10,13 +10,19 @@ export interface TicklerDates {
 interface Props {
     value: TicklerDates;
     onChange: (patch: Partial<TicklerDates>) => void;
+    /**
+     * Whether to render the `Ignore before` tickler input. Defaults to true (somedayMaybe).
+     * WaitingFor passes false — a waiting item has no reason to be hidden until a future date, so
+     * only `Expected by` is meaningful there.
+     */
+    showIgnoreBefore?: boolean;
 }
 
 /**
- * `Expected by` (deadline) + `Ignore before` (tickler) date inputs. Extracted so waitingFor and
- * somedayMaybe render an identical pair without duplicating the two TextFields and their layout.
+ * `Expected by` (deadline) + optional `Ignore before` (tickler) date inputs. Extracted so waitingFor
+ * and somedayMaybe share the layout; waitingFor opts out of the tickler field via showIgnoreBefore.
  */
-export function TicklerDateFields({ value, onChange }: Props) {
+export function TicklerDateFields({ value, onChange, showIgnoreBefore = true }: Props) {
     return (
         <Stack
             direction={{ xs: 'column', sm: 'row' }}
@@ -32,14 +38,16 @@ export function TicklerDateFields({ value, onChange }: Props) {
                 size="small"
                 slotProps={{ inputLabel: { shrink: true } }}
             />
-            <TextField
-                label="Ignore before"
-                type="date"
-                value={value.ignoreBefore}
-                onChange={(e) => onChange({ ignoreBefore: e.target.value })}
-                size="small"
-                slotProps={{ inputLabel: { shrink: true } }}
-            />
+            {showIgnoreBefore && (
+                <TextField
+                    label="Ignore before"
+                    type="date"
+                    value={value.ignoreBefore}
+                    onChange={(e) => onChange({ ignoreBefore: e.target.value })}
+                    size="small"
+                    slotProps={{ inputLabel: { shrink: true } }}
+                />
+            )}
         </Stack>
     );
 }
