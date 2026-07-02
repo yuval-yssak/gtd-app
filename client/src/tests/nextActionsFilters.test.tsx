@@ -1,0 +1,66 @@
+import { isValidElement, type ReactElement } from 'react';
+import { describe, expect, it } from 'vitest';
+import { FocusIndicator, matchesFilters, UnclarifiedWarning } from '../routes/_authenticated/next-actions';
+import type { StoredItem } from '../types/MyDB';
+
+const item = (over: Partial<StoredItem>): StoredItem =>
+    ({ _id: 'i1', userId: 'u', status: 'nextAction', title: 'T', createdTs: '', updatedTs: '', ...over }) as StoredItem;
+
+describe('matchesFilters', () => {
+    it('matches everything when no filters are set', () => {
+        expect(matchesFilters(item({}), {})).toBe(true);
+    });
+
+    it('filters by energy', () => {
+        expect(matchesFilters(item({ energy: 'low' }), { energy: 'low' })).toBe(true);
+        expect(matchesFilters(item({ energy: 'high' }), { energy: 'low' })).toBe(false);
+        expect(matchesFilters(item({}), { energy: 'low' })).toBe(false);
+    });
+
+    it('filters by max time, excluding items with no estimate', () => {
+        expect(matchesFilters(item({ time: 5 }), { time: 30 })).toBe(true);
+        expect(matchesFilters(item({ time: 60 }), { time: 30 })).toBe(false);
+        expect(matchesFilters(item({}), { time: 30 })).toBe(false);
+    });
+
+    it('filters by work context id', () => {
+        expect(matchesFilters(item({ workContextIds: ['c1', 'c2'] }), { context: 'c2' })).toBe(true);
+        expect(matchesFilters(item({ workContextIds: ['c1'] }), { context: 'c2' })).toBe(false);
+        expect(matchesFilters(item({}), { context: 'c2' })).toBe(false);
+    });
+
+    it('filters by person id via peopleIds', () => {
+        expect(matchesFilters(item({ peopleIds: ['p1', 'p2'] }), { person: 'p1' })).toBe(true);
+        expect(matchesFilters(item({ peopleIds: ['p2'] }), { person: 'p1' })).toBe(false);
+        expect(matchesFilters(item({}), { person: 'p1' })).toBe(false);
+    });
+
+    it('hides ticklered items until their ignoreBefore date, regardless of filters', () => {
+        expect(matchesFilters(item({ ignoreBefore: '2999-01-01' }), {})).toBe(false);
+        expect(matchesFilters(item({ ignoreBefore: '2000-01-01' }), {})).toBe(true);
+    });
+});
+
+// Node-env tests (no DOM): call the components as functions and assert on the returned element tree.
+const tooltipChild = (el: ReactElement) => {
+    const { title, children } = el.props as { title?: string; children?: unknown };
+    return { title, child: isValidElement(children) ? children : undefined };
+};
+
+describe('FocusIndicator', () => {
+    it('wraps a primary-colored icon with an "In focus" tooltip and a camelCase testid', () => {
+        const { title, child } = tooltipChild(FocusIndicator());
+        expect(title).toBe('In focus');
+        if (!child) throw new Error('expected an icon child inside the Tooltip');
+        expect(child.props).toMatchObject({ fontSize: 'small', color: 'primary', 'data-testid': 'focusIndicator' });
+    });
+});
+
+describe('UnclarifiedWarning', () => {
+    it('lists only the provided missing fields in the tooltip', () => {
+        const { title, child } = tooltipChild(UnclarifiedWarning({ missingLabels: ['energy', 'work context'] }));
+        expect(title).toBe('Not fully clarified — missing: energy, work context');
+        if (!child) throw new Error('expected an icon child inside the Tooltip');
+        expect(child.props).toMatchObject({ fontSize: 'small', color: 'warning', 'data-testid': 'unclarifiedWarning' });
+    });
+});

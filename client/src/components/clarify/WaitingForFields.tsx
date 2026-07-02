@@ -3,6 +3,7 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
+import { sortByName } from '../../lib/sortByName';
 import type { StoredPerson } from '../../types/MyDB';
 import { TicklerDateFields } from './TicklerDateFields';
 import type { WaitingForFormState } from './types';
@@ -32,7 +33,7 @@ export function WaitingForFields({ value, onChange, people }: Props) {
                 className={styles.waitingForSelect}
             >
                 <MenuItem value="">— No one —</MenuItem>
-                {people.map((p) => (
+                {sortByName(people).map((p) => (
                     <MenuItem key={p._id} value={p._id}>
                         {p.name}
                     </MenuItem>

@@ -1050,7 +1050,7 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                 />
                 <FormControlLabel
                     control={<Checkbox size="small" checked={form.focus} onChange={(e) => onPatch({ focus: e.target.checked })} />}
-                    label={<Typography variant="body2">Needs focus</Typography>}
+                    label={<Typography variant="body2">In focus</Typography>}
                 />
             </Stack>
         </Stack>

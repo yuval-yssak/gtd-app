@@ -8,6 +8,7 @@ import TextField from '@mui/material/TextField';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
+import { sortByName } from '../../lib/sortByName';
 import type { EnergyLevel, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import styles from './NextActionFields.module.css';
 import type { NextActionFormState } from './types';
@@ -87,7 +88,7 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                             mt: 0.5,
                         }}
                     >
-                        {workContexts.map((ctx) => (
+                        {sortByName(workContexts).map((ctx) => (
                             <Chip
                                 key={ctx._id}
                                 label={ctx.name}
@@ -120,7 +121,7 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                             mt: 0.5,
                         }}
                     >
-                        {people.map((p) => (
+                        {sortByName(people).map((p) => (
                             <Chip
                                 key={p._id}
                                 label={p.name}
@@ -177,7 +178,7 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                 />
                 <FormControlLabel
                     control={<Checkbox size="small" checked={value.focus} onChange={(e) => onChange({ focus: e.target.checked })} />}
-                    label={<Typography variant="body2">Needs focus</Typography>}
+                    label={<Typography variant="body2">In focus</Typography>}
                 />
             </Stack>
             <TextField

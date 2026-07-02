@@ -147,7 +147,7 @@ export interface ItemInterface {
     routineId?: string;
     energy?: EnergyLevel; // relevant for `nextAction` items
     time?: number; // estimated duration in minutes — relevant for `nextAction` items
-    focus?: boolean; // requires uninterrupted focus — relevant for `nextAction` items
+    focus?: boolean; // on the current-focus shortlist (Nirvana-style Focus list) — floats the item to the top of Next Actions; relevant for `nextAction` items
     urgent?: boolean; // must be done very soon — relevant for `nextAction` items
     notes?: string; // freeform markdown notes — applies to all statuses
     /**
@@ -197,7 +197,7 @@ export interface RoutineItemTemplate {
     peopleIds?: string[];
     energy?: EnergyLevel;
     time?: number; // estimated minutes
-    focus?: boolean;
+    focus?: boolean; // generated items start on the current-focus shortlist (floats to the top of Next Actions)
     urgent?: boolean;
     notes?: string;
 }

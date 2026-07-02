@@ -1,8 +1,10 @@
+import AdjustIcon from '@mui/icons-material/Adjust';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
 import SellOutlinedIcon from '@mui/icons-material/SellOutlined';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
@@ -19,7 +21,7 @@ import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { useMemo, useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
@@ -31,20 +33,17 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { itemContextTags, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
+import { missingClarifications } from '../../lib/missingClarifications';
+import { type NextActionsUrlState, parseNextActionsSearch, TIME_FILTER_OPTIONS } from '../../lib/nextActionsUrlParams';
+import { sortByName } from '../../lib/sortByName';
+import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import type { EnergyLevel, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import styles from './-next-actions.module.css';
 
 export const Route = createFileRoute('/_authenticated/next-actions')({
+    validateSearch: parseNextActionsSearch,
     component: NextActionsPage,
 });
-
-type TimeFilter = 5 | 30 | 60 | null;
-
-interface ActiveFilters {
-    energy: EnergyLevel | null;
-    maxMinutes: TimeFilter;
-    workContextId: string | null;
-}
 
 const energyLabels: Record<EnergyLevel, string> = { low: 'Low', medium: 'Medium', high: 'High' };
 const energyColors: Record<EnergyLevel, 'default' | 'success' | 'warning' | 'error'> = {
@@ -53,7 +52,7 @@ const energyColors: Record<EnergyLevel, 'default' | 'success' | 'warning' | 'err
     high: 'error',
 };
 
-function matchesFilters(item: StoredItem, filters: ActiveFilters): boolean {
+export function matchesFilters(item: StoredItem, filters: NextActionsUrlState): boolean {
     const today = dayjs().format('YYYY-MM-DD');
     if (item.ignoreBefore && item.ignoreBefore > today) {
         return false;
@@ -61,18 +60,34 @@ function matchesFilters(item: StoredItem, filters: ActiveFilters): boolean {
     if (filters.energy && item.energy !== filters.energy) {
         return false;
     }
-    if (filters.maxMinutes && (item.time === undefined || item.time > filters.maxMinutes)) {
+    if (filters.time && (item.time === undefined || item.time > filters.time)) {
         return false;
     }
-    if (filters.workContextId && !item.workContextIds?.includes(filters.workContextId)) {
+    if (filters.context && !item.workContextIds?.includes(filters.context)) {
+        return false;
+    }
+    if (filters.person && !item.peopleIds?.includes(filters.person)) {
         return false;
     }
     return true;
 }
 
-// Returns a toggle setter: clicking the same value again clears the filter.
-function makeToggle<T>(setter: React.Dispatch<React.SetStateAction<T | null>>) {
-    return (value: T) => setter((prev) => (prev === value ? null : value));
+// Nirvana-style "current focus shortlist" marker — the same flag the sort uses to float items to the top.
+export function FocusIndicator() {
+    return (
+        <Tooltip title="In focus">
+            <AdjustIcon fontSize="small" color="primary" data-testid="focusIndicator" />
+        </Tooltip>
+    );
+}
+
+// Amber hint that the clarify phase was left incomplete; the tooltip names only the actually-missing fields.
+export function UnclarifiedWarning({ missingLabels }: { missingLabels: NonEmptyArray<string> }) {
+    return (
+        <Tooltip title={`Not fully clarified — missing: ${missingLabels.join(', ')}`}>
+            <WarningAmberIcon fontSize="small" color="warning" data-testid="unclarifiedWarning" />
+        </Tooltip>
+    );
 }
 
 // "Show tags" preference persists across visits. Defaults ON; only an explicit 'false' hides them.
@@ -130,14 +145,16 @@ function NextActionsPage() {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
-    const [energyFilter, setEnergyFilter] = useState<EnergyLevel | null>(null);
-    const [timeFilter, setTimeFilter] = useState<TimeFilter>(null);
-    const [contextFilter, setContextFilter] = useState<string | null>(null);
+    const urlFilters = Route.useSearch();
+    const navigate = useNavigate();
     const [showTags, setShowTags] = useState(readShowTags);
 
-    const toggleEnergy = makeToggle(setEnergyFilter);
-    const toggleTime = makeToggle(setTimeFilter);
-    const toggleContext = makeToggle(setContextFilter);
+    // Filters live in the URL so views are shareable/bookmarkable. Clicking the active chip again
+    // clears it (single-select toggle); replace: true so chip toggling doesn't spam history.
+    function toggleFilter<K extends keyof NextActionsUrlState>(key: K, value: NextActionsUrlState[K]) {
+        const next = urlFilters[key] === value ? undefined : value;
+        void navigate({ to: '/next-actions', search: { ...urlFilters, [key]: next }, replace: true });
+    }
 
     function onShowTagsToggled(next: boolean) {
         setShowTags(next);
@@ -148,9 +165,13 @@ function NextActionsPage() {
     const contextsById = useMemo(() => new Map(workContexts.map((c) => [c._id, c])), [workContexts]);
     const peopleById = useMemo(() => new Map(people.map((p) => [p._id, p])), [people]);
 
+    // Filter chips are sorted A→Z at this consumer site only — AppDataProvider keeps stored order for other pages.
+    const sortedWorkContexts = useMemo(() => sortByName(workContexts), [workContexts]);
+    const sortedPeople = useMemo(() => sortByName(people), [people]);
+
     const nextActions = items
         .filter((item) => item.status === 'nextAction')
-        .filter((item) => matchesFilters(item, { energy: energyFilter, maxMinutes: timeFilter, workContextId: contextFilter }))
+        .filter((item) => matchesFilters(item, urlFilters))
         .sort((a, b) => {
             // Four-tier sort: focused-with-date (expectedBy asc), focused-no-date, other-with-date
             // (expectedBy asc), other-no-date. Focus is the primary partition, presence of an
@@ -198,7 +219,7 @@ function NextActionsPage() {
                     mb: 2,
                 }}
             >
-                {workContexts.length > 0 && (
+                {sortedWorkContexts.length > 0 && (
                     <Stack
                         direction="row"
                         sx={{
@@ -207,19 +228,42 @@ function NextActionsPage() {
                             mb: 1,
                         }}
                     >
-                        {workContexts.map((ctx) => (
+                        {sortedWorkContexts.map((ctx) => (
                             <Chip
                                 key={ctx._id}
                                 label={ctx.name}
                                 size="small"
-                                variant={contextFilter === ctx._id ? 'filled' : 'outlined'}
-                                color={contextFilter === ctx._id ? 'primary' : 'default'}
-                                onClick={() => toggleContext(ctx._id)}
+                                variant={urlFilters.context === ctx._id ? 'filled' : 'outlined'}
+                                color={urlFilters.context === ctx._id ? 'primary' : 'default'}
+                                onClick={() => toggleFilter('context', ctx._id)}
+                                data-testid="nextActionsContextFilterChip"
                             />
                         ))}
                     </Stack>
                 )}
-
+                {sortedPeople.length > 0 && (
+                    <Stack
+                        direction="row"
+                        sx={{
+                            flexWrap: 'wrap',
+                            gap: 0.75,
+                            mb: 1,
+                        }}
+                    >
+                        {sortedPeople.map((p) => (
+                            <Chip
+                                key={p._id}
+                                icon={<PersonOutlineIcon />}
+                                label={p.name}
+                                size="small"
+                                variant={urlFilters.person === p._id ? 'filled' : 'outlined'}
+                                color={urlFilters.person === p._id ? 'info' : 'default'}
+                                onClick={() => toggleFilter('person', p._id)}
+                                data-testid="nextActionsPersonFilterChip"
+                            />
+                        ))}
+                    </Stack>
+                )}
                 <Stack
                     direction="row"
                     sx={{
@@ -232,19 +276,21 @@ function NextActionsPage() {
                             key={e}
                             label={`${energyLabels[e]} energy`}
                             size="small"
-                            variant={energyFilter === e ? 'filled' : 'outlined'}
-                            color={energyFilter === e ? energyColors[e] : 'default'}
-                            onClick={() => toggleEnergy(e)}
+                            variant={urlFilters.energy === e ? 'filled' : 'outlined'}
+                            color={urlFilters.energy === e ? energyColors[e] : 'default'}
+                            onClick={() => toggleFilter('energy', e)}
+                            data-testid="nextActionsEnergyFilterChip"
                         />
                     ))}
-                    {([5, 30, 60] as const).map((t) => (
+                    {TIME_FILTER_OPTIONS.map((t) => (
                         <Chip
                             key={t}
                             label={`≤ ${t} min`}
                             size="small"
-                            variant={timeFilter === t ? 'filled' : 'outlined'}
-                            color={timeFilter === t ? 'primary' : 'default'}
-                            onClick={() => toggleTime(t)}
+                            variant={urlFilters.time === t ? 'filled' : 'outlined'}
+                            color={urlFilters.time === t ? 'primary' : 'default'}
+                            onClick={() => toggleFilter('time', t)}
+                            data-testid="nextActionsTimeFilterChip"
                         />
                     ))}
                 </Stack>
@@ -274,55 +320,60 @@ function NextActionsPage() {
                 )
             ) : (
                 <List disablePadding className={styles.list}>
-                    {nextActions.map((item, idx) => (
-                        <Box key={item._id}>
-                            <ListItem
-                                disablePadding
-                                className={styles.item}
-                                secondaryAction={
-                                    <Box className={styles.actionButtons}>
-                                        <CopyIdButton id={item._id} testId="nextActionItemCopyIdButton" />
-                                        <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="nextActionItemEditButton">
-                                                <EditIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                        <Tooltip title="Mark done">
-                                            <IconButton size="small" color="success" onClick={() => void onDone(item)}>
-                                                <CheckCircleOutlineIcon />
-                                            </IconButton>
-                                        </Tooltip>
-                                    </Box>
-                                }
-                            >
-                                <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="nextActionItemRow">
-                                    <ListItemText
-                                        primary={
-                                            <Box className={styles.titleRow}>
-                                                {item.urgent && <BoltIcon fontSize="small" color="error" />}
-                                                <span>{item.title}</span>
-                                                {item.energy && <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />}
-                                                {item.time !== undefined && <Chip label={`${item.time} min`} size="small" variant="outlined" />}
-                                                {item.routineId && (
-                                                    <RoutineIndicator
-                                                        routineId={item.routineId}
-                                                        routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                    />
-                                                )}
-                                                <AccountChip userId={item.userId} />
-                                            </Box>
-                                        }
-                                        // secondary slot rendered as 'div' so chips (block content) can nest — the default <p> would be invalid DOM.
-                                        slotProps={{ secondary: { component: 'div' } }}
-                                        secondary={buildRowSecondary(item, { showTags, contextsById, peopleById })}
-                                        className={styles.listItemText}
-                                    />
-                                </ListItemButton>
-                            </ListItem>
-                            {editor.renderExpandFor(item._id)}
-                            {idx < nextActions.length - 1 && <Divider />}
-                        </Box>
-                    ))}
+                    {nextActions.map((item, idx) => {
+                        const missingLabels = missingClarifications(item, hasAtLeastOne(workContexts));
+                        return (
+                            <Box key={item._id}>
+                                <ListItem
+                                    disablePadding
+                                    className={styles.item}
+                                    secondaryAction={
+                                        <Box className={styles.actionButtons}>
+                                            <CopyIdButton id={item._id} testId="nextActionItemCopyIdButton" />
+                                            <Tooltip title="Edit">
+                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="nextActionItemEditButton">
+                                                    <EditIcon fontSize="small" />
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title="Mark done">
+                                                <IconButton size="small" color="success" onClick={() => void onDone(item)}>
+                                                    <CheckCircleOutlineIcon />
+                                                </IconButton>
+                                            </Tooltip>
+                                        </Box>
+                                    }
+                                >
+                                    <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="nextActionItemRow">
+                                        <ListItemText
+                                            primary={
+                                                <Box className={styles.titleRow}>
+                                                    {item.focus === true && <FocusIndicator />}
+                                                    {item.urgent && <BoltIcon fontSize="small" color="error" />}
+                                                    <span>{item.title}</span>
+                                                    {item.energy && <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />}
+                                                    {item.time !== undefined && <Chip label={`${item.time} min`} size="small" variant="outlined" />}
+                                                    {hasAtLeastOne(missingLabels) && <UnclarifiedWarning missingLabels={missingLabels} />}
+                                                    {item.routineId && (
+                                                        <RoutineIndicator
+                                                            routineId={item.routineId}
+                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                        />
+                                                    )}
+                                                    <AccountChip userId={item.userId} />
+                                                </Box>
+                                            }
+                                            // secondary slot rendered as 'div' so chips (block content) can nest — the default <p> would be invalid DOM.
+                                            slotProps={{ secondary: { component: 'div' } }}
+                                            secondary={buildRowSecondary(item, { showTags, contextsById, peopleById })}
+                                            className={styles.listItemText}
+                                        />
+                                    </ListItemButton>
+                                </ListItem>
+                                {editor.renderExpandFor(item._id)}
+                                {idx < nextActions.length - 1 && <Divider />}
+                            </Box>
+                        );
+                    })}
                 </List>
             )}
             {editor.renderGlobal()}
