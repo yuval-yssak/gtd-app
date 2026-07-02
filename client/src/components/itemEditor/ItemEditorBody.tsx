@@ -68,6 +68,7 @@ import {
     shouldDetachFromRoutine,
     stripRoutineId,
 } from '../editItemDialogLogic';
+import { RoutineIndicator } from '../RoutineIndicator';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import styles from './ItemEditorBody.module.css';
 import { MeetingDetails, type RsvpStatus } from './MeetingDetails';
@@ -191,7 +192,7 @@ export function ItemEditorBody({
     renderActions,
 }: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
-    const { loggedInAccounts } = useAppData();
+    const { loggedInAccounts, routines } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
     const reassignInFlight = isPending('item', item._id);
 
@@ -550,6 +551,12 @@ export function ItemEditorBody({
                     ))}
                 </Stack>
             </Box>
+
+            {item.routineId && (
+                <Box data-testid="itemEditorRoutineLink">
+                    <RoutineIndicator routineId={item.routineId} routineTitle={routines.find((r) => r._id === item.routineId)?.title} forceChip />
+                </Box>
+            )}
 
             {loggedInAccounts.length > 1 && (
                 <Box>

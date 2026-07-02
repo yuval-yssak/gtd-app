@@ -6,24 +6,29 @@ import { useRoutineIndicatorStyle } from '../lib/routineIndicatorStyle';
 import styles from './RoutineIndicator.module.css';
 
 interface Props {
-    // routineId is kept for future use (navigation to specific routine edit page with search params)
     routineId: string;
     // exactOptionalPropertyTypes requires explicit `| undefined` to allow passing `.find()?.title`
     routineTitle?: string | undefined;
+    // Editor surfaces force the chip so the routine link is always reachable there — the
+    // user's list-indicator style setting ('none' etc.) only governs list rows.
+    forceChip?: boolean;
 }
 
-export function RoutineIndicator({ routineId: _routineId, routineTitle }: Props) {
+export function RoutineIndicator({ routineId, routineTitle, forceChip = false }: Props) {
     const navigate = useNavigate();
-    const style = useRoutineIndicatorStyle();
+    const listStyle = useRoutineIndicatorStyle();
+    const style = forceChip ? 'chip' : listStyle;
 
-    if (style === 'none') return null;
+    if (style === 'none') {
+        return null;
+    }
 
     const label = routineTitle ? `Routine: ${routineTitle}` : 'Part of a routine';
 
     function onClick(e: React.MouseEvent) {
         // Stop propagation so clicking the indicator doesn't trigger the parent item row action.
         e.stopPropagation();
-        void navigate({ to: '/routines' });
+        void navigate({ to: '/routine/$routineId', params: { routineId } });
     }
 
     if (style === 'chip') {

@@ -17,3 +17,8 @@
 .card {
     padding: 1.5rem;
 }
+
+.nextItemLink {
+    margin-bottom: 1rem;
+    text-transform: none;
+}
