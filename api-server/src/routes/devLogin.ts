@@ -399,10 +399,12 @@ export const devLoginRoutes = new Hono()
         }>();
         const fakeEventId = body.simulatedEventId ?? `sim-${generateId(16)}`;
         // Stub provider mirrors only the methods reassignEntity actually invokes — createEvent
-        // returns the simulated event id and deleteEvent is a no-op. The unused interface methods
-        // throw so an unexpected call surfaces immediately rather than silently succeeding.
+        // returns the simulated event id (plus a fake htmlLink, mirroring production where the
+        // insert response carries the GCal deep link) and deleteEvent is a no-op. The unused
+        // interface methods throw so an unexpected call surfaces immediately rather than silently
+        // succeeding.
         const stubProvider = {
-            createEvent: async () => fakeEventId,
+            createEvent: async () => ({ eventId: fakeEventId, htmlLink: `https://calendar.google.com/calendar/event?eid=${fakeEventId}` }),
             deleteEvent: async () => {},
             getCalendarTimeZone: async () => 'UTC',
             // Methods that aren't expected to be called in this dev path — surface programming errors loudly.

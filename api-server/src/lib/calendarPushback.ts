@@ -41,16 +41,18 @@ export interface PushContext {
 /**
  * Wraps a GCal create call with the deterministic-id idempotency contract: if Google rejects
  * with 409 (the supplied id is already on Google's side from a prior push that crashed before
- * we could write the link locally), treat it as success and return the same id — we can trust
- * the event is ours because we generated the id ourselves.
+ * we could write the link locally), treat it as success and return `relinkResult` — we can trust
+ * the event is ours because we generated the id ourselves. `relinkResult` carries only the
+ * deterministic id (no htmlLink for item creates): the insert response is unavailable on 409 and
+ * we deliberately avoid an extra events.get on this rare retry path.
  */
-async function createOr409Relink(integrationId: string, deterministicId: string, doInsert: () => Promise<string>): Promise<string> {
+async function createOr409Relink<T>(integrationId: string, deterministicId: string, doInsert: () => Promise<T>, relinkResult: T): Promise<T> {
     try {
         return await withAuthFailureHandling(integrationId, doInsert);
     } catch (err) {
         if (isDuplicateIdError(err)) {
             console.log(`[gcal-pushback] GCal event ${deterministicId} already exists (409) — relinking`);
-            return deterministicId;
+            return relinkResult;
         }
         throw err;
     }
@@ -503,22 +505,26 @@ export async function pushItemToGCalWithContext(
         const deterministicId = buildDeterministicGCalId(snapshot._id, integration._id);
         console.log(`[gcal-pushback] creating new GCal event | itemId=${snapshot._id} title=${snapshot.title} gcalId=${deterministicId}`);
         const sendUpdates = options?.sendUpdates ?? 'none';
-        const calendarEventId = await createOr409Relink(integration._id, deterministicId, () =>
-            provider.createEvent(
-                config.calendarId,
-                {
-                    title: snapshot.title,
-                    timeStart,
-                    timeEnd,
-                    ...(snapshot.notes !== undefined ? { description: markdownToHtml(snapshot.notes) } : {}),
-                    // allDay drives the provider's {date} vs {dateTime} serialization. Attendees is
-                    // the second local-write into the GCal-owned set (alongside RSVP) — sent verbatim.
-                    ...(snapshot.allDay !== undefined ? { allDay: snapshot.allDay } : {}),
-                    ...(snapshot.attendees !== undefined ? { attendees: snapshot.attendees } : {}),
-                },
-                timeZone,
-                { id: deterministicId, sendUpdates },
-            ),
+        const { eventId: calendarEventId, htmlLink } = await createOr409Relink(
+            integration._id,
+            deterministicId,
+            () =>
+                provider.createEvent(
+                    config.calendarId,
+                    {
+                        title: snapshot.title,
+                        timeStart,
+                        timeEnd,
+                        ...(snapshot.notes !== undefined ? { description: markdownToHtml(snapshot.notes) } : {}),
+                        // allDay drives the provider's {date} vs {dateTime} serialization. Attendees is
+                        // the second local-write into the GCal-owned set (alongside RSVP) — sent verbatim.
+                        ...(snapshot.allDay !== undefined ? { allDay: snapshot.allDay } : {}),
+                        ...(snapshot.attendees !== undefined ? { attendees: snapshot.attendees } : {}),
+                    },
+                    timeZone,
+                    { id: deterministicId, sendUpdates },
+                ),
+            { eventId: deterministicId },
         );
 
         const now = dayjs().toISOString();
@@ -529,6 +535,9 @@ export async function pushItemToGCalWithContext(
                     calendarEventId,
                     calendarIntegrationId: integration._id,
                     calendarSyncConfigId: config._id,
+                    // Stored in the same write (and the same recorded op) as the link fields, so the
+                    // "Open in Google Calendar" affordance costs no extra op or GCal round-trip.
+                    ...(htmlLink ? { htmlLink } : {}),
                     lastPushedToGCalTs: now,
                     updatedTs: now,
                     ...(snapshot.notes !== undefined ? { lastSyncedNotes: markdownToHtml(snapshot.notes) } : {}),
@@ -845,8 +854,11 @@ export async function pushRoutineToGCalWithContext(snapshot: RoutineInterface, c
         }
 
         const deterministicId = buildDeterministicGCalId(snapshot._id, ctx.integration._id);
-        const calendarEventId = await createOr409Relink(ctx.integration._id, deterministicId, () =>
-            ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId, ctx.timeZone, { id: deterministicId }),
+        const calendarEventId = await createOr409Relink(
+            ctx.integration._id,
+            deterministicId,
+            () => ctx.provider.createRecurringEvent(snapshot, ctx.config.calendarId, ctx.timeZone, { id: deterministicId }),
+            deterministicId,
         );
         const now = dayjs().toISOString();
         await routinesDAO.updateOne(

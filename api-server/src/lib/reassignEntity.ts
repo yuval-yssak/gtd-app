@@ -265,18 +265,22 @@ async function moveItemAcrossCalendars(
     if (!targetCtx) {
         return { ok: false, status: 502, error: 'Target calendar not found' };
     }
-    const newEventId = await createOnTargetCalendar(targetCtx, item);
-    if (newEventId === null) {
+    const createdEvent = await createOnTargetCalendar(targetCtx, item);
+    if (createdEvent === null) {
         return { ok: false, status: 502, error: 'Failed to create event on target calendar' };
     }
     await bestEffortDeleteOnSource(item, params, buildProvider);
+    // The source event is deleted above, so its htmlLink would dangle — replace it with the new
+    // event's link, or drop it entirely when the create didn't report one.
+    const { htmlLink: _staleSourceLink, ...itemWithoutStaleLink } = item;
     return {
         ok: true,
         item: {
-            ...item,
-            calendarEventId: newEventId,
+            ...itemWithoutStaleLink,
+            calendarEventId: createdEvent.eventId,
             calendarIntegrationId: targetCtx.integration._id,
             calendarSyncConfigId: targetCtx.config._id,
+            ...(createdEvent.htmlLink ? { htmlLink: createdEvent.htmlLink } : {}),
         },
     };
 }
@@ -304,7 +308,7 @@ async function loadPushContext(integrationId: string, configId: string, userId: 
     return { integration, config, provider, timeZone };
 }
 
-async function createOnTargetCalendar(ctx: PushCtx, item: ItemInterface): Promise<string | null> {
+async function createOnTargetCalendar(ctx: PushCtx, item: ItemInterface) {
     if (!item.timeStart || !item.timeEnd) {
         return null;
     }

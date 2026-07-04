@@ -14,7 +14,7 @@ dayjs.extend(utc);
 import { markdownToHtml } from '../lib/markdownHtml.js';
 import { normalizeMasterEventId } from '../lib/routineItemRegeneration.js';
 import type { CalendarIntegrationInterface, GCalAttendee, GCalEventType, GCalPerson, GCalResponseStatus, RoutineInterface } from '../types/entities.js';
-import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
+import type { CalendarProvider, CreatedCalendarEvent, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
 import { SyncTokenInvalidError } from './CalendarProvider.js';
 
 const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -571,7 +571,7 @@ export class GoogleCalendarProvider implements CalendarProvider {
         event: { title: string; timeStart: string; timeEnd: string; description?: string; allDay?: boolean; attendees?: GCalAttendee[] },
         timeZone: string,
         options?: { id?: string; sendUpdates?: 'all' | 'none' },
-    ): Promise<string> {
+    ): Promise<CreatedCalendarEvent> {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const allDay = event.allDay === true;
         // All-day requests use `{ date }` with no timeZone; timed requests use `{ dateTime, timeZone }`.
@@ -596,7 +596,10 @@ export class GoogleCalendarProvider implements CalendarProvider {
         if (!eventId) {
             throw new Error('Google Calendar did not return an event ID');
         }
-        return eventId;
+        // Capture htmlLink from the insert response — the own-echo guard suppresses the webhook
+        // report that would otherwise deliver it, so this is the only chance to learn it.
+        const htmlLink = response.data.htmlLink;
+        return { eventId, ...(htmlLink ? { htmlLink } : {}) };
     }
 
     async updateEvent(

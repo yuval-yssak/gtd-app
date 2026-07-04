@@ -94,6 +94,17 @@ export interface GCalEvent {
     htmlLink?: string;
 }
 
+/**
+ * Result of a single-event create. `htmlLink` is the GCal-owned deep link into the Google Calendar
+ * UI, captured from the insert response — the only chance to learn it for app-created events,
+ * since the own-echo guard suppresses the inbound webhook report that would otherwise carry it
+ * and incremental syncs never re-report an unchanged event.
+ */
+export interface CreatedCalendarEvent {
+    eventId: string;
+    htmlLink?: string;
+}
+
 export interface CalendarProvider {
     /** Fetches the IANA timezone of a calendar from the provider (e.g. "Asia/Jerusalem"). */
     getCalendarTimeZone(calendarId: string): Promise<string>;
@@ -122,7 +133,9 @@ export interface CalendarProvider {
     /** Stops a previously registered push notification channel. */
     stopWatch(channelId: string, resourceId: string): Promise<void>;
     /**
-     * Creates a single (non-recurring) event. Returns the event ID.
+     * Creates a single (non-recurring) event. Returns the event ID plus the event's `htmlLink`
+     * when the provider reports one — captured at create time because the own-echo guard
+     * suppresses the inbound webhook report that would otherwise deliver it.
      * When `options.id` is provided, GCal uses it as the event's id; on duplicate (409), the caller treats it as already-linked.
      * When `event.allDay` is true, `timeStart`/`timeEnd` are `YYYY-MM-DD` strings and the provider
      * emits `{ date }` (no `timeZone`); GCal preserves its exclusive-end convention as-is.
@@ -136,7 +149,7 @@ export interface CalendarProvider {
         event: { title: string; timeStart: string; timeEnd: string; description?: string; allDay?: boolean; attendees?: GCalAttendee[] },
         timeZone: string,
         options?: { id?: string; sendUpdates?: 'all' | 'none' },
-    ): Promise<string>;
+    ): Promise<CreatedCalendarEvent>;
     /**
      * Updates fields on an existing single event. `colorId` semantics: `undefined` leaves the
      * existing colorId untouched; `null` clears it (resets to the calendar's default color);

@@ -1685,7 +1685,9 @@ describe('POST /calendar/integrations/:id/sync', () => {
         await insertUnlinkedItem(userId, { _id: 'item-backfill-1', title: 'Backfilled item' });
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
-        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('gcal-id-1');
+        const createSpy = vi
+            .spyOn(GoogleCalendarProvider.prototype, 'createEvent')
+            .mockResolvedValue({ eventId: 'gcal-id-1', htmlLink: 'https://calendar.google.com/calendar/event?eid=backfill-1' });
 
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
@@ -1698,10 +1700,35 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(updated?.calendarIntegrationId).toBe('int-1');
         expect(updated?.calendarSyncConfigId).toBe('sync-config-1');
         expect(updated?.lastPushedToGCalTs).toBeTruthy();
+        // htmlLink is captured from the insert response in the SAME write as the link fields — the
+        // own-echo guard would suppress the inbound webhook report that otherwise carries it.
+        expect(updated?.htmlLink).toBe('https://calendar.google.com/calendar/event?eid=backfill-1');
         // An operation must be recorded so other devices learn about the newly-linked event id.
+        // Exactly ONE op — stamping htmlLink must not add a second write/echo.
         const recordedOps = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-backfill-1' });
         expect(recordedOps).toHaveLength(1);
-        expect(recordedOps[0]!.snapshot).toMatchObject({ calendarEventId: 'gcal-id-1', calendarIntegrationId: 'int-1' });
+        expect(recordedOps[0]!.snapshot).toMatchObject({
+            calendarEventId: 'gcal-id-1',
+            calendarIntegrationId: 'int-1',
+            htmlLink: 'https://calendar.google.com/calendar/event?eid=backfill-1',
+        });
+    });
+
+    it('links the item without htmlLink when the insert response omits it', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertUnlinkedItem(userId, { _id: 'item-backfill-nolink', title: 'No-link item' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'gcal-id-nolink' });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updated = await itemsDAO.findByOwnerAndId('item-backfill-nolink', userId);
+        expect(updated?.calendarEventId).toBe('gcal-id-nolink');
+        expect(updated?.htmlLink).toBeUndefined();
     });
 
     it('pushes unlinked calendar-type routines to GCal as part of Sync now', async () => {
@@ -1824,7 +1851,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
         await insertUnlinkedItem(userId, { _id: 'item-default-only' });
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
-        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('gcal-default');
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'gcal-default' });
 
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
@@ -1846,7 +1873,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
 
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
         let n = 0;
-        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockImplementation(async () => `gcal-${n++}`);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockImplementation(async () => ({ eventId: `gcal-${n++}` }));
 
         const start = Date.now();
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
@@ -1868,7 +1895,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
         // Inbound is empty — only the backfill produces ops.
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-1' });
-        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('gcal-sse');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'gcal-sse' });
 
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
         expect(res.status).toBe(200);
@@ -1903,7 +1930,7 @@ describe('POST /calendar/integrations/:id/sync', () => {
         // event on Google.
         const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockImplementation(async (_calId, _event, _tz, options) => {
             // Echo back the supplied id so we can assert it's deterministic across calls below.
-            return options?.id ?? 'gcal-fallback';
+            return { eventId: options?.id ?? 'gcal-fallback' };
         });
         // Force the first updateOne to fail mid-flight so the local link doesn't get written.
         const updateOneSpy = vi.spyOn(itemsDAO, 'updateOne').mockRejectedValueOnce(new Error('mongo blip'));
@@ -1938,6 +1965,9 @@ describe('POST /calendar/integrations/:id/sync', () => {
 
         const linked = await itemsDAO.findByOwnerAndId('item-idempotent-1', userId);
         expect(linked?.calendarEventId).toBe(expectedId);
+        // 409-relink has no insert response to read htmlLink from (and we deliberately skip an
+        // extra events.get on this rare retry path) — the link stays unset, as before.
+        expect(linked?.htmlLink).toBeUndefined();
     });
 
     // ── Idempotent backfill: relink naked routines onto real twins instead of cloning ──────────
@@ -7381,7 +7411,7 @@ describe('calendar push-back — new items', () => {
         const item = makeItem(userId);
         await itemsDAO.insertOne(item);
 
-        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-gcal-id');
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'new-gcal-id' });
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
@@ -7400,7 +7430,7 @@ describe('calendar push-back — new items', () => {
 
         const item = makeItem(userId, { timeStart: undefined, timeEnd: undefined });
 
-        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-id');
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'new-id' });
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
@@ -7423,7 +7453,7 @@ describe('calendar push-back — new items', () => {
         });
         await itemsDAO.insertOne(itemInDb);
 
-        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('duplicate-id');
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'duplicate-id' });
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: snapshotWithoutLink._id!, snapshot: snapshotWithoutLink }), mockBuildProvider());
 
@@ -7439,7 +7469,7 @@ describe('calendar push-back — new items', () => {
 
         const item = makeItem(userId, { routineId: 'routine-1' });
 
-        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-id');
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'new-id' });
         // Without a routine in the DB, pushRoutineInstanceOverride also no-ops — so neither
         // path touches GCal. Both are exclusive: createEvent is not called, and the override
         // path exits early because the routine can't be resolved.
@@ -8217,7 +8247,7 @@ describe('calendar push-back — concurrent in-flight guard', () => {
         const item = makeItem(userId, { _id: 'item-concurrent-1' });
         await itemsDAO.insertOne(item);
 
-        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-gcal-id');
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'new-gcal-id' });
 
         const op = makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item });
         // Fire two push-backs concurrently for the same entity.
@@ -9469,7 +9499,7 @@ describe('notes/description sync — outbound push-back', () => {
         const item = makeItem(userId, { notes: 'New item notes' });
         await itemsDAO.insertOne(item);
 
-        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('new-gcal-notes-id');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'new-gcal-notes-id' });
 
         await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
 
@@ -11805,7 +11835,7 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         });
         await itemsDAO.insertOne(item);
 
-        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue('should-not-create');
+        const createSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'should-not-create' });
         const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
         const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
 
@@ -13287,7 +13317,7 @@ function spyOnGCalEventsApi() {
     const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
     type ApiCall = (
         params: unknown,
-    ) => Promise<{ data: { id?: string; items?: Array<{ id?: string; originalStartTime?: { dateTime?: string; date?: string } }> } }>;
+    ) => Promise<{ data: { id?: string; htmlLink?: string; items?: Array<{ id?: string; originalStartTime?: { dateTime?: string; date?: string } }> } }>;
     const insertSpy = vi.spyOn(eventsProto, 'insert' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
     const patchSpy = vi.spyOn(eventsProto, 'patch' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ApiCall>>;
     // routine-instance overrides hit cal.events.instances first to resolve the master+date → instance id.
@@ -13393,6 +13423,29 @@ describe('calendar push-back — all-day items (outbound)', () => {
         expect(params.requestBody?.start).toEqual({ date: '2026-05-25' });
         expect(params.requestBody?.end).toEqual({ date: '2026-05-26' });
         expect(params.requestBody?.recurrence).toEqual(['RRULE:FREQ=WEEKLY;BYDAY=MO']);
+    });
+});
+
+describe('calendar push-back — htmlLink capture (outbound)', () => {
+    // Exercises the real GoogleCalendarProvider mapping (googleapis-level insert mock), not a
+    // provider-method mock: the insert response's htmlLink must survive createEvent's return
+    // shape and land on the item row in the same write as the link fields.
+    it('stamps the insert response htmlLink on the newly linked item', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, { _id: 'item-htmllink-1' });
+        await itemsDAO.insertOne(item);
+
+        const { insertSpy } = spyOnGCalEventsApi();
+        insertSpy.mockResolvedValue({ data: { id: 'gcal-htmllink-1', htmlLink: 'https://www.google.com/calendar/event?eid=aHRtbA' } });
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        const linked = await itemsDAO.findByOwnerAndId('item-htmllink-1', userId);
+        expect(linked?.calendarEventId).toBe('gcal-htmllink-1');
+        expect(linked?.htmlLink).toBe('https://www.google.com/calendar/event?eid=aHRtbA');
     });
 });
 

@@ -830,13 +830,16 @@ describe('POST /sync/reassign', () => {
                 calendarEventId: 'gcal-evt-original',
                 calendarIntegrationId: 'int-a',
                 calendarSyncConfigId: 'cfg-a',
+                // Stale GCal-owned deep link pointing at the source event — the move deletes that
+                // event, so the moved item must carry the NEW event's htmlLink instead.
+                htmlLink: 'https://calendar.google.com/calendar/event?eid=source-stale',
                 timeStart: '2030-01-01T10:00:00Z',
                 timeEnd: '2030-01-01T11:00:00Z',
             });
             await itemsDAO.insertOne(item);
 
             // Mock the provider so create returns a new event id and delete is a no-op.
-            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new', htmlLink: 'https://calendar.google.com/calendar/event?eid=target-new' });
             const deleteEvent = vi.fn().mockResolvedValue(undefined);
             const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
             const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
@@ -859,10 +862,12 @@ describe('POST /sync/reassign', () => {
             expect(createOrder).toBeDefined();
             expect(deleteOrder).toBeDefined();
             expect(createOrder!).toBeLessThan(deleteOrder!);
-            // Item now under bob with the new event id.
+            // Item now under bob with the new event id, and the stale source htmlLink replaced by
+            // the target event's link.
             const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
             expect(moved?.calendarEventId).toBe('gcal-evt-new');
             expect(moved?.calendarIntegrationId).toBe('int-b');
+            expect(moved?.htmlLink).toBe('https://calendar.google.com/calendar/event?eid=target-new');
             buildSpy.mockRestore();
         });
 
@@ -927,7 +932,7 @@ describe('POST /sync/reassign', () => {
             });
             await itemsDAO.insertOne(item);
 
-            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
             const deleteEvent = vi.fn().mockResolvedValue(undefined);
             const updateEvent = vi.fn().mockResolvedValue(undefined);
             const stubProvider = { createEvent, deleteEvent, updateEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
@@ -1099,17 +1104,20 @@ describe('POST /sync/reassign', () => {
             });
 
             // Item carries STALE source ids that don't resolve under alice — primary lookup fails.
+            // It also carries a stale htmlLink; the target create below reports none, so the moved
+            // item must NOT keep pointing at the (deleted) source event.
             const item = makeItem(alice.userId, {
                 status: 'calendar',
                 calendarEventId: 'gcal-evt-orig',
                 calendarIntegrationId: 'int-a-stale',
                 calendarSyncConfigId: 'cfg-a-stale',
+                htmlLink: 'https://calendar.google.com/calendar/event?eid=source-stale',
                 timeStart: '2030-01-01T10:00:00Z',
                 timeEnd: '2030-01-01T11:00:00Z',
             });
             await itemsDAO.insertOne(item);
 
-            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
             // Reject deletes against the wrong calendar (mimics GCal 404), succeed on the real one.
             // This makes the test concretely exercise the per-attempt try/catch — the fallback must
             // skip past the failing wrong-calendar attempt and continue to the matching one.
@@ -1139,6 +1147,8 @@ describe('POST /sync/reassign', () => {
             expect(deleteCalls).toContain('alice-primary');
             const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
             expect(moved?.calendarEventId).toBe('gcal-evt-new');
+            // Create reported no htmlLink → the stale source link is dropped, not carried over.
+            expect(moved?.htmlLink).toBeUndefined();
             buildSpy.mockRestore();
         });
 
@@ -1180,7 +1190,7 @@ describe('POST /sync/reassign', () => {
             });
             await itemsDAO.insertOne(item);
 
-            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
             const deleteEvent = vi.fn();
             const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
             const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
@@ -1260,7 +1270,7 @@ describe('POST /sync/reassign', () => {
             });
             await itemsDAO.insertOne(item);
 
-            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
             const deleteEvent = vi.fn().mockImplementation(async (calendarId: string) => {
                 if (calendarId === 'alice-primary') {
                     throw new Error('invalid_grant');
@@ -1506,7 +1516,7 @@ describe('POST /sync/reassign', () => {
             });
             await itemsDAO.insertOne(item);
 
-            const createEvent = vi.fn().mockResolvedValue('gcal-evt-new');
+            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
             const deleteEvent = vi.fn().mockResolvedValue(undefined);
             const buildSpy = vi
                 .spyOn(buildCalendarProviderModule, 'buildCalendarProvider')

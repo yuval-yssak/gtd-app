@@ -80,13 +80,13 @@ async function flushDevice(page: Page): Promise<void> {
 async function fetchServerEntity(
     collection: 'items' | 'people',
     entityId: string,
-): Promise<{ _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string } | null> {
+): Promise<{ _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string; htmlLink?: string } | null> {
     const res = await fetch(`http://localhost:4000/dev/reassign/find-entity?collection=${collection}&entityId=${entityId}`);
     if (!res.ok) {
         return null;
     }
     const body = (await res.json()) as {
-        doc: { _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string } | null;
+        doc: { _id: string; user: string; peopleIds?: string[]; calendarEventId?: string; calendarIntegrationId?: string; htmlLink?: string } | null;
     };
     return body.doc;
 }
@@ -205,6 +205,9 @@ test.describe('reassign — Step 5', () => {
                 calendarEventId: 'gcal-evt-original',
                 calendarIntegrationId: seedA.integrationId,
                 calendarSyncConfigId: cfgA,
+                // Deep link to the SOURCE event — the move deletes that event, so this must be
+                // replaced by the new event's link rather than carried over stale.
+                htmlLink: 'https://calendar.google.com/calendar/event?eid=stale-source',
                 timeStart: dayjs().add(1, 'day').toISOString(),
                 timeEnd: dayjs().add(1, 'day').add(1, 'hour').toISOString(),
             });
@@ -226,6 +229,9 @@ test.describe('reassign — Step 5', () => {
             expect(moved?.calendarIntegrationId).toBe(seedB.integrationId);
             expect(moved?.calendarEventId).toBeTruthy();
             expect(moved?.calendarEventId).not.toBe('gcal-evt-original');
+            // htmlLink re-stamped from the (stubbed) create response — mirrors production, where
+            // the moved item must not keep the deleted source event's deep link.
+            expect(moved?.htmlLink).toBe(`https://calendar.google.com/calendar/event?eid=${moved?.calendarEventId}`);
         });
     });
 
