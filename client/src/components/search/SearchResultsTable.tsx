@@ -128,6 +128,9 @@ export function SearchResultsTable({ items, visibleColumns, onVisibleColumnsChan
                                 hover
                                 onClick={() => void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { status: null } })}
                                 className={styles.row}
+                                // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration);
+                                // set directly on the <tr> — wrapping table rows in a div would break table semantics.
+                                data-list-item-id={item._id}
                             >
                                 {orderedColumns.map((col) => (
                                     <TableCell key={col.id}>

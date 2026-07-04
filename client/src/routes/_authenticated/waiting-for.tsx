@@ -19,10 +19,13 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { useListGhosts } from '../../hooks/useListGhosts';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-waiting-for.module.css';
 
@@ -36,8 +39,13 @@ function WaitingForPage() {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
+    useListScrollRestoration();
+    const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
-    const waitingItems = items.filter((item) => item.status === 'waitingFor').sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
+    const waitingItems = itemsWithGhosts.filter((item) => item.status === 'waitingFor').sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
+
+    // Ghosts are fading leftovers, not open work — the header count reflects live rows only.
+    const liveWaitingCount = waitingItems.filter((item) => !isGhost(item)).length;
 
     const personMap = Object.fromEntries(people.map((p) => [p._id, p.name]));
 
@@ -100,7 +108,7 @@ function WaitingForPage() {
                     }}
                 >
                     Waiting For
-                    <Chip label={waitingItems.length} size="small" color="primary" className={styles.countChip} />
+                    {liveWaitingCount > 0 && <Chip label={liveWaitingCount} size="small" color="primary" className={styles.countChip} />}
                 </Typography>
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
@@ -124,7 +132,7 @@ function WaitingForPage() {
                     </Typography>
                     <List disablePadding className={styles.list}>
                         {groupItems.map((item, idx) => (
-                            <Box key={item._id}>
+                            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
                                 <ListItem
                                     disablePadding
                                     className={styles.item}
@@ -172,7 +180,7 @@ function WaitingForPage() {
                                 </ListItem>
                                 {editor.renderExpandFor(item._id)}
                                 {idx < groupItems.length - 1 && <Divider />}
-                            </Box>
+                            </ListRowShell>
                         ))}
                     </List>
                 </Box>

@@ -14,12 +14,15 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useState } from 'react';
 import { useAppData } from '../contexts/AppDataProvider';
+import { useListGhosts } from '../hooks/useListGhosts';
+import { useListScrollRestoration } from '../hooks/useListScrollRestoration';
 import { type ItemSortDir, type ItemSortKey, sortItems } from '../lib/itemSearch';
 import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
 import { AccountSyncChip } from './AccountSyncChip';
 import styles from './ArchivedItemsView.module.css';
 import { CopyIdButton } from './itemEditor/CopyIdButton';
+import { ListRowShell } from './ListRowShell';
 import { ListSkeleton } from './ListSkeleton';
 import { RoutineIndicator } from './RoutineIndicator';
 
@@ -52,9 +55,14 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
     const { items, routines, isInitialSyncing } = useAppData();
     const [sortKey, setSortKey] = useState<ItemSortKey>('updatedTs');
     const [sortDir, setSortDir] = useState<ItemSortDir>('desc');
+    useListScrollRestoration();
+    const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
-    const filtered = items.filter((item) => item.status === status);
+    const filtered = itemsWithGhosts.filter((item) => item.status === status);
     const sorted = sortItems(filtered, sortKey, sortDir);
+
+    // Ghosts are fading leftovers of items that just left this archive — count live rows only.
+    const liveCount = filtered.filter((item) => !isGhost(item)).length;
 
     if (filtered.length === 0) {
         return (
@@ -110,7 +118,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                         }}
                     >
                         {title}
-                        <Chip label={filtered.length} size="small" className={styles.countChip} />
+                        {liveCount > 0 && <Chip label={liveCount} size="small" className={styles.countChip} />}
                     </Typography>
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                     <AccountSyncChip />
@@ -135,7 +143,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                     const ts = item[sortKey];
                     const verb = sortKey === 'updatedTs' ? 'Updated' : 'Created';
                     return (
-                        <Box key={item._id}>
+                        <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
                             <ListItem disablePadding secondaryAction={<CopyIdButton id={item._id} testId="archivedItemCopyIdButton" />}>
                                 <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
                                     <ListItemButton dense className={styles.rowButton}>
@@ -161,7 +169,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                                 </Link>
                             </ListItem>
                             {idx < sorted.length - 1 && <Divider />}
-                        </Box>
+                        </ListRowShell>
                     );
                 })}
             </List>

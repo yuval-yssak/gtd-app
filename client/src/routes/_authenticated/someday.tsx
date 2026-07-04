@@ -24,9 +24,12 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useListGhosts } from '../../hooks/useListGhosts';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import styles from './-someday.module.css';
 
 export const Route = createFileRoute('/_authenticated/someday')({
@@ -39,8 +42,13 @@ function SomedayPage() {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
+    useListScrollRestoration();
+    const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
-    const somedayItems = items.filter((item) => item.status === 'somedayMaybe').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+    const somedayItems = itemsWithGhosts.filter((item) => item.status === 'somedayMaybe').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+
+    // Ghosts are fading leftovers, not parked ideas — the header count reflects live rows only.
+    const liveSomedayCount = somedayItems.filter((item) => !isGhost(item)).length;
 
     if (somedayItems.length === 0) {
         return (
@@ -98,14 +106,14 @@ function SomedayPage() {
                     }}
                 >
                     Someday / Maybe
-                    <Chip label={somedayItems.length} size="small" className={styles.countChip} />
+                    {liveSomedayCount > 0 && <Chip label={liveSomedayCount} size="small" className={styles.countChip} />}
                 </Typography>
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
             </Box>
             <List disablePadding className={styles.list}>
                 {somedayItems.map((item, idx) => (
-                    <Box key={item._id}>
+                    <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
                         <ListItem
                             disablePadding
                             className={styles.item}
@@ -140,7 +148,7 @@ function SomedayPage() {
                         </ListItem>
                         {editor.renderExpandFor(item._id)}
                         {idx < somedayItems.length - 1 && <Divider />}
-                    </Box>
+                    </ListRowShell>
                 ))}
             </List>
             {editor.renderGlobal()}

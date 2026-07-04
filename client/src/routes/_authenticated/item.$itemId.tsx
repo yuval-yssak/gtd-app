@@ -5,13 +5,15 @@ import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
+import { useNavigateBack } from '../../hooks/useNavigateBack';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-item.$itemId.module.css';
 
@@ -71,7 +73,9 @@ function ItemPage() {
     const { itemId } = Route.useParams();
     const { status: initialStatus } = Route.useSearch();
     const { items, workContexts, people, refreshItems } = useAppData();
-    const navigate = useNavigate();
+    const historyBackOr = useNavigateBack();
+    // The scroll surface keeps the list's offset across the route change — start the form at the top.
+    useScrollToTopOnMount();
 
     const item = items.find((i) => i._id === itemId) ?? null;
 
@@ -119,6 +123,8 @@ function ItemPage() {
         );
     }
 
+    const navigateBack = () => historyBackOr(backRouteForStatus(item.status));
+
     const goBack = () => {
         // Cancel any pending deferred navigation so a double-tap Back doesn't stack two navigates
         // and so a normal-path goBack after a fromGmail save doesn't fire alongside the deferred one.
@@ -135,11 +141,11 @@ function ItemPage() {
             fromGmailJustFiredRef.current = false;
             deferredNavigateTimerRef.current = setTimeout(() => {
                 deferredNavigateTimerRef.current = null;
-                void navigate({ to: backRouteForStatus(item.status) });
+                navigateBack();
             }, 3000);
             return;
         }
-        void navigate({ to: backRouteForStatus(item.status) });
+        navigateBack();
     };
 
     const onFromGmailReadOnly = () => {

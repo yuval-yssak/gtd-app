@@ -50,7 +50,8 @@ function FlatList({ items, showStatusChip }: { items: readonly StoredItem[]; sho
     return (
         <List disablePadding className={styles.list}>
             {items.map((item, idx) => (
-                <Box key={item._id}>
+                // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
+                <Box key={item._id} data-list-item-id={item._id}>
                     <ResultRow item={item} showStatusChip={showStatusChip} />
                     {idx < items.length - 1 && <Divider />}
                 </Box>

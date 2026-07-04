@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { recordGhostSnapshot } from '../lib/listGhosts';
 import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { deleteItemById, putItem } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
@@ -18,6 +19,18 @@ function nowIso(): string {
  * shared constant so every done-transition surface emits identical wording.
  */
 export const FROM_GMAIL_READONLY_MESSAGE = 'GCal events from Gmail can only be edited in Gmail.';
+
+/**
+ * A status change removes the item from the list it was on; the pre-mutation snapshot
+ * lets that list briefly render a fading "ghost" of the row (see useListGhosts).
+ * Only user-initiated local mutations pass through here — sync-applied ops from other
+ * devices go through syncHelpers and intentionally never record ghosts.
+ */
+function recordGhostIfLeavingList(previous: StoredItem, updated: StoredItem): void {
+    if (previous.status !== updated.status) {
+        recordGhostSnapshot(previous);
+    }
+}
 
 function buildBaseItem(userId: string, title: string): StoredItem {
     const now = nowIso();
@@ -68,6 +81,7 @@ export async function clarifyToNextAction(db: IDBPDatabase<MyDB>, item: StoredIt
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'nextAction', ...meta, updatedTs: nowIso() };
+    recordGhostIfLeavingList(item, updated);
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
@@ -109,6 +123,7 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
         ...(meta.allDay ? { allDay: true } : {}),
         updatedTs: nowIso(),
     };
+    recordGhostIfLeavingList(item, updated);
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
@@ -142,6 +157,7 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'waitingFor', ...meta, updatedTs: nowIso() };
+    recordGhostIfLeavingList(item, updated);
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
@@ -167,6 +183,7 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'inbox', updatedTs: nowIso() };
+    recordGhostIfLeavingList(item, updated);
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
@@ -199,6 +216,7 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
         ...rest
     } = item;
     const updated: StoredItem = { ...rest, status: 'somedayMaybe', ...meta, updatedTs: nowIso() };
+    recordGhostIfLeavingList(item, updated);
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     return updated;
@@ -218,6 +236,7 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
  */
 export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, opts?: { onReadOnlyGCal?: () => void }): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
+    recordGhostIfLeavingList(item, updated);
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     await maybeCreateNextRoutineItem(db, item, 'done');
@@ -229,6 +248,7 @@ export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, op
 
 export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
     const updated: StoredItem = { ...item, status: 'trash', updatedTs: nowIso() };
+    recordGhostIfLeavingList(item, updated);
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
     await maybeCreateNextRoutineItem(db, item, 'trash');
@@ -425,6 +445,10 @@ export async function removeItem(db: IDBPDatabase<MyDB>, itemId: string): Promis
     // Falling back to the active account (queueSyncOp's default) is wrong when the deleted
     // item belongs to a non-active session (unified-view world).
     const existing = await db.get('items', itemId);
+    // Hard deletes leave a list too — record the ghost so the row fades out in place.
+    if (existing) {
+        recordGhostSnapshot(existing);
+    }
     await deleteItemById(db, itemId);
     await queueSyncOp(db, {
         opType: 'delete',

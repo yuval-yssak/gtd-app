@@ -28,10 +28,13 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { useListGhosts } from '../../hooks/useListGhosts';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { itemContextTags, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
 import { missingClarifications } from '../../lib/missingClarifications';
 import { type NextActionsUrlState, parseNextActionsSearch, TIME_FILTER_OPTIONS } from '../../lib/nextActionsUrlParams';
@@ -148,6 +151,8 @@ function NextActionsPage() {
     const urlFilters = Route.useSearch();
     const navigate = useNavigate();
     const [showTags, setShowTags] = useState(readShowTags);
+    useListScrollRestoration();
+    const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
     // Filters live in the URL so views are shareable/bookmarkable. Clicking the active chip again
     // clears it (single-select toggle); replace: true so chip toggling doesn't spam history.
@@ -169,7 +174,7 @@ function NextActionsPage() {
     const sortedWorkContexts = useMemo(() => sortByName(workContexts), [workContexts]);
     const sortedPeople = useMemo(() => sortByName(people), [people]);
 
-    const nextActions = items
+    const nextActions = itemsWithGhosts
         .filter((item) => item.status === 'nextAction')
         .filter((item) => matchesFilters(item, urlFilters))
         .sort((a, b) => {
@@ -197,6 +202,9 @@ function NextActionsPage() {
         await refreshItems();
     }
 
+    // Ghosts are fading leftovers, not open work — the header count reflects live rows only.
+    const liveNextActionCount = nextActions.filter((item) => !isGhost(item)).length;
+
     return (
         <Box>
             {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
@@ -208,7 +216,7 @@ function NextActionsPage() {
                     }}
                 >
                     Next Actions
-                    {nextActions.length > 0 && <Chip label={nextActions.length} size="small" color="primary" className={styles.countChip} />}
+                    {liveNextActionCount > 0 && <Chip label={liveNextActionCount} size="small" color="primary" className={styles.countChip} />}
                 </Typography>
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
@@ -323,7 +331,7 @@ function NextActionsPage() {
                     {nextActions.map((item, idx) => {
                         const missingLabels = missingClarifications(item, hasAtLeastOne(workContexts));
                         return (
-                            <Box key={item._id}>
+                            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
                                 <ListItem
                                     disablePadding
                                     className={styles.item}
@@ -371,7 +379,7 @@ function NextActionsPage() {
                                 </ListItem>
                                 {editor.renderExpandFor(item._id)}
                                 {idx < nextActions.length - 1 && <Divider />}
-                            </Box>
+                            </ListRowShell>
                         );
                     })}
                 </List>

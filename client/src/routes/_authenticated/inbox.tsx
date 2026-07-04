@@ -40,11 +40,14 @@ import { useClaudeReview } from '../../components/claudeReview/useClaudeReview';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
+import { useListGhosts } from '../../hooks/useListGhosts';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
 import type { StoredItem } from '../../types/MyDB';
@@ -279,7 +282,13 @@ function InboxPage() {
     // opens the unified editor instead.
     const [bottomSheetItem, setBottomSheetItem] = useState<StoredItem | null>(null);
 
-    const inboxItems = items.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+    useListScrollRestoration();
+    const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
+
+    const inboxItems = itemsWithGhosts.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+
+    // Ghosts are fading leftovers of items just clarified away — counts and the batch wizard use live rows only.
+    const liveInboxItems = inboxItems.filter((item) => !isGhost(item));
 
     async function onCapture() {
         const title = draft.trim();
@@ -313,7 +322,7 @@ function InboxPage() {
     }
 
     function startProcessInbox() {
-        if (inboxItems.length === 0) {
+        if (liveInboxItems.length === 0) {
             return;
         }
         // page mode is the only chrome that needs route navigation; every other setting flows
@@ -323,7 +332,7 @@ function InboxPage() {
             void navigate({ to: '/process-inbox' });
             return;
         }
-        setBatchSnapshot(inboxItems);
+        setBatchSnapshot(liveInboxItems);
     }
 
     return (
@@ -338,12 +347,12 @@ function InboxPage() {
                         }}
                     >
                         Inbox
-                        {inboxItems.length > 0 && <Chip label={inboxItems.length} size="small" color="primary" className={styles.countChip} />}
+                        {liveInboxItems.length > 0 && <Chip label={liveInboxItems.length} size="small" color="primary" className={styles.countChip} />}
                     </Typography>
                     <AccountSyncChip />
                 </Box>
-                <Button variant="outlined" size="small" disabled={inboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
-                    Process Inbox ({inboxItems.length})
+                <Button variant="outlined" size="small" disabled={liveInboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
+                    Process Inbox ({liveInboxItems.length})
                 </Button>
             </Box>
             <Paper variant="outlined" className={styles.captureCard}>
@@ -414,7 +423,7 @@ function InboxPage() {
             ) : (
                 <List disablePadding className={styles.list}>
                     {inboxItems.map((item, idx) => (
-                        <Box key={item._id}>
+                        <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
                             {isMobile ? (
                                 <InboxSwipeItem
                                     item={item}
@@ -498,7 +507,7 @@ function InboxPage() {
                             {editor.renderExpandFor(item._id)}
 
                             {idx < inboxItems.length - 1 && <Divider />}
-                        </Box>
+                        </ListRowShell>
                     ))}
                 </List>
             )}

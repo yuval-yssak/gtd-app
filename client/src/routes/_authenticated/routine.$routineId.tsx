@@ -10,6 +10,8 @@ import dayjs from 'dayjs';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
+import { useNavigateBack } from '../../hooks/useNavigateBack';
 import { describeNextItemDate, findRoutineNextItem } from '../../lib/routineNextItem';
 import type { StoredItem, StoredRoutine } from '../../types/MyDB';
 import styles from './-routine.$routineId.module.css';
@@ -70,9 +72,12 @@ function RoutinePage() {
     const { db } = Route.useRouteContext();
     const { routineId } = Route.useParams();
     const { account, routines, items, workContexts, people, refreshRoutines, refreshItems } = useAppData();
+    const historyBackOr = useNavigateBack();
+    // The scroll surface keeps the list's offset across the route change — start the form at the top.
+    useScrollToTopOnMount();
 
     const routine = routines.find((r) => r._id === routineId) ?? null;
-    const goBack = () => window.history.back();
+    const goBack = () => historyBackOr('/routines');
 
     if (!routine || !account) {
         return (

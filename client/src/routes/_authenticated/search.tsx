@@ -14,6 +14,7 @@ import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { filterItems, sortItems } from '../../lib/itemSearch';
 import { loadVisibleColumns, type SearchTableColumnId, saveVisibleColumns } from '../../lib/searchTableColumns';
 import { DEFAULT_URL_STATE, parseSearchParams, type SearchUrlState, type SearchView, urlStateToFilters } from '../../lib/searchUrlParams';
@@ -36,6 +37,7 @@ const VIEW_OPTIONS: Array<{ value: SearchView; icon: React.ReactElement; label: 
 function SearchPage() {
     const urlState = Route.useSearch();
     const navigate = useNavigate();
+    useListScrollRestoration();
     const { items, people, workContexts } = useAppData();
 
     // Mirrored from URL so typing stays responsive while URL writes are debounced.

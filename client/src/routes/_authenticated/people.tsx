@@ -25,6 +25,7 @@ import { ListSkeleton } from '../../components/ListSkeleton';
 import { PersonEditDialog } from '../../components/people/PersonEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson } from '../../db/personMutations';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './-people.module.css';
 
@@ -42,6 +43,7 @@ const emptyForm: CreateFormState = { name: '', email: '', phone: '' };
 
 function PeoplePage() {
     const { db } = Route.useRouteContext();
+    useListScrollRestoration();
     const { account, people, refreshPeople, loggedInAccounts, isInitialSyncing } = useAppData();
     const [createOpen, setCreateOpen] = useState(false);
     const [editing, setEditing] = useState<StoredPerson | null>(null);
@@ -111,7 +113,8 @@ function PeoplePage() {
             ) : (
                 <List disablePadding className={styles.list}>
                     {people.map((person, idx) => (
-                        <Box key={person._id}>
+                        // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
+                        <Box key={person._id} data-list-item-id={person._id}>
                             <ListItem
                                 disablePadding
                                 className={styles.item}

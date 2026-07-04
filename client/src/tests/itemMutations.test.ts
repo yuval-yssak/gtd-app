@@ -17,6 +17,7 @@ import {
 import { generateCalendarItemsToHorizon } from '../db/routineItemHelpers';
 import { createRoutine } from '../db/routineMutations';
 import { waitForPendingFlush } from '../db/syncHelpers';
+import { getGhostSnapshots, resetGhostStore } from '../lib/listGhosts';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -40,6 +41,9 @@ afterEach(async () => {
     await waitForPendingFlush().catch(() => {});
     db.close();
     vi.clearAllMocks();
+    // Every status-changing mutation records into the module-level ghost store — reset so
+    // ghosts from one test can't leak into another's assertions.
+    resetGhostStore();
 });
 
 describe('collectItem', () => {
@@ -969,5 +973,78 @@ describe('recordRoutineInstanceModification', () => {
         await expect(
             recordRoutineInstanceModification(db, 'missing-routine', '2026-05-04', { itemId: 'item-1', newTimeStart: '2026-05-04T10:00:00' }),
         ).resolves.toBeUndefined();
+    });
+});
+
+// Pins the wiring between the mutation layer and the ghost store (lib/listGhosts) — the store's
+// own behavior is covered in listGhosts.test.ts; these assert that the helpers actually record.
+describe('ghost snapshot recording', () => {
+    it('clarifyToDone records the pre-mutation snapshot with its old status', async () => {
+        const inbox = await collectItem(db, USER_ID, { title: 'Ghost me' });
+        const nextAction = await clarifyToNextAction(db, inbox, {});
+        resetGhostStore(); // isolate the transition under test from the inbox→nextAction ghost above
+
+        await clarifyToDone(db, nextAction);
+
+        expect(getGhostSnapshots()).toHaveLength(1);
+        const [ghost] = getGhostSnapshots();
+        if (!ghost) throw new Error('expected one ghost snapshot');
+        expect(ghost._id).toBe(nextAction._id);
+        expect(ghost.status).toBe('nextAction');
+        expect(ghost.updatedTs).toBe(nextAction.updatedTs);
+    });
+
+    it('every status-changing clarify helper records a ghost', async () => {
+        // Distinct items per helper — the store keeps one entry per item id, so a single
+        // item chained through several transitions would only retain the last ghost.
+        const transitions = [
+            (item: StoredItem) => clarifyToNextAction(db, item, {}),
+            (item: StoredItem) => clarifyToWaitingFor(db, item, {}),
+            (item: StoredItem) => clarifyToSomedayMaybe(db, item, {}),
+            (item: StoredItem) => clarifyToDone(db, item),
+            (item: StoredItem) => clarifyToTrash(db, item),
+        ];
+        for (const transition of transitions) {
+            await transition(await collectItem(db, USER_ID, { title: 'Departure' }));
+        }
+
+        expect(getGhostSnapshots().map((g) => g.status)).toEqual(['inbox', 'inbox', 'inbox', 'inbox', 'inbox']);
+    });
+
+    it('a clarify call that keeps the status does not record a ghost', async () => {
+        const inbox = await collectItem(db, USER_ID, { title: 'Stay put' });
+        const nextAction = await clarifyToNextAction(db, inbox, {});
+        resetGhostStore();
+
+        // Re-clarifying with new meta but the same status is a field edit, not a list departure.
+        await clarifyToNextAction(db, nextAction, { energy: 'high' });
+
+        expect(getGhostSnapshots()).toHaveLength(0);
+    });
+
+    it('updateItem (same-status field edit) does not record a ghost', async () => {
+        const inbox = await collectItem(db, USER_ID, { title: 'Edited in place' });
+        resetGhostStore();
+
+        await updateItem(db, { ...inbox, title: 'Edited in place (renamed)' });
+
+        expect(getGhostSnapshots()).toHaveLength(0);
+    });
+
+    it('removeItem records the deleted item as a ghost', async () => {
+        const inbox = await collectItem(db, USER_ID, { title: 'Hard delete' });
+        resetGhostStore();
+
+        await removeItem(db, inbox._id);
+
+        expect(getGhostSnapshots().map((g) => g._id)).toEqual([inbox._id]);
+    });
+
+    it('removeItem of a missing id records nothing', async () => {
+        // The queued delete op can't resolve a userId for a missing item in this env (no
+        // active account) and rejects — the ghost guard must already have declined by then.
+        await removeItem(db, 'no-such-item').catch(() => {});
+
+        expect(getGhostSnapshots()).toHaveLength(0);
     });
 });

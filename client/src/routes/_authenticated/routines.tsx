@@ -33,6 +33,7 @@ import { useRoutineEditor } from '../../components/routineEditor/useRoutineEdito
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { filterRoutinesByTitle, groupRoutines } from '../../lib/routineGrouping';
 import { parseRoutinesSearch } from '../../lib/routinesUrlParams';
 import { formatCalendarRrule, formatRrule } from '../../lib/rruleUtils';
@@ -48,6 +49,7 @@ function RoutinesPage() {
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
     const navigate = useNavigate();
+    useListScrollRestoration();
     const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh, isInitialSyncing, isCalendarSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -249,7 +251,8 @@ function RoutinesPage() {
                                   </Typography>
                                   <List disablePadding className={styles.list}>
                                       {group.routines.map((routine, idx) => (
-                                          <Box key={routine._id}>
+                                          // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
+                                          <Box key={routine._id} data-list-item-id={routine._id}>
                                               {renderRoutineRow(routine)}
                                               {editor.renderExpandFor(routine._id)}
                                               {idx < group.routines.length - 1 && <Divider />}
