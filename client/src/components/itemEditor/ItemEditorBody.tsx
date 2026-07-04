@@ -5,6 +5,7 @@ import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
 import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
@@ -15,7 +16,7 @@ import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { type RsvpPushStatus, rsvpOnline } from '../../api/calendarApi';
 import type { ReassignItemEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -34,7 +35,9 @@ import {
     updateItemAttendees,
     updateItemWithGcalMeta,
 } from '../../db/itemMutations';
+import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { offerUndo } from '../../lib/undoStore';
 import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
 import { CalendarFields } from '../clarify/CalendarFields';
@@ -46,7 +49,6 @@ import {
     buildSomedayMaybeMeta,
     buildWaitingForMeta,
     type CalendarFormState,
-    emptyCalendar,
     type NextActionFormState,
     type SomedayMaybeFormState,
     type WaitingForFormState,
@@ -71,6 +73,7 @@ import {
 import { RoutineIndicator } from '../RoutineIndicator';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import styles from './ItemEditorBody.module.css';
+import { itemToCalendarForm, itemToFormSeeds, itemToNextActionForm, itemToSomedayMaybeForm, itemToWaitingForForm, mergeItemForms } from './itemEditorLiveMerge';
 import { MeetingDetails, type RsvpStatus } from './MeetingDetails';
 import { applyOptimisticRsvp, findSelfAttendee } from './meetingDetailsLogic';
 import { NotesSection } from './NotesSection';
@@ -130,38 +133,9 @@ export interface ItemEditorBodyProps {
     renderActions?: (api: ItemEditorActionsApi) => React.ReactNode;
 }
 
-// Exported for unit testing — the all-day decode path (inclusive endDate from the +1-day exclusive
-// stored value) is the form's only round-trip dependency on Phase 5's encoding.
-export function itemToCalendarForm(item: StoredItem): CalendarFormState {
-    if (!item.timeStart) {
-        return emptyCalendar;
-    }
-    // All-day items store YYYY-MM-DD strings on timeStart/timeEnd (GCal exclusive-end preserved).
-    // Decode the +1-day shift back to an inclusive endDate so the picker shows the date the user
-    // would think of as "the last day"; a single-day event renders with endDate === '' (blank).
-    if (item.allDay) {
-        const startDate = item.timeStart;
-        const inclusiveEnd = item.timeEnd ? dayjs(item.timeEnd).subtract(1, 'day').format('YYYY-MM-DD') : startDate;
-        return {
-            date: startDate,
-            startTime: '',
-            endTime: '',
-            calendarSyncConfigId: item.calendarSyncConfigId ?? '',
-            allDay: true,
-            endDate: inclusiveEnd === startDate ? '' : inclusiveEnd,
-        };
-    }
-    const start = dayjs(item.timeStart);
-    const end = item.timeEnd ? dayjs(item.timeEnd) : start.add(1, 'hour');
-    return {
-        date: start.format('YYYY-MM-DD'),
-        startTime: start.format('HH:mm'),
-        endTime: end.format('HH:mm'),
-        calendarSyncConfigId: item.calendarSyncConfigId ?? '',
-        allDay: false,
-        endDate: '',
-    };
-}
+// Re-exported for callers/tests that historically imported it from here; the implementation moved
+// to itemEditorLiveMerge so the merge module never has to import this component (import cycle).
+export { itemToCalendarForm } from './itemEditorLiveMerge';
 
 /** Resolves the body-class for the chrome variant. dialog/page render the bare flex column;
  *  expand and popover add their own padding/borders. */
@@ -192,9 +166,16 @@ export function ItemEditorBody({
     renderActions,
 }: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
-    const { loggedInAccounts, routines } = useAppData();
+    const { loggedInAccounts, routines, items } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
     const reassignInFlight = isPending('item', item._id);
+
+    // Live row — reflects remote sync merges and our own committed autosaves. All persistence
+    // paths build on this (never the mount-time `item` prop) so a save can't clobber fields
+    // another device changed while the editor was open.
+    const liveItem = items.find((i) => i._id === item._id) ?? item;
+    const liveItemRef = useRef(liveItem);
+    liveItemRef.current = liveItem;
 
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
@@ -213,36 +194,173 @@ export function ItemEditorBody({
     // title/notes here and resolve them when the user picks all/none/cancel.
     const [pendingSave, setPendingSave] = useState<{ trimmedTitle: string; trimmedNotes: string } | null>(null);
 
-    const [naForm, setNaForm] = useState<NextActionFormState>({
-        ignoreBefore: item.ignoreBefore ?? '',
-        workContextIds: item.workContextIds ?? [],
-        peopleIds: item.peopleIds ?? [],
-        energy: item.energy ?? '',
-        time: item.time?.toString() ?? '',
-        urgent: item.urgent ?? false,
-        focus: item.focus ?? false,
-        expectedBy: item.expectedBy ?? '',
-    });
-    const [calForm, setCalForm] = useState<CalendarFormState>(itemToCalendarForm(item));
+    const [naForm, setNaForm] = useState<NextActionFormState>(() => itemToNextActionForm(item));
+    const [calForm, setCalForm] = useState<CalendarFormState>(() => itemToCalendarForm(item));
     const visibleCalendarOptions = useMemo(
         () => (ownerUserId === item.userId ? calendarOptions : calendarOptions.filter((opt) => opt.userId === ownerUserId)),
         [calendarOptions, ownerUserId, item.userId],
     );
-    const [wfForm, setWfForm] = useState<WaitingForFormState>({
-        waitingForPersonId: item.waitingForPersonId ?? '',
-        expectedBy: item.expectedBy ?? '',
-        // WaitingFor no longer exposes an `Ignore before` input — seed it empty so editing a waiting
-        // item never re-persists a hidden tickler date the user can't see.
-        ignoreBefore: '',
-    });
-    const [smForm, setSmForm] = useState<SomedayMaybeFormState>({
-        expectedBy: item.expectedBy ?? '',
-        ignoreBefore: item.ignoreBefore ?? '',
-    });
+    const [wfForm, setWfForm] = useState<WaitingForFormState>(() => itemToWaitingForForm(item));
+    const [smForm, setSmForm] = useState<SomedayMaybeFormState>(() => itemToSomedayMaybeForm(item));
 
     // Bundle the per-status forms so the merge/patch builders take one cohesive argument.
     const forms: EditorForms = { na: naForm, cal: calForm, wf: wfForm, sm: smForm };
     const saveDisabled = isSaveDisabled(title, status, calForm) || isSaving;
+
+    // ── Hybrid save model ────────────────────────────────────────────────────
+    // Title/notes autosave (debounced, with Undo); everything else (status, schedule, contexts,
+    // owner, …) still commits via the explicit Save button. Meetings with attendees are the
+    // exception: their title/notes edits stay on explicit Save so the SendUpdatesDialog
+    // ("email attendees?") gate keeps intercepting notification-worthy changes.
+    const textAutosaveEnabled = (liveItem.attendees?.length ?? 0) === 0;
+
+    // The item values the form state was last seeded/merged from. A form field differing from its
+    // seed is "dirty" (user is editing it); the live-merge effect below uses this to decide which
+    // fields silently adopt remote changes and which keep local edits.
+    const seedFormsRef = useRef(itemToFormSeeds(item));
+
+    // Fields where the user's edit collided with a change from another device. Rendered as a
+    // dismissible notice with a whole-form "Use their version" escape hatch.
+    const [conflictFields, setConflictFields] = useState<string[]>([]);
+
+    const formRefs = useRef({ title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm });
+    formRefs.current = { title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm };
+
+    const textAutosave = useAutosave<{ title: string; notes: string }>({
+        initial: { title: item.title, notes: item.notes ?? '' },
+        commit: async (value, baseline) => {
+            if (!value.title.trim()) {
+                return; // title is required — never persist a blank one
+            }
+            await persistTextFields(value);
+            offerUndo({
+                key: `item:${item._id}:text`,
+                message: 'Saved',
+                undo: async () => {
+                    await persistTextFields(baseline);
+                    setTitle(baseline.title);
+                    setNotes(baseline.notes);
+                    textAutosave.reset(baseline);
+                },
+                onExpire: () => textAutosave.endBurst(),
+            });
+        },
+    });
+
+    /** Writes the given title/notes onto the LIVE item (raw, untrimmed — trimming here would make
+     *  the committed value differ from the form text and re-dirty the controller on every echo). */
+    async function persistTextFields(value: { title: string; notes: string }) {
+        const live = liveItemRef.current;
+        const { notes: _n, ...rest } = live;
+        const next: StoredItem = value.notes ? { ...rest, title: value.title, notes: value.notes } : { ...rest, title: value.title };
+        const updated = await updateItem(db, next);
+        await recordTextExceptionIfRoutineInstance(live, updated);
+        await onSaved();
+    }
+
+    /** Routine-generated calendar items must record a `modified` exception for title/notes edits,
+     *  matching the explicit-save path — otherwise the next series regen clobbers the edit. */
+    async function recordTextExceptionIfRoutineInstance(previous: StoredItem, updated: StoredItem) {
+        if (updated.status !== 'calendar' || !updated.routineId || !previous.timeStart) {
+            return;
+        }
+        const titleChanged = updated.title !== previous.title;
+        const notesChanged = (updated.notes ?? '') !== (previous.notes ?? '');
+        if (!titleChanged && !notesChanged) {
+            return;
+        }
+        await recordRoutineInstanceModification(db, updated.routineId, dayjs(previous.timeStart).format('YYYY-MM-DD'), {
+            itemId: updated._id,
+            ...(titleChanged ? { title: updated.title } : {}),
+            ...(notesChanged ? { notes: updated.notes ?? '' } : {}),
+        });
+    }
+
+    function onTitleChange(nextTitle: string) {
+        setTitle(nextTitle);
+        if (textAutosaveEnabled) {
+            textAutosave.onChange({ title: nextTitle, notes: formRefs.current.notes });
+        }
+    }
+
+    function onNotesChange(nextNotes: string) {
+        setNotes(nextNotes);
+        if (textAutosaveEnabled) {
+            textAutosave.onChange({ title: formRefs.current.title, notes: nextNotes });
+        }
+    }
+
+    // ── Live merge ───────────────────────────────────────────────────────────
+    // When sync rewrites the open item: clean fields adopt the incoming values; dirty fields keep
+    // the local edit and flag a conflict when the remote version changed them differently. Our own
+    // autosave echoing back is recognized via the controller's lastCommitted value — not a conflict.
+    const lastMergedUpdatedTsRef = useRef(item.updatedTs);
+    useEffect(() => {
+        // Row identity churns on every unrelated refresh (IDB re-read) — only merge when this
+        // item's content actually changed. Every persisted write bumps updatedTs.
+        if (liveItem.updatedTs === lastMergedUpdatedTsRef.current) {
+            return;
+        }
+        lastMergedUpdatedTsRef.current = liveItem.updatedTs;
+        const seed = seedFormsRef.current;
+        const incoming = itemToFormSeeds(liveItem);
+        const form = { ...formRefs.current };
+        const { merged, conflicts } = mergeItemForms(
+            { title: form.title, notes: form.notes, status: form.status, na: form.na, cal: form.cal, wf: form.wf, sm: form.sm },
+            seed,
+            incoming,
+        );
+        seedFormsRef.current = incoming;
+
+        // Echo suppression: an incoming text value that equals what our autosave last committed is
+        // this editor's own write coming back — never a conflict, even while the user keeps typing.
+        const committedText = textAutosave.lastCommitted();
+        const realConflicts = conflicts.filter((label) => {
+            if (label === 'Title') {
+                return incoming.title !== committedText.title;
+            }
+            if (label === 'Notes') {
+                return incoming.notes !== committedText.notes;
+            }
+            return true;
+        });
+
+        setTitle(merged.title);
+        setNotes(merged.notes);
+        setStatus(merged.status);
+        setNaForm(merged.na);
+        setCalForm(merged.cal);
+        setWfForm(merged.wf);
+        setSmForm(merged.sm);
+        if (merged.title === incoming.title && merged.notes === incoming.notes) {
+            // Text fully clean (or adopted) — tighten the controller baseline to the live values.
+            // When text is still dirty we leave the controller alone: its pending commit must
+            // survive the merge (a reset would silently drop the user's in-flight burst).
+            textAutosave.reset({ title: incoming.title, notes: incoming.notes });
+        }
+        if (realConflicts.length > 0) {
+            setConflictFields((existing) => [...new Set([...existing, ...realConflicts])]);
+        }
+        // formRefs/textAutosave are stable refs/instances; the effect must run exactly when the
+        // live row changes.
+    }, [liveItem, textAutosave]);
+
+    /** "Use their version": re-seed the whole form from the live item, dropping local edits. */
+    function adoptTheirVersion() {
+        const live = liveItemRef.current;
+        const seeds = itemToFormSeeds(live);
+        seedFormsRef.current = seeds;
+        setTitle(seeds.title);
+        setNotes(seeds.notes);
+        setStatus(seeds.status);
+        setNaForm(seeds.na);
+        setCalForm(seeds.cal);
+        setWfForm(seeds.wf);
+        setSmForm(seeds.sm);
+        setOwnerUserId(live.userId);
+        textAutosave.reset({ title: seeds.title, notes: seeds.notes });
+        setConflictFields([]);
+    }
 
     function onSave() {
         if (isSaving) {
@@ -253,8 +371,9 @@ export function ItemEditorBody({
             return;
         }
         const trimmedNotes = notes.trim();
-        const ownerChanged = ownerUserId !== item.userId;
-        const statusChanged = status !== item.status;
+        const live = liveItemRef.current;
+        const ownerChanged = ownerUserId !== live.userId;
+        const statusChanged = status !== live.status;
         const path = decideSavePath(ownerChanged, statusChanged);
         if (path.kind === 'block') {
             setReassignError(path.error);
@@ -264,7 +383,7 @@ export function ItemEditorBody({
             return;
         }
         if (path.kind === 'reassign') {
-            startReassignInBackground(buildEditPatch(item, trimmedTitle, trimmedNotes, status, forms), trimmedTitle);
+            startReassignInBackground(buildEditPatch(live, trimmedTitle, trimmedNotes, status, forms), trimmedTitle);
             onClose();
             return;
         }
@@ -280,17 +399,43 @@ export function ItemEditorBody({
     }
 
     function commitSave(trimmedTitle: string, trimmedNotes: string, gcalMeta: { sendUpdates: 'all' | 'none' } | undefined) {
-        const ownerChanged = ownerUserId !== item.userId;
-        const statusChanged = status !== item.status;
+        const live = liveItemRef.current;
+        const ownerChanged = ownerUserId !== live.userId;
+        const statusChanged = status !== live.status;
         const path = decideSavePath(ownerChanged, statusChanged);
         startSaving(async () => {
+            // Drain any text edit still inside the debounce window first, so its snapshot doesn't
+            // land after this save with a newer updatedTs and resurrect pre-save structural fields.
+            await textAutosave.flush();
+            const base = liveItemRef.current;
             if (path.kind === 'statusTransition') {
-                await saveViaStatusTransition(normalizeTitleAndNotes(item, trimmedTitle, trimmedNotes));
+                await saveViaStatusTransition(normalizeTitleAndNotes(base, trimmedTitle, trimmedNotes));
             } else {
-                await saveInPlace(normalizeTitleAndNotes(item, trimmedTitle, trimmedNotes), gcalMeta);
+                await saveInPlace(normalizeTitleAndNotes(base, trimmedTitle, trimmedNotes), gcalMeta);
             }
+            offerSaveUndo(base);
             await onSaved();
             onClose();
+        });
+    }
+
+    /**
+     * Undo for the explicit Save: restores the full pre-save snapshot as a new op. Skipped for
+     * done/trash transitions on routine-generated items — those disposals already spawned the next
+     * routine occurrence, and restoring the old snapshot would leave the series double-booked.
+     */
+    function offerSaveUndo(beforeSnapshot: StoredItem) {
+        const isRoutineDisposal = Boolean(beforeSnapshot.routineId) && (status === 'done' || status === 'trash');
+        if (isRoutineDisposal) {
+            return;
+        }
+        offerUndo({
+            key: `item:${beforeSnapshot._id}:save`,
+            message: 'Item updated',
+            undo: async () => {
+                await updateItem(db, beforeSnapshot);
+                await onSaved();
+            },
         });
     }
 
@@ -300,23 +445,28 @@ export function ItemEditorBody({
      * through different server paths that don't currently honour the sidecar.
      */
     function shouldInterceptForSendUpdates(trimmedTitle: string, trimmedNotes: string): boolean {
-        if (status !== 'calendar') return false;
-        const ownerChanged = ownerUserId !== item.userId;
-        const statusChanged = status !== item.status;
+        if (status !== 'calendar') {
+            return false;
+        }
+        const live = liveItemRef.current;
+        const ownerChanged = ownerUserId !== live.userId;
+        const statusChanged = status !== live.status;
         const path = decideSavePath(ownerChanged, statusChanged);
-        if (path.kind !== 'saveInPlace') return false;
-        const merged = mergeFormsIntoItem({ ...item, title: trimmedTitle, notes: trimmedNotes }, status, forms, visibleCalendarOptions);
+        if (path.kind !== 'saveInPlace') {
+            return false;
+        }
+        const merged = mergeFormsIntoItem({ ...live, title: trimmedTitle, notes: trimmedNotes }, status, forms, visibleCalendarOptions);
         // Treat the live attendees state as the post-edit attendee set — attendee-editor changes
         // bypass Save (they queue their own ops) but a parallel title edit still needs the prompt.
         return shouldFireSendUpdatesDialog(
             {
-                status: item.status,
-                title: item.title,
-                notes: item.notes,
-                timeStart: item.timeStart,
-                timeEnd: item.timeEnd,
-                allDay: item.allDay,
-                attendees: item.attendees,
+                status: live.status,
+                title: live.title,
+                notes: live.notes,
+                timeStart: live.timeStart,
+                timeEnd: live.timeEnd,
+                allDay: live.allDay,
+                attendees: live.attendees,
             },
             {
                 status,
@@ -331,7 +481,7 @@ export function ItemEditorBody({
     }
 
     function validateReassign(): boolean {
-        if (status !== 'calendar' || !item.calendarEventId) {
+        if (status !== 'calendar' || !liveItemRef.current.calendarEventId) {
             return true;
         }
         const targetConfigId = calForm.calendarSyncConfigId;
@@ -357,7 +507,7 @@ export function ItemEditorBody({
             params: {
                 entityType: 'item',
                 entityId: item._id,
-                fromUserId: item.userId,
+                fromUserId: liveItemRef.current.userId,
                 toUserId: ownerUserId,
                 ...(targetCalendar ? { targetCalendar } : {}),
                 ...(hasEdits ? { editPatch } : {}),
@@ -368,7 +518,7 @@ export function ItemEditorBody({
     }
 
     function resolveTargetCalendar(): { integrationId: string; syncConfigId: string } | null {
-        if (status !== 'calendar' || !item.calendarEventId) {
+        if (status !== 'calendar' || !liveItemRef.current.calendarEventId) {
             return null;
         }
         const targetOption = visibleCalendarOptions.find((opt) => opt.configId === calForm.calendarSyncConfigId);
@@ -381,7 +531,9 @@ export function ItemEditorBody({
     async function saveInPlace(itemNormalized: StoredItem, gcalMeta: { sendUpdates: 'all' | 'none' } | undefined) {
         const merged = mergeFormsIntoItem(itemNormalized, status, forms, visibleCalendarOptions);
         // Fold in the live attendee state — it lives outside the form because the meeting-details
-        // editor mutates it asynchronously and shouldn't be lost on Save.
+        // editor mutates it asynchronously and shouldn't be lost on Save. The empty-array case
+        // (removing the last attendee) is deliberately NOT handled here: onAttendeesChange persists
+        // attendee removals immediately through its own op, and this save rebases off the live row.
         const withAttendees = liveAttendees && liveAttendees.length > 0 ? { ...merged, attendees: liveAttendees } : merged;
         if (gcalMeta) {
             await updateItemWithGcalMeta(db, withAttendees, gcalMeta);
@@ -392,16 +544,17 @@ export function ItemEditorBody({
     }
 
     async function maybeRecordRoutineException(merged: StoredItem) {
-        if (status !== 'calendar' || !merged.routineId || !item.timeStart) {
+        const live = liveItemRef.current;
+        if (status !== 'calendar' || !merged.routineId || !live.timeStart) {
             return;
         }
-        const timeChanged = merged.timeStart !== item.timeStart || merged.timeEnd !== item.timeEnd;
-        const titleChanged = merged.title !== item.title;
-        const notesChanged = (merged.notes ?? '') !== (item.notes ?? '');
+        const timeChanged = merged.timeStart !== live.timeStart || merged.timeEnd !== live.timeEnd;
+        const titleChanged = merged.title !== live.title;
+        const notesChanged = (merged.notes ?? '') !== (live.notes ?? '');
         if (!timeChanged && !titleChanged && !notesChanged) {
             return;
         }
-        const originalDate = dayjs(item.timeStart).format('YYYY-MM-DD');
+        const originalDate = dayjs(live.timeStart).format('YYYY-MM-DD');
         await recordRoutineInstanceModification(db, merged.routineId, originalDate, {
             itemId: merged._id,
             ...(timeChanged && merged.timeStart ? { newTimeStart: merged.timeStart } : {}),
@@ -470,11 +623,12 @@ export function ItemEditorBody({
         }
         // Generic failure (network or other 5xx) — queue an offline rsvp op so the replay path
         // resolves it on next flush. Only enqueue when the item carries enough GCal context.
-        if (item.calendarEventId && item.calendarIntegrationId) {
-            await queueOfflineRsvp(db, item, {
+        const live = liveItemRef.current;
+        if (live.calendarEventId && live.calendarIntegrationId) {
+            await queueOfflineRsvp(db, live, {
                 responseStatus: nextStatus,
-                calendarEventId: item.calendarEventId,
-                calendarIntegrationId: item.calendarIntegrationId,
+                calendarEventId: live.calendarEventId,
+                calendarIntegrationId: live.calendarIntegrationId,
                 attendees: nextAttendees,
             });
             await onSaved();
@@ -489,7 +643,7 @@ export function ItemEditorBody({
      */
     async function onAttendeesChange(next: GCalAttendee[]) {
         setLiveAttendees(next);
-        await updateItemAttendees(db, item, next);
+        await updateItemAttendees(db, liveItemRef.current, next);
         await onSaved();
     }
 
@@ -507,16 +661,31 @@ export function ItemEditorBody({
 
     return (
         <Box className={bodyClassFor(chrome)}>
+            {conflictFields.length > 0 && (
+                <Alert
+                    severity="info"
+                    onClose={() => setConflictFields([])}
+                    action={
+                        <Button color="inherit" size="small" onClick={adoptTheirVersion} data-testid="itemEditorUseTheirs">
+                            Use their version
+                        </Button>
+                    }
+                    data-testid="itemEditorConflictNotice"
+                >
+                    This item changed on another device ({conflictFields.join(', ')}). Your edits are kept and will overwrite on save.
+                </Alert>
+            )}
             <TextField
                 label="Title"
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e) => onTitleChange(e.target.value)}
+                onBlur={() => void textAutosave.flush()}
                 fullWidth
                 required
                 {...(shouldAutoFocus ? { autoFocus: true } : {})}
             />
 
-            <NotesSection notes={notes} onNotesChange={setNotes} chrome={chrome} />
+            <NotesSection notes={notes} onNotesChange={onNotesChange} chrome={chrome} />
 
             <Divider />
 
@@ -552,9 +721,9 @@ export function ItemEditorBody({
                 </Stack>
             </Box>
 
-            {item.routineId && (
+            {liveItem.routineId && (
                 <Box data-testid="itemEditorRoutineLink">
-                    <RoutineIndicator routineId={item.routineId} routineTitle={routines.find((r) => r._id === item.routineId)?.title} forceChip />
+                    <RoutineIndicator routineId={liveItem.routineId} routineTitle={routines.find((r) => r._id === liveItem.routineId)?.title} forceChip />
                 </Box>
             )}
 
@@ -601,10 +770,10 @@ export function ItemEditorBody({
                         calendarOptions={visibleCalendarOptions}
                         forceShowPicker={ownerUserId !== item.userId}
                     />
-                    <CalendarEventLinks item={item} calendarOptions={calendarOptions} />
+                    <CalendarEventLinks item={liveItem} calendarOptions={calendarOptions} />
                     {((liveAttendees?.length ?? 0) > 0 || item.organizer) && (
                         <MeetingDetails
-                            item={{ ...item, ...(liveAttendees ? { attendees: liveAttendees } : {}) }}
+                            item={{ ...liveItem, ...(liveAttendees ? { attendees: liveAttendees } : {}) }}
                             db={db}
                             ownerUserIdForNewPeople={ownerUserId}
                             onRsvp={onRsvp}
@@ -669,7 +838,9 @@ export function ItemEditorBody({
                 open={pendingSave !== null}
                 attendeeCount={liveAttendees?.length ?? 0}
                 onConfirm={(sendUpdates) => {
-                    if (!pendingSave) return;
+                    if (!pendingSave) {
+                        return;
+                    }
                     const { trimmedTitle, trimmedNotes } = pendingSave;
                     setPendingSave(null);
                     commitSave(trimmedTitle, trimmedNotes, { sendUpdates });
