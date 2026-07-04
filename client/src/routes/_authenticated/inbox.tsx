@@ -32,7 +32,7 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
@@ -45,7 +45,9 @@ import { ListSkeleton } from '../../components/ListSkeleton';
 import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } from '../../db/draftHelpers';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
+import { useAutosave } from '../../hooks/useAutosave';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
@@ -270,6 +272,49 @@ function InboxPage() {
     const [notesOpen, setNotesOpen] = useState(false);
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
 
+    // Capture-field draft persistence: half-typed title/notes survive reloads and navigation.
+    // Debounce is short — writes are local-only (drafts never sync), so eager persistence is cheap.
+    const draftAutosave = useAutosave<{ title: string; notes: string }>({
+        initial: { title: '', notes: '' },
+        delayMs: 300,
+        commit: async (value) => {
+            if (account) {
+                await saveInboxCaptureDraft(db, account.id, value);
+            }
+        },
+    });
+
+    // Restore a persisted draft once on mount. isDirty() means the user already started typing
+    // before the IDB read resolved — their live input wins over the stored leftover.
+    useEffect(() => {
+        if (!account) {
+            return;
+        }
+        let cancelled = false;
+        void getInboxCaptureDraft(db, account.id).then((stored) => {
+            if (cancelled || !stored || draftAutosave.isDirty()) {
+                return;
+            }
+            setDraft(stored.title);
+            setNotes(stored.notes);
+            if (stored.notes) {
+                setNotesOpen(true);
+            }
+            // Re-baseline so restoring doesn't immediately rewrite the same draft row.
+            draftAutosave.reset({ title: stored.title, notes: stored.notes });
+        });
+        return () => {
+            cancelled = true;
+        };
+        // draftAutosave is a stable controller instance; account/db are boot-stable.
+    }, [account, db, draftAutosave]);
+
+    function onCaptureFieldsChange(nextTitle: string, nextNotes: string) {
+        setDraft(nextTitle);
+        setNotes(nextNotes);
+        draftAutosave.onChange({ title: nextTitle, notes: nextNotes });
+    }
+
     // Batch "Process Inbox" wizard — same ItemEditorBody as single-item editing, just sequenced.
     // Snapshot the items at the moment "Process Inbox" is clicked so saves that move items out
     // of the inbox don't shrink the array mid-walk and skew the wizard's index. Trade-off: if
@@ -299,6 +344,12 @@ function InboxPage() {
         setNotes('');
         setNotesOpen(false);
         setNotesTab(0);
+        // The text is committed as a real item — drop the draft row and re-baseline the autosave
+        // so a pending debounce tick can't resurrect the just-captured text. reset() drops the
+        // scheduled timer; flush() then drains any commit already in flight before the delete.
+        draftAutosave.reset({ title: '', notes: '' });
+        await draftAutosave.flush();
+        await deleteInboxCaptureDraft(db, account.id);
         await collectItem(db, account.id, { title, notes });
         await refreshItems();
     }
@@ -360,7 +411,7 @@ function InboxPage() {
                     fullWidth
                     placeholder="What's on your mind?"
                     value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
+                    onChange={(e) => onCaptureFieldsChange(e.target.value, notes)}
                     onKeyDown={onKeyDown}
                     slotProps={{
                         input: {
@@ -368,7 +419,11 @@ function InboxPage() {
                                 <InputAdornment position="end">
                                     <Tooltip title={notesOpen ? 'Hide note' : 'Add note'}>
                                         {/* color="primary" when notes have content so user knows a note is attached */}
-                                        <IconButton onClick={() => setNotesOpen((o) => !o)} color={notes.trim() ? 'primary' : 'default'}>
+                                        <IconButton
+                                            onClick={() => setNotesOpen((o) => !o)}
+                                            color={notes.trim() ? 'primary' : 'default'}
+                                            data-testid="inboxAddNoteButton"
+                                        >
                                             <NoteAddIcon />
                                         </IconButton>
                                     </Tooltip>
@@ -391,7 +446,7 @@ function InboxPage() {
                             <TextField
                                 label="Notes (Markdown)"
                                 value={notes}
-                                onChange={(e) => setNotes(e.target.value)}
+                                onChange={(e) => onCaptureFieldsChange(draft, e.target.value)}
                                 fullWidth
                                 multiline
                                 rows={5}
