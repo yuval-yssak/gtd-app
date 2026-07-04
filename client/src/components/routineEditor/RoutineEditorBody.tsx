@@ -15,7 +15,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import type { ReassignRoutineEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
@@ -29,12 +29,15 @@ import {
 } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import { splitRoutine } from '../../db/routineSplit';
+import { useAutosave } from '../../hooks/useAutosave';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
 import { hasAtLeastOne } from '../../lib/typeUtils';
+import { offerUndo } from '../../lib/undoStore';
 import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
 import type { ItemEditorChrome } from '../editItemDialogLogic';
+import { mergeFormGroup } from '../itemEditor/itemEditorLiveMerge';
 import { NotesSection } from '../itemEditor/NotesSection';
 import { ReassignInFlightInline } from '../itemEditor/ReassignInFlightInline';
 import { FrequencyPicker } from '../routines/FrequencyPicker';
@@ -135,6 +138,29 @@ function initFormState(routine?: StoredRoutine): FormState {
         ...ends,
     };
 }
+
+/** Conflict-notice labels per FormState key. The three Ends fields share one label — they are a
+ *  single concept split across inputs, and the conflict list is deduplicated by the caller. */
+const ROUTINE_FIELD_LABELS: Record<keyof FormState, string> = {
+    routineType: 'Type',
+    title: 'Title',
+    rrule: 'Frequency',
+    workContextIds: 'Contexts',
+    peopleIds: 'People',
+    energy: 'Energy',
+    time: 'Time estimate',
+    focus: 'Focus',
+    urgent: 'Urgent',
+    notes: 'Notes',
+    allDay: 'All-day',
+    timeOfDay: 'Start time',
+    duration: 'Duration',
+    calendarSyncConfigId: 'Calendar',
+    endsMode: 'Ends',
+    endsDate: 'Ends',
+    endsCount: 'Ends',
+    startDate: 'Start date',
+};
 
 /**
  * Pure helper that derives the `calendarItemTemplate` shape from the form's all-day toggle and
@@ -485,8 +511,115 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
     const [isSaving, startSaving] = useTransition();
     const { options: calendarOptions } = useCalendarOptions();
-    const { loggedInAccounts } = useAppData();
+    const { loggedInAccounts, routines } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
+
+    // Live row — reflects remote sync merges and our own committed autosaves. Every persistence
+    // path builds on this (never the mount-time `routine` prop) so a save can't clobber fields
+    // another device changed while the editor was open. Undefined in create mode.
+    const liveRoutine = routine ? (routines.find((r) => r._id === routine._id) ?? routine) : undefined;
+    const liveRoutineRef = useRef(liveRoutine);
+    liveRoutineRef.current = liveRoutine;
+
+    const formRef = useRef(form);
+    formRef.current = form;
+    // Form values last seeded/merged from the live routine — a differing field is "dirty".
+    const seedRef = useRef<FormState>(initFormState(routine));
+    const [conflictFields, setConflictFields] = useState<string[]>([]);
+    // Bumped when a remote rrule is adopted into a clean form — remounts FrequencyPicker (it holds
+    // internal state seeded from `value` once, so a silent value change would desync its display).
+    const [rruleSeedVersion, setRruleSeedVersion] = useState(0);
+
+    // Title/notes autosave (edit mode only). Schedule/type/template stay on explicit Save — those
+    // edits can split the routine or regenerate items, which must never fire per keystroke.
+    const textAutosave = useAutosave<{ title: string; notes: string }>({
+        initial: { title: routine?.title ?? '', notes: routine?.template.notes ?? '' },
+        commit: async (value, baseline) => {
+            if (!isEdit || !value.title.trim()) {
+                return; // create mode commits via the Create button; a blank title is never persisted
+            }
+            await persistRoutineText(value);
+            offerUndo({
+                key: `routine:${routine._id}:text`,
+                message: 'Saved',
+                undo: async () => {
+                    await persistRoutineText(baseline);
+                    patch({ title: baseline.title, notes: baseline.notes });
+                    textAutosave.reset(baseline);
+                },
+                onExpire: () => textAutosave.endBurst(),
+            });
+        },
+    });
+
+    /** Writes title/notes onto the live routine (raw, untrimmed — see item editor rationale) and
+     *  refreshes future generated items' content, mirroring the explicit-save content-only path. */
+    async function persistRoutineText(value: { title: string; notes: string }) {
+        const live = liveRoutineRef.current;
+        if (!live) {
+            return;
+        }
+        const { notes: _n, ...restTemplate } = live.template;
+        const nextTemplate = value.notes.trim() ? { ...restTemplate, notes: value.notes } : restTemplate;
+        const updated = await updateRoutine(db, { ...live, title: value.title, template: nextTemplate });
+        if (updated.routineType === 'calendar') {
+            await regenerateFutureItemContent(db, updated.userId, updated);
+        }
+        await onSaved();
+    }
+
+    // Live merge: adopt remote changes into clean fields; dirty fields keep local edits and flag
+    // conflicts (deduplicated labels). Our own autosave echo is recognized via lastCommitted.
+    const lastMergedUpdatedTsRef = useRef(routine?.updatedTs);
+    useEffect(() => {
+        if (!liveRoutine || liveRoutine.updatedTs === lastMergedUpdatedTsRef.current) {
+            return;
+        }
+        lastMergedUpdatedTsRef.current = liveRoutine.updatedTs;
+        const incoming = initFormState(liveRoutine);
+        const { merged, conflicts } = mergeFormGroup(formRef.current, seedRef.current, incoming, ROUTINE_FIELD_LABELS);
+        const committedText = textAutosave.lastCommitted();
+        const realConflicts = [
+            ...new Set(
+                conflicts.filter((label) => {
+                    if (label === 'Title') {
+                        return incoming.title !== committedText.title;
+                    }
+                    if (label === 'Notes') {
+                        return incoming.notes !== committedText.notes;
+                    }
+                    return true;
+                }),
+            ),
+        ];
+        if (formRef.current.rrule === seedRef.current.rrule && incoming.rrule !== formRef.current.rrule) {
+            setRruleSeedVersion((v) => v + 1);
+        }
+        seedRef.current = incoming;
+        setForm(merged);
+        if (merged.title === incoming.title && merged.notes === incoming.notes) {
+            // Text fully clean/adopted — tighten the baseline. A dirty burst keeps its pending commit.
+            textAutosave.reset({ title: incoming.title, notes: incoming.notes });
+        }
+        if (realConflicts.length > 0) {
+            setConflictFields((existing) => [...new Set([...existing, ...realConflicts])]);
+        }
+    }, [liveRoutine, textAutosave]);
+
+    /** "Use their version": re-seed the whole form from the live routine, dropping local edits. */
+    function adoptTheirVersion() {
+        const live = liveRoutineRef.current;
+        if (!live) {
+            return;
+        }
+        const seeds = initFormState(live);
+        seedRef.current = seeds;
+        setForm(seeds);
+        setOwnerUserId(live.userId);
+        textAutosave.reset({ title: seeds.title, notes: seeds.notes });
+        setRruleSeedVersion((v) => v + 1);
+        setConflictFields([]);
+    }
     // Refuse to render the form while a cross-account reassign is in flight on this routine —
     // the form would seed `ownerUserId` from the overlayed (target) user and a save would write
     // IDB under the target. The Dialog wrapper has its own short-circuit (`RoutineDialog.tsx`),
@@ -521,16 +654,22 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         }
 
         startSaving(async () => {
+            // Drain any title/notes edit still inside the debounce window so its write can't land
+            // after this save with a newer updatedTs and resurrect pre-save structural fields.
+            await textAutosave.flush();
             const ctx = buildSaveContext();
+            const live = liveRoutineRef.current;
             // Reassign is fire-and-forget: it owns its own onSaved() via runReassignWithOverlay's
             // .then(). Bailing here keeps the outer postlude from double-firing onSaved/onClose
             // before the reassign has actually committed.
-            if (routine && ownerUserId !== routine.userId) {
-                dispatchReassign(routine, ctx);
+            if (live && ownerUserId !== live.userId) {
+                dispatchReassign(live, ctx);
                 return;
             }
-            if (routine) {
-                await dispatchEditSameOwner(routine, ctx);
+            if (live) {
+                // No undo snackbar for structural routine saves: a schedule edit may split the
+                // routine or delete+regenerate items — restoring a snapshot can't reverse that.
+                await dispatchEditSameOwner(live, ctx);
             } else {
                 await saveCreate(db, userId, ctx);
             }
@@ -635,6 +774,20 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
 
     return (
         <Box className={bodyClassFor(chrome)}>
+            {conflictFields.length > 0 && (
+                <Alert
+                    severity="info"
+                    onClose={() => setConflictFields([])}
+                    action={
+                        <Button color="inherit" size="small" onClick={adoptTheirVersion} data-testid="routineEditorUseTheirs">
+                            Use their version
+                        </Button>
+                    }
+                    data-testid="routineEditorConflictNotice"
+                >
+                    This routine changed on another device ({conflictFields.join(', ')}). Your edits are kept and will overwrite on save.
+                </Alert>
+            )}
             {isEdit && !routine.active && (
                 <Alert severity="info" variant="outlined">
                     This routine is paused. Save your changes to resume it.
@@ -646,7 +799,18 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 </Alert>
             )}
 
-            <TextField label="Title" value={form.title} onChange={(e) => patch({ title: e.target.value })} fullWidth required autoFocus={chrome === 'dialog'} />
+            <TextField
+                label="Title"
+                value={form.title}
+                onChange={(e) => {
+                    patch({ title: e.target.value });
+                    textAutosave.onChange({ title: e.target.value, notes: formRef.current.notes });
+                }}
+                onBlur={() => void textAutosave.flush()}
+                fullWidth
+                required
+                autoFocus={chrome === 'dialog'}
+            />
 
             <Box>
                 <FormLabel>
@@ -687,7 +851,12 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                     </Typography>
                 </FormLabel>
                 {/* key resets FrequencyPicker internal state when switching between create/edit */}
-                <FrequencyPicker key={routine?._id ?? 'new'} value={form.rrule} onChange={(rrule) => patch({ rrule })} disabled={isEndedCalendar} />
+                <FrequencyPicker
+                    key={`${routine?._id ?? 'new'}:${rruleSeedVersion}`}
+                    value={form.rrule}
+                    onChange={(rrule) => patch({ rrule })}
+                    disabled={isEndedCalendar}
+                />
             </Box>
 
             <TextField
@@ -716,7 +885,14 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 />
             )}
 
-            <NotesSection notes={form.notes} onNotesChange={(notes) => patch({ notes })} chrome={chrome} />
+            <NotesSection
+                notes={form.notes}
+                onNotesChange={(notes) => {
+                    patch({ notes });
+                    textAutosave.onChange({ title: formRef.current.title, notes });
+                }}
+                chrome={chrome}
+            />
 
             {/* Account picker — auto-hides on single-account devices */}
             {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} disabled={isSaving} />}
