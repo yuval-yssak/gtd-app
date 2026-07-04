@@ -206,6 +206,22 @@ export interface StoredCalendarSyncConfig {
 export type StoredEntity = StoredItem | StoredRoutine | StoredPerson | StoredWorkContext;
 
 /**
+ * Device-local unsaved-input draft. Never synced to the server — drafts exist so text typed into a
+ * capture/edit surface survives reloads and navigation until it is committed as a real entity write.
+ * `kind` discriminates future draft shapes; keys embed the kind + owning scope (see draftHelpers).
+ */
+export interface StoredInboxCaptureDraft {
+    key: string; // `inboxCapture:<userId>`
+    kind: 'inboxCapture';
+    userId: string;
+    title: string;
+    notes: string;
+    updatedTs: string; // ISO datetime of the last local keystroke flush
+}
+
+export type StoredDraft = StoredInboxCaptureDraft;
+
+/**
  * Singleton record holding device-scoped state — the stable deviceId and the cross-context flush
  * lock. Split from `StoredSyncCursor` because the device identity and flush coordination are
  * shared across every Better Auth session on this device, while pull cursors must be per-user.
@@ -313,5 +329,10 @@ export interface MyDB extends DBSchema {
     syncCursors: {
         key: string; // StoredSyncCursor.userId
         value: StoredSyncCursor;
+    };
+    // Device-local unsaved-input drafts (inbox capture, …). Never synced; cleared on commit.
+    drafts: {
+        key: string; // StoredDraft.key
+        value: StoredDraft;
     };
 }

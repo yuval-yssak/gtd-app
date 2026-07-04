@@ -11,6 +11,7 @@ import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { AppNav } from '../components/AppNav';
 import { NotificationNudge } from '../components/NotificationNudge';
 import { RouteFallback } from '../components/RouteFallback';
+import { UndoSnackbar } from '../components/UndoSnackbar';
 import { AppDataProvider } from '../contexts/AppDataProvider';
 import { PendingReassignProvider } from '../contexts/PendingReassignProvider';
 import styles from './-_authenticated.module.css';
@@ -58,6 +59,8 @@ export function AuthenticatedLayout() {
                             <Suspense fallback={<RouteFallback />}>
                                 <Outlet />
                                 <NotificationNudge db={db} />
+                                {/* Global "Saved — UNDO" surface for autosaving editors; fed by lib/undoStore. */}
+                                <UndoSnackbar />
                             </Suspense>
                         </AppErrorBoundary>
                     </AppDataProvider>

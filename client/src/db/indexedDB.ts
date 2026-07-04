@@ -3,7 +3,7 @@ import { openDB } from 'idb';
 import type { MyDB, StoredSyncCursor, SyncOperation } from '../types/MyDB';
 
 export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
-    return openDB<MyDB>('gtd-app', 6, {
+    return openDB<MyDB>('gtd-app', 7, {
         async upgrade(db, oldVersion, _newVersion, tx) {
             // Version 1: core stores
             if (oldVersion < 1) {
@@ -69,6 +69,12 @@ export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
             // skip the rest of the boundary ms and re-introduce the exact bug this fixes.
             if (oldVersion < 6) {
                 await backfillSyncCursorIds(tx);
+            }
+
+            // Version 7: device-local drafts store — unsaved capture/edit text that must survive
+            // reloads and navigation. Purely local (never synced), so no migration/backfill needed.
+            if (oldVersion < 7) {
+                db.createObjectStore('drafts', { keyPath: 'key' });
             }
         },
     });

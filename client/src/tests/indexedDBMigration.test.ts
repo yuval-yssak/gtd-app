@@ -329,3 +329,32 @@ describe('indexedDB v4 → v5 migration (server-data wipe)', () => {
         });
     });
 });
+
+describe('indexedDB v6 → v7 migration (drafts store)', () => {
+    it('creates the drafts store on upgrade from a v6 DB without touching existing data', async () => {
+        await withFreshIDB(async () => {
+            const v6 = await openDB<MyDB>('gtd-app', 6, {
+                upgrade(db) {
+                    db.createObjectStore('accounts', { keyPath: 'id' }).createIndex('email', 'email', { unique: true });
+                    db.createObjectStore('activeAccount');
+                    db.createObjectStore('items', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+                    db.createObjectStore('syncOperations', { autoIncrement: true, keyPath: 'id' });
+                    db.createObjectStore('routines', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+                    db.createObjectStore('people', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+                    db.createObjectStore('workContexts', { keyPath: '_id' }).createIndex('userId', 'userId', { unique: false });
+                    db.createObjectStore('deviceMeta', { keyPath: '_id' });
+                    db.createObjectStore('syncCursors', { keyPath: 'userId' });
+                },
+            });
+            await v6.put('syncCursors', { userId: 'u1', lastSyncedTs: '2026-01-01T00:00:00.000Z', lastSyncedId: 'op1' });
+            v6.close();
+
+            const upgraded = await openAppDB();
+            expect([...upgraded.objectStoreNames]).toContain('drafts');
+            // Existing rows survive untouched — v7 adds a store, it never migrates data.
+            expect(await upgraded.get('syncCursors', 'u1')).toEqual({ userId: 'u1', lastSyncedTs: '2026-01-01T00:00:00.000Z', lastSyncedId: 'op1' });
+            expect(await upgraded.getAll('drafts')).toEqual([]);
+            upgraded.close();
+        });
+    });
+});

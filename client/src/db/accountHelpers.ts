@@ -117,7 +117,7 @@ export async function clearAllAccounts(db: IDBPDatabase<MyDB>): Promise<void> {
  * orphan rows belonging to a userId that's no longer in `accounts`.
  */
 export async function wipeUserData(userId: string, db: IDBPDatabase<MyDB>): Promise<void> {
-    const tx = db.transaction(['items', 'routines', 'people', 'workContexts', 'syncOperations', 'syncCursors'], 'readwrite');
+    const tx = db.transaction(['items', 'routines', 'people', 'workContexts', 'syncOperations', 'syncCursors', 'drafts'], 'readwrite');
     await Promise.all([
         deleteByUserIdIndexInTx(tx, 'items', userId),
         deleteByUserIdIndexInTx(tx, 'routines', userId),
@@ -125,19 +125,32 @@ export async function wipeUserData(userId: string, db: IDBPDatabase<MyDB>): Prom
         deleteByUserIdIndexInTx(tx, 'workContexts', userId),
         deleteSyncOperationsForUserInTx(tx, userId),
         tx.objectStore('syncCursors').delete(userId),
+        deleteDraftsForUserInTx(tx, userId),
     ]);
     await tx.done;
 }
 
 type UserScopedStore = 'items' | 'routines' | 'people' | 'workContexts';
 
-type WipeStores = Array<'items' | 'routines' | 'people' | 'workContexts' | 'syncOperations' | 'syncCursors'>;
+type WipeStores = Array<'items' | 'routines' | 'people' | 'workContexts' | 'syncOperations' | 'syncCursors' | 'drafts'>;
 type WipeTx = IDBPTransaction<MyDB, WipeStores, 'readwrite'>;
 
 async function deleteByUserIdIndexInTx(tx: WipeTx, store: UserScopedStore, userId: string): Promise<void> {
     let cursor = await tx.objectStore(store).index('userId').openCursor(IDBKeyRange.only(userId));
     while (cursor) {
         await cursor.delete();
+        cursor = await cursor.continue();
+    }
+}
+
+async function deleteDraftsForUserInTx(tx: WipeTx, userId: string): Promise<void> {
+    // Drafts carry the user's unsaved text — they must not survive the account's sign-out.
+    // No userId index; the store holds at most a handful of rows, so a full scan is fine.
+    let cursor = await tx.objectStore('drafts').openCursor();
+    while (cursor) {
+        if (cursor.value.userId === userId) {
+            await cursor.delete();
+        }
         cursor = await cursor.continue();
     }
 }
