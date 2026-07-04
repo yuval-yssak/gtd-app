@@ -69,6 +69,10 @@ Each environment (`production`, `staging`) holds its own set of secrets and vari
 | `GH_OAUTH_CLIENT_SECRET` | GitHub OAuth client secret |
 | `BETTER_AUTH_SECRET` | Session signing key (64+ chars) |
 | `VAPID_PRIVATE_KEY` | Web Push VAPID private key |
+| `CALENDAR_ENCRYPTION_KEY` | AES key encrypting stored Google OAuth tokens |
+| `CALENDAR_WEBHOOK_CRON_SECRET` | Shared secret for the Cloud Scheduler renewal job (see "Calendar webhook renewal" below) |
+| `ANTHROPIC_API_KEY` | Claude-assist ("clarify with AI") endpoint |
+| `EXECUTE_TOKEN_SIGNING_KEY` | Signing key for Claude-assist execute tokens |
 
 ### Variables (per environment)
 
@@ -80,6 +84,11 @@ Each environment (`production`, `staging`) holds its own set of secrets and vari
 | `CLIENT_URL` | `https://getting-things-done.app` |
 | `VAPID_PUBLIC_KEY` | (base64url-encoded public key) |
 | `VAPID_SUBJECT` | `mailto:admin@getting-things-done.app` |
+| `CALENDAR_WEBHOOK_URL` | `https://api.getting-things-done.app/calendar/webhooks/google` |
+| `WEBHOOKS_ENABLED` | `true` (outbound webhook delivery worker; empty = off) |
+| `CLAUDE_ASSIST_DAILY_COST_CAP_USD` | `1` |
+
+**The deploy replaces the full env-var set.** `deploy-api.yml` writes every entry above into `env.yaml` and deploys with `--env-vars-file`, so a value set out-of-band with `gcloud run services update` survives only until the next deploy. Every permanent env var MUST live in the GitHub environment; a missing secret deploys as an empty string (it does not preserve the previous value).
 
 ---
 
@@ -121,6 +130,60 @@ The `workers/api-proxy/` Cloudflare Worker routes requests from the custom domai
 - `api-staging.getting-things-done.app` -> `gtd-api-staging` Cloud Run service
 
 This provides a stable domain with Cloudflare's edge network in front of Cloud Run.
+
+---
+
+## Calendar webhook renewal (Cloud Scheduler)
+
+GCal→GTD sync is push-driven: Google POSTs to `/calendar/webhooks/google` whenever a watched
+calendar changes. Watch channels expire after ~7 days, so something must renew them — and because
+Cloud Run scales to zero, the renewal must survive the server being asleep. Two layers exist:
+
+1. **In-process timer** (`api-server/src/lib/webhookRenewal.ts`) — hourly sweep + one sweep at every
+   cold start. Free, but only runs while an instance is awake, so it cannot be the only mechanism.
+2. **Cloud Scheduler job** — Google-managed cron that POSTs
+   `https://<api-domain>/calendar/webhooks/renew` hourly with the `x-webhook-cron-secret` header.
+   The incoming request wakes a sleeping instance, which is the whole point.
+
+Both layers renew expiring/lapsed channels and, when a channel had already lapsed (a notification
+gap existed), run a catch-up sync to drain changes Google made while no webhooks were flowing.
+
+### The shared secret
+
+`CALENDAR_WEBHOOK_CRON_SECRET` must hold the same value in **three places**:
+
+| Place | Set via |
+|---|---|
+| Cloud Scheduler job header | `gcloud scheduler jobs update http <job> --update-headers "x-webhook-cron-secret=<value>"` |
+| Cloud Run env var | GitHub environment secret → next deploy (see env-replacement warning above) |
+| GitHub environment secret | `gh secret set CALENDAR_WEBHOOK_CRON_SECRET --env staging\|production` |
+
+To rotate: generate (`openssl rand -hex 32`), update the GitHub secret, deploy, then update the
+scheduler job header. The endpoint 401s any mismatch, so rotate the job header last.
+
+### Current jobs
+
+| Environment | Job | Schedule | Status |
+|---|---|---|---|
+| staging | `gtd-staging-calendar-webhook-renew` (project `gtd-app-project-491308`, `us-central1`) | `17 * * * *` UTC | live since 2026-07-02 |
+| production | — | — | **not wired yet** — create the job + secret when calendar sync goes to prod |
+
+### Verify it works
+
+```bash
+# Auth + endpoint check (200 with the secret, 401 without):
+curl -sS -w "\n%{http_code}\n" -X POST https://api-staging.getting-things-done.app/calendar/webhooks/renew \
+  -H "x-webhook-cron-secret: $SECRET"        # → {"renewed":N,"failed":M} 200
+
+# Force a run:
+gcloud scheduler jobs run gtd-staging-calendar-webhook-renew \
+  --project gtd-app-project-491308 --location us-central1
+
+# Confirm hourly hits are landing (user-agent Google-Cloud-Scheduler, status 200):
+gcloud logging read 'resource.type="cloud_run_revision" resource.labels.service_name="gtd-api-staging" httpRequest.requestUrl:"webhooks/renew"' \
+  --project gtd-app-project-491308 --limit 5 \
+  --format="value(timestamp,httpRequest.status,httpRequest.userAgent)"
+```
 
 ---
 

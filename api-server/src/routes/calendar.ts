@@ -4352,24 +4352,70 @@ async function teardownWatch(config: CalendarSyncConfigInterface, provider: Goog
     await calendarSyncConfigsDAO.clearWebhookFields(config._id);
 }
 
+/**
+ * Renewal outcome. `'renewedAfterLapse'` means the previous channel was already expired (or never
+ * existed) — a notification gap existed, so callers that own periodic sweeps must drain it with a
+ * catch-up sync. `'renewed'` is a proactive renewal of a still-live channel (no gap).
+ */
+type WebhookRenewalOutcome = 'noop' | 'renewed' | 'renewedAfterLapse';
+
 /** Re-registers the webhook channel if it is expired or expiring within 1 day. */
-async function renewWebhookIfExpired(config: CalendarSyncConfigInterface, provider: GoogleCalendarProvider, integrationId: string): Promise<void> {
+async function renewWebhookIfExpired(
+    config: CalendarSyncConfigInterface,
+    provider: GoogleCalendarProvider,
+    integrationId: string,
+): Promise<WebhookRenewalOutcome> {
     if (!process.env.CALENDAR_WEBHOOK_URL) {
-        return;
+        return 'noop';
     }
 
-    const needsRenewal = !config.webhookExpiry || dayjs(config.webhookExpiry).isBefore(dayjs().add(1, 'day'));
+    const hadLapsed = !config.webhookExpiry || dayjs(config.webhookExpiry).isBefore(dayjs());
+    const needsRenewal = hadLapsed || dayjs(config.webhookExpiry).isBefore(dayjs().add(1, 'day'));
     if (!needsRenewal) {
-        return;
+        return 'noop';
     }
 
     // setupWatch now stops any stale channel itself, so a separate teardown is no longer needed —
     // the config still carries the old channel ids when we call it, and setupWatch stops them.
     await setupWatch(config, provider, integrationId);
-    console.log(`[calendar-webhook] renewed watch for config ${config._id}`);
+    console.log(`[calendar-webhook] renewed watch for config ${config._id}${hadLapsed ? ' (previous channel had lapsed)' : ''}`);
+    return hadLapsed ? 'renewedAfterLapse' : 'renewed';
 }
 
-export { buildProvider, renewWebhookIfExpired };
+/**
+ * Renewal entry point for the periodic sweeps (hourly in-process timer + Cloud Scheduler endpoint).
+ * When the previous channel had already lapsed, every GCal change during the dead window fired no
+ * webhook — re-registering the watch alone would leave those changes stranded until the next
+ * organic edit on that calendar (forever, on a quiet one). Drain the gap with one catch-up sync:
+ * the surviving syncToken makes it a cheap incremental fetch, and an expired token self-heals via
+ * the 410 → full-sync + reconcile path inside syncSingleCalendar.
+ */
+async function renewWebhookAndCatchUp(
+    config: CalendarSyncConfigInterface,
+    integration: CalendarIntegrationInterface,
+    provider: GoogleCalendarProvider,
+): Promise<void> {
+    const outcome = await renewWebhookIfExpired(config, provider, integration._id);
+    if (outcome !== 'renewedAfterLapse') {
+        return;
+    }
+    // Re-read the config: setupWatch just persisted a fresh webhookChannelId, and the sync mutex is
+    // keyed on it (syncKeyFor). Locking on the stale in-memory copy would use a different key than a
+    // concurrent webhook delivery arriving on the new channel — the two syncs would run unserialized.
+    const fresh = await calendarSyncConfigsDAO.findOne({ _id: config._id });
+    if (!fresh) {
+        return;
+    }
+    console.log(`[calendar-webhook] channel had lapsed — running catch-up sync | configId=${fresh._id} calendarId=${fresh.calendarId}`);
+    const now = dayjs().toISOString();
+    const ctx: SyncContext = { userId: fresh.user, now, ops: [] };
+    // Serialize against concurrent webhook/manual syncs for the same calendar — see withSyncLock.
+    await withSyncLock(fresh, () => withAuthFailureHandling(integration._id, () => syncSingleCalendar(fresh, integration, provider, ctx)));
+    console.log(`[calendar-webhook] catch-up sync complete | configId=${fresh._id} ops=${ctx.ops.length}`);
+    await notifyDevicesOfSyncOps(fresh.user, ctx.ops, now);
+}
+
+export { buildProvider, renewWebhookAndCatchUp };
 
 // ── Per-calendar sync serialization ──────────────────────────────────────────
 
@@ -4529,19 +4575,26 @@ async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void
     await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
         console.error(`[calendar-webhook] renewWebhookIfExpired failed for config ${config._id}:`, err);
     });
-    // Only notify when the sync actually produced operations. A 0-op webhook (GCal fired but nothing
-    // changed locally — echo, content no-op, or a change on another calendar) must not buzz every
-    // device: SSE wakes idle tabs into a needless pull, and web push surfaces a phone notification
-    // for nothing. This was a major contributor to the staging notification storm.
-    if (!ctx.ops.length) {
-        console.log(`[gcal-webhook-sync] no ops — skipping SSE + push | userId=${config.user}`);
+    await notifyDevicesOfSyncOps(config.user, ctx.ops, now);
+}
+
+/**
+ * Notifies devices (SSE for live tabs, web push for closed ones) after a server-initiated sync.
+ * Only fires when the sync actually produced operations. A 0-op sync (GCal fired but nothing
+ * changed locally — echo, content no-op, or a change on another calendar) must not buzz every
+ * device: SSE wakes idle tabs into a needless pull, and web push surfaces a phone notification
+ * for nothing. This was a major contributor to the staging notification storm.
+ */
+async function notifyDevicesOfSyncOps(userId: string, ops: OperationInterface[], now: string): Promise<void> {
+    if (!ops.length) {
+        console.log(`[gcal-webhook-sync] no ops — skipping SSE + push | userId=${userId}`);
         return;
     }
-    console.log(`[gcal-webhook-sync] notifying SSE + push | userId=${config.user} ops=${ctx.ops.length}`);
-    notifyUserViaSse(config.user, { type: 'update', ts: now });
+    console.log(`[gcal-webhook-sync] notifying SSE + push | userId=${userId} ops=${ops.length}`);
+    notifyUserViaSse(userId, { type: 'update', ts: now });
     // Web Push for devices without an open SSE connection (app closed / backgrounded).
-    await notifyViaWebPush(config.user, null, ctx.ops, now).catch((err) => {
-        console.error(`[calendar-webhook] web push failed for user ${config.user}:`, err);
+    await notifyViaWebPush(userId, null, ops, now).catch((err) => {
+        console.error(`[calendar-webhook] web push failed for user ${userId}:`, err);
     });
 }
 
@@ -4568,7 +4621,7 @@ calendarRoutes.post('/webhooks/renew', async (c) => {
                 return;
             }
             const provider = buildProvider(integration, config.user);
-            await renewWebhookIfExpired(config, provider, integration._id);
+            await renewWebhookAndCatchUp(config, integration, provider);
         }),
     );
 

@@ -1,11 +1,15 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts queried docs are present */
 import dayjs from 'dayjs';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SyncTokenInvalidError } from '../calendarProviders/CalendarProvider.js';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
+import itemsDAO from '../dataAccess/itemsDAO.js';
 import sentEmailsDAO from '../dataAccess/sentEmailsDAO.js';
+import * as sseConnections from '../lib/sseConnections.js';
 import { renewAllExpiring } from '../lib/webhookRenewal.js';
+import * as webPush from '../lib/webPush.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface } from '../types/entities.js';
 
@@ -41,6 +45,9 @@ beforeEach(async () => {
         db.collection('calendarIntegrations').deleteMany({}),
         db.collection('calendarSyncConfigs').deleteMany({}),
         db.collection('sentEmails').deleteMany({}),
+        db.collection('items').deleteMany({}),
+        db.collection('routines').deleteMany({}),
+        db.collection('operations').deleteMany({}),
     ]);
     vi.restoreAllMocks();
 });
@@ -189,5 +196,142 @@ describe('webhook renewal — invalid_grant escalation', () => {
         const integration = await calendarIntegrationsDAO.findById('int-1');
         // Status preserved — escalation does NOT run on a skipped integration.
         expect(integration?.status).toBe('suspended');
+    });
+});
+
+describe('webhook renewal — catch-up sync after a lapsed channel', () => {
+    /** Stubs the provider calls the renewal + catch-up path makes, returning the incremental spy for assertions. */
+    function stubProviderForCatchUp(incremental: { events: object[]; nextSyncToken: string }) {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents').mockResolvedValue({
+            resourceId: 'res-fresh',
+            expiration: dayjs().add(7, 'day').toISOString(),
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getCalendarTimeZone').mockResolvedValue('UTC');
+        const fullSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-full' });
+        const incrementalSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue(incremental as never);
+        return { incrementalSpy, fullSpy };
+    }
+
+    it('drains the notification gap: a cancellation missed while the channel was dead trashes the local item', async () => {
+        await seedUserEmail('user-1', 'alice@example.com');
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration({ status: 'active' }));
+        // Channel lapsed 3 days ago — the exact incident shape: an event was cancelled on GCal
+        // during the dead window and no webhook ever fired for it.
+        await calendarSyncConfigsDAO.insertOne(makeConfig({ webhookExpiry: dayjs().subtract(3, 'day').toISOString(), syncToken: 'tok-1', timeZone: 'UTC' }));
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-1',
+            user: 'user-1',
+            title: 'Winn admin-panel',
+            status: 'calendar',
+            timeStart: dayjs().add(1, 'day').toISOString(),
+            timeEnd: dayjs().add(1, 'day').add(1, 'hour').toISOString(),
+            calendarEventId: 'ev-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'cfg-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+        const { incrementalSpy } = stubProviderForCatchUp({
+            events: [
+                {
+                    id: 'ev-1',
+                    title: 'Winn admin-panel',
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(1, 'hour').toISOString(),
+                    updated: dayjs().subtract(2, 'day').toISOString(),
+                    status: 'cancelled',
+                },
+            ],
+            nextSyncToken: 'tok-2',
+        });
+
+        const sseSpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+        const webPushSpy = vi.spyOn(webPush, 'notifyViaWebPush').mockResolvedValue();
+
+        await renewAllExpiring();
+
+        expect(incrementalSpy).toHaveBeenCalledWith('primary', 'tok-1');
+        const item = await itemsDAO.findOne({ _id: 'item-1' });
+        expect(item?.status).toBe('trash');
+        expect(item?.cancelledByGCal).toBe(true);
+        const config = await calendarSyncConfigsDAO.findOne({ _id: 'cfg-1' });
+        expect(config?.syncToken).toBe('tok-2');
+        // The watch itself was re-registered too.
+        expect(config?.webhookResourceId).toBe('res-fresh');
+        expect(dayjs(config?.webhookExpiry).isAfter(dayjs())).toBe(true);
+        // The trash produced ops → devices must be woken (SSE for live tabs, web push for closed ones).
+        expect(sseSpy).toHaveBeenCalledWith('user-1', expect.objectContaining({ type: 'update' }));
+        expect(webPushSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('heals an expired syncToken during catch-up: 410 → full sync + reconcile sweep trashes the stranded item', async () => {
+        await seedUserEmail('user-1', 'alice@example.com');
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration({ status: 'active' }));
+        await calendarSyncConfigsDAO.insertOne(
+            makeConfig({ webhookExpiry: dayjs().subtract(30, 'day').toISOString(), syncToken: 'tok-stale', timeZone: 'UTC' }),
+        );
+        // Stranded item: its GCal event was deleted long ago, but the cancellation tombstone is no
+        // longer replayable (expired token). Only the full-sync reconcile sweep can catch it.
+        // updatedTs is well past the 120s reconcile grace window.
+        await itemsDAO.insertOne({
+            _id: 'item-stranded',
+            user: 'user-1',
+            title: 'Deleted long ago on GCal',
+            status: 'calendar',
+            timeStart: dayjs().add(1, 'day').toISOString(),
+            timeEnd: dayjs().add(1, 'day').add(1, 'hour').toISOString(),
+            calendarEventId: 'evgone1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'cfg-1',
+            createdTs: dayjs().subtract(30, 'day').toISOString(),
+            updatedTs: dayjs().subtract(3, 'day').toISOString(),
+        });
+        const { incrementalSpy, fullSpy } = stubProviderForCatchUp({ events: [], nextSyncToken: 'unused' });
+        incrementalSpy.mockRejectedValue(new SyncTokenInvalidError());
+
+        await renewAllExpiring();
+
+        expect(fullSpy).toHaveBeenCalledTimes(1);
+        const item = await itemsDAO.findOne({ _id: 'item-stranded' });
+        expect(item?.status).toBe('trash');
+        expect(item?.cancelledByGCal).toBe(true);
+        const config = await calendarSyncConfigsDAO.findOne({ _id: 'cfg-1' });
+        expect(config?.syncToken).toBe('tok-full');
+    });
+
+    it('treats a config with no webhook fields as lapsed — catch-up sync runs after the watch is established', async () => {
+        await seedUserEmail('user-1', 'alice@example.com');
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration({ status: 'active' }));
+        // No webhookExpiry at all (cleared fields / never set up) — a gap may exist; drain it.
+        await calendarSyncConfigsDAO.insertOne(makeConfig({ syncToken: 'tok-1', timeZone: 'UTC' }));
+        const { incrementalSpy } = stubProviderForCatchUp({ events: [], nextSyncToken: 'tok-2' });
+
+        await renewAllExpiring();
+
+        expect(incrementalSpy).toHaveBeenCalledWith('primary', 'tok-1');
+        const config = await calendarSyncConfigsDAO.findOne({ _id: 'cfg-1' });
+        expect(config?.syncToken).toBe('tok-2');
+    });
+
+    it('proactive renewal of a still-live channel does NOT sync — no gap existed', async () => {
+        await seedUserEmail('user-1', 'alice@example.com');
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration({ status: 'active' }));
+        // Expiring within the 1-day horizon but not yet lapsed — webhooks are still flowing.
+        await calendarSyncConfigsDAO.insertOne(makeConfig({ webhookExpiry: dayjs().add(2, 'hour').toISOString(), syncToken: 'tok-1', timeZone: 'UTC' }));
+        const { incrementalSpy, fullSpy } = stubProviderForCatchUp({ events: [], nextSyncToken: 'tok-2' });
+        const watchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents');
+        const sseSpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+
+        await renewAllExpiring();
+
+        expect(watchSpy).toHaveBeenCalledTimes(1);
+        expect(incrementalSpy).not.toHaveBeenCalled();
+        expect(fullSpy).not.toHaveBeenCalled();
+        expect(sseSpy).not.toHaveBeenCalled();
+        const config = await calendarSyncConfigsDAO.findOne({ _id: 'cfg-1' });
+        // syncToken untouched — only the watch was refreshed.
+        expect(config?.syncToken).toBe('tok-1');
+        expect(config?.webhookResourceId).toBe('res-fresh');
     });
 });

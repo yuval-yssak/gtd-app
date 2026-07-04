@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
-import { buildProvider, renewWebhookIfExpired } from '../routes/calendar.js';
+import { buildProvider, renewWebhookAndCatchUp } from '../routes/calendar.js';
 import { integrationStatus } from './calendarIntegrationStatus.js';
 
 const RENEWAL_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -41,7 +41,7 @@ export async function renewAllExpiring(): Promise<void> {
                     continue;
                 }
                 const provider = buildProvider(integration, config.user);
-                await renewWebhookIfExpired(config, provider, integration._id);
+                await renewWebhookAndCatchUp(config, integration, provider);
             } catch (err) {
                 console.error(`[webhook-renewal] skipping config ${config._id} (integration ${config.integrationId}):`, err);
             }
