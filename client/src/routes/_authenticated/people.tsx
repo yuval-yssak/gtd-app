@@ -121,7 +121,7 @@ function PeoplePage() {
                                 secondaryAction={
                                     <Box className={styles.actionButtons}>
                                         <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => setEditing(person)}>
+                                            <IconButton size="small" onClick={() => setEditing(person)} data-testid="personRowEditButton">
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
@@ -151,7 +151,7 @@ function PeoplePage() {
             )}
             {/* Edit dialog reuses the shared PersonEditDialog component (also used by MeetingDetails).
                 Mount-on-open so the form re-initializes per person — see PersonEditDialog comment. */}
-            {editing && <PersonEditDialog db={db} person={editing} showAccountPicker onSaved={() => setEditing(null)} onCancel={() => setEditing(null)} />}
+            {editing && <PersonEditDialog db={db} person={editing} showAccountPicker onClose={() => setEditing(null)} />}
             <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="xs" fullWidth>
                 <DialogTitle>Add person</DialogTitle>
                 <DialogContent>

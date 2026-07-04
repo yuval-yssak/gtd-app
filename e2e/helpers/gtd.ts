@@ -47,6 +47,12 @@ const gtdImpl = {
     listCalendar: (page: Page): Promise<StoredItem[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { listCalendar(): Promise<StoredItem[]> } }).__gtd.listCalendar()),
 
+    listPeople: (page: Page): Promise<StoredPerson[]> =>
+        page.evaluate(() => (window as unknown as { __gtd: { listPeople(): Promise<StoredPerson[]> } }).__gtd.listPeople()),
+
+    listWorkContexts: (page: Page): Promise<StoredWorkContext[]> =>
+        page.evaluate(() => (window as unknown as { __gtd: { listWorkContexts(): Promise<StoredWorkContext[]> } }).__gtd.listWorkContexts()),
+
     listRoutines: (page: Page): Promise<StoredRoutine[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { listRoutines(): Promise<StoredRoutine[]> } }).__gtd.listRoutines()),
 

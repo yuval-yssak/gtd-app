@@ -6,10 +6,13 @@ import DialogContent from '@mui/material/DialogContent';
 import DialogTitle from '@mui/material/DialogTitle';
 import TextField from '@mui/material/TextField';
 import type { IDBPDatabase } from 'idb';
-import { useState, useTransition } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updatePerson } from '../../db/personMutations';
 import { reassignEntity } from '../../db/reassignMutations';
+import { useAutosave } from '../../hooks/useAutosave';
+import { mergeCleanStringFields, stringFieldsEqual } from '../../lib/liveMerge';
+import { offerUndo } from '../../lib/undoStore';
 import type { MyDB, StoredPerson } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
 
@@ -22,83 +25,147 @@ interface PersonEditDialogProps {
      * in; MeetingDetails-launched edits stay focused on name/email/phone.
      */
     showAccountPicker?: boolean;
-    onSaved: () => void;
-    onCancel: () => void;
+    onClose: () => void;
 }
 
-interface FormState {
+// Type alias (not interface) so it satisfies the Record<string, string> constraint in lib/liveMerge.
+type PersonTextFields = {
     name: string;
     email: string;
     phone: string;
-    ownerUserId: string;
+};
+
+function textFieldsOf(person: StoredPerson): PersonTextFields {
+    return { name: person.name, email: person.email ?? '', phone: person.phone ?? '' };
+}
+
+/** Overlays the edited text fields on the live person row. Blank email/phone omit the key —
+ *  exactOptionalPropertyTypes + the op validator's NonEmptyString rule both forbid ''. */
+function applyTextFields(base: StoredPerson, fields: PersonTextFields): StoredPerson {
+    const { email: _e, phone: _p, ...rest } = base;
+    return {
+        ...rest,
+        name: fields.name.trim(),
+        ...(fields.email.trim() ? { email: fields.email.trim() } : {}),
+        ...(fields.phone.trim() ? { phone: fields.phone.trim() } : {}),
+    };
 }
 
 /**
- * Reusable person-edit dialog shared between the `/people` route (full management) and the
- * MeetingDetails attendee chip (quick edit from a meeting). Mirrors the existing route form's
- * fields (name/email/phone) and optionally the account picker.
+ * Person editor — fully autosaving (no Save button). Text edits debounce into `updatePerson`
+ * writes with a "Saved — UNDO" snackbar; the dialog only offers Close. Remote changes from other
+ * devices live-merge into fields the user hasn't touched (see lib/liveMerge for the policy).
  *
- * Mount-on-open, like QuickCreatePersonDialog: callers conditionally render this component so the
- * `useState(person)` re-initializes on each open. Keeping it mounted with a toggled `open` would
- * freeze the form at the first person's values.
- *
- * Refresh policy: calls `useAppData().refreshPeople()` after writing so callers (MeetingDetails,
- * people route) don't have to remember to wire it up. The IDB write + sync queue happen inside
- * `updatePerson`; the refresh re-reads IDB into React state so chip labels / autocomplete update
- * without waiting for the next SSE pull.
+ * Mount-on-open, like before: callers conditionally render this component so state re-seeds per
+ * person. Owner reassignment (account picker) is a deliberate discrete action — it applies
+ * immediately on selection, then closes the dialog (the person now renders under another account).
  */
-export function PersonEditDialog({ db, person, showAccountPicker = false, onSaved, onCancel }: PersonEditDialogProps) {
-    const { loggedInAccounts, refreshPeople } = useAppData();
-    const [form, setForm] = useState<FormState>({
-        name: person.name,
-        email: person.email ?? '',
-        phone: person.phone ?? '',
-        ownerUserId: person.userId,
-    });
-    const [isPending, startSave] = useTransition();
+export function PersonEditDialog({ db, person, showAccountPicker = false, onClose }: PersonEditDialogProps) {
+    const { loggedInAccounts, refreshPeople, people } = useAppData();
+    // Live row — reflects both remote sync merges and our own committed autosaves.
+    const livePerson = people.find((p) => p._id === person._id) ?? person;
+    const livePersonRef = useRef(livePerson);
+    livePersonRef.current = livePerson;
 
-    function onSave() {
-        const trimmedName = form.name.trim();
-        if (!trimmedName) {
+    const [form, setForm] = useState<PersonTextFields>(textFieldsOf(person));
+    const formRef = useRef(form);
+    formRef.current = form;
+    // The live values the form was last seeded/merged from — a field is "dirty" iff it differs.
+    const seedRef = useRef<PersonTextFields>(textFieldsOf(person));
+
+    const autosave = useAutosave<PersonTextFields>({
+        initial: textFieldsOf(person),
+        commit: async (value, baseline) => {
+            if (!value.name.trim()) {
+                return; // name is required — never persist a blank; the field shows the error state
+            }
+            await updatePerson(db, applyTextFields(livePersonRef.current, value));
+            offerUndo({
+                key: `person:${person._id}`,
+                message: 'Person saved',
+                undo: async () => {
+                    await updatePerson(db, applyTextFields(livePersonRef.current, baseline));
+                    setForm(baseline);
+                    autosave.reset(baseline);
+                    await refreshPeople();
+                },
+                onExpire: () => autosave.endBurst(),
+            });
+            await refreshPeople();
+        },
+    });
+
+    // Live merge: when the row changes underneath the open dialog (another device, or our own
+    // committed autosave echoing back), adopt new values into clean fields; dirty fields keep the
+    // local text (it re-commits within one debounce tick, so the conflict window is sub-second).
+    useEffect(() => {
+        const liveFields = textFieldsOf(livePerson);
+        if (stringFieldsEqual(liveFields, seedRef.current)) {
             return;
         }
-        startSave(async () => {
-            const next: StoredPerson = {
-                ...person,
-                name: trimmedName,
-                ...(form.email.trim() ? { email: form.email.trim() } : {}),
-                ...(form.phone.trim() ? { phone: form.phone.trim() } : {}),
-            };
-            await updatePerson(db, next);
-            // Reassign happens after the local update so the owner-pivot operates on the freshly-saved row.
-            if (showAccountPicker && form.ownerUserId !== person.userId) {
-                await reassignEntity(db, { entityType: 'person', entityId: person._id, fromUserId: person.userId, toUserId: form.ownerUserId });
-            }
-            await refreshPeople();
-            onSaved();
+        const merged = mergeCleanStringFields(formRef.current, seedRef.current, liveFields);
+        seedRef.current = liveFields;
+        setForm(merged);
+        if (stringFieldsEqual(merged, liveFields)) {
+            // Fully clean/adopted — tighten the controller baseline to the live values.
+            autosave.reset(liveFields);
+        } else {
+            // A burst is in flight: no reset (it would drop the undo baseline). onChange updates
+            // the controller's latest value so the pending commit carries the merged clean fields
+            // instead of re-asserting their pre-merge values.
+            autosave.onChange(merged);
+        }
+    }, [livePerson, autosave]);
+
+    function onFieldChange(key: keyof PersonTextFields, value: string) {
+        const next = { ...formRef.current, [key]: value };
+        setForm(next);
+        autosave.onChange(next);
+    }
+
+    async function onOwnerPicked(nextOwnerUserId: string) {
+        if (nextOwnerUserId === livePersonRef.current.userId) {
+            return;
+        }
+        await autosave.flush(); // the move must carry any text still in the debounce window
+        const fromUserId = livePersonRef.current.userId;
+        await reassignEntity(db, { entityType: 'person', entityId: person._id, fromUserId, toUserId: nextOwnerUserId });
+        offerUndo({
+            key: `person:${person._id}:owner`,
+            message: `Moved to ${loggedInAccounts.find((a) => a.id === nextOwnerUserId)?.email ?? 'the other account'}`,
+            undo: async () => {
+                await reassignEntity(db, { entityType: 'person', entityId: person._id, fromUserId: nextOwnerUserId, toUserId: fromUserId });
+                await refreshPeople();
+            },
         });
+        await refreshPeople();
+        onClose();
     }
 
     const showPicker = showAccountPicker && loggedInAccounts.length > 1;
 
     return (
-        <Dialog open onClose={onCancel} maxWidth="xs" fullWidth>
+        <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
             <DialogTitle>Edit person</DialogTitle>
             <DialogContent>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
                     <TextField
                         label="Name"
                         value={form.name}
-                        onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                        onChange={(e) => onFieldChange('name', e.target.value)}
+                        onBlur={() => void autosave.flush()}
                         fullWidth
                         autoFocus
                         required
+                        error={!form.name.trim()}
+                        helperText={form.name.trim() ? undefined : 'Name is required — changes are not saved while empty.'}
                         data-testid="personEditName"
                     />
                     <TextField
                         label="Email"
                         value={form.email}
-                        onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                        onChange={(e) => onFieldChange('email', e.target.value)}
+                        onBlur={() => void autosave.flush()}
                         fullWidth
                         type="email"
                         data-testid="personEditEmail"
@@ -106,19 +173,17 @@ export function PersonEditDialog({ db, person, showAccountPicker = false, onSave
                     <TextField
                         label="Phone"
                         value={form.phone}
-                        onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                        onChange={(e) => onFieldChange('phone', e.target.value)}
+                        onBlur={() => void autosave.flush()}
                         fullWidth
                         data-testid="personEditPhone"
                     />
-                    {showPicker && <AccountPicker value={form.ownerUserId} onChange={(v) => setForm((f) => ({ ...f, ownerUserId: v }))} />}
+                    {showPicker && <AccountPicker value={livePerson.userId} onChange={(v) => void onOwnerPicked(v)} />}
                 </Box>
             </DialogContent>
             <DialogActions>
-                <Button onClick={onCancel} data-testid="personEditCancel">
-                    Cancel
-                </Button>
-                <Button variant="contained" onClick={onSave} disabled={isPending || !form.name.trim()} data-testid="personEditSave">
-                    Save
+                <Button onClick={onClose} data-testid="personEditClose">
+                    Close
                 </Button>
             </DialogActions>
         </Dialog>

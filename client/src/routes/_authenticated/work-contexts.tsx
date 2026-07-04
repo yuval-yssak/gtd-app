@@ -22,9 +22,9 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { WorkContextEditDialog } from '../../components/workContexts/WorkContextEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { reassignEntity } from '../../db/reassignMutations';
-import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
+import { createWorkContext, removeWorkContext } from '../../db/workContextMutations';
 import type { StoredWorkContext } from '../../types/MyDB';
 import styles from './-work-contexts.module.css';
 
@@ -35,40 +35,25 @@ export const Route = createFileRoute('/_authenticated/work-contexts')({
 function WorkContextsPage() {
     const { db } = Route.useRouteContext();
     const { account, workContexts, refreshWorkContexts, loggedInAccounts, isInitialSyncing } = useAppData();
-    const [dialogOpen, setDialogOpen] = useState(false);
+    const [createOpen, setCreateOpen] = useState(false);
+    // Renames autosave inside WorkContextEditDialog (mount-on-open); creation stays an explicit
+    // Add action so half-typed names never become synced entities.
     const [editing, setEditing] = useState<StoredWorkContext | null>(null);
     const [nameInput, setNameInput] = useState('');
     const [ownerUserId, setOwnerUserId] = useState<string>('');
 
     function openCreate() {
-        setEditing(null);
         setNameInput('');
         setOwnerUserId(account?.id ?? '');
-        setDialogOpen(true);
+        setCreateOpen(true);
     }
 
-    function openEdit(ctx: StoredWorkContext) {
-        setEditing(ctx);
-        setNameInput(ctx.name);
-        setOwnerUserId(ctx.userId);
-        setDialogOpen(true);
-    }
-
-    async function onSave() {
+    async function onCreate() {
         if (!account || !nameInput.trim()) {
             return;
         }
-        if (editing) {
-            await updateWorkContext(db, { ...editing, name: nameInput.trim() });
-            // Reassign after the local update so the source-user copy carries the rename;
-            // the server then moves that updated entity to the new owner.
-            if (ownerUserId !== editing.userId) {
-                await reassignEntity(db, { entityType: 'workContext', entityId: editing._id, fromUserId: editing.userId, toUserId: ownerUserId });
-            }
-        } else {
-            await createWorkContext(db, { userId: ownerUserId || account.id, name: nameInput.trim() });
-        }
-        setDialogOpen(false);
+        await createWorkContext(db, { userId: ownerUserId || account.id, name: nameInput.trim() });
+        setCreateOpen(false);
         await refreshWorkContexts();
     }
 
@@ -122,7 +107,7 @@ function WorkContextsPage() {
                                 secondaryAction={
                                     <Box className={styles.actionButtons}>
                                         <Tooltip title="Rename">
-                                            <IconButton size="small" onClick={() => openEdit(ctx)}>
+                                            <IconButton size="small" onClick={() => setEditing(ctx)} data-testid="workContextRowEditButton">
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
@@ -149,8 +134,9 @@ function WorkContextsPage() {
                     ))}
                 </List>
             )}
-            <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="xs" fullWidth>
-                <DialogTitle>{editing ? 'Rename context' : 'Add work context'}</DialogTitle>
+            {editing && <WorkContextEditDialog db={db} workContext={editing} onClose={() => setEditing(null)} />}
+            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="xs" fullWidth>
+                <DialogTitle>Add work context</DialogTitle>
                 <DialogContent>
                     <TextField
                         label="Name"
@@ -161,16 +147,16 @@ function WorkContextsPage() {
                         autoFocus
                         className={styles.nameField}
                         onKeyDown={(e) => {
-                            if (e.key === 'Enter') void onSave();
+                            if (e.key === 'Enter') void onCreate();
                         }}
                     />
                     {/* Auto-hides on single-account devices */}
                     {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} />}
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-                    <Button onClick={() => void onSave()} variant="contained" disabled={!nameInput.trim()}>
-                        {editing ? 'Save' : 'Add'}
+                    <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
+                    <Button onClick={() => void onCreate()} variant="contained" disabled={!nameInput.trim()}>
+                        Add
                     </Button>
                 </DialogActions>
             </Dialog>

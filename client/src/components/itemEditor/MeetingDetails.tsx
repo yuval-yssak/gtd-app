@@ -309,9 +309,7 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
                     onCancel={() => setQuickCreateEmail(null)}
                 />
             )}
-            {personEditTarget && (
-                <PersonEditDialog db={db} person={personEditTarget} onSaved={() => setPersonEditTarget(null)} onCancel={() => setPersonEditTarget(null)} />
-            )}
+            {personEditTarget && <PersonEditDialog db={db} person={personEditTarget} onClose={() => setPersonEditTarget(null)} />}
             <Dialog open={pendingMutation !== null} onClose={() => setPendingMutation(null)} maxWidth="xs" fullWidth>
                 <DialogTitle>Detach this occurrence?</DialogTitle>
                 <DialogContent>

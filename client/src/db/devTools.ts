@@ -25,6 +25,7 @@ import {
     updateItem,
 } from './itemMutations';
 import { syncAllLoggedInUsers } from './multiUserSync';
+import { getPeopleByUser } from './personHelpers';
 import type { NewPersonFields } from './personMutations';
 import { createPerson } from './personMutations';
 import { reassignEntity } from './reassignMutations';
@@ -34,6 +35,7 @@ import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { getOpenSseUserIds } from './sseClient';
 import { flushSyncQueue, waitForPendingFlush } from './syncHelpers';
+import { getWorkContextsByUser } from './workContextHelpers';
 import { createWorkContext } from './workContextMutations';
 
 async function resolveUserId(db: IDBPDatabase<MyDB>): Promise<string> {
@@ -82,6 +84,8 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // ── Supporting entities ──────────────────────────────────────────────
         createPerson: (fields: Omit<NewPersonFields, 'userId'>) => resolveUserId(db).then((uid) => createPerson(db, { ...fields, userId: uid })),
         createWorkContext: (name: string) => resolveUserId(db).then((uid) => createWorkContext(db, { userId: uid, name })),
+        listPeople: () => resolveUserId(db).then((uid) => getPeopleByUser(db, uid)),
+        listWorkContexts: () => resolveUserId(db).then((uid) => getWorkContextsByUser(db, uid)),
 
         // ── Routines ─────────────────────────────────────────────────────────
         listRoutines: () => resolveUserId(db).then((uid) => getRoutinesByUser(db, uid)),
