@@ -11447,6 +11447,351 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         expect(routine?.calendarEventId).toBeUndefined();
     });
 
+    it('removeLinkedEntities renames routine calendar* fields to lastKnown* and deactivates, recording the renamed snapshot', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId, { accountEmail: 'Alice@Example.com' }));
+        await routinesDAO.insertOne(
+            makeRoutine(userId, { calendarEventId: 'gcal-master-remove', calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' }),
+        );
+
+        const res = await authenticatedRequest(app, {
+            method: 'DELETE',
+            path: '/calendar/integrations/int-1?action=removeLinkedEntities',
+            sessionCookie,
+        });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ _id: 'routine-1' });
+        expect(routine?.active).toBe(false);
+        expect(routine?.calendarEventId).toBeUndefined();
+        expect(routine?.calendarIntegrationId).toBeUndefined();
+        expect(routine?.calendarSyncConfigId).toBeUndefined();
+        expect(routine?.lastKnownCalendarEventId).toBe('gcal-master-remove');
+        expect(routine?.lastKnownCalendarIntegrationId).toBe('int-1');
+        expect(routine?.lastKnownCalendarSyncConfigId).toBe('sync-config-1');
+        // Lowercased origin-account stamp — lets a later reconnect distinguish same-account (restore)
+        // from cross-account (wipe).
+        expect(routine?.lastKnownCalendarAccountEmail).toBe('alice@example.com');
+
+        // The recorded op must advertise the RENAMED + deactivated state — recording the pre-rename
+        // snapshot would propagate the stale still-linked state to other devices.
+        const ops = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-1' });
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one routine op');
+        expect(op.opType).toBe('update');
+        const snapshot = op.snapshot as RoutineInterface | null;
+        expect(snapshot?.active).toBe(false);
+        expect(snapshot?.calendarEventId).toBeUndefined();
+        expect(snapshot?.lastKnownCalendarEventId).toBe('gcal-master-remove');
+    });
+
+    it('same-account reconnect after removeLinkedEntities restores the deactivated routine (no twin) and regenerates items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        // Post-remove-disconnect state: deactivated routine whose markers point at the DELETED
+        // integration id. The reconnect minted a brand-new integration id (int-1 below).
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-restore-remove',
+                active: false,
+                lastKnownCalendarEventId: 'gcal-master-restore',
+                lastKnownCalendarIntegrationId: 'int-DELETED',
+                lastKnownCalendarSyncConfigId: 'sync-config-DELETED',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+                updatedTs: dayjs().subtract(3, 'day').toISOString(),
+            }),
+        );
+        await insertIntegrationWithConfig(userId);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-master-restore',
+                    title: 'Standup',
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-restore',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // The SAME routine doc is restored — reactivated and relinked to the new integration ids.
+        const routines = await routinesDAO.findArray({ user: userId });
+        expect(routines).toHaveLength(1);
+        const [restored] = routines;
+        if (!restored) throw new Error('expected the restored routine');
+        expect(restored._id).toBe('routine-restore-remove');
+        expect(restored.active).toBe(true);
+        expect(restored.calendarEventId).toBe('gcal-master-restore');
+        expect(restored.calendarIntegrationId).toBe('int-1');
+        expect(restored.calendarSyncConfigId).toBe('sync-config-1');
+        expect(restored.lastKnownCalendarEventId).toBeUndefined();
+        expect(restored.lastKnownCalendarIntegrationId).toBeUndefined();
+        expect(restored.lastKnownCalendarSyncConfigId).toBeUndefined();
+        expect(restored.lastKnownCalendarAccountEmail).toBeUndefined();
+
+        // The disconnect cascade trashed all generated items — reactivation must rebuild them.
+        const regenerated = await itemsDAO.findArray({ user: userId, routineId: 'routine-restore-remove', status: 'calendar' });
+        expect(regenerated.length).toBeGreaterThan(0);
+    });
+
+    it('cross-account reconnect wipes remove-mode markers and imports a fresh routine instead of restoring', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+
+        // Remove-mode disconnect state left by the WORK account.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-work-orphan',
+                active: false,
+                updatedTs: dayjs().subtract(3, 'day').toISOString(),
+                lastKnownCalendarEventId: 'gcal-work-master',
+                lastKnownCalendarIntegrationId: 'int-WORK',
+                lastKnownCalendarSyncConfigId: 'sync-config-WORK',
+                lastKnownCalendarAccountEmail: 'work@example.com',
+            }),
+        );
+        // A leftover generated item still carrying an instance id derived from the WORK master —
+        // the orphan wipe must clear it (it can never match the new account's exception payloads).
+        const oldTs = dayjs().subtract(3, 'day').toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-work-orphan-instance',
+            user: userId,
+            status: 'trash',
+            title: 'Standup',
+            routineId: 'routine-work-orphan',
+            calendarInstanceEventId: 'gcal-work-master_20260701T060000Z',
+            createdTs: oldTs,
+            updatedTs: oldTs,
+        });
+
+        // Reconnect with a DIFFERENT Google account (alice's, not work's) → the markers' origin email
+        // no longer matches the live integration, so reconcileLastKnownMarkers wipes them.
+        const redirectRes = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/calendar/auth/google?login_hint=alice@example.com',
+            sessionCookie,
+        });
+        const state = new URL(redirectRes.headers.get('location')!).searchParams.get('state')!;
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'new-at', refresh_token: 'new-rt', expiry_date: dayjs().add(1, 'hour').valueOf() },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+        const cbRes = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(cbRes.status).toBe(302);
+
+        const [liveIntegration] = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        if (!liveIntegration) throw new Error('expected a live integration');
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, liveIntegration._id, { _id: 'sync-config-live' }));
+
+        // The shared-calendar case: the new account sees the SAME event id. Post-wipe there is no
+        // marker to match, so the import must create a fresh routine, not hijack the work one.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-work-master',
+                    title: 'Standup',
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-cross',
+        });
+        const syncRes = await authenticatedRequest(app, { method: 'POST', path: `/calendar/integrations/${liveIntegration._id}/sync`, sessionCookie });
+        expect(syncRes.status).toBe(200);
+
+        // Original routine untouched: still inactive, unlinked, markers gone.
+        const orphan = await routinesDAO.findOne({ _id: 'routine-work-orphan' });
+        expect(orphan?.active).toBe(false);
+        expect(orphan?.calendarEventId).toBeUndefined();
+        expect(orphan?.lastKnownCalendarEventId).toBeUndefined();
+        expect(orphan?.lastKnownCalendarAccountEmail).toBeUndefined();
+        // The orphaned routine's leftover item lost its defunct instance id in the same wipe.
+        const orphanItem = await itemsDAO.findOne({ _id: 'item-work-orphan-instance' });
+        expect(orphanItem?.calendarInstanceEventId).toBeUndefined();
+
+        // The inbound master created a FRESH routine under the new account's integration.
+        const fresh = await routinesDAO.findOne({ calendarEventId: 'gcal-work-master' });
+        expect(fresh).not.toBeNull();
+        expect(fresh!._id).not.toBe('routine-work-orphan');
+        expect(fresh!.active).toBe(true);
+        expect(fresh!.calendarIntegrationId).toBe(liveIntegration._id);
+    });
+
+    it('split base + successor pair both restore after a remove-mode disconnect + reconnect (no twins)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const cappedRrule = `FREQ=WEEKLY;BYDAY=MO;UNTIL=${dayjs().subtract(2, 'week').format('YYYYMMDD[T]HHmmss[Z]')}`;
+
+        // Post-remove-disconnect state of a "this and all following" split: capped base + open
+        // successor, both deactivated with markers on the shared bare id.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-split-base',
+                active: false,
+                rrule: cappedRrule,
+                updatedTs: dayjs().subtract(3, 'day').toISOString(),
+                lastKnownCalendarEventId: 'gcal-split-1',
+                lastKnownCalendarIntegrationId: 'int-DELETED',
+                lastKnownCalendarSyncConfigId: 'sync-config-DELETED',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+            }),
+        );
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-split-succ',
+                title: 'Standup (moved)',
+                active: false,
+                rrule: 'FREQ=WEEKLY;BYDAY=TU',
+                calendarRebasedEventId: 'gcal-split-1_R20260620T090000',
+                splitFromRoutineId: 'routine-split-base',
+                updatedTs: dayjs().subtract(3, 'day').toISOString(),
+                lastKnownCalendarEventId: 'gcal-split-1',
+                lastKnownCalendarIntegrationId: 'int-DELETED',
+                lastKnownCalendarSyncConfigId: 'sync-config-DELETED',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+            }),
+        );
+        await insertIntegrationWithConfig(userId);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-split-1',
+                    title: 'Standup',
+                    timeStart: dayjs().subtract(8, 'week').toISOString(),
+                    timeEnd: dayjs().subtract(8, 'week').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: [`RRULE:${cappedRrule}`],
+                },
+                {
+                    id: 'gcal-split-1_R20260620T090000',
+                    title: 'Standup (moved)',
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TU'],
+                },
+            ],
+            nextSyncToken: 'tok-split-restore',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // No new routine docs — the pair was restored in place.
+        const routines = await routinesDAO.findArray({ user: userId });
+        expect(routines).toHaveLength(2);
+
+        const base = await routinesDAO.findOne({ _id: 'routine-split-base' });
+        expect(base?.calendarEventId).toBe('gcal-split-1');
+        expect(base?.calendarIntegrationId).toBe('int-1');
+        // The capped segment stays paused — GCal truth (rrule with UNTIL) is not a live series.
+        expect(base?.active).toBe(false);
+        expect(base?.lastKnownCalendarEventId).toBeUndefined();
+
+        const successor = await routinesDAO.findOne({ _id: 'routine-split-succ' });
+        expect(successor?.calendarEventId).toBe('gcal-split-1');
+        expect(successor?.calendarRebasedEventId).toBe('gcal-split-1_R20260620T090000');
+        expect(successor?.calendarIntegrationId).toBe('int-1');
+        expect(successor?.active).toBe(true);
+        expect(successor?.lastKnownCalendarEventId).toBeUndefined();
+
+        // Only the live successor regenerates items.
+        const succItems = await itemsDAO.findArray({ user: userId, routineId: 'routine-split-succ', status: 'calendar' });
+        expect(succItems.length).toBeGreaterThan(0);
+        const baseItems = await itemsDAO.findArray({ user: userId, routineId: 'routine-split-base', status: 'calendar' });
+        expect(baseItems).toHaveLength(0);
+    });
+
+    it('restore that races a concurrent active twin catches the E11000 and falls through without a 500', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-race-marker',
+                active: false,
+                updatedTs: dayjs().subtract(3, 'day').toISOString(),
+                lastKnownCalendarEventId: 'gcal-master-race-restore',
+                lastKnownCalendarIntegrationId: 'int-DELETED',
+                lastKnownCalendarSyncConfigId: 'sync-config-DELETED',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+            }),
+        );
+        await insertIntegrationWithConfig(userId);
+
+        // Interleave the race: a rival sync activates a routine on the same series AFTER the restore
+        // candidate was read but BEFORE its conditional update executes. The reactivating $set then
+        // violates uniq_active_routine_per_gcal_series — the catch must treat it as a miss, not 500.
+        const realUpdateOne = routinesDAO.updateOne.bind(routinesDAO);
+        let rivalInjected = false;
+        vi.spyOn(routinesDAO, 'updateOne').mockImplementation(async (filter, update, options) => {
+            type FilterShape = { lastKnownCalendarEventId?: string };
+            if ((filter as FilterShape).lastKnownCalendarEventId === 'gcal-master-race-restore' && !rivalInjected) {
+                rivalInjected = true;
+                await routinesDAO.insertOne(
+                    makeRoutine(userId, {
+                        _id: 'routine-race-rival',
+                        active: true,
+                        calendarEventId: 'gcal-master-race-restore',
+                        calendarIntegrationId: 'int-1',
+                        calendarSyncConfigId: 'sync-config-1',
+                    }),
+                );
+            }
+            return await realUpdateOne(filter, update, options);
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-master-race-restore',
+                    title: 'Standup',
+                    timeStart: dayjs().add(1, 'day').toISOString(),
+                    timeEnd: dayjs().add(1, 'day').add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                },
+            ],
+            nextSyncToken: 'tok-race-restore',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+        expect(rivalInjected).toBe(true);
+
+        // Race loser: the marker routine is untouched — markers intact, still inactive, not relinked.
+        const marker = await routinesDAO.findOne({ _id: 'routine-race-marker' });
+        expect(marker?.active).toBe(false);
+        expect(marker?.calendarEventId).toBeUndefined();
+        expect(marker?.lastKnownCalendarEventId).toBe('gcal-master-race-restore');
+
+        // Exactly one ACTIVE routine holds the series — the rival winner.
+        const active = await routinesDAO.findArray({ user: userId, calendarEventId: 'gcal-master-race-restore', active: true });
+        expect(active).toHaveLength(1);
+        const [winner] = active;
+        if (!winner) throw new Error('expected the rival winner');
+        expect(winner._id).toBe('routine-race-rival');
+    });
+
     it('pushback skips items carrying lastKnownCalendarEventId (no create, no update)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

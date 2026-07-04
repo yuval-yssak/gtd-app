@@ -865,7 +865,7 @@ async function applyUnlinkSideEffects(action: UnlinkAction, integrationId: strin
     }
     // removeLinkedEntities: trash items first, then trash routines + cascade their generated items.
     await trashItemsForIntegration(ctx.userId, integrationId, ctx.now);
-    await trashRoutinesForIntegration(ctx.userId, routines, ctx.now);
+    await trashRoutinesForIntegration(ctx.userId, routines, ctx.now, ctx.accountEmail);
 }
 
 /**
@@ -897,12 +897,18 @@ async function unlinkItems(userId: string, integrationId: string, now: string, a
  * Trashes routines linked to the integration and cascades generated items via `pushRoutineDeletion`,
  * passing `skipGCalDelete: true` so the GCal master event is preserved (disconnect must never touch GCal).
  */
-async function trashRoutinesForIntegration(userId: string, routines: RoutineInterface[], now: string): Promise<void> {
+async function trashRoutinesForIntegration(userId: string, routines: RoutineInterface[], now: string, accountEmail?: string): Promise<void> {
     if (!hasAtLeastOne(routines)) {
         return;
     }
     const ids = routines.map((r) => r._id);
     await routinesDAO.updateMany({ _id: { $in: ids }, user: userId }, { $set: { active: false, updatedTs: now } });
+    // Rename link fields to lastKnown* (same shape as the keep path) so a same-account reconnect
+    // RESTORES these routines via `tryRestoreRoutineFromLastKnownEventId` instead of minting duplicate
+    // twins — the deactivated routines would otherwise keep pointing at the deleted integration id,
+    // which the integration-scoped strong-key lookup can never match. Must run BEFORE the re-fetch so
+    // the recorded op snapshots advertise the renamed state to other devices.
+    await renameOrUnsetCalendarLinkFields(routinesDAO, { _id: { $in: ids }, user: userId }, now, accountEmail);
     const updated = await routinesDAO.findArray({ _id: { $in: ids }, user: userId });
     await Promise.all(
         updated.map(async (r) => {
@@ -2021,8 +2027,12 @@ async function importRecurringEventAsRoutine(
         // of the same batch imports the capped base and (because base + successor share a bare
         // calendarEventId) can flip this successor to active:false. Matching on the stable rebased id and
         // reactivating reverses that erroneous cap, so a re-reported split converges instead of minting a
-        // fresh routine every webhook fire (the unbounded-chain bug).
-        const successor = await findSplitSuccessorByRebasedId(rawEvent.id, source, ctx);
+        // fresh routine every webhook fire (the unbounded-chain bug). When the integration-scoped lookup
+        // misses because a disconnect renamed the successor's link fields, fall back to a marker-based
+        // restore (relink + reactivate) before concluding the successor is new.
+        const successor =
+            (await findSplitSuccessorByRebasedId(rawEvent.id, source, ctx)) ??
+            (await tryRestoreSplitSuccessorFromMarkers(rawEvent.id, event, rrule, source, ctx));
         if (successor) {
             console.log(
                 `[gcal-sync] updating split-successor routine (rebased-id match) | rebasedId=${rawEvent.id} routineId=${successor._id} active=${successor.active}`,
@@ -2130,7 +2140,7 @@ async function findExistingRoutineForEvent(
     }
     // Strong-key restore: a routine whose link was renamed to lastKnown* on disconnect gets atomically
     // restored when the GCal master event re-imports. Mirrors `tryRestoreFromLastKnownEventId` for items.
-    const restored = await tryRestoreRoutineFromLastKnownEventId(event, source, ctx);
+    const restored = await tryRestoreRoutineFromLastKnownEventId(event, rrule, source, ctx);
     if (restored || !rrule) {
         return restored;
     }
@@ -2156,36 +2166,113 @@ async function findExistingRoutineForEvent(
 
 /**
  * Strong-key restore for routines: atomically rebinds a routine whose calendar link was renamed
- * to `lastKnown*` on disconnect-with-keep, when the matching GCal master event re-imports. TOCTOU-safe
- * via the conditional update on `lastKnownCalendarEventId` — a concurrent restore wins, the loser
- * returns undefined.
+ * to `lastKnown*` on disconnect (keep AND remove modes both rename), when the matching GCal master
+ * event re-imports. Split successors (calendarRebasedEventId set) share the bare id with their capped
+ * base but are owned exclusively by the phase-2 rebased-id path (`tryRestoreSplitSuccessorFromMarkers`)
+ * — restoring one here would overwrite it with the capped base's rrule/active state (the flip-flop bug).
  */
-async function tryRestoreRoutineFromLastKnownEventId(event: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<RoutineInterface | undefined> {
-    const [candidate] = await routinesDAO.findArray({ user: ctx.userId, lastKnownCalendarEventId: event.id });
-    if (!candidate) {
+async function tryRestoreRoutineFromLastKnownEventId(
+    event: GCalEvent,
+    rrule: string | null,
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<RoutineInterface | undefined> {
+    const candidates = await routinesDAO.findArray({ user: ctx.userId, lastKnownCalendarEventId: event.id });
+    const bases = candidates.filter((r) => !r.calendarRebasedEventId);
+    if (!hasAtLeastOne(bases)) {
         return undefined;
     }
-    const result = await routinesDAO.updateOne(
-        { _id: candidate._id, user: ctx.userId, lastKnownCalendarEventId: event.id },
-        {
-            $set: {
-                calendarEventId: event.id,
-                calendarIntegrationId: source.integration._id,
-                calendarSyncConfigId: source.config._id,
-                updatedTs: ctx.now,
-            },
-            $unset: { lastKnownCalendarEventId: '', lastKnownCalendarIntegrationId: '', lastKnownCalendarSyncConfigId: '' },
-        },
-    );
-    if (result.matchedCount === 0) {
+    return restoreRoutineCalendarLink(pickMostRecentlyUpdated(bases), event, rrule, source, ctx);
+}
+
+/**
+ * Marker-based restore for a split-successor routine after a disconnect+reconnect cycle: the rename on
+ * disconnect strips `calendarIntegrationId`, so `findSplitSuccessorByRebasedId`'s integration-scoped
+ * lookup misses. The stable raw rebased id (`calendarRebasedEventId`, never renamed) plus the
+ * `lastKnownCalendarEventId` marker re-identify the successor for relink instead of minting a twin.
+ */
+async function tryRestoreSplitSuccessorFromMarkers(
+    rebasedEventId: string,
+    event: GCalEvent,
+    rrule: string | null,
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<RoutineInterface | undefined> {
+    const candidates = await routinesDAO.findArray({ user: ctx.userId, calendarRebasedEventId: rebasedEventId, lastKnownCalendarEventId: event.id });
+    if (!hasAtLeastOne(candidates)) {
         return undefined;
+    }
+    return restoreRoutineCalendarLink(pickMostRecentlyUpdated(candidates), event, rrule, source, ctx);
+}
+
+/**
+ * Shared restore write: rebinds the candidate to the live integration/config, clears the lastKnown*
+ * markers, and reactivates when GCal reports a live OPEN series. TOCTOU-safe via the conditional
+ * update on `lastKnownCalendarEventId` — a concurrent restore wins, the loser returns undefined.
+ *
+ * Reactivation rationale: a remove-mode disconnect deactivates routines while leaving their rrule
+ * open, whereas a user pause always caps the series with UNTIL — so inactive + open inbound rrule
+ * means the pause was disconnect-inflicted, not user intent. GCal truth (a live uncapped master)
+ * wins. A capped inbound rrule (split base / genuinely ended series) stays inactive. Reactivation
+ * regenerates the future items that the disconnect cascade trashed.
+ *
+ * Deliberately does NOT set `lastSyncedFromGCalTs`: the follow-up `updateRoutineFromGCal` must see
+ * the inbound payload as structurally newer so it can apply any schedule change GCal made while
+ * disconnected — its idempotent delta regen then corrects the rows created here. Setting the anchor
+ * would silently disable that follow-up correction.
+ */
+async function restoreRoutineCalendarLink(
+    candidate: RoutineInterface,
+    event: GCalEvent,
+    rrule: string | null,
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<RoutineInterface | undefined> {
+    const reactivate = !candidate.active && rrule !== null && isOpenRrule(rrule);
+    try {
+        const result = await routinesDAO.updateOne(
+            { _id: candidate._id, user: ctx.userId, lastKnownCalendarEventId: event.id },
+            {
+                $set: {
+                    calendarEventId: event.id,
+                    calendarIntegrationId: source.integration._id,
+                    calendarSyncConfigId: source.config._id,
+                    ...(reactivate ? { active: true } : {}),
+                    updatedTs: ctx.now,
+                },
+                $unset: {
+                    lastKnownCalendarEventId: '',
+                    lastKnownCalendarIntegrationId: '',
+                    lastKnownCalendarSyncConfigId: '',
+                    lastKnownCalendarAccountEmail: '',
+                },
+            },
+        );
+        if (result.matchedCount === 0) {
+            return undefined;
+        }
+    } catch (err) {
+        // uniq_active_routine_per_gcal_series: a concurrent sync already activated a routine on this
+        // series — treat the race loser as a miss (createRoutineFromGCal has its own duplicate guard).
+        if (isDuplicateKeyError(err)) {
+            return undefined;
+        }
+        throw err;
     }
     const restored = await routinesDAO.findByOwnerAndId(candidate._id, ctx.userId);
     if (!restored) {
         return undefined;
     }
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: candidate._id, snapshot: restored, opType: 'update', now: ctx.now }));
-    console.log(`[gcal-sync] restored routine from lastKnownCalendarEventId | routineId=${candidate._id} eventId=${event.id} title="${event.title}"`);
+    if (reactivate) {
+        // The disconnect cascade trashed every generated item — rebuild the future occurrence set.
+        // Idempotent delta regen: if updateRoutineFromGCal later applies a changed schedule, its own
+        // regeneration pass reconciles these rows instead of duplicating them.
+        ctx.ops.push(...(await regenerateFutureRoutineItems(restored, ctx.userId, ctx.now, source.config.timeZone ?? 'UTC')));
+    }
+    console.log(
+        `[gcal-sync] restored routine from lastKnownCalendarEventId | routineId=${candidate._id} eventId=${event.id} reactivated=${reactivate} title="${event.title}"`,
+    );
     return restored;
 }
 
