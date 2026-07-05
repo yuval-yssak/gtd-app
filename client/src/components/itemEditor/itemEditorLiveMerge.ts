@@ -194,6 +194,50 @@ export function mergeItemForms(form: ItemFormSeeds, seed: ItemFormSeeds, incomin
     };
 }
 
+/** Arguments for `hasUnsavedStructuralItemEdits`, bundled — they describe one editor snapshot. */
+export interface ItemStructuralEditCheck {
+    /** The editor's current form values. */
+    form: ItemFormSeeds;
+    /** The values the form was last seeded/merged from (= the persisted state). */
+    seed: ItemFormSeeds;
+    /** Wizard-preselected status chip — a status equal to it is a preset, not a user edit. */
+    initialStatus?: EditableStatus | undefined;
+    /** Meetings with attendees keep title/notes on explicit Save — count them as structural too. */
+    includeText: boolean;
+}
+
+/**
+ * True when the editor holds edits that only the explicit Save button would persist — the state
+ * the unsaved-changes navigation guard protects. Autosaved text is excluded (navigation flushes
+ * it), and only the form group the current status renders counts: hidden groups are dropped on
+ * save, so losing them to navigation loses nothing Save would have kept.
+ */
+export function hasUnsavedStructuralItemEdits({ form, seed, initialStatus, includeText }: ItemStructuralEditCheck): boolean {
+    if (form.status !== seed.status && form.status !== initialStatus) {
+        return true;
+    }
+    if (includeText && (form.title !== seed.title || form.notes !== seed.notes)) {
+        return true;
+    }
+    return isActiveGroupDirty(form, seed);
+}
+
+function isActiveGroupDirty(form: ItemFormSeeds, seed: ItemFormSeeds): boolean {
+    if (form.status === 'nextAction') {
+        return !valuesEqual(form.na, seed.na);
+    }
+    if (form.status === 'calendar') {
+        return !valuesEqual(form.cal, seed.cal);
+    }
+    if (form.status === 'waitingFor') {
+        return !valuesEqual(form.wf, seed.wf);
+    }
+    if (form.status === 'somedayMaybe') {
+        return !valuesEqual(form.sm, seed.sm);
+    }
+    return false;
+}
+
 function groupConflictsForStatus(status: EditableStatus, groups: { na: string[]; cal: string[]; wf: string[]; sm: string[] }): string[] {
     if (status === 'nextAction') {
         return groups.na;

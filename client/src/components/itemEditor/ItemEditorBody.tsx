@@ -37,6 +37,7 @@ import {
 } from '../../db/itemMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { offerUndo } from '../../lib/undoStore';
 import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
@@ -71,9 +72,18 @@ import {
     stripRoutineId,
 } from '../editItemDialogLogic';
 import { RoutineIndicator } from '../RoutineIndicator';
+import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import styles from './ItemEditorBody.module.css';
-import { itemToCalendarForm, itemToFormSeeds, itemToNextActionForm, itemToSomedayMaybeForm, itemToWaitingForForm, mergeItemForms } from './itemEditorLiveMerge';
+import {
+    hasUnsavedStructuralItemEdits,
+    itemToCalendarForm,
+    itemToFormSeeds,
+    itemToNextActionForm,
+    itemToSomedayMaybeForm,
+    itemToWaitingForForm,
+    mergeItemForms,
+} from './itemEditorLiveMerge';
 import { MeetingDetails, type RsvpStatus } from './MeetingDetails';
 import { applyOptimisticRsvp, findSelfAttendee } from './meetingDetailsLogic';
 import { NotesSection } from './NotesSection';
@@ -223,8 +233,8 @@ export function ItemEditorBody({
     // dismissible notice with a whole-form "Use their version" escape hatch.
     const [conflictFields, setConflictFields] = useState<string[]>([]);
 
-    const formRefs = useRef({ title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm });
-    formRefs.current = { title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm };
+    const formRefs = useRef({ title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId });
+    formRefs.current = { title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId };
 
     const textAutosave = useAutosave<{ title: string; notes: string }>({
         initial: { title: item.title, notes: item.notes ?? '' },
@@ -289,6 +299,39 @@ export function ItemEditorBody({
             textAutosave.onChange({ title: formRefs.current.title, notes: nextNotes });
         }
     }
+
+    // ── Unsaved-changes guard ────────────────────────────────────────────────
+    // Structural edits (status, schedule, contexts, owner, …) only persist on explicit Save, so
+    // navigating away or reloading would silently drop them. Pause in-app navigations behind a
+    // confirm dialog and arm the native beforeunload prompt while such edits exist.
+    const guardBypassRef = useRef(false);
+
+    /** Deliberate close (Cancel, post-save, wizard skip) — the navigation it triggers must never
+     *  re-prompt about the edits the user just chose to discard or already saved. */
+    function closeEditor() {
+        guardBypassRef.current = true;
+        onClose();
+    }
+
+    function hasStructuralEdits(): boolean {
+        if (guardBypassRef.current) {
+            return false;
+        }
+        // ownerUserId is seeded from the mount-time item and only changes via the picker, so a
+        // REMOTE reassign of the open item makes this true without a local edit — one spurious
+        // prompt, no data loss. Accepted: the save paths use the same comparison to route saves.
+        if (formRefs.current.ownerUserId !== liveItemRef.current.userId) {
+            return true;
+        }
+        return hasUnsavedStructuralItemEdits({ form: formRefs.current, seed: seedFormsRef.current, initialStatus, includeText: !textAutosaveEnabled });
+    }
+
+    const navigationBlocker = useUnsavedChangesGuard({
+        hasUnsavedChanges: hasStructuralEdits,
+        // A hard unload also kills a debounced text commit mid-window — the unmount flush that
+        // covers in-app navigation never runs on reload/close.
+        hasUnsavedChangesOnUnload: () => hasStructuralEdits() || textAutosave.isDirty(),
+    });
 
     // ── Live merge ───────────────────────────────────────────────────────────
     // When sync rewrites the open item: clean fields adopt the incoming values; dirty fields keep
@@ -384,7 +427,7 @@ export function ItemEditorBody({
         }
         if (path.kind === 'reassign') {
             startReassignInBackground(buildEditPatch(live, trimmedTitle, trimmedNotes, status, forms), trimmedTitle);
-            onClose();
+            closeEditor();
             return;
         }
         setReassignError(null);
@@ -415,7 +458,7 @@ export function ItemEditorBody({
             }
             offerSaveUndo(base);
             await onSaved();
-            onClose();
+            closeEditor();
         });
     }
 
@@ -652,7 +695,7 @@ export function ItemEditorBody({
         // branch only fires under popover/expand/page.
         return (
             <Box className={bodyClassFor(chrome)}>
-                <ReassignInFlightInline onClose={onClose} />
+                <ReassignInFlightInline onClose={closeEditor} />
             </Box>
         );
     }
@@ -815,25 +858,26 @@ export function ItemEditorBody({
 
             {renderActions ? (
                 chrome === 'dialog' ? (
-                    <DialogActions sx={{ px: 0 }}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose })}</DialogActions>
+                    <DialogActions sx={{ px: 0 }}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose: closeEditor })}</DialogActions>
                 ) : (
-                    <Box className={styles.inlineActions}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose })}</Box>
+                    <Box className={styles.inlineActions}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose: closeEditor })}</Box>
                 )
             ) : chrome === 'dialog' ? (
                 <DialogActions sx={{ px: 0 }}>
-                    <Button onClick={onClose}>Cancel</Button>
+                    <Button onClick={closeEditor}>Cancel</Button>
                     <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()}>
                         Save changes
                     </Button>
                 </DialogActions>
             ) : (
                 <Box className={styles.inlineActions}>
-                    <Button onClick={onClose}>Cancel</Button>
+                    <Button onClick={closeEditor}>Cancel</Button>
                     <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()}>
                         Save changes
                     </Button>
                 </Box>
             )}
+            <UnsavedChangesDialog blocker={navigationBlocker} />
             <SendUpdatesDialog
                 open={pendingSave !== null}
                 attendeeCount={liveAttendees?.length ?? 0}

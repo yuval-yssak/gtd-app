@@ -31,6 +31,7 @@ import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import { splitRoutine } from '../../db/routineSplit';
 import { useAutosave } from '../../hooks/useAutosave';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import { offerUndo } from '../../lib/undoStore';
@@ -42,6 +43,7 @@ import { NotesSection } from '../itemEditor/NotesSection';
 import { ReassignInFlightInline } from '../itemEditor/ReassignInFlightInline';
 import { FrequencyPicker } from '../routines/FrequencyPicker';
 import { isCalendarScheduleChanged, isStartDateChanged } from '../routines/routineEditDecision';
+import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import styles from './RoutineEditorBody.module.css';
 
 /**
@@ -53,7 +55,7 @@ export type RoutineEditorChrome = ItemEditorChrome;
 
 type EndsMode = 'never' | 'onDate' | 'afterN';
 
-interface FormState {
+export interface FormState {
     routineType: 'nextAction' | 'calendar';
     title: string;
     rrule: string; // base rrule without UNTIL/COUNT — those are stored in endsMode/endsDate/endsCount
@@ -117,7 +119,7 @@ function buildFinalRrule(baseRrule: string, endsMode: EndsMode, endsDate: string
     return baseRrule;
 }
 
-function initFormState(routine?: StoredRoutine): FormState {
+export function initFormState(routine?: StoredRoutine): FormState {
     const ends = parseEndsFromRrule(routine?.rrule ?? '');
     return {
         routineType: routine?.routineType ?? 'nextAction',
@@ -137,6 +139,21 @@ function initFormState(routine?: StoredRoutine): FormState {
         startDate: routine?.startDate ?? '',
         ...ends,
     };
+}
+
+/**
+ * True when the routine form holds edits that only the explicit Save/Create button would persist —
+ * the state the unsaved-changes navigation guard protects. In edit mode title/notes are excluded
+ * (they autosave, so navigation can't lose them); in create mode every field counts because
+ * nothing persists before Create. Exported for unit-testing.
+ */
+export function hasUnsavedStructuralRoutineEdits(form: FormState, seed: FormState, isEdit: boolean): boolean {
+    return (Object.keys(seed) as Array<keyof FormState>).some((key) => {
+        if (isEdit && (key === 'title' || key === 'notes')) {
+            return false;
+        }
+        return JSON.stringify(form[key]) !== JSON.stringify(seed[key]);
+    });
 }
 
 /** Conflict-notice labels per FormState key. The three Ends fields share one label — they are a
@@ -627,6 +644,42 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
     // the guard after all hooks below (rules-of-hooks).
     const reassignInFlight = routine !== undefined && isPending('routine', routine._id);
     const [ownerUserId, setOwnerUserId] = useState<string>(routine?.userId ?? userId);
+    const ownerUserIdRef = useRef(ownerUserId);
+    ownerUserIdRef.current = ownerUserId;
+
+    // ── Unsaved-changes guard ────────────────────────────────────────────────
+    // Schedule/type/template edits (and the whole form in create mode) only persist on explicit
+    // Save/Create — navigating away or reloading would silently drop them. Pause in-app
+    // navigations behind a confirm dialog and arm the native beforeunload prompt meanwhile.
+    const guardBypassRef = useRef(false);
+
+    /** Deliberate close (Cancel, post-save) — the navigation it triggers must never re-prompt
+     *  about the edits the user just chose to discard or already saved. */
+    function closeEditor() {
+        guardBypassRef.current = true;
+        onClose();
+    }
+
+    function hasStructuralEdits(): boolean {
+        if (guardBypassRef.current) {
+            return false;
+        }
+        // ownerUserId is seeded from the mount-time routine and only changes via the picker, so a
+        // REMOTE reassign of the open routine makes this true without a local edit — one spurious
+        // prompt, no data loss. Accepted: the save paths use the same comparison to route saves.
+        const live = liveRoutineRef.current;
+        if (live && ownerUserIdRef.current !== live.userId) {
+            return true;
+        }
+        return hasUnsavedStructuralRoutineEdits(formRef.current, seedRef.current, isEdit);
+    }
+
+    const navigationBlocker = useUnsavedChangesGuard({
+        hasUnsavedChanges: hasStructuralEdits,
+        // A hard unload also kills a debounced title/notes commit mid-window — the unmount flush
+        // that covers in-app navigation never runs on reload/close.
+        hasUnsavedChangesOnUnload: () => hasStructuralEdits() || textAutosave.isDirty(),
+    });
 
     function patch(update: Partial<FormState>) {
         setForm((f) => ({ ...f, ...update }));
@@ -674,7 +727,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 await saveCreate(db, userId, ctx);
             }
             await onSaved();
-            onClose();
+            closeEditor();
         });
 
         function buildSaveContext(): SaveContext {
@@ -713,7 +766,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 ...(ctx.calendarLink.calendarSyncConfigId !== undefined ? { targetSyncConfigId: ctx.calendarLink.calendarSyncConfigId } : {}),
                 resumeOnSave: !currentRoutine.active,
             });
-            onClose();
+            closeEditor();
         }
     }
 
@@ -767,7 +820,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         // so this branch only fires under popover/expand/page.
         return (
             <Box className={bodyClassFor(chrome)}>
-                <ReassignInFlightInline onClose={onClose} entityLabel="routine" />
+                <ReassignInFlightInline onClose={closeEditor} entityLabel="routine" />
             </Box>
         );
     }
@@ -899,19 +952,20 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
 
             {chrome === 'dialog' ? (
                 <DialogActions sx={{ px: 0 }}>
-                    <Button onClick={onClose}>Cancel</Button>
+                    <Button onClick={closeEditor}>Cancel</Button>
                     <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()} data-testid="routineEditorSaveButton">
                         {isEdit ? 'Save changes' : 'Create routine'}
                     </Button>
                 </DialogActions>
             ) : (
                 <Box className={styles.inlineActions}>
-                    <Button onClick={onClose}>Cancel</Button>
+                    <Button onClick={closeEditor}>Cancel</Button>
                     <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()} data-testid="routineEditorSaveButton">
                         {isEdit ? 'Save changes' : 'Create routine'}
                     </Button>
                 </Box>
             )}
+            <UnsavedChangesDialog blocker={navigationBlocker} />
         </Box>
     );
 }
