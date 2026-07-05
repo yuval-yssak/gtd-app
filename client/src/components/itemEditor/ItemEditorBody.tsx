@@ -37,6 +37,7 @@ import {
 } from '../../db/itemMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { offerUndo } from '../../lib/undoStore';
 import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -332,6 +333,11 @@ export function ItemEditorBody({
         // covers in-app navigation never runs on reload/close.
         hasUnsavedChangesOnUnload: () => hasStructuralEdits() || textAutosave.isDirty(),
     });
+
+    // Page chrome only — the other chromes get ESC from MUI Modal. Deliberately the raw `onClose`
+    // (not closeEditor): the resulting router navigation must stay behind the guard above, exactly
+    // like the header's back arrow.
+    usePageEscapeToClose({ enabled: chrome === 'page', onEscape: onClose });
 
     // ── Live merge ───────────────────────────────────────────────────────────
     // When sync rewrites the open item: clean fields adopt the incoming values; dirty fields keep

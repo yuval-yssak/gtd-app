@@ -37,6 +37,36 @@ test.describe('unsaved-changes guard — item editor', () => {
         });
     });
 
+    test('ESC with a pending structural edit triggers the guard, same as the back arrow', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `guard-esc-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Guard me via ESC');
+            await page.goto(`/item/${item._id}`);
+            await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
+
+            // Structural edit, then ESC — must route through the guarded navigation, not bypass it.
+            await page.getByRole('button', { name: 'Next Action' }).click();
+            await page.keyboard.press('Escape');
+
+            const guardDialog = page.getByTestId('unsavedChangesDialog');
+            await expect(guardDialog).toBeVisible();
+            await page.getByTestId('unsavedChangesStay').click();
+            await expect(guardDialog).toHaveCount(0);
+            // The guard dialog is a MUI modal — wait for its exit so the next ESC isn't swallowed.
+            // (:not() skips AppNav's keep-mounted mobile drawer, which is always in the DOM.)
+            await expect(page.locator('.MuiModal-root:not([aria-hidden="true"])')).toHaveCount(0);
+            await expect(page).toHaveURL(new RegExp(`/item/${item._id}`)); // navigation was cancelled
+
+            await page.keyboard.press('Escape');
+            await expect(guardDialog).toBeVisible();
+            await page.getByTestId('unsavedChangesDiscard').click();
+            await expect(page).toHaveURL(/\/inbox/);
+
+            // The unsaved status change was discarded, not silently applied.
+            const after = (await gtd.listItems(page)).find((i) => i._id === item._id);
+            expect(after?.status).toBe('inbox');
+        });
+    });
+
     test('explicit Cancel never prompts — it is a deliberate discard', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `guard-cancel-${dayjs().valueOf()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Cancel me');

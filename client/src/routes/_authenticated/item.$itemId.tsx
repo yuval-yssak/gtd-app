@@ -14,6 +14,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
+import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-item.$itemId.module.css';
 
@@ -102,6 +103,11 @@ function ItemPage() {
         },
         [],
     );
+
+    // ESC on the not-found branch, where ItemEditorBody (which owns the page-chrome ESC handling)
+    // never mounts — mirrors its "Go back" button. Enabled only then, so exactly one listener is
+    // active at a time. Declared before the early return to keep hook order stable.
+    usePageEscapeToClose({ enabled: !item, onEscape: () => window.history.back() });
 
     if (!item) {
         return (

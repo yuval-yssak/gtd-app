@@ -24,6 +24,7 @@ import {
     pickDefaultConfigForUser,
     shouldAutoFocusTitle,
     shouldDetachFromRoutine,
+    shouldHandlePageEscape,
     stripRoutineId,
 } from '../components/editItemDialogLogic';
 import type { CalendarOption } from '../hooks/useCalendarOptions';
@@ -772,5 +773,25 @@ describe('notesAreEmpty', () => {
         expect(notesAreEmpty('hello')).toBe(false);
         expect(notesAreEmpty('  hello  ')).toBe(false);
         expect(notesAreEmpty('a')).toBe(false);
+    });
+});
+
+describe('shouldHandlePageEscape', () => {
+    const cleanEvent = { defaultPrevented: false, isComposing: false };
+
+    it('handles a clean Escape when no modal is open', () => {
+        expect(shouldHandlePageEscape(cleanEvent, false)).toBe(true);
+    });
+
+    it('stands down when the event was already claimed (defaultPrevented)', () => {
+        expect(shouldHandlePageEscape({ ...cleanEvent, defaultPrevented: true }, false)).toBe(false);
+    });
+
+    it('stands down during IME composition', () => {
+        expect(shouldHandlePageEscape({ ...cleanEvent, isComposing: true }, false)).toBe(false);
+    });
+
+    it('stands down while a MUI modal surface is open', () => {
+        expect(shouldHandlePageEscape(cleanEvent, true)).toBe(false);
     });
 });

@@ -184,6 +184,81 @@ test.describe('Item editor — page mode UX', () => {
         });
     });
 
+    test('ESC navigates back to the originating list', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-esc-back-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Escape target');
+
+            await page.goto('/inbox');
+            await page.waitForSelector('text=Escape target');
+            await page.evaluate(
+                (args) => {
+                    localStorage.setItem(args.key, 'page');
+                    window.dispatchEvent(new StorageEvent('storage', { key: args.key, newValue: 'page' }));
+                },
+                { key: CLARIFY_MODE_KEY },
+            );
+
+            // In-app navigation (row click) so the router has history for ESC's history-back path.
+            await page.getByText('Escape target').click();
+            await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
+            // Gate on the editor being mounted — the ESC listener attaches in an effect, so a
+            // keypress fired on the bare URL change can land before anyone is listening.
+            await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
+
+            await page.keyboard.press('Escape');
+            await expect(page).toHaveURL(/\/inbox/);
+        });
+    });
+
+    test('ESC closes an open Select popup first; second ESC leaves the page', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-esc-select-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Escape with popup');
+            // Pre-set waitingFor so the person Select is on the page without a structural edit
+            // (which would put the second ESC behind the unsaved-changes guard).
+            await gtd.updateItem(page, { ...item, status: 'waitingFor' });
+
+            await page.goto(`/item/${item._id}`);
+            await page.getByLabel('Waiting for (optional)').click();
+            await expect(page.getByRole('listbox')).toBeVisible();
+
+            // First ESC: MUI closes the menu, the page listener stands down — URL unchanged.
+            await page.keyboard.press('Escape');
+            await expect(page.getByRole('listbox')).toHaveCount(0);
+            // Wait out the menu's exit transition — the page listener treats a still-open (not yet
+            // aria-hidden/unmounted) MuiModal-root as "popup open" and would swallow the second ESC.
+            // AppNav's keep-mounted mobile drawer stays in the DOM aria-hidden, hence the :not().
+            await expect(page.locator('.MuiModal-root:not([aria-hidden="true"])')).toHaveCount(0);
+            await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
+
+            // Second ESC: nothing open → navigate back (deep link → status-bucket fallback).
+            await page.keyboard.press('Escape');
+            await expect(page).toHaveURL(/\/waiting-for/);
+        });
+    });
+
+    test('ESC in the notes editor returns to preview first; second ESC leaves the page', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-esc-notes-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Escape from notes');
+            await gtd.updateItem(page, { ...item, notes: 'Some notes' });
+
+            await page.goto(`/item/${item._id}`);
+            const editNotesButton = page.getByRole('button', { name: 'Edit notes' });
+            await expect(editNotesButton).toBeVisible();
+            await editNotesButton.click();
+            const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            await expect(notesEditor).toBeVisible({ timeout: 15_000 });
+
+            // First ESC (on the textarea): steps out to the preview, does not navigate.
+            await notesEditor.press('Escape');
+            await expect(page.getByTestId('pageNotesPreview')).toBeVisible();
+            await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
+
+            // Second ESC: nothing claims it → navigate back (deep link → inbox fallback).
+            await page.keyboard.press('Escape');
+            await expect(page).toHaveURL(/\/inbox/);
+        });
+    });
+
     test('honours mode setting end-to-end: clicking a row in page mode navigates to /item/:id', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `page-mode-nav-${dayjs().valueOf()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Nav target');

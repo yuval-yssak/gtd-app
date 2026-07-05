@@ -450,6 +450,18 @@ export function notesAreEmpty(notes: string): boolean {
 }
 
 /**
+ * Decides whether a page-level Escape keydown should navigate back. Stands down when the event was
+ * already claimed (`defaultPrevented` — MUI Autocomplete's open popup, the notes editor's
+ * ESC-to-preview), when it's an IME composition cancel, or when any MUI modal surface is open
+ * (Select menus and inner Dialogs — their own ESC handling must win). "Open" cannot mean mere DOM
+ * presence: keep-mounted modals like AppNav's mobile drawer are always mounted, so the caller must
+ * exclude aria-hidden modal roots when computing `isModalOpen`.
+ */
+export function shouldHandlePageEscape(event: { defaultPrevented: boolean; isComposing: boolean }, isModalOpen: boolean): boolean {
+    return !event.defaultPrevented && !event.isComposing && !isModalOpen;
+}
+
+/**
  * Builds the optional `opts` argument for `clarifyToDone` so the spread in `ItemEditorBody`'s
  * status-transition dispatch is a named helper instead of an inline ternary. `exactOptionalPropertyTypes`
  * forbids passing `{ onReadOnlyGCal: undefined }`, so when no callback is supplied we must pass

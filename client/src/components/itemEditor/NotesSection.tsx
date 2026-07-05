@@ -65,6 +65,15 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
                             setEditing(false);
                         }
                     }}
+                    onKeyDown={(e) => {
+                        // First ESC steps out to the preview; preventDefault tells the page-level
+                        // ESC listener the key was claimed, so it doesn't also navigate back.
+                        // With empty notes the editor is the resting state — let ESC fall through.
+                        if (e.key === 'Escape' && !notesAreEmpty(notes)) {
+                            e.preventDefault();
+                            setEditing(false);
+                        }
+                    }}
                     fullWidth
                     multiline
                     minRows={4}
