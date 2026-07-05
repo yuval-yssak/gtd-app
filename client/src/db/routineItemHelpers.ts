@@ -3,7 +3,8 @@ import utc from 'dayjs/plugin/utc';
 import type { IDBPDatabase } from 'idb';
 import { RRule } from 'rrule';
 import { getCalendarHorizonMonths } from '../lib/calendarHorizon';
-import { computeNextOccurrence } from '../lib/rruleUtils';
+import { computeFirstOccurrenceDate } from '../lib/routineOpenItemMerge';
+import { computeNextOccurrence, RruleExhaustedError } from '../lib/rruleUtils';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { putItem } from './itemHelpers';
 import { updateRoutine } from './routineMutations';
@@ -91,22 +92,15 @@ export async function createFirstRoutineItem(db: IDBPDatabase<MyDB>, userId: str
     if (!routine.active) {
         return;
     }
-    const todayAsUtcDay = dayjs.utc(dayjs().format('YYYY-MM-DD')).toDate();
-    const startAsUtcDay = routine.startDate ? dayjs.utc(routine.startDate).toDate() : null;
-    const anchor = startAsUtcDay && startAsUtcDay > todayAsUtcDay ? startAsUtcDay : todayAsUtcDay;
-    const nextDueDate = computeNextOccurrence(routine.rrule, anchor, true);
-    const expectedBy = dayjs.utc(nextDueDate).format('YYYY-MM-DD');
+    const expectedBy = computeFirstOccurrenceDate(routine, dayjs().format('YYYY-MM-DD'));
     await persistRoutineItem(db, userId, routine, expectedBy);
 }
 
 // ── Calendar routine helpers ───────────────────────────────────────────────────
 
-/**
- * Thrown when a calendar routine's rrule series is fully exhausted (UNTIL/COUNT reached or all
- * occurrences are in the exception list). Callers catch this to deactivate the routine rather
- * than logging a generic error.
- */
-export class RruleExhaustedError extends Error {}
+// Canonical home is lib/rruleUtils.ts so `computeNextOccurrence` can throw the typed error itself;
+// re-exported here because the disposal/generation callers historically import it from this module.
+export { RruleExhaustedError };
 
 /**
  * Build an RRule anchored to the routine's creation date (UTC midnight) for calendar routines.
