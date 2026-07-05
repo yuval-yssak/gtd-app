@@ -233,3 +233,99 @@ describe('saveEditWithStartDateChange (additional)', () => {
         expect(stored?.startDate).toBe(tomorrow);
     });
 });
+
+describe('nextAction open-item propagation on save', () => {
+    it('updates the open item when the template changes (no schedule change)', async () => {
+        const routine = buildRoutine({ template: { energy: 'low' } });
+        await db.put('routines', routine);
+        const today = dayjs().format('YYYY-MM-DD');
+        await db.put('items', buildItem({ _id: 'open-1', energy: 'low', expectedBy: today, ignoreBefore: today }));
+
+        const result = await saveEditWithoutStartDateChange(
+            db,
+            routine,
+            buildCtx({ trimmedTitle: 'Original title', template: { energy: 'high', workContextIds: ['wc-1'] } }),
+        );
+
+        expect(result?.outcome).toBe('updated');
+        const stored = await db.get('items', 'open-1');
+        expect(stored?.energy).toBe('high');
+        expect(stored?.workContextIds).toEqual(['wc-1']);
+        expect(stored?.expectedBy).toBe(today);
+    });
+
+    it('recomputes the open item dates when the recurrence changes', async () => {
+        const routine = buildRoutine({ rrule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU' });
+        await db.put('routines', routine);
+        const nextWeek = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        await db.put('items', buildItem({ _id: 'open-1', expectedBy: nextWeek, ignoreBefore: nextWeek }));
+
+        const result = await saveEditWithoutStartDateChange(db, routine, buildCtx({ trimmedTitle: 'Original title', finalRrule: 'FREQ=DAILY;INTERVAL=1' }));
+
+        expect(result?.outcome).toBe('updated');
+        const stored = await db.get('items', 'open-1');
+        const today = dayjs().format('YYYY-MM-DD');
+        expect(stored?.expectedBy).toBe(today);
+        expect(stored?.ignoreBefore).toBe(today);
+    });
+
+    it('restamps a surviving future open item on a startDate change instead of seeding a duplicate', async () => {
+        const routine = buildRoutine();
+        await db.put('routines', routine);
+        const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        await db.put('items', buildItem({ _id: 'open-1', expectedBy: tomorrow, ignoreBefore: tomorrow }));
+        const inThreeDays = dayjs().add(3, 'day').format('YYYY-MM-DD');
+
+        const result = await saveEditWithStartDateChange(db, routine, buildCtx({ trimmedTitle: 'Original title', formStartDate: inThreeDays }));
+
+        expect(result?.outcome).toBe('updated');
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === routine._id);
+        expect(items).toHaveLength(1);
+        const [stored] = items;
+        if (!stored) throw new Error('expected the surviving open item');
+        expect(stored._id).toBe('open-1');
+        expect(stored.expectedBy).toBe(inThreeDays);
+        expect(stored.ignoreBefore).toBe(inThreeDays);
+    });
+
+    it('trashes the pending item and deactivates the routine when the edited schedule is exhausted', async () => {
+        const routine = buildRoutine();
+        await db.put('routines', routine);
+        const today = dayjs().format('YYYY-MM-DD');
+        await db.put('items', buildItem({ _id: 'open-1', expectedBy: today, ignoreBefore: today }));
+
+        const result = await saveEditWithoutStartDateChange(
+            db,
+            routine,
+            buildCtx({ trimmedTitle: 'Original title', finalRrule: 'FREQ=DAILY;INTERVAL=1;UNTIL=20200101T235959Z' }),
+        );
+
+        expect(result?.outcome).toBe('trashedExhausted');
+        const stored = await db.get('items', 'open-1');
+        expect(stored?.status).toBe('trash');
+        const storedRoutine = await db.get('routines', routine._id);
+        expect(storedRoutine?.active).toBe(false);
+    });
+});
+
+describe('startDate change with a transformed survivor', () => {
+    it('does not seed a duplicate next to a transformed open item (broad open-slot guard)', async () => {
+        const routine = buildRoutine();
+        await db.put('routines', routine);
+        const tomorrow = dayjs().add(1, 'day').format('YYYY-MM-DD');
+        // The generated item was transformed to waitingFor — it claims the open slot but is the
+        // user's own now, so it must be neither edited nor shadowed by a fresh nextAction item.
+        await db.put('items', buildItem({ _id: 'transformed-1', status: 'waitingFor', expectedBy: tomorrow, ignoreBefore: tomorrow }));
+        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
+        const result = await saveEditWithStartDateChange(db, routine, buildCtx({ trimmedTitle: 'Original title', formStartDate: yesterday }));
+
+        expect(result).toBeNull();
+        const items = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === routine._id);
+        expect(items).toHaveLength(1);
+        const [survivor] = items;
+        if (!survivor) throw new Error('expected the transformed survivor');
+        expect(survivor.status).toBe('waitingFor');
+        expect(survivor.expectedBy).toBe(tomorrow);
+    });
+});
