@@ -12,7 +12,8 @@ import { requireScope } from '../../auth/scopeMiddleware.js';
 import routinesDAO from '../../dataAccess/routinesDAO.js';
 import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
 import { pauseRoutine, resumeRoutine, type SplitParams, splitRoutine } from '../../lib/routineComposites.js';
-import { ensureFirstRoutineItem, restampOpenItemForStartDateChange } from '../../lib/routineItemGeneration.js';
+import { propagateRoutineEditToItems } from '../../lib/routineEditPropagation.js';
+import { ensureFirstRoutineItem } from '../../lib/routineItemGeneration.js';
 import type { RoutineInterface } from '../../types/entities.js';
 import { presentRoutine } from './projections/routine.js';
 
@@ -268,13 +269,12 @@ export const v1RoutinesRoutes = new Hono<{ Variables: BearerVariables }>()
                 result.error.status,
             );
         }
-        // A startDate change has to re-stamp the already-materialized first item — the CREATE-path
-        // bootstrap anchored it on the old startDate (or today), and the MCP/API caller has no client
-        // tick to fix it up. Only fires when startDate actually changed; errors are logged + swallowed.
-        if (snapshot.startDate !== existing.startDate) {
-            await restampOpenItemForStartDateChange({ userId, tokenId }, snapshot);
-        }
-        return c.json(presentRoutine(snapshot));
+        // Propagate the edit to generated items immediately — the MCP/API caller has no client
+        // tick to do it. nextAction: 3-way merge + schedule recompute on the open item; calendar:
+        // delta regen / in-place content refresh. Errors are logged + swallowed inside; the
+        // returned routine reflects a possible exhausted-schedule deactivation.
+        const finalRoutine = await propagateRoutineEditToItems({ userId, tokenId }, existing, snapshot);
+        return c.json(presentRoutine(finalRoutine));
     })
 
     // ── DELETE /v1/routines/:id ─────────────────────────────────────────────

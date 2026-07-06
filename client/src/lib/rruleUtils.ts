@@ -7,6 +7,18 @@ import { hasAtLeastOne } from './typeUtils';
 dayjs.extend(utc);
 
 /**
+ * Thrown when an rrule series has no further occurrences (UNTIL/COUNT exhausted). Callers catch
+ * this to deactivate the owning routine rather than logging a generic error. Mirrors the
+ * server-side `RruleExhaustedError` in `api-server/src/lib/rruleHelpers.ts`.
+ */
+export class RruleExhaustedError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'RruleExhaustedError';
+    }
+}
+
+/**
  * Parse an rrule string (without DTSTART) into an RRule instance anchored to a given date.
  * DTSTART must be supplied separately because next-action routines set it dynamically
  * to the completion date rather than using a fixed start.
@@ -31,7 +43,7 @@ export function computeNextOccurrence(rruleStr: string, afterDate: Date, include
     const rule = parseRrule(rruleStr, afterDate);
     const next = rule.after(afterDate, includeAnchor);
     if (!next) {
-        throw new Error(`rrule "${rruleStr}" has no occurrence after ${dayjs(afterDate).toISOString()}`);
+        throw new RruleExhaustedError(`rrule "${rruleStr}" has no occurrence after ${dayjs(afterDate).toISOString()}`);
     }
     return next;
 }

@@ -24,8 +24,13 @@ import {
     deleteAndRegenerateFutureItems,
     generateCalendarItemsToHorizon,
     hardDeletePastItems,
+    hasOpenRoutineItem,
+    type OpenItemSyncResult,
     partitionPastItemsByDoneness,
+    persistRoutineTextEdit,
     regenerateFutureItemContent,
+    restoreTrashedRoutineItem,
+    syncOpenItemAfterNextActionEdit,
 } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import { splitRoutine } from '../../db/routineSplit';
@@ -33,16 +38,17 @@ import { useAutosave } from '../../hooks/useAutosave';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
+import { RruleExhaustedError } from '../../lib/rruleUtils';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import { offerUndo } from '../../lib/undoStore';
-import type { EnergyLevel, MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
+import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
 import type { ItemEditorChrome } from '../editItemDialogLogic';
 import { mergeFormGroup } from '../itemEditor/itemEditorLiveMerge';
 import { NotesSection } from '../itemEditor/NotesSection';
 import { ReassignInFlightInline } from '../itemEditor/ReassignInFlightInline';
 import { FrequencyPicker } from '../routines/FrequencyPicker';
-import { isCalendarScheduleChanged, isStartDateChanged } from '../routines/routineEditDecision';
+import { isCalendarScheduleChanged, isNextActionScheduleChanged, isStartDateChanged } from '../routines/routineEditDecision';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import styles from './RoutineEditorBody.module.css';
 
@@ -314,6 +320,8 @@ export interface SaveContext {
  */
 export interface EditDecision {
     scheduleChanged: boolean;
+    /** nextAction analog of `scheduleChanged` — recurrence changed; recomputes the open item's dates instead of regenerating items. */
+    nextActionScheduleChanged: boolean;
     resumeOnSave: boolean;
 }
 
@@ -370,37 +378,71 @@ function isFutureStartDate(startDate: string | undefined): boolean {
     return startDate > todayStr;
 }
 
+/** The before/after pair of an in-place routine edit — the merge baseline and the new truth. */
+interface RoutineEditPair {
+    previous: StoredRoutine;
+    next: StoredRoutine;
+}
+
 /**
  * Edit branch: routine.startDate changed. If any past items are done we split (preserve their
  * schedule); otherwise hard-delete the open past items and update in place, then either
- * regenerate future calendar items or seed the first nextAction item (skipping when the new
- * startDate is in the future — the boot-tick will materialise it).
+ * regenerate future calendar items or restamp/seed the nextAction item (skipping the seed when
+ * the new startDate is in the future — the boot-tick will materialise it).
  *
  * Exported for unit-testing.
  */
-export async function saveEditWithStartDateChange(db: IDBPDatabase<MyDB>, routine: StoredRoutine, ctx: SaveContext): Promise<void> {
+export async function saveEditWithStartDateChange(db: IDBPDatabase<MyDB>, routine: StoredRoutine, ctx: SaveContext): Promise<OpenItemSyncResult | null> {
     const { donePast, nonDonePast } = await partitionPastItemsByDoneness(db, routine.userId, routine._id);
     if (donePast.length > 0) {
         const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
         await splitRoutine(db, routine.userId, routine, buildSplitPatch(ctx), yesterday);
-        return;
+        return null;
     }
     await hardDeletePastItems(db, nonDonePast);
     const updatedRoutine = buildUpdatedRoutine(routine, ctx, true);
     await updateRoutine(db, updatedRoutine);
-    await seedAfterStartDateChange(db, updatedRoutine, ctx);
+    return seedAfterStartDateChange(db, { previous: routine, next: updatedRoutine }, ctx);
 }
 
-/** Regenerates calendar items or seeds the first nextAction item after a startDate-change update. */
-async function seedAfterStartDateChange(db: IDBPDatabase<MyDB>, updatedRoutine: StoredRoutine, ctx: SaveContext): Promise<void> {
+/**
+ * Regenerates calendar items, or syncs the open nextAction item, after a startDate-change update.
+ * A surviving open item (hardDeletePastItems only removes PAST ones — a future-dated open item
+ * survives) is restamped to the new schedule instead of seeding a duplicate beside it; only when
+ * no open item remains is a fresh first item created.
+ */
+async function seedAfterStartDateChange(db: IDBPDatabase<MyDB>, edit: RoutineEditPair, ctx: SaveContext): Promise<OpenItemSyncResult | null> {
     if (ctx.routineType === 'calendar') {
-        await deleteAndRegenerateFutureItems(db, updatedRoutine.userId, updatedRoutine);
-        return;
+        await deleteAndRegenerateFutureItems(db, edit.next.userId, edit.next);
+        return null;
+    }
+    const result = await syncOpenItemAfterNextActionEdit(db, { ...edit, scheduleChanged: true });
+    if (result.outcome !== 'noOpenItem') {
+        return result;
     }
     if (isFutureStartDate(ctx.formStartDate)) {
-        return;
+        return null;
     }
-    await createFirstRoutineItem(db, updatedRoutine.userId, updatedRoutine);
+    // A transformed (waitingFor/inbox/…) survivor still claims the routine's single open slot —
+    // seeding beside it would surface a visible duplicate. Matches the boot-tick's broad guard.
+    if (await hasOpenRoutineItem(db, edit.next.userId, edit.next._id)) {
+        return null;
+    }
+    await seedFirstItemDeactivatingOnExhaustion(db, edit.next);
+    return null;
+}
+
+/** Seeds the first nextAction item; an exhausted rrule (e.g. Ends date already passed) deactivates
+ *  the routine instead of failing the save — same series-over semantics as the disposal path. */
+async function seedFirstItemDeactivatingOnExhaustion(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<void> {
+    try {
+        await createFirstRoutineItem(db, routine.userId, routine);
+    } catch (err) {
+        if (!(err instanceof RruleExhaustedError)) {
+            throw err;
+        }
+        await updateRoutine(db, { ...routine, active: false });
+    }
 }
 
 /**
@@ -410,26 +452,38 @@ async function seedAfterStartDateChange(db: IDBPDatabase<MyDB>, updatedRoutine: 
  *
  * Exported for unit-testing.
  */
-export async function saveEditWithoutStartDateChange(db: IDBPDatabase<MyDB>, routine: StoredRoutine, ctx: SaveContext): Promise<void> {
+export async function saveEditWithoutStartDateChange(db: IDBPDatabase<MyDB>, routine: StoredRoutine, ctx: SaveContext): Promise<OpenItemSyncResult | null> {
     const decision = deriveEditDecision(routine, ctx);
     const hasPastItems = decision.scheduleChanged ? await routineHasPastItems(db, routine.userId, routine._id) : false;
     const splitDate = hasPastItems ? computeSplitDate(routine.rrule, routine.createdTs) : null;
     if (splitDate) {
         await splitRoutine(db, routine.userId, routine, buildSplitPatch(ctx), splitDate);
-        return;
+        return null;
     }
     const updatedRoutine = buildUpdatedRoutine(routine, ctx, decision.resumeOnSave ? true : undefined);
     await updateRoutine(db, updatedRoutine);
-    if (routine.routineType !== 'calendar' || ctx.routineType !== 'calendar') {
-        return;
+    if (routine.routineType === 'calendar' && ctx.routineType === 'calendar') {
+        await regenerateCalendarItemsForSameTypeEdit(db, updatedRoutine, decision);
+        return null;
     }
-    await regenerateCalendarItemsForSameTypeEdit(db, updatedRoutine, decision);
+    if (routine.routineType === 'nextAction' && ctx.routineType === 'nextAction') {
+        return syncOpenItemAfterNextActionEdit(db, {
+            previous: routine,
+            next: updatedRoutine,
+            scheduleChanged: decision.nextActionScheduleChanged,
+        });
+    }
+    // Type switch (nextAction ↔ calendar): old-type items are currently left behind — tracked
+    // as a follow-up task, deliberately out of scope here.
+    return null;
 }
 
 /** Computes the `EditDecision` for an edit (schedule-changed + paused→resume). Pure. */
 function deriveEditDecision(routine: StoredRoutine, ctx: SaveContext): EditDecision {
+    const intent = buildEditIntentFromContext(ctx);
     return {
-        scheduleChanged: isCalendarScheduleChanged(routine, buildEditIntentFromContext(ctx)),
+        scheduleChanged: isCalendarScheduleChanged(routine, intent),
+        nextActionScheduleChanged: isNextActionScheduleChanged(routine, intent),
         resumeOnSave: !routine.active,
     };
 }
@@ -576,12 +630,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         if (!live) {
             return;
         }
-        const { notes: _n, ...restTemplate } = live.template;
-        const nextTemplate = value.notes.trim() ? { ...restTemplate, notes: value.notes } : restTemplate;
-        const updated = await updateRoutine(db, { ...live, title: value.title, template: nextTemplate });
-        if (updated.routineType === 'calendar') {
-            await regenerateFutureItemContent(db, updated.userId, updated);
-        }
+        await persistRoutineTextEdit(db, live, value);
         await onSaved();
     }
 
@@ -720,9 +769,14 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 return;
             }
             if (live) {
-                // No undo snackbar for structural routine saves: a schedule edit may split the
-                // routine or delete+regenerate items — restoring a snapshot can't reverse that.
-                await dispatchEditSameOwner(live, ctx);
+                // No undo snackbar for structural routine saves in general: a schedule edit may
+                // split the routine or delete+regenerate items — restoring a snapshot can't
+                // reverse that. The one exception is the exhausted-schedule trash below, which
+                // is a single reversible item write and MUST be surfaced explicitly.
+                const result = await dispatchEditSameOwner(live, ctx);
+                if (result?.outcome === 'trashedExhausted') {
+                    offerExhaustedTrashUndo(live._id, result.restorable);
+                }
             } else {
                 await saveCreate(db, userId, ctx);
             }
@@ -744,12 +798,11 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
             };
         }
 
-        async function dispatchEditSameOwner(currentRoutine: StoredRoutine, ctx: SaveContext): Promise<void> {
+        async function dispatchEditSameOwner(currentRoutine: StoredRoutine, ctx: SaveContext): Promise<OpenItemSyncResult | null> {
             if (isStartDateChanged(currentRoutine, buildEditIntentFromContext(ctx))) {
-                await saveEditWithStartDateChange(db, currentRoutine, ctx);
-                return;
+                return saveEditWithStartDateChange(db, currentRoutine, ctx);
             }
-            await saveEditWithoutStartDateChange(db, currentRoutine, ctx);
+            return saveEditWithoutStartDateChange(db, currentRoutine, ctx);
         }
 
         function dispatchReassign(currentRoutine: StoredRoutine, ctx: SaveContext): void {
@@ -768,6 +821,24 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
             });
             closeEditor();
         }
+    }
+
+    /**
+     * Explicit snackbar for the exhausted-schedule save: the edited recurrence has no future
+     * occurrence, so the pending next action was trashed and the routine deactivated. Undo
+     * restores the pending item only — the routine stays inactive because its schedule is
+     * genuinely over. Offered before the editor closes; the snackbar is app-global so it
+     * survives the close.
+     */
+    function offerExhaustedTrashUndo(routineId: string, restorable: StoredItem) {
+        offerUndo({
+            key: `routine:${routineId}:exhaustedTrash`,
+            message: 'Schedule ended — the pending next action was moved to trash',
+            undo: async () => {
+                await restoreTrashedRoutineItem(db, restorable);
+                await onSaved();
+            },
+        });
     }
 
     /**

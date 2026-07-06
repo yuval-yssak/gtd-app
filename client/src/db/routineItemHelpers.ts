@@ -3,7 +3,8 @@ import utc from 'dayjs/plugin/utc';
 import type { IDBPDatabase } from 'idb';
 import { RRule } from 'rrule';
 import { getCalendarHorizonMonths } from '../lib/calendarHorizon';
-import { computeNextOccurrence } from '../lib/rruleUtils';
+import { computeFirstOccurrenceDate, mergeRoutineEditIntoOpenItem } from '../lib/routineOpenItemMerge';
+import { computeNextOccurrence, RruleExhaustedError } from '../lib/rruleUtils';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { putItem } from './itemHelpers';
 import { updateRoutine } from './routineMutations';
@@ -91,22 +92,138 @@ export async function createFirstRoutineItem(db: IDBPDatabase<MyDB>, userId: str
     if (!routine.active) {
         return;
     }
-    const todayAsUtcDay = dayjs.utc(dayjs().format('YYYY-MM-DD')).toDate();
-    const startAsUtcDay = routine.startDate ? dayjs.utc(routine.startDate).toDate() : null;
-    const anchor = startAsUtcDay && startAsUtcDay > todayAsUtcDay ? startAsUtcDay : todayAsUtcDay;
-    const nextDueDate = computeNextOccurrence(routine.rrule, anchor, true);
-    const expectedBy = dayjs.utc(nextDueDate).format('YYYY-MM-DD');
+    const expectedBy = computeFirstOccurrenceDate(routine, dayjs().format('YYYY-MM-DD'));
     await persistRoutineItem(db, userId, routine, expectedBy);
+}
+
+// ── Open-item propagation for nextAction routine edits ────────────────────────
+
+/** A routine edit as the open-item sync sees it: pre-edit state, post-edit state, and whether the
+ *  schedule (rrule or startDate) changed — schedule changes recompute the open item's dates. */
+export interface NextActionRoutineEdit {
+    previous: StoredRoutine;
+    next: StoredRoutine;
+    scheduleChanged: boolean;
+}
+
+/** What the open-item sync did — drives the caller's snackbar and create-vs-restamp decisions. */
+export type OpenItemSyncResult =
+    | { outcome: 'noOpenItem' | 'unchanged' | 'updated' }
+    /** The new schedule has no future occurrence: item trashed + routine deactivated.
+     *  `restorable` is the pre-trash snapshot for the undo snackbar. */
+    | { outcome: 'trashedExhausted'; restorable: StoredItem };
+
+/**
+ * Propagates a nextAction routine edit to the routine's open generated item, immediately:
+ * 1. 3-way content merge — template/title/notes fields the user hasn't hand-tweaked on the item
+ *    adopt the new routine values (see `mergeRoutineEditIntoOpenItem`).
+ * 2. When the schedule changed, `expectedBy`/`ignoreBefore` are recomputed unconditionally from
+ *    the new rrule/startDate (schedule edits win over manual date tweaks — agreed semantics).
+ * 3. A schedule with no future occurrence trashes the item and deactivates the routine; the
+ *    caller surfaces this via snackbar.
+ * Only items still in their NATIVE status count — a transformed (waitingFor/inbox/…) item is the
+ * user's own now and is never touched. Paused routines never propagate.
+ */
+export async function syncOpenItemAfterNextActionEdit(db: IDBPDatabase<MyDB>, edit: NextActionRoutineEdit): Promise<OpenItemSyncResult> {
+    if (!edit.next.active) {
+        return { outcome: 'noOpenItem' };
+    }
+    const openItem = await findOpenNextActionItem(db, edit.next.userId, edit.next._id);
+    if (!openItem) {
+        return { outcome: 'noOpenItem' };
+    }
+    const now = dayjs().toISOString();
+    const merged = mergeRoutineEditIntoOpenItem(openItem, { previous: edit.previous, next: edit.next, now });
+    if (!edit.scheduleChanged) {
+        if (!merged) {
+            return { outcome: 'unchanged' };
+        }
+        await persistOpenItemUpdate(db, merged);
+        return { outcome: 'updated' };
+    }
+    return recomputeOpenItemSchedule(db, edit.next, { openItem, contentMerged: merged, now });
+}
+
+/** The routine's open item still in its native `nextAction` status (at most one by invariant). */
+async function findOpenNextActionItem(db: IDBPDatabase<MyDB>, userId: string, routineId: string): Promise<StoredItem | undefined> {
+    const items = await db.getAllFromIndex('items', 'userId', userId);
+    return items.find((i) => i.routineId === routineId && i.status === 'nextAction');
+}
+
+/** True when the routine has ANY open (non-done/non-trash) item — including transformed ones.
+ *  This is the seeding guard ("at most one open item"), deliberately broader than the merge's
+ *  native-status filter: a transformed item blocks new generation but is never edited. */
+export async function hasOpenRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routineId: string): Promise<boolean> {
+    const items = await db.getAllFromIndex('items', 'userId', userId);
+    return items.some((i) => i.routineId === routineId && i.status !== 'done' && i.status !== 'trash');
+}
+
+/**
+ * Persist a title/notes edit onto the routine and propagate it to generated items — the shared
+ * body of the editor's autosave commit. Calendar routines refresh future item content in place;
+ * nextAction routines run the content-only open-item sync. `live` must be the pre-write routine
+ * state: it is the merge baseline, so a debounced burst chains correctly (each commit's baseline
+ * is the routine state the item was last synced against).
+ */
+export async function persistRoutineTextEdit(db: IDBPDatabase<MyDB>, live: StoredRoutine, value: { title: string; notes: string }): Promise<StoredRoutine> {
+    const { notes: _n, ...restTemplate } = live.template;
+    const nextTemplate = value.notes.trim() ? { ...restTemplate, notes: value.notes } : restTemplate;
+    const updated = await updateRoutine(db, { ...live, title: value.title, template: nextTemplate });
+    if (updated.routineType === 'calendar') {
+        await regenerateFutureItemContent(db, updated.userId, updated);
+    } else if (updated.routineType === 'nextAction') {
+        await syncOpenItemAfterNextActionEdit(db, { previous: live, next: updated, scheduleChanged: false });
+    }
+    return updated;
+}
+
+/** Persist an updated open item and queue its sync op — the standard write pair. */
+async function persistOpenItemUpdate(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<void> {
+    await putItem(db, item);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
+}
+
+/**
+ * Re-stamps the open item's `expectedBy`/`ignoreBefore` to the edited schedule's first occurrence
+ * (tickler invariant: both move together). When the new rrule is exhausted, the pending item is
+ * trashed and the routine deactivated — same series-over semantics as the disposal path, but here
+ * the pre-trash snapshot is returned so the UI can offer an undo.
+ */
+async function recomputeOpenItemSchedule(
+    db: IDBPDatabase<MyDB>,
+    routine: StoredRoutine,
+    state: { openItem: StoredItem; contentMerged: StoredItem | null; now: string },
+): Promise<OpenItemSyncResult> {
+    const base = state.contentMerged ?? state.openItem;
+    try {
+        const expectedBy = computeFirstOccurrenceDate(routine, dayjs().format('YYYY-MM-DD'));
+        if (expectedBy === state.openItem.expectedBy && state.openItem.ignoreBefore === expectedBy && !state.contentMerged) {
+            return { outcome: 'unchanged' };
+        }
+        await persistOpenItemUpdate(db, { ...base, expectedBy, ignoreBefore: expectedBy, updatedTs: state.now });
+        return { outcome: 'updated' };
+    } catch (err) {
+        if (!(err instanceof RruleExhaustedError)) {
+            throw err;
+        }
+        await persistOpenItemUpdate(db, { ...state.openItem, status: 'trash', updatedTs: state.now });
+        await updateRoutine(db, { ...routine, active: false });
+        return { outcome: 'trashedExhausted', restorable: state.openItem };
+    }
+}
+
+/** Undo half of the exhausted-schedule trash: put the pre-trash snapshot back (fresh updatedTs so
+ *  LWW wins over the trash op on other devices). The routine stays deactivated — its schedule
+ *  still has no future occurrence; only the pending task is rescued. */
+export async function restoreTrashedRoutineItem(db: IDBPDatabase<MyDB>, preTrashItem: StoredItem): Promise<void> {
+    await persistOpenItemUpdate(db, { ...preTrashItem, updatedTs: dayjs().toISOString() });
 }
 
 // ── Calendar routine helpers ───────────────────────────────────────────────────
 
-/**
- * Thrown when a calendar routine's rrule series is fully exhausted (UNTIL/COUNT reached or all
- * occurrences are in the exception list). Callers catch this to deactivate the routine rather
- * than logging a generic error.
- */
-export class RruleExhaustedError extends Error {}
+// Canonical home is lib/rruleUtils.ts so `computeNextOccurrence` can throw the typed error itself;
+// re-exported here because the disposal/generation callers historically import it from this module.
+export { RruleExhaustedError };
 
 /**
  * Build an RRule anchored to the routine's creation date (UTC midnight) for calendar routines.

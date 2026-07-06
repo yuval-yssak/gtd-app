@@ -20,8 +20,10 @@ interface RoutineEditIntent {
  *
  * This is a regex-based shape comparator (no rrule.js dep) so corrupted UNTIL values like
  * "Invalid Date" don't bypass canonicalization and trip the schedule-changed check.
+ *
+ * MIRROR: api-server/src/lib/rruleCanonical.ts — keep the canonicalization rules in sync.
  */
-function canonicalRruleKey(rruleStr: string) {
+export function canonicalRruleKey(rruleStr: string) {
     const parts = rruleStr.split(';').filter(Boolean);
     const bag = new Map<string, string>();
     for (const part of parts) {
@@ -89,6 +91,20 @@ export function isCalendarScheduleChanged(previous: StoredRoutine, edited: Routi
         return true;
     }
     return previous.calendarItemTemplate?.duration !== edited.duration;
+}
+
+/**
+ * Returns true when a nextAction routine's recurrence changed (canonical rrule comparison). Only
+ * fires for nextAction→nextAction edits — type switches are handled elsewhere, and calendar
+ * routines have their own richer predicate above. Drives the open item's expectedBy/ignoreBefore
+ * recompute: unlike the calendar predicate, a positive here never splits the routine (past
+ * nextAction items are just dated done items — a recurrence rewrite doesn't alter them).
+ */
+export function isNextActionScheduleChanged(previous: StoredRoutine, edited: RoutineEditIntent) {
+    if (previous.routineType !== 'nextAction' || edited.routineType !== 'nextAction') {
+        return false;
+    }
+    return canonicalRruleKey(previous.rrule) !== canonicalRruleKey(edited.rrule);
 }
 
 /**
