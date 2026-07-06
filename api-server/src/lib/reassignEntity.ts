@@ -514,6 +514,10 @@ async function persistRoutineMove(routine: RoutineInterface, params: ReassignPar
     // Destructure to drop the keys entirely (rather than assigning undefined) to keep
     // exactOptionalPropertyTypes happy.
     const { calendarEventId: _ce, calendarIntegrationId: _ci, calendarSyncConfigId: _cs, ...routineWithoutCalLinks } = routine;
+    // No open-item propagation (routineEditPropagation.ts) is needed here, by architecture:
+    // generated items never accompany the routine across accounts — source-side ones are trashed
+    // by the delete cascade, and every target-side item is generated FROM this patched snapshot,
+    // so the edit patch is already the single source of truth for the new owner's items.
     const patched = applyRoutineEditPatch(routineWithoutCalLinks as RoutineInterface, params.editRoutinePatch);
     // Relink template.workContextIds / peopleIds AFTER the edit patch — same rationale as the item
     // path: explicit dialog edits flow through the same find-or-create as snapshot-inherited refs.
