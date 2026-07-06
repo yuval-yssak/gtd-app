@@ -251,6 +251,45 @@ export async function propagateRoutineTitleToItems(routine: RoutineInterface, us
 }
 
 /**
+ * Propagates an in-app content edit (title AND template.notes) to all future calendar items of
+ * the routine, preserving item IDs; per-instance `routineExceptions` overrides win per field.
+ * Mirrors the client's `regenerateFutureItemContent` (routineItemHelpers.ts).
+ *
+ * Deliberately separate from `propagateRoutineTitleToItems` above: that one serves the GCal
+ * inbound path, where notes flow through the description-sync machinery (`lastSyncedNotes`
+ * conflict anchors) and must NOT be blindly stamped from the template. This one serves
+ * PATCH /v1/routines, where the caller explicitly edited the in-app template.
+ */
+export async function propagateRoutineContentToItems(routine: RoutineInterface, userId: string, now: string): Promise<OperationInterface[]> {
+    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+    const items = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+    const futureItems = items.filter((i) => (i.timeStart ?? '') >= todayStr);
+    const exceptions = routine.routineExceptions ?? [];
+    const masterNotes = routine.template.notes;
+
+    const ops = await Promise.all(
+        futureItems.map(async (item) => {
+            const itemId = item._id;
+            if (!itemId) {
+                return null;
+            }
+            const dateStr = (item.timeStart ?? '').slice(0, 10);
+            const override = exceptions.find((e) => e.type === 'modified' && e.date === dateStr);
+            const nextTitle = override?.title ?? routine.title;
+            const nextNotes = override?.notes ?? masterNotes;
+            if (item.title === nextTitle && (item.notes ?? undefined) === (nextNotes ?? undefined)) {
+                return null;
+            }
+            const { notes: _stale, ...rest } = item;
+            const updated: ItemInterface = { ...rest, title: nextTitle, ...(nextNotes ? { notes: nextNotes } : {}), updatedTs: now };
+            await itemsDAO.replaceById(itemId, updated);
+            return recordOperation(userId, { entityType: 'item', entityId: itemId, snapshot: updated, opType: 'update', now });
+        }),
+    );
+    return ops.filter((op): op is OperationInterface => op !== null);
+}
+
+/**
  * Reconciles future calendar items to the routine's current schedule (rrule, timeOfDay, duration),
  * emitting only the DELTA: trashes future live items whose occurrence date the schedule no longer
  * produces (or whose timing/title drifted), and inserts items for newly-required dates. Done +

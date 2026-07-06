@@ -65,3 +65,35 @@ export function isNextActionScheduleChanged(previous: RoutineInterface, next: Ro
     }
     return (previous.startDate ?? '') !== (next.startDate ?? '');
 }
+
+/**
+ * True when a calendar routine edit changed anything that moves generated items' timing: the
+ * recurrence (canonical rrule), the startDate anchor, the all-day flag, or timeOfDay/duration.
+ * A title/notes-only edit returns false — those propagate in place without regenerating items.
+ * Mirrors the client's `isCalendarScheduleChanged` (routineEditDecision.ts) plus the startDate
+ * check the client handles via its separate `isStartDateChanged` dispatch.
+ */
+export function isCalendarScheduleChanged(previous: RoutineInterface, next: RoutineInterface): boolean {
+    if (previous.routineType !== 'calendar' || next.routineType !== 'calendar') {
+        return false;
+    }
+    if (canonicalRruleKey(previous.rrule) !== canonicalRruleKey(next.rrule)) {
+        return true;
+    }
+    if ((previous.startDate ?? '') !== (next.startDate ?? '')) {
+        return true;
+    }
+    const previousAllDay = previous.calendarItemTemplate?.allDay === true;
+    const nextAllDay = next.calendarItemTemplate?.allDay === true;
+    if (previousAllDay !== nextAllDay) {
+        return true;
+    }
+    if (previousAllDay && nextAllDay) {
+        // Both sides all-day → timeOfDay/duration carry no semantic weight.
+        return false;
+    }
+    if (previous.calendarItemTemplate?.timeOfDay !== next.calendarItemTemplate?.timeOfDay) {
+        return true;
+    }
+    return previous.calendarItemTemplate?.duration !== next.calendarItemTemplate?.duration;
+}

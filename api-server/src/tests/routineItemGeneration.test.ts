@@ -297,9 +297,10 @@ describe('PATCH /v1/routines/:id — re-stamp first item on startDate change', (
         expect(after[0]!.expectedBy).toBe(originalExpectedBy);
     });
 
-    it('does not re-stamp a user-edited item (expectedBy !== ignoreBefore)', async () => {
-        // Guard: once a user pulls the tickler off the due date, the item is no longer an untouched
-        // routine-generated first occurrence — a startDate PATCH must not clobber that edit.
+    it('re-stamps even a user-edited item — schedule edits win over manual date tweaks', async () => {
+        // Agreed semantics (routineEditPropagation.ts): a schedule-shaped edit (startDate/rrule)
+        // recomputes the open item's dates unconditionally. The old only-if-untouched guard
+        // (expectedBy === ignoreBefore) is gone.
         const userId = await login();
         const token = await tokenWith(userId, ['routines.write']);
         const routine = await createRoutineViaApi(token, { rrule: 'FREQ=MONTHLY' });
@@ -313,8 +314,8 @@ describe('PATCH /v1/routines/:id — re-stamp first item on startDate change', (
         expect(res.status).toBe(200);
 
         const after = await itemsDAO.findByOwnerAndId(itemId, userId);
-        expect(after?.expectedBy).toBe(before[0]!.expectedBy);
-        expect(after?.ignoreBefore).toBe('2020-01-01');
+        expect(after?.expectedBy).toBe(futureStart);
+        expect(after?.ignoreBefore).toBe(futureStart);
     });
 
     it('rejects clearing startDate via null and leaves the open item untouched', async () => {
@@ -334,9 +335,10 @@ describe('PATCH /v1/routines/:id — re-stamp first item on startDate change', (
         expect(after[0]!.ignoreBefore).toBe(futureStart);
     });
 
-    it('startDate moved past UNTIL: re-stamp deactivates the routine without stranding the item', async () => {
+    it('startDate moved past UNTIL: exhausted schedule trashes the pending item and deactivates', async () => {
         // If the new startDate pushes the first occurrence past the rule's UNTIL, the rule is
-        // exhausted. The re-stamp must route through handleGenerationError → deactivate, never throw.
+        // exhausted. Agreed semantics: the pending item is trashed (explicitly, so the client can
+        // surface it) and the routine deactivates — the PATCH itself never throws.
         // Seed routine + item directly: UNTIL is in the past relative to "today", so going through
         // createRoutineViaApi would exhaust at create time and never materialize a first item.
         const userId = await login();
@@ -367,13 +369,14 @@ describe('PATCH /v1/routines/:id — re-stamp first item on startDate change', (
             updatedTs: '2019-06-15T00:00:00.000Z',
         });
 
-        // startDate after UNTIL → computeNextOccurrence throws RruleExhaustedError inside the re-stamp.
+        // startDate after UNTIL → computeFirstOccurrenceDate throws RruleExhaustedError inside the recompute.
         const res = await patchJson(`/v1/routines/${routineId}`, token, { startDate: '2020-01-01' });
         expect(res.status).toBe(200);
 
-        // Item is left as-is (not re-stamped, not duplicated) and the routine is deactivated.
+        // Pending item trashed (date preserved on the trashed row) and the routine deactivated.
         const after = await getItemsForRoutine(userId, routineId);
-        expect(after.filter((i) => i.status === 'nextAction')).toHaveLength(1);
+        expect(after.filter((i) => i.status === 'nextAction')).toHaveLength(0);
+        expect(after.filter((i) => i.status === 'trash')).toHaveLength(1);
         expect(after[0]!.expectedBy).toBe(seededExpectedBy);
         const stored = await routinesDAO.findByOwnerAndId(routineId, userId);
         expect(stored?.active).toBe(false);

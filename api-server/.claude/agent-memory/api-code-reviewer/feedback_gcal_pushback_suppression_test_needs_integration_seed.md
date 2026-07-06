@@ -1,0 +1,16 @@
+---
+name: gcal-pushback-suppression-test-needs-integration-seed
+description: A suppressGCalPushback regression test asserting provider methods NOT called is non-discriminating unless it seeds a resolvable calendarIntegration + default calendarSyncConfig
+metadata:
+  type: feedback
+---
+
+Any test that guards a `suppressGCalPushback: true` flag by stubbing `buildCalendarProvider` and asserting `provider.updateRecurringInstance/cancelRecurringInstance/...` `.not.toHaveBeenCalled()` is WORTHLESS unless it also seeds an active `calendarIntegrations` row AND an enabled default `calendarSyncConfigs` row for the test user.
+
+**Why:** every per-instance/per-item pushback helper in `calendarPushback.ts` (`pushRoutineInstanceOverride`, `pushRoutineInstanceCancellation`, `pushExistingItemToGCal`, etc.) calls `resolvePushContext(...)` and returns early on `if (!ctx) return;` (lines ~220, ~304). With no integration/config seeded, `resolvePushContext` → `findByOwnerAndIdDecrypted` null → `tryHealStaleLink` → `resolveDefaultPushContext` null → returns null → the provider method is NEVER reached regardless of the suppression flag. So the `not.toHaveBeenCalled()` assertions pass for the WRONG reason (missing integration short-circuit), not because suppression worked. Proven empirically 2026-07-06: stripped `suppressGCalPushback` from routineEditPropagation.ts and the "never layers per-instance overrides" test in v1RoutineEditPropagation.test.ts still passed. Note `beforeEach` in these test files clears user/session/routines/items/operations but NOT calendarIntegrations/calendarSyncConfigs — an easy omission to miss.
+
+**Second silent neutralizer (also seen here):** even WITH the rows, a raw `calendarIntegrationsDAO.insertOne` stores plaintext tokens and `findByOwnerAndIdDecrypted` throws "Invalid encrypted token format" → push dies before the provider. Seed via the test-only `insertEncrypted` instead. So a passing not-called assertion has TWO possible vacuous causes: missing rows, and unencrypted tokens.
+
+**FIXED 2026-07-06** in `v1RoutineEditPropagation.test.ts` describe "GCal-linked calendar routine (pushback suppression)": `seedGCalLink` uses `insertEncrypted` for `integ-1` + enabled default `cfg-1` (timeZone UTC), routine carries `calendarSyncConfigId: 'cfg-1'`, `beforeEach` clears both collections. Settle = `vi.waitFor(updateRecurringEvent)` (master-push positive anchor) then bounded 200ms before the per-instance not-called assertions. Re-verified both ways by the reviewer: flag removed → FAIL (updateRecurringInstance called 63×, instanceEventId reaches the real provider); flag present → PASS. Memo kept as a review checklist for the next pushback-suppression test.
+
+**How to apply:** on any pushback-suppression regression test, (1) verify a resolvable active integration (seeded via `insertEncrypted`, NOT raw insertOne) + default enabled sync config is seeded, and (2) apply the "would it fail without the fix?" bar by actually running the test with the flag removed — it MUST fail. Prefer `vi.waitFor` on the MASTER push (which SHOULD fire) over a bare `setTimeout` settle, so the assertion proves the pipeline ran before asserting per-instance legs were suppressed (see [[project_sync_purge_test_timing_traps]]). Relates to [[project_routine_edit_propagation_gcal_pushback_gap]].
