@@ -35,7 +35,7 @@ export const Route = createFileRoute('/_authenticated/waiting-for')({
 
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
-    const { items, people, routines, workContexts, refreshItems, isInitialSyncing } = useAppData();
+    const { items, people, allPeople, routines, workContexts, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
@@ -47,7 +47,9 @@ function WaitingForPage() {
     // Ghosts are fading leftovers, not open work — the header count reflects live rows only.
     const liveWaitingCount = waitingItems.filter((item) => !isGhost(item)).length;
 
-    const personMap = Object.fromEntries(people.map((p) => [p._id, p.name]));
+    // Unfiltered allPeople: a visible item can be waiting on a hidden account's person — the group
+    // header must still resolve that name instead of falling back to "Unknown".
+    const personMap = Object.fromEntries(allPeople.map((p) => [p._id, p.name]));
 
     // Group by person (or "Unassigned")
     const groups = waitingItems.reduce<Record<string, StoredItem[]>>((acc, item) => {

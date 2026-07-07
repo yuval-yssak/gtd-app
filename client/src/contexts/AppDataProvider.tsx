@@ -1,6 +1,18 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { createContext, type PropsWithChildren, type ReactNode, use, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    createContext,
+    type PropsWithChildren,
+    type ReactNode,
+    use,
+    useCallback,
+    useContext,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    useSyncExternalStore,
+} from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
 import { AppResourceProvider, useAppResource } from '../data/AppResourceProvider';
 import { triggerAppResourceRefresh } from '../data/appResource';
@@ -17,6 +29,7 @@ import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import { filterOutHiddenAccounts, getHiddenAccountIds, subscribeHiddenAccounts } from './hiddenAccounts';
 import { applyOverrideToItem, applyOverrideToRoutine, usePendingReassignMaps } from './PendingReassignProvider';
 import { dispatchSyncIssuesRefresh } from './syncIssuesEvents';
 
@@ -31,10 +44,24 @@ export interface AppData {
     loggedInAccounts: StoredAccount[];
     /** Convenience: same as `loggedInAccounts.map(a => a.id)`. Memoized at the provider level. */
     loggedInUserIds: string[];
+    /**
+     * Display sets — entities from every signed-in account MINUS accounts the user has toggled
+     * out of view (see `hiddenAccounts.ts`). All list pages, pickers, and management pages read
+     * these so one filter covers the whole app.
+     */
     items: StoredItem[];
     workContexts: StoredWorkContext[];
     people: StoredPerson[];
     routines: StoredRoutine[];
+    /**
+     * Unfiltered variants — include entities owned by hidden accounts. Use for by-id resolution
+     * (deep-linked /item/:id and /routine/:id pages, editors' live-row lookups) so an existing
+     * reference never dangles just because its owner account is currently hidden.
+     */
+    allItems: StoredItem[];
+    allWorkContexts: StoredWorkContext[];
+    allPeople: StoredPerson[];
+    allRoutines: StoredRoutine[];
     refreshItems: () => Promise<void>;
     refreshWorkContexts: () => Promise<void>;
     refreshPeople: () => Promise<void>;
@@ -479,7 +506,7 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
     // is rewritten to render under the target account. Touches only fields safe to forge (userId
     // + calendar config refs); the underlying IDB row is unchanged. See PendingReassignProvider.
     const { items: itemOverrides, routines: routineOverrides } = usePendingReassignMaps();
-    const visibleItems = useMemo(() => {
+    const overlaidItems = useMemo(() => {
         if (itemOverrides.size === 0) {
             return items;
         }
@@ -488,7 +515,7 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
             return override ? applyOverrideToItem(item, override) : item;
         });
     }, [items, itemOverrides]);
-    const visibleRoutines = useMemo(() => {
+    const overlaidRoutines = useMemo(() => {
         if (routineOverrides.size === 0) {
             return routines;
         }
@@ -498,15 +525,28 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
         });
     }, [routines, routineOverrides]);
 
+    // Account-visibility filter: applied AFTER the reassign overlay so an item mid-reassign to a
+    // hidden account disappears like the rest of that account's data. The unfiltered (overlaid)
+    // sets stay exposed as all* for by-id resolution — see the AppData interface docs.
+    const hiddenUserIds = useSyncExternalStore(subscribeHiddenAccounts, getHiddenAccountIds);
+    const visibleItems = useMemo(() => filterOutHiddenAccounts(overlaidItems, hiddenUserIds), [overlaidItems, hiddenUserIds]);
+    const visibleRoutines = useMemo(() => filterOutHiddenAccounts(overlaidRoutines, hiddenUserIds), [overlaidRoutines, hiddenUserIds]);
+    const visiblePeople = useMemo(() => filterOutHiddenAccounts(people, hiddenUserIds), [people, hiddenUserIds]);
+    const visibleWorkContexts = useMemo(() => filterOutHiddenAccounts(workContexts, hiddenUserIds), [workContexts, hiddenUserIds]);
+
     const appData: AppData = useMemo(
         () => ({
             ...authBundle,
             items: visibleItems,
-            workContexts,
-            people,
+            workContexts: visibleWorkContexts,
+            people: visiblePeople,
             routines: visibleRoutines,
+            allItems: overlaidItems,
+            allWorkContexts: workContexts,
+            allPeople: people,
+            allRoutines: overlaidRoutines,
         }),
-        [authBundle, visibleItems, workContexts, people, visibleRoutines],
+        [authBundle, visibleItems, visibleWorkContexts, visiblePeople, visibleRoutines, overlaidItems, workContexts, people, overlaidRoutines],
     );
 
     return <AppDataContext.Provider value={appData}>{children}</AppDataContext.Provider>;

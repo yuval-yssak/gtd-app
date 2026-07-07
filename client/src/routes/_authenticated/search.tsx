@@ -38,7 +38,7 @@ function SearchPage() {
     const urlState = Route.useSearch();
     const navigate = useNavigate();
     useListScrollRestoration();
-    const { items, people, workContexts } = useAppData();
+    const { items, people, workContexts, allPeople, allWorkContexts } = useAppData();
 
     // Mirrored from URL so typing stays responsive while URL writes are debounced.
     const [queryInput, setQueryInput] = useState(urlState.q);
@@ -139,8 +139,10 @@ function SearchPage() {
                     items={filtered}
                     visibleColumns={visibleColumns}
                     onVisibleColumnsChange={onColumnsChange}
-                    people={people}
-                    workContexts={workContexts}
+                    // all* (unfiltered): result rows resolve person/context ids to names, and a
+                    // visible item may reference a hidden account's entity.
+                    people={allPeople}
+                    workContexts={allWorkContexts}
                 />
             ) : (
                 <SearchResultsList items={filtered} view={urlState.view} />

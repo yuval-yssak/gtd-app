@@ -177,14 +177,16 @@ export function ItemEditorBody({
     renderActions,
 }: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
-    const { loggedInAccounts, routines, items } = useAppData();
+    // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
+    // when this item's owner account is toggled out of view (editor reached via deep link).
+    const { loggedInAccounts, allRoutines, allItems } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
     const reassignInFlight = isPending('item', item._id);
 
     // Live row — reflects remote sync merges and our own committed autosaves. All persistence
     // paths build on this (never the mount-time `item` prop) so a save can't clobber fields
     // another device changed while the editor was open.
-    const liveItem = items.find((i) => i._id === item._id) ?? item;
+    const liveItem = allItems.find((i) => i._id === item._id) ?? item;
     const liveItemRef = useRef(liveItem);
     liveItemRef.current = liveItem;
 
@@ -772,7 +774,7 @@ export function ItemEditorBody({
 
             {liveItem.routineId && (
                 <Box data-testid="itemEditorRoutineLink">
-                    <RoutineIndicator routineId={liveItem.routineId} routineTitle={routines.find((r) => r._id === liveItem.routineId)?.title} forceChip />
+                    <RoutineIndicator routineId={liveItem.routineId} routineTitle={allRoutines.find((r) => r._id === liveItem.routineId)?.title} forceChip />
                 </Box>
             )}
 

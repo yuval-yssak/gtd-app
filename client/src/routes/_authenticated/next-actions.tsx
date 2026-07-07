@@ -144,7 +144,7 @@ export function buildRowSecondary(item: StoredItem, { showTags, contextsById, pe
 
 function NextActionsPage() {
     const { db } = Route.useRouteContext();
-    const { items, workContexts, people, routines, refreshItems, isInitialSyncing } = useAppData();
+    const { items, workContexts, people, allWorkContexts, allPeople, routines, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
@@ -167,8 +167,10 @@ function NextActionsPage() {
     }
 
     // Lookup maps for resolving an item's workContextIds / peopleIds to names without rescanning the arrays per row.
-    const contextsById = useMemo(() => new Map(workContexts.map((c) => [c._id, c])), [workContexts]);
-    const peopleById = useMemo(() => new Map(people.map((p) => [p._id, p])), [people]);
+    // Built from the unfiltered all* sets: a visible item may reference a hidden account's entity
+    // (cross-account references exist), and its chip must still resolve to a name.
+    const contextsById = useMemo(() => new Map(allWorkContexts.map((c) => [c._id, c])), [allWorkContexts]);
+    const peopleById = useMemo(() => new Map(allPeople.map((p) => [p._id, p])), [allPeople]);
 
     // Filter chips are sorted A→Z at this consumer site only — AppDataProvider keeps stored order for other pages.
     const sortedWorkContexts = useMemo(() => sortByName(workContexts), [workContexts]);

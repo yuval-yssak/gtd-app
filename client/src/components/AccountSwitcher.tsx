@@ -2,7 +2,6 @@ import AddIcon from '@mui/icons-material/Add';
 import CheckIcon from '@mui/icons-material/Check';
 import LogoutIcon from '@mui/icons-material/Logout';
 import Alert from '@mui/material/Alert';
-import Avatar from '@mui/material/Avatar';
 import Backdrop from '@mui/material/Backdrop';
 import CircularProgress from '@mui/material/CircularProgress';
 import Divider from '@mui/material/Divider';
@@ -17,24 +16,16 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { type PendingAction, useAccounts } from '../hooks/useAccounts';
 import { useOnline } from '../hooks/useOnline';
-import type { MyDB, StoredAccount } from '../types/MyDB';
+import type { MyDB } from '../types/MyDB';
+import { AccountAvatar } from './AccountAvatar';
 import styles from './AccountSwitcher.module.css';
+import { AccountVisibilityToggles } from './AccountVisibilityToggles';
 
 const PENDING_LABELS: Record<PendingAction, string> = {
     switching: 'Switching account…',
     signingOut: 'Signing out…',
     signingOutAll: 'Signing out of all accounts…',
 };
-
-function AccountAvatar({ account, size }: { account: StoredAccount | undefined; size: number }) {
-    // fontSize: MUI Avatar default is 1.25rem on 40px = ~0.375 ratio; scale it with size
-    // Inline style used because width/height/fontSize are dynamic — computed from the size prop at runtime
-    return (
-        <Avatar src={account?.image ?? undefined} alt={account?.name ?? 'Account'} style={{ width: size, height: size, fontSize: size * 0.375 }}>
-            {!account?.image && (account?.name?.[0]?.toUpperCase() ?? '?')}
-        </Avatar>
-    );
-}
 
 interface Props {
     db: IDBPDatabase<MyDB>;
@@ -56,6 +47,9 @@ export function AccountSwitcher({ db }: Props) {
 
     return (
         <>
+            {/* Per-account show/hide toggles — rendered here so every AccountSwitcher mount point
+                (sidebar footer + mobile AppBar) gets them without an extra useAccounts fetch. */}
+            <AccountVisibilityToggles accounts={allAccounts} />
             <IconButton onClick={openMenu} size="small" className={styles.menuButton} data-testid="accountSwitcherTrigger">
                 <AccountAvatar account={activeAccount} size={32} />
             </IconButton>

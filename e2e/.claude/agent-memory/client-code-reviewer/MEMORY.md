@@ -2,3 +2,4 @@
 - [Multi-chrome editor refactor pattern](project_multi_chrome_editor_pattern.md) — Items and routines both use Body+Expand+Popover+Dialog+useEditor+page-route; future entity editors will follow this shape.
 - [`window.history.back()` is unsafe for direct-navigation pages](feedback_history_back_unsafe_for_deep_links.md) — Page-mode routes should use `navigate({ to: '/<canonical-list>' })` rather than `window.history.back()`, which exits the app on direct deep-link entry.
 - [Editor unsaved-changes guard only covers router navigation](project_editor_close_gestures_bypass_guard.md) — Dialog backdrop/Escape route around the guard entirely; only page routes + sidebar links prompt.
+- [Cross-tab bridge installed in render body](feedback_cross_tab_bridge_install_in_render.md) — New module-store `ensure*Bridge()` installers get called from render instead of module top-level (canonical: AccountReauthBanner). Flag it.

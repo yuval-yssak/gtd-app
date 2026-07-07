@@ -582,13 +582,15 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
     const [isSaving, startSaving] = useTransition();
     const { options: calendarOptions } = useCalendarOptions();
-    const { loggedInAccounts, routines } = useAppData();
+    // allRoutines (unfiltered): the live-row lookup must keep working when this routine's owner
+    // account is toggled out of view (editor reached via deep link).
+    const { loggedInAccounts, allRoutines } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
 
     // Live row — reflects remote sync merges and our own committed autosaves. Every persistence
     // path builds on this (never the mount-time `routine` prop) so a save can't clobber fields
     // another device changed while the editor was open. Undefined in create mode.
-    const liveRoutine = routine ? (routines.find((r) => r._id === routine._id) ?? routine) : undefined;
+    const liveRoutine = routine ? (allRoutines.find((r) => r._id === routine._id) ?? routine) : undefined;
     const liveRoutineRef = useRef(liveRoutine);
     liveRoutineRef.current = liveRoutine;
 

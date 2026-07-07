@@ -71,12 +71,14 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
 function RoutinePage() {
     const { db } = Route.useRouteContext();
     const { routineId } = Route.useParams();
-    const { account, routines, items, workContexts, people, refreshRoutines, refreshItems } = useAppData();
+    // Unfiltered all* sets: a deep link must resolve even when the routine's owner account is
+    // currently toggled out of view (the user navigated here explicitly).
+    const { account, allRoutines, allItems, allWorkContexts, allPeople, refreshRoutines, refreshItems } = useAppData();
     const historyBackOr = useNavigateBack();
     // The scroll surface keeps the list's offset across the route change — start the form at the top.
     useScrollToTopOnMount();
 
-    const routine = routines.find((r) => r._id === routineId) ?? null;
+    const routine = allRoutines.find((r) => r._id === routineId) ?? null;
     const goBack = () => historyBackOr('/routines');
 
     if (!routine || !account) {
@@ -107,14 +109,14 @@ function RoutinePage() {
     return (
         <Box className={styles.page} data-testid="routinePageWrapper">
             <PageHeader title="Edit routine" onBack={goBack} idForCopy={routine._id} />
-            <NextItemLink routine={routine} items={items} />
+            <NextItemLink routine={routine} items={allItems} />
             <Paper variant="outlined" className={styles.card}>
                 <RoutineEditorBody
                     key={routine._id}
                     db={db}
                     userId={account.id}
-                    workContexts={workContexts}
-                    people={people}
+                    workContexts={allWorkContexts}
+                    people={allPeople}
                     routine={routine}
                     onClose={goBack}
                     onSaved={onSaved}

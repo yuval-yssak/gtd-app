@@ -1,0 +1,26 @@
+.toggleRow {
+    display: inline-flex;
+    align-items: center;
+}
+
+/* Colored ring ties each toggle avatar to the account colour used by AccountChip on list rows */
+.avatarRing {
+    display: inline-flex;
+    border: 0.125rem solid;
+    border-radius: 50%;
+    padding: 0.0625rem;
+    transition:
+        opacity 0.15s ease,
+        filter 0.15s ease;
+}
+
+/* Hidden accounts render dimmed + desaturated so the toggle state is readable at a glance */
+.avatarHidden {
+    opacity: 0.35;
+    filter: grayscale(0.9);
+}
+
+.hiddenBadgeIcon {
+    font-size: 0.875rem;
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+}

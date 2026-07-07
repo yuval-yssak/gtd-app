@@ -73,12 +73,14 @@ function ItemPage() {
     const { db } = Route.useRouteContext();
     const { itemId } = Route.useParams();
     const { status: initialStatus } = Route.useSearch();
-    const { items, workContexts, people, refreshItems } = useAppData();
+    // Unfiltered all* sets: a deep link must resolve even when the item's owner account is
+    // currently toggled out of view (the user navigated here explicitly).
+    const { allItems, allWorkContexts, allPeople, refreshItems } = useAppData();
     const historyBackOr = useNavigateBack();
     // The scroll surface keeps the list's offset across the route change — start the form at the top.
     useScrollToTopOnMount();
 
-    const item = items.find((i) => i._id === itemId) ?? null;
+    const item = allItems.find((i) => i._id === itemId) ?? null;
 
     // Page mode doesn't use useItemEditor, so we own a tiny local snackbar slot to surface the
     // fromGmail-read-only warning when the body's done-transition save fires the callback.
@@ -167,8 +169,8 @@ function ItemPage() {
                     key={item._id}
                     item={item}
                     db={db}
-                    people={people}
-                    workContexts={workContexts}
+                    people={allPeople}
+                    workContexts={allWorkContexts}
                     onClose={goBack}
                     onSaved={refreshItems}
                     onFromGmailReadOnly={onFromGmailReadOnly}
