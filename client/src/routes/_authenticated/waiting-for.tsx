@@ -10,10 +10,12 @@ import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import Snackbar from '@mui/material/Snackbar';
 import { useTheme } from '@mui/material/styles';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
@@ -26,15 +28,20 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { groupByWaitingForPerson, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../../lib/waitingForGroups';
+import { parseWaitingForSearch } from '../../lib/waitingForUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-waiting-for.module.css';
 
 export const Route = createFileRoute('/_authenticated/waiting-for')({
     component: WaitingForPage,
+    validateSearch: parseWaitingForSearch,
 });
 
 function WaitingForPage() {
     const { db } = Route.useRouteContext();
+    const { sortBy = 'person' } = Route.useSearch();
+    const navigate = useNavigate();
     const { items, people, allPeople, routines, workContexts, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -51,12 +58,15 @@ function WaitingForPage() {
     // header must still resolve that name instead of falling back to "Unknown".
     const personMap = Object.fromEntries(allPeople.map((p) => [p._id, p.name]));
 
-    // Group by person (or "Unassigned")
-    const groups = waitingItems.reduce<Record<string, StoredItem[]>>((acc, item) => {
-        const key = item.waitingForPersonId ?? '__none__';
-        acc[key] = [...(acc[key] ?? []), item];
-        return acc;
-    }, {});
+    // Group by person (or "Unassigned"), then order the groups A→Z by resolved name —
+    // "Unassigned" sorts last since it isn't a real name.
+    const groups = groupByWaitingForPerson(waitingItems);
+    const sortedGroupEntries = sortGroupEntriesByPersonName(groups, personMap);
+
+    function onSortByChanged(value: 'person' | 'date' | null) {
+        if (!value) return;
+        void navigate({ to: '/waiting-for', search: { sortBy: value === 'person' ? undefined : value }, replace: true });
+    }
 
     async function onReceived(item: StoredItem) {
         await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
@@ -64,6 +74,64 @@ function WaitingForPage() {
     }
 
     const isOverdue = (item: StoredItem) => item.expectedBy !== undefined && item.expectedBy < dayjs().format('YYYY-MM-DD');
+
+    function renderItemList(rowItems: StoredItem[]) {
+        return (
+            <List disablePadding className={styles.list}>
+                {rowItems.map((item, idx) => (
+                    <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
+                        <ListItem
+                            disablePadding
+                            className={styles.item}
+                            secondaryAction={
+                                <Box className={styles.actionButtons}>
+                                    <CopyIdButton id={item._id} testId="waitingForItemCopyIdButton" />
+                                    <Tooltip title="Edit">
+                                        <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="waitingForItemEditButton">
+                                            <EditIcon fontSize="small" />
+                                        </IconButton>
+                                    </Tooltip>
+                                    <Tooltip title="Received">
+                                        <IconButton size="small" color="success" onClick={() => void onReceived(item)}>
+                                            <CheckCircleOutlineIcon />
+                                        </IconButton>
+                                    </Tooltip>
+                                </Box>
+                            }
+                        >
+                            <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="waitingForItemRow">
+                                <ListItemText
+                                    primary={
+                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                            <span>{item.title}</span>
+                                            {item.routineId && (
+                                                <RoutineIndicator
+                                                    routineId={item.routineId}
+                                                    routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                />
+                                            )}
+                                            <AccountChip userId={item.userId} />
+                                        </Box>
+                                    }
+                                    secondary={
+                                        item.expectedBy ? (
+                                            <Typography component="span" variant="caption" color={isOverdue(item) ? 'error' : 'text.secondary'}>
+                                                Expected by {dayjs(item.expectedBy).format('MMM D')}
+                                                {isOverdue(item) && ' — overdue'}
+                                            </Typography>
+                                        ) : undefined
+                                    }
+                                    className={styles.listItemText}
+                                />
+                            </ListItemButton>
+                        </ListItem>
+                        {editor.renderExpandFor(item._id)}
+                        {idx < rowItems.length - 1 && <Divider />}
+                    </ListRowShell>
+                ))}
+            </List>
+        );
+    }
 
     if (waitingItems.length === 0) {
         return (
@@ -115,78 +183,38 @@ function WaitingForPage() {
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
             </Box>
-            {Object.entries(groups).map(([personId, groupItems]) => (
-                <Box
-                    key={personId}
-                    sx={{
-                        mb: 3,
-                    }}
-                >
-                    <Typography
-                        variant="subtitle2"
-                        sx={{
-                            color: 'text.secondary',
-                            fontWeight: 600,
-                            mb: 1,
-                        }}
-                    >
-                        {personId === '__none__' ? 'Unassigned' : (personMap[personId] ?? 'Unknown')}
-                    </Typography>
-                    <List disablePadding className={styles.list}>
-                        {groupItems.map((item, idx) => (
-                            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
-                                <ListItem
-                                    disablePadding
-                                    className={styles.item}
-                                    secondaryAction={
-                                        <Box className={styles.actionButtons}>
-                                            <CopyIdButton id={item._id} testId="waitingForItemCopyIdButton" />
-                                            <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="waitingForItemEditButton">
-                                                    <EditIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Received">
-                                                <IconButton size="small" color="success" onClick={() => void onReceived(item)}>
-                                                    <CheckCircleOutlineIcon />
-                                                </IconButton>
-                                            </Tooltip>
-                                        </Box>
-                                    }
-                                >
-                                    <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="waitingForItemRow">
-                                        <ListItemText
-                                            primary={
-                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                    <span>{item.title}</span>
-                                                    {item.routineId && (
-                                                        <RoutineIndicator
-                                                            routineId={item.routineId}
-                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                        />
-                                                    )}
-                                                    <AccountChip userId={item.userId} />
-                                                </Box>
-                                            }
-                                            secondary={
-                                                item.expectedBy ? (
-                                                    <Typography component="span" variant="caption" color={isOverdue(item) ? 'error' : 'text.secondary'}>
-                                                        Expected by {dayjs(item.expectedBy).format('MMM D')}
-                                                        {isOverdue(item) && ' — overdue'}
-                                                    </Typography>
-                                                ) : undefined
-                                            }
-                                            className={styles.listItemText}
-                                        />
-                                    </ListItemButton>
-                                </ListItem>
-                                {editor.renderExpandFor(item._id)}
-                                {idx < groupItems.length - 1 && <Divider />}
-                            </ListRowShell>
-                        ))}
-                    </List>
-                </Box>
-            ))}
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
+                <ToggleButtonGroup size="small" value={sortBy} exclusive onChange={(_, value: 'person' | 'date' | null) => onSortByChanged(value)}>
+                    <ToggleButton value="person" aria-label="Sort by person" data-testid="waitingForSortByPerson">
+                        Person
+                    </ToggleButton>
+                    <ToggleButton value="date" aria-label="Sort by date" data-testid="waitingForSortByDate">
+                        Date
+                    </ToggleButton>
+                </ToggleButtonGroup>
+            </Box>
+            {sortBy === 'date'
+                ? renderItemList(waitingItems)
+                : sortedGroupEntries.map(([personId, groupItems]) => (
+                      <Box
+                          key={personId}
+                          sx={{
+                              mb: 3,
+                          }}
+                      >
+                          <Typography
+                              variant="subtitle2"
+                              sx={{
+                                  color: 'text.secondary',
+                                  fontWeight: 600,
+                                  mb: 1,
+                              }}
+                          >
+                              {personId === UNASSIGNED_GROUP_KEY ? 'Unassigned' : (personMap[personId] ?? 'Unknown')}
+                          </Typography>
+                          {renderItemList(groupItems)}
+                      </Box>
+                  ))}
             {editor.renderGlobal()}
             <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
         </Box>

@@ -47,6 +47,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } from '../../db/draftHelpers';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
+import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -259,6 +260,7 @@ function InboxPage() {
     const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const captureFieldRef = useAutoFocus();
 
     // Inbox is the only page where 'instant' fires the no-fields nextAction shortcut.
     const editor = useItemEditor({ db, people, workContexts, refreshItems, allowInstantNextAction: true, isMobile });
@@ -414,6 +416,7 @@ function InboxPage() {
                     onChange={(e) => onCaptureFieldsChange(e.target.value, notes)}
                     onKeyDown={onKeyDown}
                     slotProps={{
+                        htmlInput: { ref: captureFieldRef },
                         input: {
                             endAdornment: (
                                 <InputAdornment position="end">

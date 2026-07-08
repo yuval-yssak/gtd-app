@@ -8,6 +8,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { ALL_STATUSES, STATUS_LABELS } from '../../lib/itemSearch';
 import type { SearchUrlState } from '../../lib/searchUrlParams';
 import { DEFAULT_URL_STATE, isDateField } from '../../lib/searchUrlParams';
@@ -38,6 +39,8 @@ const isFilterActive = (state: SearchUrlState) => {
 };
 
 export function SearchFilters({ urlState, queryInput, onQueryInputChange, onUrlStateChange, onReset, people, workContexts, activeStatuses }: Props) {
+    const queryFieldRef = useAutoFocus();
+
     const toggleStatus = (status: StoredItem['status']) => {
         const next = new Set(activeStatuses);
         if (next.has(status)) {
@@ -59,6 +62,7 @@ export function SearchFilters({ urlState, queryInput, onQueryInputChange, onUrlS
                 onChange={(e) => onQueryInputChange(e.target.value)}
                 size="small"
                 slotProps={{
+                    htmlInput: { ref: queryFieldRef },
                     input: {
                         startAdornment: (
                             <InputAdornment position="start">

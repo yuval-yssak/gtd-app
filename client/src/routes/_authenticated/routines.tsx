@@ -33,6 +33,7 @@ import { useRoutineEditor } from '../../components/routineEditor/useRoutineEdito
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
+import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { filterRoutinesByTitle, groupRoutines } from '../../lib/routineGrouping';
 import { parseRoutinesSearch } from '../../lib/routinesUrlParams';
@@ -49,6 +50,7 @@ function RoutinesPage() {
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
     const navigate = useNavigate();
+    const searchFieldRef = useAutoFocus();
     useListScrollRestoration();
     const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh, isInitialSyncing, isCalendarSyncing } = useAppData();
     const theme = useTheme();
@@ -229,7 +231,7 @@ function RoutinesPage() {
                     value={q ?? ''}
                     onChange={(e) => onSearchChanged(e.target.value)}
                     className={styles.searchField}
-                    slotProps={{ htmlInput: { 'data-testid': 'routinesSearchInput' } }}
+                    slotProps={{ htmlInput: { ref: searchFieldRef, 'data-testid': 'routinesSearchInput' } }}
                 />
             )}
             {sections.length === 0
