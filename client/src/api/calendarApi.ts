@@ -56,6 +56,26 @@ export async function syncIntegration(integrationId: string): Promise<void> {
     await apiFetch(`/calendar/integrations/${integrationId}/sync`, { method: 'POST' });
 }
 
+/** Per-category counts returned by the server's stranded-marker relink sweep. */
+export interface RelinkSweepCounts {
+    relinkedItems: number;
+    relinkedRoutines: number;
+    recreatedEvents: number;
+    trashedItems: number;
+    deactivatedRoutines: number;
+    clearedMarkers: number;
+}
+
+/**
+ * Runs the active relink sweep for the session user's calendar integrations: entities stranded with
+ * `lastKnown*` markers (disconnect + reconnect where the event never re-arrived through a sync
+ * window) are resolved by fetching each event directly by id. Idempotent — safe to run any time.
+ */
+export async function relinkCalendarMarkers(): Promise<RelinkSweepCounts> {
+    const res = await apiFetch('/maintenance/relink-calendar-markers', { method: 'POST' });
+    return res.json();
+}
+
 export async function deleteIntegration(integrationId: string, action: UnlinkAction): Promise<void> {
     await apiFetch(`/calendar/integrations/${integrationId}?action=${action}`, { method: 'DELETE' });
 }

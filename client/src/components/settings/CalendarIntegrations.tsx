@@ -34,6 +34,8 @@ import {
     type GoogleCalendar,
     initiateGoogleCalendarAuth,
     listCalendars,
+    type RelinkSweepCounts,
+    relinkCalendarMarkers,
     syncIntegration,
     type UnlinkAction,
     updateSyncConfig,
@@ -410,6 +412,64 @@ function useSyncNow(
     return { onSyncNow, isSyncing, syncError };
 }
 
+/**
+ * Human-readable one-liner for the relink sweep's counts. Exported for unit tests.
+ * Repaired categories are listed; an all-zero sweep reads as "nothing needed repair".
+ */
+export function summarizeRepair(counts: RelinkSweepCounts): string {
+    const parts = [
+        counts.relinkedItems > 0 ? `${counts.relinkedItems} item${counts.relinkedItems === 1 ? '' : 's'} relinked` : null,
+        counts.relinkedRoutines > 0 ? `${counts.relinkedRoutines} routine${counts.relinkedRoutines === 1 ? '' : 's'} relinked` : null,
+        counts.recreatedEvents > 0 ? `${counts.recreatedEvents} event${counts.recreatedEvents === 1 ? '' : 's'} recreated on Google` : null,
+        counts.trashedItems > 0 ? `${counts.trashedItems} cancelled item${counts.trashedItems === 1 ? '' : 's'} trashed` : null,
+        counts.deactivatedRoutines > 0 ? `${counts.deactivatedRoutines} ended routine${counts.deactivatedRoutines === 1 ? '' : 's'} paused` : null,
+        counts.clearedMarkers > 0 ? `${counts.clearedMarkers} stale link${counts.clearedMarkers === 1 ? '' : 's'} cleared` : null,
+    ].filter((part): part is string => part !== null);
+    return parts.length > 0 ? `Repaired: ${parts.join(', ')}.` : 'Everything is already linked — nothing needed repair.';
+}
+
+/**
+ * Wraps the repair-sync action (the server's stranded-marker relink sweep) with loading, error, and
+ * result-summary state. The sweep is account-wide, so it runs under the row's pinned account session
+ * and is idempotent — safe to click repeatedly.
+ */
+function useRepairSync(withActiveAccountSession: WithActiveAccountSession): {
+    onRepair: () => void;
+    isRepairing: boolean;
+    repairError: string | null;
+    repairSummary: string | null;
+} {
+    const [isRepairing, setIsRepairing] = useState(false);
+    const [repairError, setRepairError] = useState<string | null>(null);
+    const [repairSummary, setRepairSummary] = useState<string | null>(null);
+    const { syncAndRefresh } = useAppData();
+    const isMountedRef = useRef(true);
+    useEffect(
+        () => () => {
+            isMountedRef.current = false;
+        },
+        [],
+    );
+
+    const onRepair = useCallback(async () => {
+        setIsRepairing(true);
+        setRepairError(null);
+        setRepairSummary(null);
+        try {
+            const counts = await withActiveAccountSession(() => relinkCalendarMarkers());
+            // Pull the repair ops into IDB so the healed items/routines show up immediately.
+            await syncAndRefresh();
+            if (isMountedRef.current) setRepairSummary(summarizeRepair(counts));
+        } catch {
+            if (isMountedRef.current) setRepairError('Repair failed. Please try again.');
+        } finally {
+            if (isMountedRef.current) setIsRepairing(false);
+        }
+    }, [syncAndRefresh, withActiveAccountSession]);
+
+    return { onRepair, isRepairing, repairError, repairSummary };
+}
+
 function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withActiveAccountSession }: IntegrationRowProps) {
     const { integration, calendars } = detail;
     const { configs, setConfigs } = useLocalSyncConfigs(detail.syncConfigs);
@@ -422,6 +482,7 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
         withActiveAccountSession,
     });
     const { onSyncNow, isSyncing, syncError } = useSyncNow(integration._id, withActiveAccountSession);
+    const { onRepair, isRepairing, repairError, repairSummary } = useRepairSync(withActiveAccountSession);
     const [isDisconnectOpen, setIsDisconnectOpen] = useState(false);
     const [isAddCalendarOpen, setIsAddCalendarOpen] = useState(false);
     const { syncAndRefresh } = useAppData();
@@ -438,7 +499,7 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
     const availableToAdd = (calendars ?? []).filter((c) => !syncedCalendarIds.has(c.id));
 
     const connectedSince = dayjs(integration.createdTs).format('MMM D, YYYY');
-    const errorMessage = calendarFetchError ?? actionError ?? syncError;
+    const errorMessage = calendarFetchError ?? actionError ?? syncError ?? repairError;
     // Step 2: integrations require an explicit calendar choice. If the user dismissed the
     // post-OAuth dialog without picking one, surface a "choose one" CTA so they can resume.
     const hasNoCalendarChosen = configs.length === 0;
@@ -487,9 +548,15 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
             )}
             <IntegrationActions
                 isSyncing={isSyncing}
+                isRepairing={isRepairing}
                 hasAvailableCalendars={availableToAdd.length > 0}
-                actions={{ onSyncNow, onAddCalendar: () => setIsAddCalendarOpen(true), onDisconnect: () => setIsDisconnectOpen(true) }}
+                actions={{ onSyncNow, onRepair, onAddCalendar: () => setIsAddCalendarOpen(true), onDisconnect: () => setIsDisconnectOpen(true) }}
             />
+            {repairSummary && (
+                <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 1 }} data-testid="repairSyncSummary">
+                    {repairSummary}
+                </Typography>
+            )}
             <DisconnectDialog
                 open={isDisconnectOpen}
                 integrationId={integration._id}
@@ -538,19 +605,21 @@ function NoCalendarChosenRow({ onChooseCalendar }: { onChooseCalendar: () => voi
 
 interface IntegrationRowActions {
     onSyncNow: () => void;
+    onRepair: () => void;
     onAddCalendar: () => void;
     onDisconnect: () => void;
 }
 
 interface IntegrationActionsProps {
     isSyncing: boolean;
+    isRepairing: boolean;
     hasAvailableCalendars: boolean;
     actions: IntegrationRowActions;
 }
 
-function IntegrationActions({ isSyncing, hasAvailableCalendars, actions }: IntegrationActionsProps) {
+function IntegrationActions({ isSyncing, isRepairing, hasAvailableCalendars, actions }: IntegrationActionsProps) {
     return (
-        <Box sx={{ display: 'flex', gap: 1, mt: 1.5 }}>
+        <Box sx={{ display: 'flex', gap: 1, mt: 1.5, flexWrap: 'wrap' }}>
             {hasAvailableCalendars && (
                 <Button variant="outlined" size="small" onClick={actions.onAddCalendar}>
                     Add calendar
@@ -559,6 +628,10 @@ function IntegrationActions({ isSyncing, hasAvailableCalendars, actions }: Integ
             <Button variant="outlined" size="small" onClick={actions.onSyncNow} disabled={isSyncing}>
                 {isSyncing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
                 {isSyncing ? 'Syncing…' : 'Sync now'}
+            </Button>
+            <Button variant="outlined" size="small" onClick={actions.onRepair} disabled={isRepairing} data-testid="repairSyncButton">
+                {isRepairing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
+                {isRepairing ? 'Repairing…' : 'Repair sync'}
             </Button>
             <Button variant="outlined" size="small" color="error" onClick={actions.onDisconnect}>
                 Disconnect

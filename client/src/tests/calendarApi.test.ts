@@ -6,7 +6,7 @@
  * Mirrors the structure of `pushApi.test.ts` — global fetch is replaced per-test, then restored.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { deleteIntegration, initiateGoogleCalendarAuth, rsvpOnline, type UnlinkAction } from '../api/calendarApi';
+import { deleteIntegration, initiateGoogleCalendarAuth, relinkCalendarMarkers, rsvpOnline, type UnlinkAction } from '../api/calendarApi';
 import { authClient } from '../lib/authClient';
 import type { StoredItem } from '../types/MyDB';
 
@@ -195,6 +195,29 @@ describe('deleteIntegration', () => {
     it('throws when the server responds with a non-OK status so the UI can surface an error', async () => {
         fetchSpy.mockImplementationOnce(() => Promise.resolve(new Response('boom', { status: 500 })));
         await expect(deleteIntegration('int-3', 'keepLinkedEntities')).rejects.toThrow(/500/);
+    });
+});
+
+describe('relinkCalendarMarkers', () => {
+    it('POSTs to /maintenance/relink-calendar-markers with credentials and returns the counts', async () => {
+        const counts = { relinkedItems: 2, relinkedRoutines: 1, recreatedEvents: 0, trashedItems: 1, deactivatedRoutines: 0, clearedMarkers: 0 };
+        fetchSpy.mockImplementationOnce((input, init) => {
+            recordFetchCall(input as RequestInfo, init as RequestInit);
+            return Promise.resolve(makeJsonResponse(counts));
+        });
+
+        const result = await relinkCalendarMarkers();
+        expect(fetchCalls).toHaveLength(1);
+        expect(fetchCalls[0]?.init?.method).toBe('POST');
+        expect(fetchCalls[0]?.init?.credentials).toBe('include');
+        const url = new URL(fetchCalls[0]?.url ?? '', 'http://placeholder');
+        expect(url.pathname).toBe('/maintenance/relink-calendar-markers');
+        expect(result).toEqual(counts);
+    });
+
+    it('throws on a non-OK status so the Repair button can surface an error', async () => {
+        fetchSpy.mockImplementationOnce(() => Promise.resolve(new Response('boom', { status: 502 })));
+        await expect(relinkCalendarMarkers()).rejects.toThrow(/502/);
     });
 });
 
