@@ -14,6 +14,7 @@ import {
     useSyncExternalStore,
 } from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
+import { SyncAuthError } from '../api/syncClient';
 import { AppResourceProvider, useAppResource } from '../data/AppResourceProvider';
 import { triggerAppResourceRefresh } from '../data/appResource';
 import { getInitialAuthBundle } from '../data/initialAuthBundle';
@@ -29,6 +30,7 @@ import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import { dispatchAccountNeedsReauth } from './accountReauthEvents';
 import { filterOutHiddenAccounts, getHiddenAccountIds, subscribeHiddenAccounts } from './hiddenAccounts';
 import { applyOverrideToItem, applyOverrideToRoutine, usePendingReassignMaps } from './PendingReassignProvider';
 import { dispatchSyncIssuesRefresh } from './syncIssuesEvents';
@@ -313,6 +315,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     triggerAppResourceRefresh('all');
                     dispatchSyncIssuesRefresh();
                 } catch (err) {
+                    if (err instanceof SyncAuthError) {
+                        console.warn(`[sse] session for ${userId} expired mid-sync — flagging for reauth`);
+                        dispatchAccountNeedsReauth(userId);
+                        return;
+                    }
                     console.error('[sse] per-user sync failed:', err);
                 }
             })();
@@ -321,11 +328,16 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     );
 
     // When the SW handles a push event it updates IndexedDB and then messages open tabs.
-    // Without this listener the tab only sees fresh data after the next mount.
+    // Without this listener the tab only sees fresh data after the next mount. The SW also
+    // messages 'account-needs-reauth' when its background pull/flush hits a 401 — the SW has no
+    // `window` to call dispatchAccountNeedsReauth itself (see serviceWorker.ts).
     const onSwMessage = useCallback(
         (event: MessageEvent) => {
-            if (event.data?.type === 'sync-complete') {
+            const data = event.data as { type?: unknown; userId?: unknown } | undefined;
+            if (data?.type === 'sync-complete') {
                 syncAndRefresh().catch((err) => console.error('[sw-push] sync failed:', err));
+            } else if (data?.type === 'account-needs-reauth' && typeof data.userId === 'string') {
+                dispatchAccountNeedsReauth(data.userId);
             }
         },
         [syncAndRefresh],
@@ -466,7 +478,18 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             // sync was in flight when the device went offline; a blocked syncAndRefresh would
             // silently drop the flush and leave queued ops stranded. flushSyncQueue has its own
             // concurrency guard (flushInFlight) so calling it here alongside syncAndRefresh is safe.
-            flushSyncQueue(db).catch((err) => console.error('[online] flush failed:', err));
+            // This flush is unscoped (no userIdFilter), so a 401 can't be attributed to a single
+            // account — best-effort flag the currently active one; syncAndRefresh's per-user pass
+            // (via syncOneUser) is the authoritative place that flags the right account regardless.
+            flushSyncQueue(db).catch(async (err) => {
+                console.error('[online] flush failed:', err);
+                if (err instanceof SyncAuthError) {
+                    const activeAcct = await getActiveAccount(db);
+                    if (activeAcct) {
+                        dispatchAccountNeedsReauth(activeAcct.id);
+                    }
+                }
+            });
             syncAndRefresh().catch((err) => console.error('[online] sync failed:', err));
             getOrCreateDeviceId(db).then((deviceId) => {
                 openSseConnections(onSseUpdateForUser, deviceId, loggedInUserIdsRef.current);

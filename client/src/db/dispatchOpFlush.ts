@@ -1,4 +1,6 @@
 import type { IDBPDatabase } from 'idb';
+import { SyncAuthError } from '../api/syncClient';
+import { dispatchAccountNeedsReauth } from '../contexts/accountReauthEvents';
 import type { MyDB } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import { syncSingleUser } from './multiUserSync';
@@ -25,5 +27,16 @@ import { flushSyncQueue } from './syncHelpers';
 export async function dispatchOpFlush(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     const active = await getActiveAccount(db);
     const sameAccount = active?.id === userId;
-    return sameAccount ? flushSyncQueue(db, { userIdFilter: userId }) : syncSingleUser(db, userId);
+    if (!sameAccount) {
+        return syncSingleUser(db, userId);
+    }
+    try {
+        await flushSyncQueue(db, { userIdFilter: userId });
+    } catch (err) {
+        if (err instanceof SyncAuthError) {
+            dispatchAccountNeedsReauth(userId);
+            return;
+        }
+        throw err;
+    }
 }

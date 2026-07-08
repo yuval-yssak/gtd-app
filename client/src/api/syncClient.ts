@@ -1,5 +1,8 @@
 import { API_SERVER } from '../constants/globals';
 import type { EntityType, OpType, SyncOperation } from '../types/MyDB';
+import { SyncAuthError } from './syncAuthError';
+
+export { SyncAuthError } from './syncAuthError';
 
 // ── Shared server-facing types ────────────────────────────────────────────────
 // Exported so syncHelpers.ts can reference them without importing from this path directly.
@@ -35,6 +38,13 @@ export interface PullPayload {
 // fresh — see api-server/src/auth/middleware.ts.
 const DEVICE_ID_HEADER = 'X-Device-Id';
 
+function throwForStatus(res: Response, context: string): never {
+    if (res.status === 401) {
+        throw new SyncAuthError(context);
+    }
+    throw new Error(`${context} ${res.status}`);
+}
+
 export async function pushSyncOps(deviceId: string, ops: SyncOperation[]): Promise<void> {
     const res = await fetch(`${API_SERVER}/sync/push`, {
         method: 'POST',
@@ -42,7 +52,7 @@ export async function pushSyncOps(deviceId: string, ops: SyncOperation[]): Promi
         headers: { 'Content-Type': 'application/json', [DEVICE_ID_HEADER]: deviceId },
         body: JSON.stringify({ deviceId, ops }),
     });
-    if (!res.ok) throw new Error(`POST /sync/push ${res.status}`);
+    if (!res.ok) throwForStatus(res, 'POST /sync/push');
 }
 
 export async function fetchBootstrap(deviceId: string): Promise<BootstrapPayload> {
@@ -53,7 +63,7 @@ export async function fetchBootstrap(deviceId: string): Promise<BootstrapPayload
         credentials: 'include',
         headers: { [DEVICE_ID_HEADER]: deviceId },
     });
-    if (!res.ok) throw new Error(`GET /sync/bootstrap ${res.status}`);
+    if (!res.ok) throwForStatus(res, 'GET /sync/bootstrap');
     return res.json() as Promise<BootstrapPayload>;
 }
 
@@ -68,7 +78,7 @@ export async function fetchSyncOps(since: string, sinceId: string, ackedTs: stri
         credentials: 'include',
         headers: { [DEVICE_ID_HEADER]: deviceId },
     });
-    if (!res.ok) throw new Error(`GET /sync/pull ${res.status}`);
+    if (!res.ok) throwForStatus(res, 'GET /sync/pull');
     return res.json() as Promise<PullPayload>;
 }
 

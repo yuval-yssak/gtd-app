@@ -21,7 +21,7 @@ vi.mock('../lib/authClient', () => {
 });
 
 import dayjs from 'dayjs';
-import { fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import { fetchSyncOps, pushSyncOps, SyncAuthError } from '#api/syncClient';
 import { ACCOUNT_NEEDS_REAUTH_EVENT } from '../contexts/accountReauthEvents';
 import { syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { setSessionGateTimeoutMs } from '../db/syncHelpers';
@@ -309,6 +309,74 @@ describe('syncAllLoggedInUsers', () => {
         expect(reauthEvents).toHaveLength(0);
 
         vi.unstubAllGlobals();
+    });
+
+    it('flags a user for reauth on a 401 mid-flush/pull and continues the loop for other users', async () => {
+        // Distinct from the "no multi-session entry" case above: here the pivot succeeds (a valid
+        // multi-session token exists) but the pivoted Better Auth cookie itself has expired, so the
+        // flush/pull calls come back 401. The orchestrator must flag this user and move on rather
+        // than aborting the whole loop or leaving the failure silent.
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+
+        vi.mocked(fetchSyncOps)
+            .mockRejectedValueOnce(new SyncAuthError('GET /sync/pull'))
+            .mockResolvedValueOnce({ ops: [], serverTs: '2025-01-02T00:00:00.000Z', serverId: '' });
+
+        const dispatchSpy = vi.fn();
+        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const onUserSynced = vi.fn<(userId: string) => Promise<void>>(async () => undefined);
+
+        await syncAllLoggedInUsers(db, { onUserSynced });
+
+        // user-a's pass 401'd; user-b's pass still ran — the loop didn't abort.
+        expect(vi.mocked(fetchSyncOps)).toHaveBeenCalledTimes(2);
+        const reauthEvents = dispatchSpy.mock.calls.map(([e]) => e as CustomEvent).filter((e) => e.type === ACCOUNT_NEEDS_REAUTH_EVENT);
+        expect(reauthEvents).toHaveLength(1);
+        const [reauthEvent] = reauthEvents;
+        if (!reauthEvent) throw new Error('expected one reauth event');
+        expect(reauthEvent.detail).toEqual({ userId: 'user-a' });
+
+        // onUserSynced must NOT run for the 401'd user — only user-b's pass completed successfully.
+        expect(onUserSynced).toHaveBeenCalledTimes(1);
+        expect(onUserSynced).toHaveBeenCalledWith('user-b');
+
+        vi.unstubAllGlobals();
+        warnSpy.mockRestore();
+    });
+
+    it('flags a user for reauth on a 401 from bootstrap (no prior syncCursors row)', async () => {
+        // Distinct from the pull-401 case above: this user has never synced on this device, so
+        // pullOrBootstrap chooses fetchBootstrap instead of fetchSyncOps. A stale cookie 401's there
+        // just as easily and must be caught the same way.
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-c', 'c@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        await db.delete('syncCursors', 'user-c');
+
+        const bootstrapMod = await import('#api/syncClient');
+        vi.mocked(bootstrapMod.fetchBootstrap).mockRejectedValueOnce(new SyncAuthError('GET /sync/bootstrap'));
+
+        const dispatchSpy = vi.fn();
+        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        await syncAllLoggedInUsers(db);
+
+        // user-c never got a cursor row — the bootstrap never completed.
+        const cursorC = await db.get('syncCursors', 'user-c');
+        expect(cursorC).toBeUndefined();
+
+        const reauthEvents = dispatchSpy.mock.calls.map(([e]) => e as CustomEvent).filter((e) => e.type === ACCOUNT_NEEDS_REAUTH_EVENT);
+        expect(reauthEvents).toHaveLength(1);
+        const [reauthEvent] = reauthEvents;
+        if (!reauthEvent) throw new Error('expected one reauth event');
+        expect(reauthEvent.detail).toEqual({ userId: 'user-c' });
+
+        vi.unstubAllGlobals();
+        warnSpy.mockRestore();
     });
 
     it('single-account device dispatches no reauth event even with an empty session list', async () => {

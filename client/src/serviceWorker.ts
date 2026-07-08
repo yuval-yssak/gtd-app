@@ -2,10 +2,25 @@
 import { clientsClaim } from 'workbox-core';
 import { createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
+import { SyncAuthError } from './api/syncClient';
 import { getActiveAccount } from './db/accountHelpers';
 import { openAppDB } from './db/indexedDB';
 import { flushSyncQueue, pullFromServer } from './db/syncHelpers';
 import { hasAtLeastOne } from './lib/typeUtils';
+
+/** Posted to open tabs so they can call `dispatchAccountNeedsReauth` — the SW has no `window` to dispatch on directly. */
+interface AccountNeedsReauthMessage {
+    type: 'account-needs-reauth';
+    userId: string;
+}
+
+async function notifyClientsAccountNeedsReauth(userId: string): Promise<void> {
+    const clients = await self.clients.matchAll({ type: 'window' });
+    const message: AccountNeedsReauthMessage = { type: 'account-needs-reauth', userId };
+    for (const client of clients) {
+        client.postMessage(message);
+    }
+}
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -34,7 +49,22 @@ clientsClaim();
 self.addEventListener('sync', (event) => {
     const syncEvent = event as SyncEvent;
     if (syncEvent.tag !== 'gtd-sync-queue') return;
-    syncEvent.waitUntil(openAppDB().then((db) => flushSyncQueue(db)));
+    syncEvent.waitUntil(
+        openAppDB().then(async (db) => {
+            try {
+                await flushSyncQueue(db);
+            } catch (err) {
+                if (err instanceof SyncAuthError) {
+                    const acct = await getActiveAccount(db);
+                    if (acct) {
+                        await notifyClientsAccountNeedsReauth(acct.id);
+                    }
+                    return;
+                }
+                throw err;
+            }
+        }),
+    );
 });
 
 // ---------------------------------------------------------------------------
@@ -89,7 +119,15 @@ self.addEventListener('push', (event) => {
             .then(async (db) => {
                 const acct = await getActiveAccount(db);
                 if (!acct) return;
-                await pullFromServer(db, acct.id);
+                try {
+                    await pullFromServer(db, acct.id);
+                } catch (err) {
+                    if (err instanceof SyncAuthError) {
+                        await notifyClientsAccountNeedsReauth(acct.id);
+                        return;
+                    }
+                    throw err;
+                }
             })
             .then(() => {
                 console.log('[sw-push] pulled from server, notifying open tabs');

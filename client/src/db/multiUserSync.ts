@@ -1,4 +1,5 @@
 import type { IDBPDatabase } from 'idb';
+import { SyncAuthError } from '../api/syncClient';
 import { dispatchAccountNeedsReauth } from '../contexts/accountReauthEvents';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
@@ -166,6 +167,11 @@ async function loadDeviceSessionsByUserId(): Promise<Map<string, DeviceSession>>
  *   user sees a banner instead of silent data absence — without a session token we'd authenticate
  *   as whoever the cookie points at and attribute their data to the wrong cursor (the failure mode
  *   `assertActiveSessionMatches` catches downstream).
+ *
+ * A 401 from the flush/pull themselves (the pivoted session cookie itself has expired — distinct
+ * from the "no multi-session entry" case above, which is caught before any request is made) is
+ * caught the same way: flag this user for reauth and skip, so a stale cookie for one account
+ * doesn't abort the whole loop or spin retrying against a dead session forever.
  */
 async function syncOneUser(
     db: IDBPDatabase<MyDB>,
@@ -188,8 +194,17 @@ async function syncOneUser(
         // session-match guard passes (it reads IDB's activeAccount).
         await setActiveAccount(userId, db);
     }
-    await flushSyncQueue(db, { userIdFilter: userId });
-    await pullOrBootstrap(db, userId);
+    try {
+        await flushSyncQueue(db, { userIdFilter: userId });
+        await pullOrBootstrap(db, userId);
+    } catch (err) {
+        if (err instanceof SyncAuthError) {
+            console.warn(`[multi-sync] session for ${userId} expired mid-sync — flagging for reauth`);
+            dispatchAccountNeedsReauth(userId);
+            return;
+        }
+        throw err;
+    }
     if (options.onUserSynced) {
         await options.onUserSynced(userId);
     }

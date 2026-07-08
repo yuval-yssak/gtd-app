@@ -1,6 +1,13 @@
 import { vi } from 'vitest';
 import type * as actual from './syncClient.ts';
 
+// Re-exported as-is (not mocked) — it's a plain error class, not a network call, and tests need to
+// construct real instances to simulate a 401 (e.g. `mockRejectedValueOnce(new SyncAuthError(...))`).
+// Imported from its own module rather than from syncClient.ts: re-exporting a value from the real
+// module being mocked pulls its runtime code into the mock's module graph and wedges Vitest's
+// module resolution across the whole suite (observed as every worker hanging with near-zero CPU).
+export { SyncAuthError } from './syncAuthError';
+
 // Automatically resolved instead of the real syncClient in test runs via the "test"
 // condition in package.json imports. Each export matches the real function's type so
 // vi.mocked() calls in tests remain fully type-safe.
