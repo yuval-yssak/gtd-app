@@ -74,6 +74,70 @@ test.describe('Virtualized list pages with in-page search', () => {
         });
     });
 
+    test('someday renders windowed and the header search button filters rows', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `virtual-someday-${dayjs().valueOf()}@example.com`, async (page) => {
+            for (let i = 1; i <= 60; i++) {
+                const item = await gtd.collect(page, `Idea ${String(i).padStart(2, '0')}`);
+                await gtd.clarifyToSomedayMaybe(page, item);
+            }
+
+            await page.goto('/someday');
+            // Sorted by createdTs descending — the newest idea leads the list.
+            await expect(page.getByTestId('somedayItemRow').first()).toContainText('Idea 60');
+            expect(await page.locator('[data-list-item-id]').count()).toBeLessThan(50);
+
+            await page.getByTestId('somedaySearchButton').click();
+            const searchInput = page.getByTestId('somedaySearchInput');
+            await searchInput.fill('Idea 33');
+            await expect(page.getByText('Idea 33')).toBeVisible();
+            await expect(page.getByText('Idea 34')).toBeHidden();
+
+            await searchInput.fill('zebra');
+            await expect(page.getByText('No parked items match your search.')).toBeVisible();
+        });
+    });
+
+    // Both archives share ArchivedItemsView, but the status-templated testids and the per-route
+    // ?q= URL writes are distinct code paths — exercise each.
+    for (const archive of [
+        { status: 'done', path: '/done', clarify: gtd.clarifyToDone, prefix: 'Finished' },
+        { status: 'trash', path: '/trash', clarify: gtd.clarifyToTrash, prefix: 'Discarded' },
+    ] as const) {
+        test(`${archive.status} archive search filters rows and lands the query in the URL`, async ({ browser }) => {
+            await withOneLoggedInDevice(browser, `virtual-${archive.status}-${dayjs().valueOf()}@example.com`, async (page) => {
+                for (let i = 1; i <= 10; i++) {
+                    const item = await gtd.collect(page, `${archive.prefix} ${String(i).padStart(2, '0')}`);
+                    await archive.clarify(page, item);
+                }
+
+                await page.goto(archive.path);
+                await expect(page.getByTestId('archivedItemCopyIdButton').first()).toBeVisible();
+
+                await page.getByTestId(`${archive.status}SearchButton`).click();
+                const searchInput = page.getByTestId(`${archive.status}SearchInput`);
+                await searchInput.fill(`${archive.prefix} 06`);
+                await expect(page.getByText(`${archive.prefix} 06`)).toBeVisible();
+                await expect(page.getByText(`${archive.prefix} 07`)).toBeHidden();
+                await expect(page).toHaveURL(/[?&]q=/);
+
+                await searchInput.fill('zebra');
+                await expect(page.getByText('No items match your search.')).toBeVisible();
+
+                // Closing clears the query and restores the archive.
+                await page.getByLabel('Close search').click();
+                await expect(page.getByTestId(`${archive.status}SearchInput`)).toBeHidden();
+                await expect(page).not.toHaveURL(/[?&]q=/);
+                await expect(page.getByText(`${archive.prefix} 07`)).toBeVisible();
+
+                // A shared/bookmarked ?q= deep link opens the field pre-filled and pre-filtered.
+                await page.goto(`${archive.path}?q=${archive.prefix}%2003`);
+                await expect(page.getByTestId(`${archive.status}SearchInput`)).toHaveValue(`${archive.prefix} 03`);
+                await expect(page.getByText(`${archive.prefix} 03`)).toBeVisible();
+                await expect(page.getByText(`${archive.prefix} 04`)).toBeHidden();
+            });
+        });
+    }
+
     test('calendar renders day groups windowed and search narrows across days', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `virtual-cal-${dayjs().valueOf()}@example.com`, async (page) => {
             // One timed item per day for 30 days — every item lands in its own day group.

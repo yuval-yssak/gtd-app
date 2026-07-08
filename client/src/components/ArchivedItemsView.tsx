@@ -17,13 +17,15 @@ import { WindowVirtualizer } from 'virtua';
 import { useAppData } from '../contexts/AppDataProvider';
 import { useListGhosts } from '../hooks/useListGhosts';
 import { useListScrollRestoration } from '../hooks/useListScrollRestoration';
-import { type ItemSortDir, type ItemSortKey, sortItems } from '../lib/itemSearch';
+import { useListSearch } from '../hooks/useListSearch';
+import { filterItemsByQuery, type ItemSortDir, type ItemSortKey, sortItems } from '../lib/itemSearch';
 import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
 import { AccountSyncChip } from './AccountSyncChip';
 import styles from './ArchivedItemsView.module.css';
 import { CopyIdButton } from './itemEditor/CopyIdButton';
 import { ListRowShell } from './ListRowShell';
+import { ListSearchButton, ListSearchField } from './ListSearch';
 import { ListSkeleton } from './ListSkeleton';
 import { RoutineIndicator } from './RoutineIndicator';
 
@@ -50,6 +52,10 @@ interface Props {
     title: string;
     emptyIcon: React.ReactElement;
     emptyMessage: string;
+    /** Current `q` from the owning route's URL ('' when unset). */
+    urlQuery: string;
+    /** Writes `q` back to the owning route's URL (replace: true). Must be referentially stable. */
+    writeUrlQuery: (query: string) => void;
 }
 
 interface ArchivedRowProps {
@@ -91,21 +97,26 @@ const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, isG
     );
 });
 
-export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Props) {
+export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage, urlQuery, writeUrlQuery }: Props) {
     const { items, routines, isInitialSyncing } = useAppData();
     const [sortKey, setSortKey] = useState<ItemSortKey>('updatedTs');
     const [sortDir, setSortDir] = useState<ItemSortDir>('desc');
     useListScrollRestoration();
     const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
+    const search = useListSearch({ urlQuery, writeUrlQuery });
+    // Deferred query: typing re-filters in an interruptible background render (see useListSearch).
+    const { deferredQuery } = search;
 
-    const filtered = useMemo(() => itemsWithGhosts.filter((item) => item.status === status), [itemsWithGhosts, status]);
+    const archivedItems = useMemo(() => itemsWithGhosts.filter((item) => item.status === status), [itemsWithGhosts, status]);
+    const filtered = useMemo(() => filterItemsByQuery(archivedItems, deferredQuery), [archivedItems, deferredQuery]);
     const sorted = useMemo(() => sortItems(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
     const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
 
     // Ghosts are fading leftovers of items that just left this archive — count live rows only.
     const liveCount = filtered.filter((item) => !isGhost(item)).length;
 
-    if (filtered.length === 0) {
+    // Truly empty archive (no query involved) — the empty-state card, or a skeleton during bootstrap.
+    if (archivedItems.length === 0) {
         return (
             <Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -163,6 +174,7 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                     </Typography>
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                     <AccountSyncChip />
+                    <ListSearchButton onToggle={search.toggleSearch} testId={`${status}SearchButton`} />
                 </Box>
                 <TextField
                     size="small"
@@ -179,24 +191,45 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                     ))}
                 </TextField>
             </Box>
-            {/* component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
-                the default <ul>. Windowed rendering — only rows near the viewport mount, so the
-                unbounded done/trash archives don't block the main thread on mount or navigation. */}
-            <List disablePadding component="div" className={styles.list}>
-                <WindowVirtualizer>
-                    {sorted.map((item, idx) => (
-                        <ArchivedRow
-                            key={item._id}
-                            item={item}
-                            sortKey={sortKey}
-                            routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
-                            isGhost={isGhost(item)}
-                            onGhostExited={onGhostExited}
-                            hasDivider={idx < sorted.length - 1}
-                        />
-                    ))}
-                </WindowVirtualizer>
-            </List>
+            {search.isOpen && (
+                <ListSearchField
+                    value={search.queryInput}
+                    onValueChange={search.setQueryInput}
+                    onClose={search.closeSearch}
+                    placeholder={`Search ${title.toLowerCase()}…`}
+                    testId={`${status}SearchInput`}
+                />
+            )}
+            {sorted.length === 0 ? (
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                >
+                    No items match your search.
+                </Typography>
+            ) : (
+                /* component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
+                   the default <ul>. Windowed rendering — only rows near the viewport mount, so the
+                   unbounded done/trash archives don't block the main thread on mount or navigation. */
+                <List disablePadding component="div" className={styles.list}>
+                    <WindowVirtualizer>
+                        {sorted.map((item, idx) => (
+                            <ArchivedRow
+                                key={item._id}
+                                item={item}
+                                sortKey={sortKey}
+                                routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
+                                isGhost={isGhost(item)}
+                                onGhostExited={onGhostExited}
+                                hasDivider={idx < sorted.length - 1}
+                            />
+                        ))}
+                    </WindowVirtualizer>
+                </List>
+            )}
         </Box>
     );
 }
