@@ -32,7 +32,8 @@
         "react": "^19.2.5",
         "react-dom": "^19.2.5",
         "react-markdown": "^10.1.0",
-        "rrule": "^2.8.1"
+        "rrule": "^2.8.1",
+        "virtua": "^0.49.2"
     },
     "imports": {
         "#api/syncClient": {

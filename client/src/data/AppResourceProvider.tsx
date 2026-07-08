@@ -1,7 +1,15 @@
 import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, startTransition, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { MyDB } from '../types/MyDB';
-import { type AppResourceSnapshot, getAppResource, invalidateAppResource, type ResourceScope, registerAppResourceRefreshHandler } from './appResource';
+import {
+    type AppResourceSnapshot,
+    appResourceKey,
+    getAppResource,
+    invalidateAppResource,
+    type ResourceScope,
+    registerAppResourceRefreshHandler,
+    shouldAdoptSnapshotDuringRender,
+} from './appResource';
 
 interface AppResourceContextValue {
     snapshot: AppResourceSnapshot;
@@ -41,9 +49,14 @@ export function AppResourceProvider({ db, userIds, children }: PropsWithChildren
     const userIdsRef = useRef(userIds);
     userIdsRef.current = userIds;
 
-    // If parent passed a different snapshot identity (e.g. userIds changed), update what's rendered.
-    // We don't startTransition here — userIds change is a context shift the user expects to feel.
-    if (snapshot !== renderedSnapshot && userIdsRef.current === userIds) {
+    // Adopt the derived snapshot during render ONLY when the (db, userIds) key changed — a context
+    // shift (account added/removed) the user expects to feel, so no startTransition. See
+    // shouldAdoptSnapshotDuringRender for why keying on the cache key (not snapshot identity) is
+    // load-bearing; invalidation swaps must flow only through `refresh`.
+    const key = appResourceKey(db, userIds);
+    const [renderedKey, setRenderedKey] = useState(key);
+    if (shouldAdoptSnapshotDuringRender(renderedKey, key)) {
+        setRenderedKey(key);
         setRenderedSnapshot(snapshot);
     }
 

@@ -1,6 +1,6 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { _resetAppResourceCacheForTests, getAppResource, invalidateAppResource } from '../data/appResource';
+import { _resetAppResourceCacheForTests, appResourceKey, getAppResource, invalidateAppResource, shouldAdoptSnapshotDuringRender } from '../data/appResource';
 import { putItem } from '../db/itemHelpers';
 import type { MyDB, StoredItem } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
@@ -51,6 +51,35 @@ describe('getAppResource cache identity', () => {
         const single = getAppResource(db, [USER_A]);
         const both = getAppResource(db, [USER_A, USER_B]);
         expect(both).not.toBe(single);
+    });
+});
+
+/**
+ * AppResourceProvider adopts a fresh snapshot during render (urgently, outside startTransition)
+ * only when this key changes. These tests pin the two sides of that contract: invalidation must
+ * NOT change the key (else every sync would suspend the route urgently — the "page blink"), and
+ * a changed userIds set MUST change it (account add/remove is an intentional context shift).
+ */
+describe('appResourceKey', () => {
+    it('is stable across invalidations — same (db, userIds) always maps to the same key', () => {
+        const before = appResourceKey(db, [USER_A, USER_B]);
+        invalidateAppResource(db, [USER_A, USER_B], 'all');
+        expect(appResourceKey(db, [USER_A, USER_B])).toBe(before);
+    });
+
+    it('ignores userId order but changes when the set changes', () => {
+        expect(appResourceKey(db, [USER_B, USER_A])).toBe(appResourceKey(db, [USER_A, USER_B]));
+        expect(appResourceKey(db, [USER_A])).not.toBe(appResourceKey(db, [USER_A, USER_B]));
+    });
+
+    it('render-phase adoption fires on a context shift but never on an invalidation-only change', () => {
+        const rendered = appResourceKey(db, [USER_A]);
+        // Cache invalidated, same users — the key is unchanged, so the provider must NOT adopt
+        // (the swap belongs to refresh()'s startTransition; urgent adoption is the "page blink").
+        invalidateAppResource(db, [USER_A], 'all');
+        expect(shouldAdoptSnapshotDuringRender(rendered, appResourceKey(db, [USER_A]))).toBe(false);
+        // Signed-in set changed — adopt urgently (intentional context shift).
+        expect(shouldAdoptSnapshotDuringRender(rendered, appResourceKey(db, [USER_A, USER_B]))).toBe(true);
     });
 });
 

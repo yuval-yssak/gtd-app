@@ -29,9 +29,25 @@ interface CacheEntry {
 // components `use()` the same field without firing two IDB reads.
 const cache = new Map<string, CacheEntry>();
 
-function keyFor(db: IDBPDatabase<MyDB>, userIds: readonly string[]): string {
+/**
+ * Cache key for a (db, userIds) pair. Exported so AppResourceProvider can distinguish "the
+ * signed-in set changed" (key changes → adopt the new snapshot urgently) from "the cache was
+ * invalidated" (key unchanged → the swap must stay inside refresh()'s startTransition).
+ */
+export function appResourceKey(db: IDBPDatabase<MyDB>, userIds: readonly string[]): string {
     const sorted = [...userIds].sort().join(',');
     return `${db.name}|${sorted}`;
+}
+
+/**
+ * Whether AppResourceProvider may adopt a freshly derived snapshot during render (urgently,
+ * outside startTransition). True only for a (db, userIds) context shift. A previous version
+ * keyed this on snapshot identity, which is also true after a cache invalidation — any urgent
+ * parent re-render then suspended the whole route to its fallback for the length of the IDB
+ * re-read (the "page blink"). Pure and exported so that regression stays unit-testable.
+ */
+export function shouldAdoptSnapshotDuringRender(renderedKey: string, nextKey: string): boolean {
+    return nextKey !== renderedKey;
 }
 
 function buildSnapshot(db: IDBPDatabase<MyDB>, userIds: readonly string[]): AppResourceSnapshot {
@@ -49,7 +65,7 @@ function buildSnapshot(db: IDBPDatabase<MyDB>, userIds: readonly string[]): AppR
  * same arguments return the *same* promise references — that's what enables Suspense to dedupe.
  */
 export function getAppResource(db: IDBPDatabase<MyDB>, userIds: readonly string[]): AppResourceSnapshot {
-    const key = keyFor(db, userIds);
+    const key = appResourceKey(db, userIds);
     const existing = cache.get(key);
     if (existing) {
         return existing.snapshot;
@@ -66,7 +82,7 @@ export function getAppResource(db: IDBPDatabase<MyDB>, userIds: readonly string[
  * them never re-suspend.
  */
 export function invalidateAppResource(db: IDBPDatabase<MyDB>, userIds: readonly string[], scope: ResourceScope = 'all'): AppResourceSnapshot {
-    const key = keyFor(db, userIds);
+    const key = appResourceKey(db, userIds);
     const existing = cache.get(key);
     if (!existing || scope === 'all') {
         const snapshot = buildSnapshot(db, userIds);

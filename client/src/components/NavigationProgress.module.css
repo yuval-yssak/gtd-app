@@ -1,0 +1,17 @@
+.navigationProgress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    /* Above the mobile AppBar (MUI appBar z-index 1100) and drawers (1200). */
+    z-index: 1500;
+    /* Stay invisible for the first 150ms so fast navigations never flash the bar. */
+    opacity: 0;
+    animation: navigationProgressReveal 0s linear 150ms forwards;
+}
+
+@keyframes navigationProgressReveal {
+    to {
+        opacity: 1;
+    }
+}

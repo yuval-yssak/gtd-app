@@ -96,7 +96,9 @@ export function filterItems(items: readonly StoredItem[], filters: SearchFilters
 
 export function sortItems(items: readonly StoredItem[], key: ItemSortKey, dir: ItemSortDir): StoredItem[] {
     const sign = dir === 'asc' ? 1 : -1;
-    return [...items].sort((a, b) => sign * a[key].localeCompare(b[key]));
+    // Plain string comparison — ISO 8601 timestamps sort lexicographically, and localeCompare
+    // is ~20× slower, which matters when re-sorting thousands of archive rows per render.
+    return [...items].sort((a, b) => (a[key] < b[key] ? -sign : a[key] > b[key] ? sign : 0));
 }
 
 export function groupByStatus(items: readonly StoredItem[]): Array<{ status: StoredItem['status']; items: StoredItem[] }> {

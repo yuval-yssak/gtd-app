@@ -12,7 +12,8 @@ import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useState } from 'react';
+import { memo, useMemo, useState } from 'react';
+import { WindowVirtualizer } from 'virtua';
 import { useAppData } from '../contexts/AppDataProvider';
 import { useListGhosts } from '../hooks/useListGhosts';
 import { useListScrollRestoration } from '../hooks/useListScrollRestoration';
@@ -51,6 +52,45 @@ interface Props {
     emptyMessage: string;
 }
 
+interface ArchivedRowProps {
+    item: StoredItem;
+    sortKey: ItemSortKey;
+    routineTitle: string | undefined;
+    isGhost: boolean;
+    onGhostExited: (itemId: string) => void;
+    hasDivider: boolean;
+}
+
+// memo: done/trash are the largest lists in the app — item identity is stable across re-renders
+// (rows come straight from the IDB snapshot), so sorting/ghost updates only pay for changed rows.
+const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, isGhost, onGhostExited, hasDivider }: ArchivedRowProps) {
+    const verb = sortKey === 'updatedTs' ? 'Updated' : 'Created';
+    return (
+        <ListRowShell itemId={item._id} isGhost={isGhost} onGhostExited={onGhostExited}>
+            <ListItem disablePadding secondaryAction={<CopyIdButton id={item._id} testId="archivedItemCopyIdButton" />}>
+                <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
+                    <ListItemButton dense className={styles.rowButton}>
+                        <ListItemText
+                            primary={
+                                <Box className={styles.titleRow}>
+                                    <span>{item.title}</span>
+                                    {item.routineId && <RoutineIndicator routineId={item.routineId} routineTitle={routineTitle} />}
+                                    <AccountChip userId={item.userId} />
+                                    {item.cancelledByGCal && (
+                                        <Chip label="Cancelled in Calendar" size="small" color="warning" data-testid="cancelledByGCalChip" />
+                                    )}
+                                </Box>
+                            }
+                            secondary={`${verb} ${dayjs(item[sortKey]).fromNow()}`}
+                        />
+                    </ListItemButton>
+                </Link>
+            </ListItem>
+            {hasDivider && <Divider />}
+        </ListRowShell>
+    );
+});
+
 export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Props) {
     const { items, routines, isInitialSyncing } = useAppData();
     const [sortKey, setSortKey] = useState<ItemSortKey>('updatedTs');
@@ -58,8 +98,9 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
     useListScrollRestoration();
     const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
-    const filtered = itemsWithGhosts.filter((item) => item.status === status);
-    const sorted = sortItems(filtered, sortKey, sortDir);
+    const filtered = useMemo(() => itemsWithGhosts.filter((item) => item.status === status), [itemsWithGhosts, status]);
+    const sorted = useMemo(() => sortItems(filtered, sortKey, sortDir), [filtered, sortKey, sortDir]);
+    const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
 
     // Ghosts are fading leftovers of items that just left this archive — count live rows only.
     const liveCount = filtered.filter((item) => !isGhost(item)).length;
@@ -138,40 +179,23 @@ export function ArchivedItemsView({ status, title, emptyIcon, emptyMessage }: Pr
                     ))}
                 </TextField>
             </Box>
-            <List disablePadding className={styles.list}>
-                {sorted.map((item, idx) => {
-                    const ts = item[sortKey];
-                    const verb = sortKey === 'updatedTs' ? 'Updated' : 'Created';
-                    return (
-                        <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
-                            <ListItem disablePadding secondaryAction={<CopyIdButton id={item._id} testId="archivedItemCopyIdButton" />}>
-                                <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
-                                    <ListItemButton dense className={styles.rowButton}>
-                                        <ListItemText
-                                            primary={
-                                                <Box className={styles.titleRow}>
-                                                    <span>{item.title}</span>
-                                                    {item.routineId && (
-                                                        <RoutineIndicator
-                                                            routineId={item.routineId}
-                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                        />
-                                                    )}
-                                                    <AccountChip userId={item.userId} />
-                                                    {item.cancelledByGCal && (
-                                                        <Chip label="Cancelled in Calendar" size="small" color="warning" data-testid="cancelledByGCalChip" />
-                                                    )}
-                                                </Box>
-                                            }
-                                            secondary={`${verb} ${dayjs(ts).fromNow()}`}
-                                        />
-                                    </ListItemButton>
-                                </Link>
-                            </ListItem>
-                            {idx < sorted.length - 1 && <Divider />}
-                        </ListRowShell>
-                    );
-                })}
+            {/* component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
+                the default <ul>. Windowed rendering — only rows near the viewport mount, so the
+                unbounded done/trash archives don't block the main thread on mount or navigation. */}
+            <List disablePadding component="div" className={styles.list}>
+                <WindowVirtualizer>
+                    {sorted.map((item, idx) => (
+                        <ArchivedRow
+                            key={item._id}
+                            item={item}
+                            sortKey={sortKey}
+                            routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
+                            isGhost={isGhost(item)}
+                            onGhostExited={onGhostExited}
+                            hasDivider={idx < sorted.length - 1}
+                        />
+                    ))}
+                </WindowVirtualizer>
             </List>
         </Box>
     );

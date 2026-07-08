@@ -12,7 +12,7 @@ import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
 import { useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import { itemContextNames, itemPersonNames } from '../../lib/itemSearch';
 import { SEARCH_TABLE_COLUMNS, type SearchTableColumnId } from '../../lib/searchTableColumns';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -101,11 +101,43 @@ function ResultCell({
     return <span>{names.length > 0 ? names.join(', ') : '—'}</span>;
 }
 
-export function SearchResultsTable({ items, visibleColumns, onVisibleColumnsChange, people, workContexts }: Props) {
+interface ResultTableRowProps {
+    item: StoredItem;
+    orderedColumns: typeof SEARCH_TABLE_COLUMNS;
+    peopleById: Map<string, StoredPerson>;
+    contextsById: Map<string, StoredWorkContext>;
+    onItemOpened: (itemId: string) => void;
+}
+
+// memo: item identity is stable across filter re-renders (rows come straight from the IDB
+// snapshot), so re-filtering only pays for rows that actually entered/left the result set.
+const ResultTableRow = memo(function ResultTableRow({ item, orderedColumns, peopleById, contextsById, onItemOpened }: ResultTableRowProps) {
+    return (
+        <TableRow
+            hover
+            onClick={() => onItemOpened(item._id)}
+            className={styles.row}
+            // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration);
+            // set directly on the <tr> — wrapping table rows in a div would break table semantics.
+            data-list-item-id={item._id}
+        >
+            {orderedColumns.map((col) => (
+                <TableCell key={col.id}>
+                    <ResultCell column={col.id} item={item} peopleById={peopleById} contextsById={contextsById} />
+                </TableCell>
+            ))}
+        </TableRow>
+    );
+});
+
+// memo: skips the whole table on urgent keystroke renders — `items` only changes identity when
+// the deferred filter pass commits (see search.tsx).
+export const SearchResultsTable = memo(function SearchResultsTable({ items, visibleColumns, onVisibleColumnsChange, people, workContexts }: Props) {
     const navigate = useNavigate();
     const peopleById = useMemo(() => new Map(people.map((p) => [p._id, p])), [people]);
     const contextsById = useMemo(() => new Map(workContexts.map((c) => [c._id, c])), [workContexts]);
     const orderedColumns = useMemo(() => SEARCH_TABLE_COLUMNS.filter((c) => visibleColumns.has(c.id)), [visibleColumns]);
+    const onItemOpened = useCallback((itemId: string) => void navigate({ to: '/item/$itemId', params: { itemId }, search: { status: null } }), [navigate]);
 
     return (
         <>
@@ -123,25 +155,18 @@ export function SearchResultsTable({ items, visibleColumns, onVisibleColumnsChan
                     </TableHead>
                     <TableBody>
                         {items.map((item) => (
-                            <TableRow
+                            <ResultTableRow
                                 key={item._id}
-                                hover
-                                onClick={() => void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { status: null } })}
-                                className={styles.row}
-                                // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration);
-                                // set directly on the <tr> — wrapping table rows in a div would break table semantics.
-                                data-list-item-id={item._id}
-                            >
-                                {orderedColumns.map((col) => (
-                                    <TableCell key={col.id}>
-                                        <ResultCell column={col.id} item={item} peopleById={peopleById} contextsById={contextsById} />
-                                    </TableCell>
-                                ))}
-                            </TableRow>
+                                item={item}
+                                orderedColumns={orderedColumns}
+                                peopleById={peopleById}
+                                contextsById={contextsById}
+                                onItemOpened={onItemOpened}
+                            />
                         ))}
                     </TableBody>
                 </Table>
             </TableContainer>
         </>
     );
-}
+});

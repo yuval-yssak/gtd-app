@@ -9,7 +9,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
@@ -42,6 +42,10 @@ function SearchPage() {
 
     // Mirrored from URL so typing stays responsive while URL writes are debounced.
     const [queryInput, setQueryInput] = useState(urlState.q);
+    // Filtering keys off the deferred value, not the URL: keystrokes commit urgently (the input
+    // echoes immediately) while the filter + results re-render happens in a background render
+    // React can interrupt. The debounced URL write below remains for shareability/history only.
+    const deferredQuery = useDeferredValue(queryInput);
     const [visibleColumns, setVisibleColumns] = useState<Set<SearchTableColumnId>>(() => loadVisibleColumns());
 
     const updateUrlState = (patch: Partial<SearchUrlState>) => {
@@ -70,18 +74,21 @@ function SearchPage() {
         void navigate({ to: '/search', search: { ...DEFAULT_URL_STATE, view: urlState.view }, replace: true });
     }
 
-    function onColumnsChange(next: Set<SearchTableColumnId>) {
+    // Stable identity so the memoized SearchResultsTable isn't re-rendered by unrelated state.
+    const onColumnsChange = useCallback((next: Set<SearchTableColumnId>) => {
         setVisibleColumns(next);
         saveVisibleColumns(next);
-    }
+    }, []);
 
-    const filters = useMemo(() => urlStateToFilters(urlState), [urlState]);
+    // Query comes from the deferred input (see above) — the other filters still read the URL.
+    const filters = useMemo(() => ({ ...urlStateToFilters(urlState), query: deferredQuery }), [urlState, deferredQuery]);
     const activeStatuses = filters.statuses;
     const filtered = useMemo(() => sortItems(filterItems(items, filters), 'updatedTs', 'desc'), [items, filters]);
 
     // Distinguish "no inputs yet, show a hint" from "inputs entered, but nothing matched".
+    // Reads deferredQuery (not urlState.q) so the hint matches what the rendered list filtered on.
     const hasNoInputs =
-        urlState.q.length === 0 &&
+        deferredQuery.length === 0 &&
         urlState.statuses === null &&
         urlState.personId === null &&
         urlState.contextId === null &&

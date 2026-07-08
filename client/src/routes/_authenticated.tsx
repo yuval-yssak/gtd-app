@@ -9,6 +9,7 @@ import { Suspense, useState } from 'react';
 import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { AppNav } from '../components/AppNav';
+import { NavigationProgress } from '../components/NavigationProgress';
 import { NotificationNudge } from '../components/NotificationNudge';
 import { RouteFallback } from '../components/RouteFallback';
 import { UndoSnackbar } from '../components/UndoSnackbar';
@@ -28,6 +29,8 @@ export function AuthenticatedLayout() {
 
     return (
         <Box className={styles.appShell}>
+            {/* Immediate feedback while a navigation's transition renders the destination page */}
+            <NavigationProgress />
             {/* Mobile AppBar — fixed at top, hidden on desktop where the sidebar takes over */}
             <AppBar position="fixed" className={styles.mobileAppBar}>
                 <Toolbar>
