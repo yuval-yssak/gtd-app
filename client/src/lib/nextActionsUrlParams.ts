@@ -1,4 +1,5 @@
 import type { EnergyLevel } from '../types/MyDB';
+import { readQueryParam } from './listQueryUrlParams';
 
 export const TIME_FILTER_OPTIONS = [5, 30, 60] as const;
 export type TimeFilterMinutes = (typeof TIME_FILTER_OPTIONS)[number];
@@ -17,6 +18,7 @@ export interface NextActionsUrlState {
     person?: string | undefined; // StoredPerson._id
     energy?: EnergyLevel | undefined;
     time?: TimeFilterMinutes | undefined;
+    q?: string | undefined; // in-page search query (title/notes substring)
 }
 
 const readId = (raw: unknown): string | undefined => (typeof raw === 'string' && raw.length > 0 ? raw : undefined);
@@ -41,5 +43,6 @@ export function parseNextActionsSearch(search: RawNextActionsBag): NextActionsUr
         person: readId(search.person),
         energy: readEnergy(search.energy),
         time: readTime(search.time),
+        q: readQueryParam(search.q),
     };
 }

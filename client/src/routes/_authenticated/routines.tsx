@@ -24,7 +24,8 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
@@ -35,15 +36,16 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { useListSearch } from '../../hooks/useListSearch';
+import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import { filterRoutinesByTitle, groupRoutines } from '../../lib/routineGrouping';
-import { parseRoutinesSearch } from '../../lib/routinesUrlParams';
 import { formatCalendarRrule, formatRrule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
 import styles from './-routines.module.css';
 
 export const Route = createFileRoute('/_authenticated/routines')({
     component: RoutinesPage,
-    validateSearch: parseRoutinesSearch,
+    validateSearch: parseListQuerySearch,
 });
 
 function RoutinesPage() {
@@ -67,7 +69,12 @@ function RoutinesPage() {
     const [routineToDelete, setRoutineToDelete] = useState<StoredRoutine | null>(null);
     const [routineToPause, setRoutineToPause] = useState<StoredRoutine | null>(null);
 
-    const sections = useMemo(() => groupRoutines(filterRoutinesByTitle(routines, q)), [routines, q]);
+    const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/routines', search: { q: query || undefined }, replace: true }), [navigate]);
+    // Deferred query: keystrokes echo urgently while the regroup (rrule parsing per routine)
+    // happens in an interruptible background render. The URL write is debounced (see useListSearch).
+    const search = useListSearch({ urlQuery: q ?? '', writeUrlQuery });
+    const { deferredQuery } = search;
+    const sections = useMemo(() => groupRoutines(filterRoutinesByTitle(routines, deferredQuery)), [routines, deferredQuery]);
 
     async function onConfirmDelete() {
         if (!routineToDelete) {
@@ -103,11 +110,6 @@ function RoutinesPage() {
 
     function onRowClick(routine: StoredRoutine, e: React.MouseEvent<HTMLElement>) {
         editor.openEditor({ routine, anchor: e.currentTarget });
-    }
-
-    function onSearchChanged(value: string) {
-        // replace:true — each keystroke updates the URL in place instead of spamming history.
-        void navigate({ to: '/routines', search: { q: value || undefined }, replace: true });
     }
 
     function openRoutinePage(routine: StoredRoutine) {
@@ -228,43 +230,53 @@ function RoutinesPage() {
                     size="small"
                     fullWidth
                     placeholder="Search routines…"
-                    value={q ?? ''}
-                    onChange={(e) => onSearchChanged(e.target.value)}
+                    value={search.queryInput}
+                    onChange={(e) => search.setQueryInput(e.target.value)}
                     className={styles.searchField}
                     slotProps={{ htmlInput: { ref: searchFieldRef, 'data-testid': 'routinesSearchInput' } }}
                 />
             )}
-            {sections.length === 0
-                ? renderEmptyState()
-                : sections.map((section) => (
-                      <Box key={section.routineType} data-testid="routineTypeSection">
-                          <Typography variant="h6" className={styles.sectionTitle} data-testid="routineTypeSectionTitle">
-                              {section.title}
-                          </Typography>
-                          {section.buckets.map((group) => (
-                              <Box key={group.bucket}>
-                                  <Typography
-                                      variant="overline"
-                                      className={styles.bucketLabel}
-                                      data-testid="routineFrequencyBucket"
-                                      sx={{ color: 'text.secondary' }}
-                                  >
-                                      {group.bucket}
-                                  </Typography>
-                                  <List disablePadding className={styles.list}>
-                                      {group.routines.map((routine, idx) => (
-                                          // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
-                                          <Box key={routine._id} data-list-item-id={routine._id}>
-                                              {renderRoutineRow(routine)}
-                                              {editor.renderExpandFor(routine._id)}
-                                              {idx < group.routines.length - 1 && <Divider />}
-                                          </Box>
-                                      ))}
-                                  </List>
-                              </Box>
-                          ))}
-                      </Box>
-                  ))}
+            {sections.length === 0 ? (
+                renderEmptyState()
+            ) : (
+                // Sections/buckets flattened into one windowed sequence (headings and rows are each
+                // a measured child) — only elements near the viewport mount, so a large routine
+                // collection doesn't block the main thread on navigation. component="div": the
+                // WindowVirtualizer measuring wrapper is invalid inside the default <ul>.
+                <List disablePadding component="div" className={styles.list}>
+                    <WindowVirtualizer>
+                        {sections.flatMap((section) => [
+                            <Typography
+                                key={`section-${section.routineType}`}
+                                variant="h6"
+                                className={styles.sectionTitle}
+                                data-testid="routineTypeSectionTitle"
+                            >
+                                {section.title}
+                            </Typography>,
+                            ...section.buckets.flatMap((group) => [
+                                <Typography
+                                    key={`bucket-${section.routineType}-${group.bucket}`}
+                                    variant="overline"
+                                    className={styles.bucketLabel}
+                                    data-testid="routineFrequencyBucket"
+                                    sx={{ color: 'text.secondary' }}
+                                >
+                                    {group.bucket}
+                                </Typography>,
+                                ...group.routines.map((routine, idx) => (
+                                    // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
+                                    <Box key={routine._id} data-list-item-id={routine._id}>
+                                        {renderRoutineRow(routine)}
+                                        {editor.renderExpandFor(routine._id)}
+                                        {idx < group.routines.length - 1 && <Divider />}
+                                    </Box>
+                                )),
+                            ]),
+                        ])}
+                    </WindowVirtualizer>
+                </List>
+            )}
             {editor.renderGlobal()}
             <Dialog open={routineToDelete !== null} onClose={() => setRoutineToDelete(null)} maxWidth="sm" fullWidth>
                 <DialogTitle>Delete routine?</DialogTitle>

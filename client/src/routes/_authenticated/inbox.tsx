@@ -32,8 +32,9 @@ import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { useClaudeReview } from '../../components/claudeReview/useClaudeReview';
@@ -41,6 +42,7 @@ import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
+import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
@@ -51,14 +53,18 @@ import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { useListSearch } from '../../hooks/useListSearch';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
+import { filterItemsByQuery, sortItems } from '../../lib/itemSearch';
+import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-inbox.module.css';
 
 dayjs.extend(relativeTime);
 
 export const Route = createFileRoute('/_authenticated/inbox')({
+    validateSearch: parseListQuerySearch,
     component: InboxPage,
 });
 
@@ -256,6 +262,7 @@ function InboxBottomSheet({ item, onClose, onClarifyClaude, onEdit, onDone, onNe
 
 function InboxPage() {
     const { db } = Route.useRouteContext();
+    const { q } = Route.useSearch();
     const { account, items, workContexts, people, routines, refreshItems, syncAndRefresh, isInitialSyncing, withOwnerSession } = useAppData();
     const navigate = useNavigate();
     const theme = useTheme();
@@ -332,7 +339,26 @@ function InboxPage() {
     useListScrollRestoration();
     const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
-    const inboxItems = itemsWithGhosts.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+    const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/inbox', search: { q: query || undefined }, replace: true }), [navigate]);
+    const search = useListSearch({ urlQuery: q ?? '', writeUrlQuery });
+
+    // Deferred query: typing re-filters in an interruptible background render (see useListSearch).
+    const { deferredQuery } = search;
+    const inboxItems = useMemo(
+        () =>
+            sortItems(
+                filterItemsByQuery(
+                    itemsWithGhosts.filter((item) => item.status === 'inbox'),
+                    deferredQuery,
+                ),
+                'createdTs',
+                'desc',
+            ),
+        [itemsWithGhosts, deferredQuery],
+    );
+
+    // Lookup map so each row doesn't rescan the routines array for its indicator title.
+    const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
 
     // Ghosts are fading leftovers of items just clarified away — counts and the batch wizard use live rows only.
     const liveInboxItems = inboxItems.filter((item) => !isGhost(item));
@@ -374,6 +400,8 @@ function InboxPage() {
         editor.openEditor({ item, initialStatus: status, ...(anchor ? { anchor } : {}) });
     }
 
+    // Deliberate: with an in-page search active, the wizard batches only the matching items
+    // (liveInboxItems derives from the query-filtered list) — "process what I searched for".
     function startProcessInbox() {
         if (liveInboxItems.length === 0) {
             return;
@@ -403,11 +431,21 @@ function InboxPage() {
                         {liveInboxItems.length > 0 && <Chip label={liveInboxItems.length} size="small" color="primary" className={styles.countChip} />}
                     </Typography>
                     <AccountSyncChip />
+                    <ListSearchButton onToggle={search.toggleSearch} testId="inboxSearchButton" />
                 </Box>
                 <Button variant="outlined" size="small" disabled={liveInboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
                     Process Inbox ({liveInboxItems.length})
                 </Button>
             </Box>
+            {search.isOpen && (
+                <ListSearchField
+                    value={search.queryInput}
+                    onValueChange={search.setQueryInput}
+                    onClose={search.closeSearch}
+                    placeholder="Search inbox…"
+                    testId="inboxSearchInput"
+                />
+            )}
             <Paper variant="outlined" className={styles.captureCard}>
                 <TextField
                     fullWidth
@@ -475,98 +513,101 @@ function InboxPage() {
                             mt: 6,
                         }}
                     >
-                        Inbox zero — well done.
+                        {/* An active search that matches nothing is "no results", not inbox zero. */}
+                        {deferredQuery.trim() ? 'No inbox items match your search.' : 'Inbox zero — well done.'}
                     </Typography>
                 )
             ) : (
-                <List disablePadding className={styles.list}>
-                    {inboxItems.map((item, idx) => (
-                        <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
-                            {isMobile ? (
-                                <InboxSwipeItem
-                                    item={item}
-                                    routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                    onTap={(i) => editor.openEditor({ item: i })}
-                                    onMore={setBottomSheetItem}
-                                    onSwipeNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
-                                    onSwipeTrash={(i) => void onTrash(i)}
-                                />
-                            ) : (
-                                <ListItem
-                                    disablePadding
-                                    className={styles.item}
-                                    secondaryAction={
-                                        <Box className={styles.actionButtons}>
-                                            <CopyIdButton id={item._id} testId="inboxItemCopyIdButton" />
-                                            <Tooltip title="Clarify with Claude">
-                                                <IconButton
-                                                    size="small"
-                                                    color="primary"
-                                                    onClick={() => review.openFor(item)}
-                                                    data-testid="inboxItemClarifyClaudeButton"
-                                                >
-                                                    <AutoAwesomeIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="inboxItemEditButton">
-                                                    <EditIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Done (< 2 min)">
-                                                <IconButton size="small" onClick={() => void onQuickDone(item)}>
-                                                    <PlaylistAddCheckIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Next Action">
-                                                <IconButton size="small" onClick={(e) => openWithStatus(item, 'nextAction', e.currentTarget)}>
-                                                    <ArrowForwardIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Calendar">
-                                                <IconButton size="small" onClick={(e) => openWithStatus(item, 'calendar', e.currentTarget)}>
-                                                    <CalendarTodayIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Waiting For">
-                                                <IconButton size="small" onClick={(e) => openWithStatus(item, 'waitingFor', e.currentTarget)}>
-                                                    <HourglassEmptyIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Trash">
-                                                <IconButton size="small" color="error" onClick={() => void onTrash(item)}>
-                                                    <DeleteOutlineIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                        </Box>
-                                    }
-                                >
-                                    <ListItemButton onClick={() => editor.openEditor({ item })} data-testid="inboxItemRow">
-                                        <ListItemText
-                                            primary={
-                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                    <span>{item.title}</span>
-                                                    {item.routineId && (
-                                                        <RoutineIndicator
-                                                            routineId={item.routineId}
-                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                        />
-                                                    )}
-                                                    <AccountChip userId={item.userId} />
-                                                </Box>
-                                            }
-                                            secondary={dayjs(item.createdTs).fromNow()}
-                                            className={styles.listItemText}
-                                        />
-                                    </ListItemButton>
-                                </ListItem>
-                            )}
+                // component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
+                // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
+                // inbox doesn't block the main thread on navigation.
+                <List disablePadding component="div" className={styles.list}>
+                    <WindowVirtualizer>
+                        {inboxItems.map((item, idx) => (
+                            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
+                                {isMobile ? (
+                                    <InboxSwipeItem
+                                        item={item}
+                                        routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
+                                        onTap={(i) => editor.openEditor({ item: i })}
+                                        onMore={setBottomSheetItem}
+                                        onSwipeNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
+                                        onSwipeTrash={(i) => void onTrash(i)}
+                                    />
+                                ) : (
+                                    <ListItem
+                                        disablePadding
+                                        className={styles.item}
+                                        secondaryAction={
+                                            <Box className={styles.actionButtons}>
+                                                <CopyIdButton id={item._id} testId="inboxItemCopyIdButton" />
+                                                <Tooltip title="Clarify with Claude">
+                                                    <IconButton
+                                                        size="small"
+                                                        color="primary"
+                                                        onClick={() => review.openFor(item)}
+                                                        data-testid="inboxItemClarifyClaudeButton"
+                                                    >
+                                                        <AutoAwesomeIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                <Tooltip title="Edit">
+                                                    <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="inboxItemEditButton">
+                                                        <EditIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                <Tooltip title="Done (< 2 min)">
+                                                    <IconButton size="small" onClick={() => void onQuickDone(item)}>
+                                                        <PlaylistAddCheckIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                <Tooltip title="Next Action">
+                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'nextAction', e.currentTarget)}>
+                                                        <ArrowForwardIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                <Tooltip title="Calendar">
+                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'calendar', e.currentTarget)}>
+                                                        <CalendarTodayIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                <Tooltip title="Waiting For">
+                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'waitingFor', e.currentTarget)}>
+                                                        <HourglassEmptyIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                <Tooltip title="Trash">
+                                                    <IconButton size="small" color="error" onClick={() => void onTrash(item)}>
+                                                        <DeleteOutlineIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                            </Box>
+                                        }
+                                    >
+                                        <ListItemButton onClick={() => editor.openEditor({ item })} data-testid="inboxItemRow">
+                                            <ListItemText
+                                                primary={
+                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                        <span>{item.title}</span>
+                                                        {item.routineId && (
+                                                            <RoutineIndicator routineId={item.routineId} routineTitle={routineTitleById.get(item.routineId)} />
+                                                        )}
+                                                        <AccountChip userId={item.userId} />
+                                                    </Box>
+                                                }
+                                                secondary={dayjs(item.createdTs).fromNow()}
+                                                className={styles.listItemText}
+                                            />
+                                        </ListItemButton>
+                                    </ListItem>
+                                )}
 
-                            {editor.renderExpandFor(item._id)}
+                                {editor.renderExpandFor(item._id)}
 
-                            {idx < inboxItems.length - 1 && <Divider />}
-                        </ListRowShell>
-                    ))}
+                                {idx < inboxItems.length - 1 && <Divider />}
+                            </ListRowShell>
+                        ))}
+                    </WindowVirtualizer>
                 </List>
             )}
 

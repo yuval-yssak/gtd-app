@@ -13,38 +13,53 @@ import { useTheme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { useCallback, useMemo } from 'react';
+import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CalendarRowMeta } from '../../components/CalendarRowMeta';
 import { groupCalendarItemsByDay, isMultiDayAllDay, NO_DATE_KEY } from '../../components/calendarRouteSort';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
+import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { useListSearch } from '../../hooks/useListSearch';
 import { formatAllDayDate, fromGCalExclusive } from '../../lib/allDayDate';
+import { filterItemsByQuery } from '../../lib/itemSearch';
+import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-calendar.module.css';
 
 export const Route = createFileRoute('/_authenticated/calendar')({
+    validateSearch: parseListQuerySearch,
     component: CalendarPage,
 });
 
 function CalendarPage() {
     const { db } = Route.useRouteContext();
+    const { q } = Route.useSearch();
+    const navigate = useNavigate();
     const { items, routines, people, workContexts, refreshItems, isInitialSyncing, isCalendarSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
 
-    const calendarItems = items.filter((item) => item.status === 'calendar');
+    const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/calendar', search: { q: query || undefined }, replace: true }), [navigate]);
+    const search = useListSearch({ urlQuery: q ?? '', writeUrlQuery });
+    const { deferredQuery } = search;
+
+    const calendarItems = useMemo(() => items.filter((item) => item.status === 'calendar'), [items]);
     // Group + sort lives in calendarRouteSort.ts so the rules (all-day first, multi-day under start date) are
     // unit-tested independently of this render path. The returned map iterates day-keys chronologically.
-    const groups = groupCalendarItemsByDay(calendarItems);
+    // The in-page query (deferred — see useListSearch) narrows items before grouping, so empty days vanish.
+    const groups = useMemo(() => groupCalendarItemsByDay(filterItemsByQuery(calendarItems, deferredQuery)), [calendarItems, deferredQuery]);
+    const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
 
     function dateLabel(dateKey: string): string {
         if (dateKey === NO_DATE_KEY) {
@@ -67,36 +82,93 @@ function CalendarPage() {
         await refreshItems();
     }
 
-    if (calendarItems.length === 0) {
+    function renderBody() {
+        // First-launch bootstrap: skeleton while IDB loads; "no items" copy only once loaded.
+        if (calendarItems.length === 0) {
+            return isInitialSyncing ? <ListSkeleton /> : <EmptyMessage text="No upcoming calendar items." />;
+        }
+        const dayGroups = Object.entries(groups);
+        if (dayGroups.length === 0) {
+            return <EmptyMessage text="No calendar items match your search." />;
+        }
         return (
-            <Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-                    <Typography
-                        variant="h5"
+            // Windowed rendering — only day groups near the viewport mount, so months of calendar
+            // history don't block the main thread on navigation. Each day is one measured child.
+            <WindowVirtualizer>
+                {dayGroups.map(([dateKey, groupItems]) => (
+                    <Box
+                        key={dateKey}
                         sx={{
-                            fontWeight: 600,
+                            mb: 3,
                         }}
                     >
-                        Calendar
-                    </Typography>
-                    {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
-                    <AccountSyncChip />
-                </Box>
-                {/* First-launch bootstrap: skeleton while IDB loads; "no items" copy only once loaded. */}
-                {isInitialSyncing ? (
-                    <ListSkeleton />
-                ) : (
-                    <Typography
-                        sx={{
-                            color: 'text.secondary',
-                            textAlign: 'center',
-                            mt: 6,
-                        }}
-                    >
-                        No upcoming calendar items.
-                    </Typography>
-                )}
-            </Box>
+                        <Box className={styles.dateHeader}>
+                            <Typography
+                                variant="subtitle2"
+                                sx={{
+                                    color: 'text.secondary',
+                                    fontWeight: 600,
+                                }}
+                            >
+                                {dateLabel(dateKey)}
+                            </Typography>
+                            {isPast(dateKey) && <Chip label="Past" size="small" color="default" />}
+                        </Box>
+                        <List disablePadding className={styles.list}>
+                            {groupItems.map((item, idx) => (
+                                <Box key={item._id}>
+                                    <ListItem
+                                        disablePadding
+                                        className={styles.item}
+                                        secondaryAction={
+                                            <Box className={styles.actionButtons}>
+                                                <CopyIdButton id={item._id} testId="calendarItemCopyIdButton" />
+                                                <Tooltip title="Edit">
+                                                    <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="calendarItemEditButton">
+                                                        <EditIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                <Tooltip title="Mark done">
+                                                    <IconButton
+                                                        size="small"
+                                                        color="success"
+                                                        onClick={() => void onDone(item)}
+                                                        data-testid="calendarItemMarkDoneButton"
+                                                    >
+                                                        <CheckCircleOutlineIcon />
+                                                    </IconButton>
+                                                </Tooltip>
+                                            </Box>
+                                        }
+                                    >
+                                        <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="calendarItemRow">
+                                            <Box className={styles.timeCol}>
+                                                <TimeColumn item={item} />
+                                            </Box>
+                                            {/* pr ensures text doesn't overlap the edit button in secondaryAction */}
+                                            <ListItemText
+                                                primary={
+                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                                                        <span>{item.title}</span>
+                                                        {item.routineId && (
+                                                            <RoutineIndicator routineId={item.routineId} routineTitle={routineTitleById.get(item.routineId)} />
+                                                        )}
+                                                        <AccountChip userId={item.userId} />
+                                                        <CalendarRowMeta item={item} />
+                                                    </Box>
+                                                }
+                                                className={styles.listItemText}
+                                            />
+                                        </ListItemButton>
+                                    </ListItem>
+                                    {editor.renderExpandFor(item._id)}
+                                    {idx < groupItems.length - 1 && <Divider />}
+                                </Box>
+                            ))}
+                        </List>
+                    </Box>
+                ))}
+            </WindowVirtualizer>
         );
     }
 
@@ -113,86 +185,35 @@ function CalendarPage() {
                 </Typography>
                 {isCalendarSyncing && <SyncingChip label="Syncing calendar…" />}
                 <AccountSyncChip />
+                <ListSearchButton onToggle={search.toggleSearch} testId="calendarSearchButton" />
             </Box>
-            {Object.entries(groups).map(([dateKey, groupItems]) => (
-                <Box
-                    key={dateKey}
-                    sx={{
-                        mb: 3,
-                    }}
-                >
-                    <Box className={styles.dateHeader}>
-                        <Typography
-                            variant="subtitle2"
-                            sx={{
-                                color: 'text.secondary',
-                                fontWeight: 600,
-                            }}
-                        >
-                            {dateLabel(dateKey)}
-                        </Typography>
-                        {isPast(dateKey) && <Chip label="Past" size="small" color="default" />}
-                    </Box>
-                    <List disablePadding className={styles.list}>
-                        {groupItems.map((item, idx) => (
-                            <Box key={item._id}>
-                                <ListItem
-                                    disablePadding
-                                    className={styles.item}
-                                    secondaryAction={
-                                        <Box className={styles.actionButtons}>
-                                            <CopyIdButton id={item._id} testId="calendarItemCopyIdButton" />
-                                            <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="calendarItemEditButton">
-                                                    <EditIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Mark done">
-                                                <IconButton
-                                                    size="small"
-                                                    color="success"
-                                                    onClick={() => void onDone(item)}
-                                                    data-testid="calendarItemMarkDoneButton"
-                                                >
-                                                    <CheckCircleOutlineIcon />
-                                                </IconButton>
-                                            </Tooltip>
-                                        </Box>
-                                    }
-                                >
-                                    <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="calendarItemRow">
-                                        <Box className={styles.timeCol}>
-                                            <TimeColumn item={item} />
-                                        </Box>
-                                        {/* pr ensures text doesn't overlap the edit button in secondaryAction */}
-                                        <ListItemText
-                                            primary={
-                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
-                                                    <span>{item.title}</span>
-                                                    {item.routineId && (
-                                                        <RoutineIndicator
-                                                            routineId={item.routineId}
-                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                        />
-                                                    )}
-                                                    <AccountChip userId={item.userId} />
-                                                    <CalendarRowMeta item={item} />
-                                                </Box>
-                                            }
-                                            className={styles.listItemText}
-                                        />
-                                    </ListItemButton>
-                                </ListItem>
-                                {editor.renderExpandFor(item._id)}
-                                {idx < groupItems.length - 1 && <Divider />}
-                            </Box>
-                        ))}
-                    </List>
-                </Box>
-            ))}
+            {search.isOpen && (
+                <ListSearchField
+                    value={search.queryInput}
+                    onValueChange={search.setQueryInput}
+                    onClose={search.closeSearch}
+                    placeholder="Search calendar…"
+                    testId="calendarSearchInput"
+                />
+            )}
+            {renderBody()}
             {editor.renderGlobal()}
             <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
         </Box>
+    );
+}
+
+function EmptyMessage({ text }: { text: string }) {
+    return (
+        <Typography
+            sx={{
+                color: 'text.secondary',
+                textAlign: 'center',
+                mt: 6,
+            }}
+        >
+            {text}
+        </Typography>
     );
 }
 
@@ -221,7 +242,9 @@ function TimeColumn({ item }: TimeColumnProps) {
             </Box>
         );
     }
-    if (!item.timeStart) return null;
+    if (!item.timeStart) {
+        return null;
+    }
     return (
         <Typography variant="caption" sx={{ color: 'text.secondary' }}>
             {dayjs(item.timeStart).format('h:mm a')}

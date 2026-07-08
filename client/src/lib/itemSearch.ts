@@ -94,6 +94,19 @@ export function filterItems(items: readonly StoredItem[], filters: SearchFilters
     });
 }
 
+/**
+ * Case-insensitive title/notes substring filter — the query semantics of the /search page,
+ * reused by the in-page search fields on virtualized list pages. A blank query returns the
+ * input array unchanged (stable identity, so memoized consumers skip work).
+ */
+export function filterItemsByQuery(items: readonly StoredItem[], query: string): readonly StoredItem[] {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+        return items;
+    }
+    return items.filter((item) => matchesQuery(item, normalizedQuery));
+}
+
 export function sortItems(items: readonly StoredItem[], key: ItemSortKey, dir: ItemSortDir): StoredItem[] {
     const sign = dir === 'asc' ? 1 : -1;
     // Plain string comparison — ISO 8601 timestamps sort lexicographically, and localeCompare

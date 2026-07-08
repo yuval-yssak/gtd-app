@@ -47,7 +47,7 @@ export function compareWithinDay(a: StoredItem, b: StoredItem): number {
  * preserved by sorting keys ascending (No-date sentinel pinned to the end) so `Object.entries`
  * yields a stable, chronological iteration for the route's render loop.
  */
-export function groupCalendarItemsByDay(items: StoredItem[]): Record<string, StoredItem[]> {
+export function groupCalendarItemsByDay(items: readonly StoredItem[]): Record<string, StoredItem[]> {
     const buckets = items.reduce<Record<string, StoredItem[]>>((acc, item) => {
         const key = groupingKeyFor(item);
         acc[key] = [...(acc[key] ?? []), item];

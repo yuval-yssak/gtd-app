@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SEARCH_FILTERS, filterItems, groupByStatus, sortItems } from '../lib/itemSearch';
+import { DEFAULT_SEARCH_FILTERS, filterItems, filterItemsByQuery, groupByStatus, sortItems } from '../lib/itemSearch';
 import type { StoredItem } from '../types/MyDB';
 
 const mkItem = (overrides: Partial<StoredItem> & { _id: string; status: StoredItem['status'] }): StoredItem => ({
@@ -8,6 +8,31 @@ const mkItem = (overrides: Partial<StoredItem> & { _id: string; status: StoredIt
     createdTs: '2026-01-01T00:00:00.000Z',
     updatedTs: '2026-01-01T00:00:00.000Z',
     ...overrides,
+});
+
+describe('filterItemsByQuery', () => {
+    const items = [
+        mkItem({ _id: '1', status: 'nextAction', title: 'Buy MILK' }),
+        mkItem({ _id: '2', status: 'inbox', title: 'Other', notes: 'remember the milk' }),
+        mkItem({ _id: '3', status: 'calendar', title: 'no match' }),
+    ];
+
+    it('matches title and notes case-insensitively, ignoring status', () => {
+        expect(filterItemsByQuery(items, 'MiLk').map((i) => i._id)).toEqual(['1', '2']);
+    });
+
+    it('trims surrounding whitespace before matching', () => {
+        expect(filterItemsByQuery(items, '  milk  ').map((i) => i._id)).toEqual(['1', '2']);
+    });
+
+    it('returns the input array identity for a blank query, so memoized consumers skip work', () => {
+        expect(filterItemsByQuery(items, '')).toBe(items);
+        expect(filterItemsByQuery(items, '   ')).toBe(items);
+    });
+
+    it('returns an empty list when nothing matches', () => {
+        expect(filterItemsByQuery(items, 'zebra')).toEqual([]);
+    });
 });
 
 describe('filterItems', () => {

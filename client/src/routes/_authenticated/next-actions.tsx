@@ -23,19 +23,22 @@ import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
+import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
-import { itemContextTags, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
+import { useListSearch } from '../../hooks/useListSearch';
+import { filterItemsByQuery, itemContextTags, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
 import { missingClarifications } from '../../lib/missingClarifications';
 import { type NextActionsUrlState, parseNextActionsSearch, TIME_FILTER_OPTIONS } from '../../lib/nextActionsUrlParams';
 import { sortByName } from '../../lib/sortByName';
@@ -91,6 +94,26 @@ export function UnclarifiedWarning({ missingLabels }: { missingLabels: NonEmptyA
             <WarningAmberIcon fontSize="small" color="warning" data-testid="unclarifiedWarning" />
         </Tooltip>
     );
+}
+
+// Four-tier sort: focused-with-date (expectedBy asc), focused-no-date, other-with-date
+// (expectedBy asc), other-no-date. Focus is the primary partition, presence of an
+// expectedBy is the secondary partition within each focus group.
+function compareNextActions(a: StoredItem, b: StoredItem): number {
+    const aFocus = a.focus === true;
+    const bFocus = b.focus === true;
+    if (aFocus !== bFocus) {
+        return aFocus ? -1 : 1;
+    }
+    const aHasDate = Boolean(a.expectedBy);
+    const bHasDate = Boolean(b.expectedBy);
+    if (aHasDate !== bHasDate) {
+        return aHasDate ? -1 : 1;
+    }
+    if (!aHasDate) {
+        return 0;
+    }
+    return (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '');
 }
 
 // "Show tags" preference persists across visits. Defaults ON; only an explicit 'false' hides them.
@@ -161,6 +184,12 @@ function NextActionsPage() {
         void navigate({ to: '/next-actions', search: { ...urlFilters, [key]: next }, replace: true });
     }
 
+    const writeUrlQuery = useCallback(
+        (query: string) => void navigate({ to: '/next-actions', search: { ...urlFilters, q: query || undefined }, replace: true }),
+        [navigate, urlFilters],
+    );
+    const search = useListSearch({ urlQuery: urlFilters.q ?? '', writeUrlQuery });
+
     function onShowTagsToggled(next: boolean) {
         setShowTags(next);
         localStorage.setItem(SHOW_TAGS_KEY, String(next));
@@ -171,33 +200,18 @@ function NextActionsPage() {
     // (cross-account references exist), and its chip must still resolve to a name.
     const contextsById = useMemo(() => new Map(allWorkContexts.map((c) => [c._id, c])), [allWorkContexts]);
     const peopleById = useMemo(() => new Map(allPeople.map((p) => [p._id, p])), [allPeople]);
+    const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
 
     // Filter chips are sorted A→Z at this consumer site only — AppDataProvider keeps stored order for other pages.
     const sortedWorkContexts = useMemo(() => sortByName(workContexts), [workContexts]);
     const sortedPeople = useMemo(() => sortByName(people), [people]);
 
-    const nextActions = itemsWithGhosts
-        .filter((item) => item.status === 'nextAction')
-        .filter((item) => matchesFilters(item, urlFilters))
-        .sort((a, b) => {
-            // Four-tier sort: focused-with-date (expectedBy asc), focused-no-date, other-with-date
-            // (expectedBy asc), other-no-date. Focus is the primary partition, presence of an
-            // expectedBy is the secondary partition within each focus group.
-            const af = a.focus === true;
-            const bf = b.focus === true;
-            if (af !== bf) {
-                return af ? -1 : 1;
-            }
-            const aHas = Boolean(a.expectedBy);
-            const bHas = Boolean(b.expectedBy);
-            if (aHas !== bHas) {
-                return aHas ? -1 : 1;
-            }
-            if (!aHas) {
-                return 0;
-            }
-            return (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '');
-        });
+    // Deferred query: typing re-filters in an interruptible background render (see useListSearch).
+    const { deferredQuery } = search;
+    const nextActions = useMemo(() => {
+        const visible = itemsWithGhosts.filter((item) => item.status === 'nextAction').filter((item) => matchesFilters(item, urlFilters));
+        return [...filterItemsByQuery(visible, deferredQuery)].sort(compareNextActions);
+    }, [itemsWithGhosts, urlFilters, deferredQuery]);
 
     async function onDone(item: StoredItem) {
         await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
@@ -222,7 +236,17 @@ function NextActionsPage() {
                 </Typography>
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
+                <ListSearchButton onToggle={search.toggleSearch} testId="nextActionsSearchButton" />
             </Box>
+            {search.isOpen && (
+                <ListSearchField
+                    value={search.queryInput}
+                    onValueChange={search.setQueryInput}
+                    onClose={search.closeSearch}
+                    placeholder="Search next actions…"
+                    testId="nextActionsSearchInput"
+                />
+            )}
             {/* Filter bar */}
             <Box
                 sx={{
@@ -325,65 +349,74 @@ function NextActionsPage() {
                             mt: 6,
                         }}
                     >
-                        No next actions match the current filters.
+                        {/* Distinguish an unmatched search from unmatched filter chips — same convention as inbox/calendar. */}
+                        {deferredQuery.trim() ? 'No next actions match your search.' : 'No next actions match the current filters.'}
                     </Typography>
                 )
             ) : (
-                <List disablePadding className={styles.list}>
-                    {nextActions.map((item, idx) => {
-                        const missingLabels = missingClarifications(item, hasAtLeastOne(workContexts));
-                        return (
-                            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
-                                <ListItem
-                                    disablePadding
-                                    className={styles.item}
-                                    secondaryAction={
-                                        <Box className={styles.actionButtons}>
-                                            <CopyIdButton id={item._id} testId="nextActionItemCopyIdButton" />
-                                            <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="nextActionItemEditButton">
-                                                    <EditIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
-                                            <Tooltip title="Mark done">
-                                                <IconButton size="small" color="success" onClick={() => void onDone(item)}>
-                                                    <CheckCircleOutlineIcon />
-                                                </IconButton>
-                                            </Tooltip>
-                                        </Box>
-                                    }
-                                >
-                                    <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="nextActionItemRow">
-                                        <ListItemText
-                                            primary={
-                                                <Box className={styles.titleRow}>
-                                                    {item.focus === true && <FocusIndicator />}
-                                                    {item.urgent && <BoltIcon fontSize="small" color="error" />}
-                                                    <span>{item.title}</span>
-                                                    {item.energy && <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />}
-                                                    {item.time !== undefined && <Chip label={`${item.time} min`} size="small" variant="outlined" />}
-                                                    {hasAtLeastOne(missingLabels) && <UnclarifiedWarning missingLabels={missingLabels} />}
-                                                    {item.routineId && (
-                                                        <RoutineIndicator
-                                                            routineId={item.routineId}
-                                                            routineTitle={routines.find((r) => r._id === item.routineId)?.title}
-                                                        />
-                                                    )}
-                                                    <AccountChip userId={item.userId} />
-                                                </Box>
-                                            }
-                                            // secondary slot rendered as 'div' so chips (block content) can nest — the default <p> would be invalid DOM.
-                                            slotProps={{ secondary: { component: 'div' } }}
-                                            secondary={buildRowSecondary(item, { showTags, contextsById, peopleById })}
-                                            className={styles.listItemText}
-                                        />
-                                    </ListItemButton>
-                                </ListItem>
-                                {editor.renderExpandFor(item._id)}
-                                {idx < nextActions.length - 1 && <Divider />}
-                            </ListRowShell>
-                        );
-                    })}
+                // component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
+                // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
+                // next-actions list doesn't block the main thread on navigation.
+                <List disablePadding component="div" className={styles.list}>
+                    <WindowVirtualizer>
+                        {nextActions.map((item, idx) => {
+                            const missingLabels = missingClarifications(item, hasAtLeastOne(workContexts));
+                            return (
+                                <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
+                                    <ListItem
+                                        disablePadding
+                                        className={styles.item}
+                                        secondaryAction={
+                                            <Box className={styles.actionButtons}>
+                                                <CopyIdButton id={item._id} testId="nextActionItemCopyIdButton" />
+                                                <Tooltip title="Edit">
+                                                    <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="nextActionItemEditButton">
+                                                        <EditIcon fontSize="small" />
+                                                    </IconButton>
+                                                </Tooltip>
+                                                <Tooltip title="Mark done">
+                                                    <IconButton size="small" color="success" onClick={() => void onDone(item)}>
+                                                        <CheckCircleOutlineIcon />
+                                                    </IconButton>
+                                                </Tooltip>
+                                            </Box>
+                                        }
+                                    >
+                                        <ListItemButton
+                                            onClick={() => editor.openEditor({ item })}
+                                            className={styles.rowButton}
+                                            data-testid="nextActionItemRow"
+                                        >
+                                            <ListItemText
+                                                primary={
+                                                    <Box className={styles.titleRow}>
+                                                        {item.focus === true && <FocusIndicator />}
+                                                        {item.urgent && <BoltIcon fontSize="small" color="error" />}
+                                                        <span>{item.title}</span>
+                                                        {item.energy && (
+                                                            <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />
+                                                        )}
+                                                        {item.time !== undefined && <Chip label={`${item.time} min`} size="small" variant="outlined" />}
+                                                        {hasAtLeastOne(missingLabels) && <UnclarifiedWarning missingLabels={missingLabels} />}
+                                                        {item.routineId && (
+                                                            <RoutineIndicator routineId={item.routineId} routineTitle={routineTitleById.get(item.routineId)} />
+                                                        )}
+                                                        <AccountChip userId={item.userId} />
+                                                    </Box>
+                                                }
+                                                // secondary slot rendered as 'div' so chips (block content) can nest — the default <p> would be invalid DOM.
+                                                slotProps={{ secondary: { component: 'div' } }}
+                                                secondary={buildRowSecondary(item, { showTags, contextsById, peopleById })}
+                                                className={styles.listItemText}
+                                            />
+                                        </ListItemButton>
+                                    </ListItem>
+                                    {editor.renderExpandFor(item._id)}
+                                    {idx < nextActions.length - 1 && <Divider />}
+                                </ListRowShell>
+                            );
+                        })}
+                    </WindowVirtualizer>
                 </List>
             )}
             {editor.renderGlobal()}

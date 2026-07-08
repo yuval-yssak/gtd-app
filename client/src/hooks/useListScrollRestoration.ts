@@ -53,9 +53,15 @@ function saveCurrentPosition(locationKey: string): void {
     saveListScrollEntry(locationKey, { scrollTop: surface.scroller.scrollTop, anchor, savedAtMs: dayjs().valueOf() });
 }
 
+function findAnchorElement(entry: ListScrollEntry): Element | null {
+    if (!entry.anchor) {
+        return null;
+    }
+    return document.querySelector(`[${LIST_ANCHOR_ATTRIBUTE}="${CSS.escape(entry.anchor.id)}"]`);
+}
+
 /** Anchor-first target: where the saved row sits now, else the raw saved pixel offset. */
-function desiredScrollTop(surface: ScrollSurface, entry: ListScrollEntry): number {
-    const anchorEl = entry.anchor && document.querySelector(`[${LIST_ANCHOR_ATTRIBUTE}="${CSS.escape(entry.anchor.id)}"]`);
+function desiredScrollTop(surface: ScrollSurface, entry: ListScrollEntry, anchorEl: Element | null): number {
     if (entry.anchor && anchorEl) {
         return scrollTopForAnchor(surface.scroller.scrollTop, surface.visualTop(), anchorEl.getBoundingClientRect().top, entry.anchor.offset);
     }
@@ -70,10 +76,20 @@ function desiredScrollTop(surface: ScrollSurface, entry: ListScrollEntry): numbe
 // shared shell) — a future split-view would need per-surface generations.
 const RESTORE_RETRY_FRAMES = 60;
 let restoreGeneration = 0;
+// While a restore chain runs, scroll events are programmatic echoes of the chain's own
+// assignments — capturing them would overwrite the accurate saved entry with a provisional
+// position (see isAwaitingAnchor below) and freeze the drift in place.
+let isRestoreChainActive = false;
 
 function applyRestore(locationKey: string, generation: number, framesLeft: number): void {
+    const finishChain = () => {
+        if (generation === restoreGeneration) {
+            isRestoreChainActive = false;
+        }
+    };
     const surface = resolveScrollSurface();
     if (!surface) {
+        finishChain();
         return;
     }
     const entry = readFreshListScrollEntry(locationKey);
@@ -81,23 +97,34 @@ function applyRestore(locationKey: string, generation: number, framesLeft: numbe
         // Fresh visit (or the sticky window lapsed) — the scroll surface keeps its offset
         // across route changes, so an explicit reset is what makes lists start at the top.
         surface.scroller.scrollTop = 0;
+        finishChain();
         return;
     }
-    const target = desiredScrollTop(surface, entry);
+    const anchorEl = findAnchorElement(entry);
+    const target = desiredScrollTop(surface, entry, anchorEl);
     surface.scroller.scrollTop = target;
     const wasClamped = Math.abs(surface.scroller.scrollTop - target) > 1;
-    if (wasClamped && framesLeft > 0) {
+    // Windowed lists (virtua) don't have the saved anchor row mounted yet on arrival: the pixel
+    // fallback lands nearby (content height is partly estimated, so it drifts), the row then
+    // mounts, and a later frame re-anchors precisely. Keep retrying until the anchor appears.
+    // Worst case (anchor row was deleted and never mounts): the chain — and with it the
+    // scroll-capture suppression — runs the full retry budget (~1s) before saves resume.
+    const isAwaitingAnchor = entry.anchor !== null && !anchorEl;
+    if ((wasClamped || isAwaitingAnchor) && framesLeft > 0) {
         requestAnimationFrame(() => {
             if (generation === restoreGeneration) {
                 applyRestore(locationKey, generation, framesLeft - 1);
             }
         });
+        return;
     }
+    finishChain();
 }
 
 /** Hybrid restore: re-anchor on the saved row when it still exists, else fall back to the raw pixel offset. */
 function restorePosition(locationKey: string): void {
     restoreGeneration += 1;
+    isRestoreChainActive = true;
     applyRestore(locationKey, restoreGeneration, RESTORE_RETRY_FRAMES);
 }
 
@@ -143,12 +170,15 @@ export function useListScrollRestoration(): void {
             }
         };
         const captureOnScroll = () => {
-            if (isDeparting || captureFrame !== null) {
+            if (isDeparting || isRestoreChainActive || captureFrame !== null) {
                 return;
             }
             captureFrame = requestAnimationFrame(() => {
                 captureFrame = null;
-                saveCurrentPosition(keyOfLocation(router.latestLocation));
+                // Re-checked here: a restore chain may have started between scheduling and firing.
+                if (!isRestoreChainActive) {
+                    saveCurrentPosition(keyOfLocation(router.latestLocation));
+                }
             });
         };
         window.addEventListener('scroll', captureOnScroll, { capture: true, passive: true });

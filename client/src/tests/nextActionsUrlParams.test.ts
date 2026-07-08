@@ -36,6 +36,14 @@ describe('parseNextActionsSearch', () => {
             person: undefined,
             energy: undefined,
             time: undefined,
+            q: undefined,
         });
+    });
+
+    it('passes through the in-page search query and coerces JSON-parsed scalars', () => {
+        expect(parseNextActionsSearch({ q: 'milk' }).q).toBe('milk');
+        // TanStack Router JSON-parses search values, so `?q=2024` arrives as the number 2024.
+        expect(parseNextActionsSearch({ q: 2024 }).q).toBe('2024');
+        expect(parseNextActionsSearch({ q: '' }).q).toBeUndefined();
     });
 });

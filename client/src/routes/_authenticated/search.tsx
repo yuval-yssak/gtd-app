@@ -9,18 +9,17 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { useListSearch } from '../../hooks/useListSearch';
 import { filterItems, sortItems } from '../../lib/itemSearch';
 import { loadVisibleColumns, type SearchTableColumnId, saveVisibleColumns } from '../../lib/searchTableColumns';
 import { DEFAULT_URL_STATE, parseSearchParams, type SearchUrlState, type SearchView, urlStateToFilters } from '../../lib/searchUrlParams';
 import styles from './-search.module.css';
-
-const QUERY_DEBOUNCE_MS = 200;
 
 export const Route = createFileRoute('/_authenticated/search')({
     validateSearch: parseSearchParams,
@@ -40,34 +39,19 @@ function SearchPage() {
     useListScrollRestoration();
     const { items, people, workContexts, allPeople, allWorkContexts } = useAppData();
 
-    // Mirrored from URL so typing stays responsive while URL writes are debounced.
-    const [queryInput, setQueryInput] = useState(urlState.q);
-    // Filtering keys off the deferred value, not the URL: keystrokes commit urgently (the input
-    // echoes immediately) while the filter + results re-render happens in a background render
-    // React can interrupt. The debounced URL write below remains for shareability/history only.
-    const deferredQuery = useDeferredValue(queryInput);
+    // Input mirroring, deferred filtering, and the debounced URL write all live in useListSearch —
+    // the same pipeline the virtualized list pages use for their in-page search fields.
+    const writeUrlQuery = useCallback(
+        (query: string) => void navigate({ to: '/search', search: { ...urlState, q: query }, replace: true }),
+        [navigate, urlState],
+    );
+    const { queryInput, setQueryInput, deferredQuery } = useListSearch({ urlQuery: urlState.q, writeUrlQuery });
     const [visibleColumns, setVisibleColumns] = useState<Set<SearchTableColumnId>>(() => loadVisibleColumns());
 
     const updateUrlState = (patch: Partial<SearchUrlState>) => {
         // replace: true so live filter changes don't pollute browser history.
         void navigate({ to: '/search', search: { ...urlState, ...patch }, replace: true });
     };
-
-    // Debounce query → URL. Skip the navigate call on no-op so typing doesn't churn history.
-    useEffect(() => {
-        if (queryInput === urlState.q) return;
-        const handle = window.setTimeout(() => {
-            void navigate({ to: '/search', search: { ...urlState, q: queryInput }, replace: true });
-        }, QUERY_DEBOUNCE_MS);
-        return () => window.clearTimeout(handle);
-    }, [queryInput, urlState, navigate]);
-
-    // External URL changes (back/forward, programmatic resets) need to flow back into the input.
-    // setState dedupes when the value matches, so unconditionally calling it is safe and avoids
-    // a stale-closure read of queryInput inside the comparison.
-    useEffect(() => {
-        setQueryInput(urlState.q);
-    }, [urlState.q]);
 
     function resetFilters() {
         setQueryInput('');

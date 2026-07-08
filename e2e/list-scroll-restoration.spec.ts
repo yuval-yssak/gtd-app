@@ -62,7 +62,9 @@ test.describe('List scroll restoration + ghost rows', () => {
 
             await page.goto('/next-actions');
             await usePageClarifyMode(page);
-            await expect(page.getByTestId('nextActionItemRow')).toHaveCount(35);
+            // Windowed rendering (virtua) mounts only rows near the viewport, so an exact
+            // 35-row count never holds — a visible first row means the list data is loaded.
+            await expect(page.getByTestId('nextActionItemRow').first()).toBeVisible();
 
             const savedScrollTop = await scrollListToMiddle(page);
             expect(savedScrollTop).toBeGreaterThan(200);
@@ -120,7 +122,8 @@ test.describe('List scroll restoration + ghost rows', () => {
             await seedNextActions(page, 35, 'Sticky item');
 
             await page.goto('/next-actions');
-            await expect(page.getByTestId('nextActionItemRow')).toHaveCount(35);
+            // Windowed rendering — readiness is "a row is visible", not an exact mounted count.
+            await expect(page.getByTestId('nextActionItemRow').first()).toBeVisible();
             const savedScrollTop = await scrollListToMiddle(page);
             expect(savedScrollTop).toBeGreaterThan(200);
 
@@ -132,7 +135,7 @@ test.describe('List scroll restoration + ghost rows', () => {
             // Returning via the nav (not back-navigation) is still "within the flow" — position sticks.
             await page.getByRole('link', { name: 'Next Actions' }).click();
             await expect(page).toHaveURL(/\/next-actions$/);
-            await expect(page.getByTestId('nextActionItemRow')).toHaveCount(35);
+            await expect(page.getByTestId('nextActionItemRow').first()).toBeVisible();
             await expect.poll(async () => Math.abs((await readListScrollTop(page)) - savedScrollTop)).toBeLessThan(150);
         });
     });
