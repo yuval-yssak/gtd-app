@@ -412,6 +412,18 @@ function useSyncNow(
     return { onSyncNow, isSyncing, syncError };
 }
 
+/** Field-wise sum of two sweeps' counts — the button repairs every logged-in account and reports one total. */
+export function addRepairCounts(a: RelinkSweepCounts, b: RelinkSweepCounts): RelinkSweepCounts {
+    return {
+        relinkedItems: a.relinkedItems + b.relinkedItems,
+        relinkedRoutines: a.relinkedRoutines + b.relinkedRoutines,
+        recreatedEvents: a.recreatedEvents + b.recreatedEvents,
+        trashedItems: a.trashedItems + b.trashedItems,
+        deactivatedRoutines: a.deactivatedRoutines + b.deactivatedRoutines,
+        clearedMarkers: a.clearedMarkers + b.clearedMarkers,
+    };
+}
+
 /**
  * Human-readable one-liner for the relink sweep's counts. Exported for unit tests.
  * Repaired categories are listed; an all-zero sweep reads as "nothing needed repair".
@@ -429,11 +441,43 @@ export function summarizeRepair(counts: RelinkSweepCounts): string {
 }
 
 /**
- * Wraps the repair-sync action (the server's stranded-marker relink sweep) with loading, error, and
- * result-summary state. The sweep is account-wide, so it runs under the row's pinned account session
- * and is idempotent — safe to click repeatedly.
+ * Runs the relink sweep once per LOGGED-IN account — pinned via `withOwnerSession` — and returns the
+ * summed counts. Not just the app-active account: the settings rows render from the ambient session,
+ * which can drift from the active account (the IDB-vs-cookie mismatch family), and a single-account
+ * sweep then silently repairs the wrong user. Sweeping every account is idempotent and drift-immune.
+ *
+ * Sequential, not Promise.all — `withOwnerSession` swaps the shared Better Auth active session;
+ * concurrent swaps would race each other's pinning. Dependency-injected and exported so the
+ * composition (per-account fan-out, ordering, fallback, aggregation) is unit-testable.
  */
-function useRepairSync(withActiveAccountSession: WithActiveAccountSession): {
+export async function sweepAllAccounts(
+    accountIds: string[],
+    withOwnerSession: <T>(userId: string, task: () => Promise<T>) => Promise<T>,
+    runSweep: () => Promise<RelinkSweepCounts>,
+): Promise<RelinkSweepCounts> {
+    const sweeps: RelinkSweepCounts[] = [];
+    for (const accountId of accountIds) {
+        sweeps.push(await withOwnerSession(accountId, runSweep));
+    }
+    if (!hasAtLeastOne(sweeps)) {
+        // No tracked accounts (shouldn't happen on the settings page) — run under the ambient session.
+        sweeps.push(await runSweep());
+    }
+    return sweeps.reduce(addRepairCounts, zeroRepairCounts());
+}
+
+/** All-zero sweep counts — the identity element for `addRepairCounts`. */
+export function zeroRepairCounts(): RelinkSweepCounts {
+    return { relinkedItems: 0, relinkedRoutines: 0, recreatedEvents: 0, trashedItems: 0, deactivatedRoutines: 0, clearedMarkers: 0 };
+}
+
+/**
+ * Wraps the repair-sync action (the server's stranded-marker relink sweep) with loading, error, and
+ * result-summary state. The heavy lifting (per-account fan-out) lives in `sweepAllAccounts`. The
+ * error branch is all-or-nothing on purpose: a partial server-side success is safe — the sweep is
+ * idempotent, so re-clicking after a failure just finishes the job.
+ */
+function useRepairSync(): {
     onRepair: () => void;
     isRepairing: boolean;
     repairError: string | null;
@@ -442,7 +486,7 @@ function useRepairSync(withActiveAccountSession: WithActiveAccountSession): {
     const [isRepairing, setIsRepairing] = useState(false);
     const [repairError, setRepairError] = useState<string | null>(null);
     const [repairSummary, setRepairSummary] = useState<string | null>(null);
-    const { syncAndRefresh } = useAppData();
+    const { loggedInAccounts, syncAndRefresh, withOwnerSession } = useAppData();
     const isMountedRef = useRef(true);
     useEffect(
         () => () => {
@@ -456,16 +500,20 @@ function useRepairSync(withActiveAccountSession: WithActiveAccountSession): {
         setRepairError(null);
         setRepairSummary(null);
         try {
-            const counts = await withActiveAccountSession(() => relinkCalendarMarkers());
+            const totals = await sweepAllAccounts(
+                loggedInAccounts.map((account) => account.id),
+                withOwnerSession,
+                relinkCalendarMarkers,
+            );
             // Pull the repair ops into IDB so the healed items/routines show up immediately.
             await syncAndRefresh();
-            if (isMountedRef.current) setRepairSummary(summarizeRepair(counts));
+            if (isMountedRef.current) setRepairSummary(summarizeRepair(totals));
         } catch {
             if (isMountedRef.current) setRepairError('Repair failed. Please try again.');
         } finally {
             if (isMountedRef.current) setIsRepairing(false);
         }
-    }, [syncAndRefresh, withActiveAccountSession]);
+    }, [loggedInAccounts, syncAndRefresh, withOwnerSession]);
 
     return { onRepair, isRepairing, repairError, repairSummary };
 }
@@ -482,7 +530,7 @@ function IntegrationRow({ detail, onIntegrationsChanged, onChooseCalendar, withA
         withActiveAccountSession,
     });
     const { onSyncNow, isSyncing, syncError } = useSyncNow(integration._id, withActiveAccountSession);
-    const { onRepair, isRepairing, repairError, repairSummary } = useRepairSync(withActiveAccountSession);
+    const { onRepair, isRepairing, repairError, repairSummary } = useRepairSync();
     const [isDisconnectOpen, setIsDisconnectOpen] = useState(false);
     const [isAddCalendarOpen, setIsAddCalendarOpen] = useState(false);
     const { syncAndRefresh } = useAppData();
