@@ -124,6 +124,13 @@ export interface CalendarProvider {
     getExceptions(eventId: string, calendarId: string, since: string, masterContent?: MasterContent): Promise<GCalException[]>;
     /** Fetches all events (including cancelled) within the given time window. */
     listEvents(calendarId: string, since: string, until: string): Promise<GCalEvent[]>;
+    /**
+     * Fetches a single event by id, regardless of its time or modification state — the active-relink
+     * sweep uses this to resolve `lastKnownCalendarEventId` markers that a full sync's `timeMin`
+     * window or an incremental syncToken would never surface. Returns the event verbatim (including
+     * `status: 'cancelled'` tombstones), or `null` when the provider reports it gone (404/410).
+     */
+    getEvent(calendarId: string, eventId: string): Promise<GCalEvent | null>;
     /** Fetches only events changed since the last sync using Google's syncToken. Throws SyncTokenInvalidError on 410 Gone. */
     listEventsIncremental(calendarId: string, syncToken: string): Promise<EventSyncResult>;
     /** Fetches all future events from timeMin onwards and returns a syncToken for subsequent incremental syncs. */

@@ -16,6 +16,7 @@ import * as sseConnections from '../lib/sseConnections.js';
 import * as webPush from '../lib/webPush.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { calendarRoutes, classifyRecurringMaster, pickSplitParent } from '../routes/calendar.js';
+import { maintenanceRoutes } from '../routes/maintenance.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
@@ -11358,12 +11359,16 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         expect(routine?.active).toBe(true);
     });
 
-    it('cross-account reconnect: OAuth callback clears orphaned lastKnown* markers pointing at a defunct integration', async () => {
+    it('reconnect: legacy (unstamped) lastKnown* markers with a dead integration id are left intact', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
 
         // Seed the prior disconnect state: an item AND a routine both carry markers pointing at the
         // OLD integration id (which the user has since disconnected). No live integration row exists.
+        // Neither marker carries lastKnownCalendarAccountEmail (legacy, pre-stamping rows) — the
+        // reconcile pass can't prove same-account, so under leave-unlinked it must NOT touch them.
+        // They heal later via the relink paths, which accept email-less markers best-effort when the
+        // event actually resolves (inbound strong-key restore, or the active sweep's found-event branch).
         const oldTs = dayjs().subtract(1, 'day').toISOString();
         await itemsDAO.insertOne({
             _id: 'item-orphan',
@@ -11416,32 +11421,23 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         // Redirect carries the live integration id so the client picker targets the real row.
         expect(res.headers.get('location')).toContain(`calendarConnected=${liveIntegration._id}`);
 
-        // Repair pass fired: the orphaned markers on the item and routine are cleared so pushback
-        // can flow again (otherwise both entities would be permanently un-pushable).
+        // Leave-unlinked: the markers persist verbatim. Wiping them would irreversibly sever the
+        // original events (an A→B→A round-trip could no longer relink) and re-arm the outbound
+        // backfill into minting clone events on the new account's calendar.
         const orphanItem = await itemsDAO.findOne({ _id: 'item-orphan' });
-        expect(orphanItem?.lastKnownCalendarEventId).toBeUndefined();
-        expect(orphanItem?.lastKnownCalendarIntegrationId).toBeUndefined();
-        expect(orphanItem?.lastKnownCalendarSyncConfigId).toBeUndefined();
+        expect(orphanItem?.lastKnownCalendarEventId).toBe('gcal-orphan-1');
+        expect(orphanItem?.lastKnownCalendarIntegrationId).toBe('int-OLD-account');
+        expect(orphanItem?.lastKnownCalendarSyncConfigId).toBe('sync-config-OLD');
         const orphanRoutine = await routinesDAO.findOne({ _id: 'routine-orphan' });
-        expect(orphanRoutine?.lastKnownCalendarEventId).toBeUndefined();
-        expect(orphanRoutine?.lastKnownCalendarIntegrationId).toBeUndefined();
-        expect(orphanRoutine?.lastKnownCalendarSyncConfigId).toBeUndefined();
+        expect(orphanRoutine?.lastKnownCalendarEventId).toBe('gcal-orphan-master');
+        expect(orphanRoutine?.lastKnownCalendarIntegrationId).toBe('int-OLD-account');
+        expect(orphanRoutine?.lastKnownCalendarSyncConfigId).toBe('sync-config-OLD');
 
-        // Repair-pass ops are recorded so other devices learn about the cleared markers via sync.
-        // Without these ops, other devices would keep the stale lastKnown* fields locally and their
-        // pushback would stay permanently skipped.
+        // No repair ops either — nothing changed, so peers must not be told anything.
         const itemOps = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-orphan' });
-        expect(itemOps.length).toBeGreaterThanOrEqual(1);
-        const latestItemOp = itemOps[itemOps.length - 1];
-        expect(latestItemOp?.opType).toBe('update');
-        const itemSnapshot = latestItemOp?.snapshot as ItemInterface | null;
-        expect(itemSnapshot?.lastKnownCalendarEventId).toBeUndefined();
+        expect(itemOps).toHaveLength(0);
         const routineOps = await operationsDAO.findArray({ user: userId, entityType: 'routine', entityId: 'routine-orphan' });
-        expect(routineOps.length).toBeGreaterThanOrEqual(1);
-        const latestRoutineOp = routineOps[routineOps.length - 1];
-        expect(latestRoutineOp?.opType).toBe('update');
-        const routineSnapshot = latestRoutineOp?.snapshot as RoutineInterface | null;
-        expect(routineSnapshot?.lastKnownCalendarEventId).toBeUndefined();
+        expect(routineOps).toHaveLength(0);
     });
 
     it('double disconnect without reconnect preserves the originally-stored lastKnownCalendarEventId on routines', async () => {
@@ -11573,7 +11569,7 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         expect(regenerated.length).toBeGreaterThan(0);
     });
 
-    it('cross-account reconnect wipes remove-mode markers and imports a fresh routine instead of restoring', async () => {
+    it('cross-account reconnect leaves remove-mode markers intact and imports a fresh routine instead of hijacking', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
 
@@ -11590,7 +11586,8 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
             }),
         );
         // A leftover generated item still carrying an instance id derived from the WORK master —
-        // the orphan wipe must clear it (it can never match the new account's exception payloads).
+        // under leave-unlinked it persists too: its routine stays unlinked, so it never participates
+        // in the new account's exception sync and the stale id is inert.
         const oldTs = dayjs().subtract(3, 'day').toISOString();
         await itemsDAO.insertOne({
             _id: 'item-work-orphan-instance',
@@ -11604,7 +11601,7 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         });
 
         // Reconnect with a DIFFERENT Google account (alice's, not work's) → the markers' origin email
-        // no longer matches the live integration, so reconcileLastKnownMarkers wipes them.
+        // no longer matches the live integration, so reconcileLastKnownMarkers leaves them untouched.
         const redirectRes = await authenticatedRequest(app, {
             method: 'GET',
             path: '/calendar/auth/google?login_hint=alice@example.com',
@@ -11626,8 +11623,9 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         if (!liveIntegration) throw new Error('expected a live integration');
         await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId, liveIntegration._id, { _id: 'sync-config-live' }));
 
-        // The shared-calendar case: the new account sees the SAME event id. Post-wipe there is no
-        // marker to match, so the import must create a fresh routine, not hijack the work one.
+        // The shared-calendar case: the new account sees the SAME event id. The work marker still
+        // exists, but the restore is account-scoped (markerOriginAccountScope) — it must NOT match
+        // the other-account marker, so the import creates a fresh routine instead of hijacking it.
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
                 {
@@ -11645,15 +11643,16 @@ describe('disconnect/reconnect — lastKnownCalendar* rename and strong-key rest
         const syncRes = await authenticatedRequest(app, { method: 'POST', path: `/calendar/integrations/${liveIntegration._id}/sync`, sessionCookie });
         expect(syncRes.status).toBe(200);
 
-        // Original routine untouched: still inactive, unlinked, markers gone.
+        // Original routine untouched: still inactive, unlinked, markers PRESERVED — reconnecting the
+        // work account later can still relink it to its original series.
         const orphan = await routinesDAO.findOne({ _id: 'routine-work-orphan' });
         expect(orphan?.active).toBe(false);
         expect(orphan?.calendarEventId).toBeUndefined();
-        expect(orphan?.lastKnownCalendarEventId).toBeUndefined();
-        expect(orphan?.lastKnownCalendarAccountEmail).toBeUndefined();
-        // The orphaned routine's leftover item lost its defunct instance id in the same wipe.
+        expect(orphan?.lastKnownCalendarEventId).toBe('gcal-work-master');
+        expect(orphan?.lastKnownCalendarAccountEmail).toBe('work@example.com');
+        // The orphaned routine's leftover item keeps its (inert) instance id for the same reason.
         const orphanItem = await itemsDAO.findOne({ _id: 'item-work-orphan-instance' });
-        expect(orphanItem?.calendarInstanceEventId).toBeUndefined();
+        expect(orphanItem?.calendarInstanceEventId).toBe('gcal-work-master_20260701T060000Z');
 
         // The inbound master created a FRESH routine under the new account's integration.
         const fresh = await routinesDAO.findOne({ calendarEventId: 'gcal-work-master' });
@@ -13107,12 +13106,13 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         expect(allForActive).toHaveLength(1);
     });
 
-    it('cross-account reconnect (REGRESSION): routine-instance ids are wiped, second move does not duplicate', async () => {
-        // The Q2 reviewer's hardest case: disconnect-with-keep on account A, reconnect to a
-        // DIFFERENT Google account B. Routine items still carry calendarInstanceEventId derived
-        // from A's master id. B's exceptions use a different master id → preferred lookup misses
-        // → fallback by originalDate works on the FIRST move, then misses on the SECOND →
-        // create-on-miss inserts a duplicate. Repair pass must wipe the stale instance ids.
+    it("cross-account reconnect: routine markers and instance ids persist; the unlinked routine never joins B's exception sync", async () => {
+        // Historic context: disconnect-with-keep on account A, reconnect to a DIFFERENT account B.
+        // The old wipe-and-repush behavior cleared markers + stale instance ids so the routine could
+        // be relinked/re-pushed under B (and stale ids then caused the duplicate-on-second-move
+        // regression). Under leave-unlinked the routine simply STAYS unlinked — markers and instance
+        // ids persist inertly, and only an explicit re-bind (simulated below) brings the routine into
+        // B's exception sync, at which point the duplicate-protection invariant must still hold.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
 
@@ -13160,19 +13160,24 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         );
         expect(callbackRes.status).toBe(302);
 
-        // Repair pass must have wiped the stale calendarInstanceEventId — otherwise the second
-        // move below would create a duplicate via the fallback-then-miss path.
-        const afterRepair = await itemsDAO.findByOwnerAndId('item-cross-account', userId);
-        expect(afterRepair?.calendarInstanceEventId).toBeUndefined();
-        expect(afterRepair?.lastKnownCalendarEventId).toBeUndefined();
+        // Leave-unlinked: the reconnect touches neither the routine's markers nor the item's stale
+        // instance id. The routine is unlinked, so it does not participate in B's exception sync —
+        // the stale id is inert until something explicitly re-binds the routine.
+        const afterReconnect = await routinesDAO.findByOwnerAndId('routine-cross-account', userId);
+        expect(afterReconnect?.lastKnownCalendarEventId).toBe('gcal-master-A');
+        const itemAfterReconnect = await itemsDAO.findByOwnerAndId('item-cross-account', userId);
+        expect(itemAfterReconnect?.calendarInstanceEventId).toBe('gcal-master-A_20260815T060000Z');
 
-        // Simulate two moves under account B's master id. With the instance id wiped, the first
-        // move uses the fallback (routineId + originalDate '2026-08-15' matches the item's
-        // current timeStart). Create-on-miss may fire on the second move, but the unique partial
-        // index ensures at most one new row.
+        // Simulate two moves under account B's master id after an EXPLICIT re-bind. The stale
+        // instance id makes the preferred lookup miss; the first move lands via the originalDate
+        // fallback. Create-on-miss may fire on the second move, but the unique partial index
+        // ensures at most one new row — the invariant that must survive leave-unlinked.
         const integrationsB = await calendarIntegrationsDAO.findByUserDecrypted(userId);
         const liveIntegrationId = integrationsB[0]?._id;
         if (!liveIntegrationId) throw new Error('expected reconnected integration');
+        // The sweep runs inside each manual sync below (full sync) and picks up the legacy
+        // email-less marker best-effort; return "not found" so it skips (provenance unproven).
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(null);
 
         const instanceB1 = 'gcal-master-B_20260815T060000Z';
         const getExceptionsSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions');
@@ -13265,11 +13270,12 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         expect(latestRepairOp.snapshot?.lastKnownCalendarIntegrationId).toBe(liveIntegration._id);
     });
 
-    it('cross-account reconnect: a STAMPED different-account marker is wiped (not rewritten)', async () => {
+    it('cross-account reconnect: a STAMPED different-account marker is left intact (not rewritten, not wiped)', async () => {
         // Genuine cross-account: disconnect-with-keep stamped origin email `other@example.com`, then reconnect
-        // authorizes `alice@example.com`. The origin master will never arrive inbound under alice's account,
-        // so the marker is a true orphan and must be WIPED (so the entity becomes pushable again) — proving
-        // the $ne wipe path fires on a stamped (non-legacy) cross-account marker, not just legacy ones.
+        // authorizes `alice@example.com`. Leave-unlinked: the marker must survive verbatim — wiping would
+        // re-arm the outbound backfill (clone events on alice's calendar) and irreversibly sever the
+        // original series, killing a later other@ reconnect's ability to relink. Rewriting would lie
+        // about the marker's origin account.
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
 
@@ -13299,10 +13305,10 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         expect(callbackRes.status).toBe(302);
 
         const afterRepair = await routinesDAO.findByOwnerAndId('routine-other-account', userId);
-        // True orphan — all markers wiped so the routine is pushable again under the new account.
-        expect(afterRepair?.lastKnownCalendarEventId).toBeUndefined();
-        expect(afterRepair?.lastKnownCalendarIntegrationId).toBeUndefined();
-        expect(afterRepair?.lastKnownCalendarAccountEmail).toBeUndefined();
+        // Marker preserved verbatim — the routine stays unlinked (and unpushable) until other@ returns.
+        expect(afterRepair?.lastKnownCalendarEventId).toBe('gcal-master-other');
+        expect(afterRepair?.lastKnownCalendarIntegrationId).toBe('int-OTHER-deleted');
+        expect(afterRepair?.lastKnownCalendarAccountEmail).toBe('other@example.com');
     });
 });
 
@@ -13916,5 +13922,419 @@ describe('POST /calendar/items/:itemId/rsvp', () => {
         // Alice's item is untouched.
         const aliceItem = await itemsDAO.findByOwnerAndId('item-rsvp-1', aliceId);
         expect(aliceItem?.responseStatus).toBe('needsAction');
+    });
+});
+
+// ─── Active relink sweep (stranded lastKnown* markers) ───────────────────────
+
+describe('relink sweep — active resolution of stranded lastKnown* markers', () => {
+    const FUTURE_START = dayjs().add(5, 'day').startOf('hour').toISOString();
+    const FUTURE_END = dayjs().add(5, 'day').startOf('hour').add(30, 'minute').toISOString();
+    const LOCAL_EDIT_START = dayjs().add(9, 'day').startOf('hour').toISOString();
+    const LOCAL_EDIT_END = dayjs().add(9, 'day').startOf('hour').add(30, 'minute').toISOString();
+
+    /** Seeds alice + a live integration (accountEmail stamped) and mocks an empty full sync so the sweep is the only actor. */
+    async function seedSweepFixture() {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const { integration, config } = await insertIntegrationWithConfig(userId, { accountEmail: 'alice@example.com' });
+        // No syncToken on the config → the manual sync runs a FULL sync → the sweep fires after import.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-sweep' });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        return { sessionCookie, userId, integration, config };
+    }
+
+    function makeMarkerItem(userId: string, overrides: Partial<ItemInterface> = {}): ItemInterface {
+        const contact = dayjs().subtract(7, 'day').toISOString();
+        return {
+            _id: 'item-stranded',
+            user: userId,
+            status: 'calendar',
+            title: 'Return the booster',
+            timeStart: FUTURE_START,
+            timeEnd: FUTURE_END,
+            createdTs: contact,
+            updatedTs: contact,
+            lastPushedToGCalTs: contact,
+            lastSyncedFromGCalTs: contact,
+            lastKnownCalendarEventId: 'gtd-stranded-event',
+            lastKnownCalendarIntegrationId: 'int-1',
+            lastKnownCalendarSyncConfigId: 'sync-config-dead',
+            lastKnownCalendarAccountEmail: 'alice@example.com',
+            ...overrides,
+        };
+    }
+
+    /** GCal event frozen at the last agreed state: updated == the item's last contact anchor. */
+    function makeFrozenEvent(item: ItemInterface) {
+        return {
+            id: 'gtd-stranded-event',
+            title: item.title,
+            timeStart: item.timeStart ?? FUTURE_START,
+            timeEnd: item.timeEnd ?? FUTURE_END,
+            updated: item.lastSyncedFromGCalTs ?? dayjs().subtract(7, 'day').toISOString(),
+            status: 'confirmed' as const,
+        };
+    }
+
+    async function runManualSync(sessionCookie: string, integrationId: string) {
+        const res = await authenticatedRequest(app, { method: 'POST', path: `/calendar/integrations/${integrationId}/sync`, sessionCookie });
+        expect(res.status).toBe(200);
+    }
+
+    it('relinks a locally-edited item against an unmodified event and pushes the local state to GCal (the stranded-reschedule bug)', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        // The b50e8cd3 shape: item rescheduled in-app AFTER the disconnect; the GCal event is frozen
+        // at the old time and was never modified since → no sync window would ever surface it.
+        const seeded = makeMarkerItem(userId, { timeStart: LOCAL_EDIT_START, timeEnd: LOCAL_EDIT_END, updatedTs: dayjs().toISOString() });
+        await itemsDAO.insertOne(seeded);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(makeFrozenEvent({ ...seeded, timeStart: FUTURE_START, timeEnd: FUTURE_END }));
+        const updateEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue();
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.calendarEventId).toBe('gtd-stranded-event');
+        expect(item?.calendarIntegrationId).toBe(integration._id);
+        expect(item?.calendarSyncConfigId).toBe('sync-config-1');
+        expect(item?.lastKnownCalendarEventId).toBeUndefined();
+        expect(item?.lastKnownCalendarAccountEmail).toBeUndefined();
+        // Local state won: the rescheduled time was pushed out to GCal.
+        expect(updateEventSpy).toHaveBeenCalledTimes(1);
+        const [, eventId, updates] = updateEventSpy.mock.calls[0]!;
+        expect(eventId).toBe('gtd-stranded-event');
+        expect(updates.timeStart).toBe(LOCAL_EDIT_START);
+        // The push stamped the item so the webhook echo of our own update is suppressed.
+        const stamped = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(stamped?.lastPushedToGCalTs).toBeDefined();
+        expect(dayjs(stamped?.lastPushedToGCalTs).isAfter(dayjs().subtract(1, 'minute'))).toBe(true);
+    });
+
+    it('relinks an untouched item against a GCal-edited event and applies the event state locally', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const seeded = makeMarkerItem(userId);
+        await itemsDAO.insertOne(seeded);
+        // GCal moved the event while disconnected; the app item was never edited.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue({
+            ...makeFrozenEvent(seeded),
+            timeStart: LOCAL_EDIT_START,
+            timeEnd: LOCAL_EDIT_END,
+            updated: dayjs().subtract(1, 'day').toISOString(),
+        });
+        const updateEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue();
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.calendarEventId).toBe('gtd-stranded-event');
+        expect(item?.timeStart).toBe(LOCAL_EDIT_START);
+        expect(item?.lastKnownCalendarEventId).toBeUndefined();
+        expect(updateEventSpy).not.toHaveBeenCalled();
+    });
+
+    it('relinks a content-equal marker quietly and a second sweep run records nothing (idempotent)', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const seeded = makeMarkerItem(userId);
+        await itemsDAO.insertOne(seeded);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(makeFrozenEvent(seeded));
+        const updateEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue();
+
+        await runManualSync(sessionCookie, integration._id);
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.calendarEventId).toBe('gtd-stranded-event');
+        expect(updateEventSpy).not.toHaveBeenCalled();
+        const opsAfterFirst = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-stranded' });
+        expect(opsAfterFirst).toHaveLength(1); // the restore op only
+
+        // Clear the syncToken so the second manual sync is a FULL sync again — the sweep must re-run.
+        // The full snapshot must now INCLUDE the event (the item is linked, and a snapshot missing it
+        // would legitimately trigger the vanished-event reconcile) — the first sync omitted it to
+        // model the stranded case, where the event sits outside the snapshot window.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [makeFrozenEvent(seeded)],
+            nextSyncToken: 'tok-sweep-2',
+        });
+        await calendarSyncConfigsDAO.upsertSyncToken('sync-config-1', '', dayjs().toISOString());
+        await runManualSync(sessionCookie, integration._id);
+        const opsAfterSecond = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-stranded' });
+        expect(opsAfterSecond).toHaveLength(1); // no marker left — the sweep had nothing to do
+    });
+
+    it('recreates the GCal event for a locally-edited item whose event is gone (hybrid: local wins)', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const seeded = makeMarkerItem(userId, { timeStart: LOCAL_EDIT_START, timeEnd: LOCAL_EDIT_END, updatedTs: dayjs().toISOString() });
+        await itemsDAO.insertOne(seeded);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(null);
+        const createEventSpy = vi
+            .spyOn(GoogleCalendarProvider.prototype, 'createEvent')
+            .mockResolvedValue({ eventId: 'recreated-event-id', htmlLink: 'https://cal.example/recreated' });
+
+        await runManualSync(sessionCookie, integration._id);
+
+        expect(createEventSpy).toHaveBeenCalledTimes(1);
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.status).toBe('calendar');
+        expect(item?.lastKnownCalendarEventId).toBeUndefined();
+        expect(item?.calendarEventId).toBeDefined();
+    });
+
+    it('trashes an untouched item whose event was deleted on GCal (hybrid: deletion wins), stamping cancelledByGCal', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const seeded = makeMarkerItem(userId);
+        await itemsDAO.insertOne(seeded);
+        // A cancellation tombstone newer than the item's last local touch.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue({
+            ...makeFrozenEvent(seeded),
+            status: 'cancelled',
+            updated: dayjs().subtract(1, 'day').toISOString(),
+        });
+        const createEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'never' });
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.status).toBe('trash');
+        expect(item?.cancelledByGCal).toBe(true);
+        expect(item?.lastKnownCalendarEventId).toBeUndefined();
+        expect(createEventSpy).not.toHaveBeenCalled();
+    });
+
+    it('clears markers on a done item whose event is gone without trashing or recreating', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const seeded = makeMarkerItem(userId, { status: 'done' });
+        await itemsDAO.insertOne(seeded);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(null);
+        const createEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'never' });
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.status).toBe('done');
+        expect(item?.lastKnownCalendarEventId).toBeUndefined();
+        expect(createEventSpy).not.toHaveBeenCalled();
+    });
+
+    it('never touches a marker stamped with a different account email — not even a lookup', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const seeded = makeMarkerItem(userId, {
+            lastKnownCalendarIntegrationId: 'int-WORK-dead',
+            lastKnownCalendarAccountEmail: 'work@example.com',
+        });
+        await itemsDAO.insertOne(seeded);
+        const getEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(null);
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.lastKnownCalendarEventId).toBe('gtd-stranded-event');
+        expect(item?.lastKnownCalendarAccountEmail).toBe('work@example.com');
+        expect(getEventSpy).not.toHaveBeenCalled();
+    });
+
+    it('relinks a legacy email-less marker when its event resolves, but skips it (no trash/recreate) when it does not', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        // Legacy marker: no origin email, dead integration id → provenance unproven.
+        const resolvable = makeMarkerItem(userId, {
+            _id: 'item-legacy-found',
+            lastKnownCalendarEventId: 'legacy-found-event',
+            lastKnownCalendarIntegrationId: 'int-legacy-dead',
+        });
+        const { lastKnownCalendarAccountEmail: _dropA, ...legacyFound } = resolvable;
+        const unresolvable = makeMarkerItem(userId, {
+            _id: 'item-legacy-missing',
+            title: 'Other legacy',
+            lastKnownCalendarEventId: 'legacy-missing-event',
+            lastKnownCalendarIntegrationId: 'int-legacy-dead',
+        });
+        const { lastKnownCalendarAccountEmail: _dropB, ...legacyMissing } = unresolvable;
+        await itemsDAO.insertOne(legacyFound);
+        await itemsDAO.insertOne(legacyMissing);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockImplementation(async (_calendarId: string, eventId: string) =>
+            eventId === 'legacy-found-event' ? { ...makeFrozenEvent(legacyFound), id: 'legacy-found-event' } : null,
+        );
+
+        await runManualSync(sessionCookie, integration._id);
+
+        // Found on this account's calendar → safe to relink.
+        const found = await itemsDAO.findByOwnerAndId('item-legacy-found', userId);
+        expect(found?.calendarEventId).toBe('legacy-found-event');
+        // Not found → could belong to an account we can't see: left untouched, NOT trashed.
+        const missing = await itemsDAO.findByOwnerAndId('item-legacy-missing', userId);
+        expect(missing?.status).toBe('calendar');
+        expect(missing?.lastKnownCalendarEventId).toBe('legacy-missing-event');
+    });
+
+    it('restores a stranded routine through the full import path when its master resolves live', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-stranded',
+                active: false,
+                updatedTs: dayjs().subtract(7, 'day').toISOString(),
+                lastKnownCalendarEventId: 'gcal-stranded-master',
+                lastKnownCalendarIntegrationId: 'int-1',
+                lastKnownCalendarSyncConfigId: 'sync-config-dead',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+            }),
+        );
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue({
+            id: 'gcal-stranded-master',
+            title: 'Standup',
+            timeStart: FUTURE_START,
+            timeEnd: FUTURE_END,
+            updated: dayjs().subtract(6, 'day').toISOString(),
+            status: 'confirmed',
+            recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+        });
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const routine = await routinesDAO.findByOwnerAndId('routine-stranded', userId);
+        expect(routine?.calendarEventId).toBe('gcal-stranded-master');
+        expect(routine?.calendarIntegrationId).toBe(integration._id);
+        expect(routine?.lastKnownCalendarEventId).toBeUndefined();
+        // Open inbound rrule + inactive local → the disconnect-inflicted pause is lifted.
+        expect(routine?.active).toBe(true);
+    });
+
+    it('recreates a fresh series for an active routine whose master is hard-gone, and deactivates an inactive one on a newer tombstone', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-recreate',
+                active: true,
+                lastKnownCalendarEventId: 'gcal-gone-master',
+                lastKnownCalendarIntegrationId: 'int-1',
+                lastKnownCalendarSyncConfigId: 'sync-config-dead',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+            }),
+        );
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(null);
+        const createSeriesSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('fresh-master-id');
+
+        await runManualSync(sessionCookie, integration._id);
+
+        expect(createSeriesSpy).toHaveBeenCalledTimes(1);
+        const routine = await routinesDAO.findByOwnerAndId('routine-recreate', userId);
+        expect(routine?.lastKnownCalendarEventId).toBeUndefined();
+        expect(routine?.active).toBe(true);
+        expect(routine?.calendarEventId).toBeDefined();
+    });
+
+    it('deactivation path: an active routine whose master was cancelled AFTER its last local touch is deactivated, future items trashed', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const staleTouch = dayjs().subtract(7, 'day').toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-deactivate',
+                active: true,
+                updatedTs: staleTouch,
+                lastKnownCalendarEventId: 'gcal-cancelled-master',
+                lastKnownCalendarIntegrationId: 'int-1',
+                lastKnownCalendarSyncConfigId: 'sync-config-dead',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+            }),
+        );
+        await itemsDAO.insertOne({
+            _id: 'item-future-occurrence',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-deactivate',
+            timeStart: FUTURE_START,
+            timeEnd: FUTURE_END,
+            createdTs: staleTouch,
+            updatedTs: staleTouch,
+        });
+        // Cancellation tombstone NEWER than the routine's last local touch → deletion wins.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue({
+            id: 'gcal-cancelled-master',
+            title: '',
+            timeStart: '',
+            timeEnd: '',
+            updated: dayjs().subtract(1, 'day').toISOString(),
+            status: 'cancelled',
+        });
+        const createSeriesSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('never');
+
+        await runManualSync(sessionCookie, integration._id);
+
+        expect(createSeriesSpy).not.toHaveBeenCalled();
+        const routine = await routinesDAO.findByOwnerAndId('routine-deactivate', userId);
+        expect(routine?.active).toBe(false);
+        expect(routine?.lastKnownCalendarEventId).toBeUndefined();
+        const occurrence = await itemsDAO.findByOwnerAndId('item-future-occurrence', userId);
+        expect(occurrence?.status).toBe('trash');
+    });
+
+    it('POST /maintenance/relink-calendar-markers heals a stranded item on demand and reports counts', async () => {
+        const maintenanceApp = new Hono()
+            .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
+            .route('/calendar', calendarRoutes)
+            .route('/maintenance', maintenanceRoutes);
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const seeded = makeMarkerItem(userId);
+        await itemsDAO.insertOne(seeded);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(makeFrozenEvent(seeded));
+
+        const res = await authenticatedRequest(maintenanceApp, { method: 'POST', path: '/maintenance/relink-calendar-markers', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { relinkedItems: number };
+        expect(body.relinkedItems).toBe(1);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.calendarEventId).toBe('gtd-stranded-event');
+        expect(item?.calendarIntegrationId).toBe(integration._id);
+        expect(item?.lastKnownCalendarEventId).toBeUndefined();
+    });
+
+    it("POST /maintenance/relink-calendar-markers is tenant-isolated — another user's markers stay untouched", async () => {
+        const maintenanceApp = new Hono()
+            .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
+            .route('/calendar', calendarRoutes)
+            .route('/maintenance', maintenanceRoutes);
+        const { sessionCookie } = await seedSweepFixture();
+        // A second user (bob) with the same-shaped stranded marker AND a live integration of his own.
+        const { sessionCookie: bobCookieRaw } = await oauthLogin(app, 'github');
+        if (!bobCookieRaw) throw new Error('expected bob session cookie');
+        const bobId = await getUserId(bobCookieRaw);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(bobId, { _id: 'int-bob', accountEmail: 'alice@example.com' }));
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(bobId, 'int-bob', { _id: 'sync-config-bob' }));
+        const bobMarkerItem = makeMarkerItem(bobId, { _id: 'item-bob-stranded', lastKnownCalendarIntegrationId: 'int-bob' });
+        await itemsDAO.insertOne(bobMarkerItem);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(makeFrozenEvent(bobMarkerItem));
+
+        // Alice's sweep: she has no markers, and bob's must not be visible to her session.
+        const res = await authenticatedRequest(maintenanceApp, { method: 'POST', path: '/maintenance/relink-calendar-markers', sessionCookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { relinkedItems: number; trashedItems: number; recreatedEvents: number };
+        expect(body.relinkedItems).toBe(0);
+        expect(body.trashedItems).toBe(0);
+        expect(body.recreatedEvents).toBe(0);
+
+        const bobItem = await itemsDAO.findByOwnerAndId('item-bob-stranded', bobId);
+        expect(bobItem?.lastKnownCalendarEventId).toBe('gtd-stranded-event');
+        expect(bobItem?.calendarEventId).toBeUndefined();
+    });
+
+    it('relinks a done marker item against its live event quietly — no outbound push, done stays done', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        // Done items keep their timeStart/timeEnd; on GCal the event carries the "✓ " done marker
+        // in its title, which the content comparison must strip before deciding anything changed.
+        const seeded = makeMarkerItem(userId, { status: 'done' });
+        await itemsDAO.insertOne(seeded);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue({
+            ...makeFrozenEvent(seeded),
+            title: `✓ ${seeded.title}`,
+        });
+        const updateEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue();
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const item = await itemsDAO.findByOwnerAndId('item-stranded', userId);
+        expect(item?.status).toBe('done');
+        expect(item?.calendarEventId).toBe('gtd-stranded-event');
+        expect(item?.lastKnownCalendarEventId).toBeUndefined();
+        expect(updateEventSpy).not.toHaveBeenCalled();
     });
 });

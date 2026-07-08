@@ -7,6 +7,7 @@ import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import { healDuplicateCalendarItems, healSplitSuccessorRoutines, healStuckGCalRoutines } from '../lib/calendarHeal.js';
 import { computePurgeFloor, type PurgeFloor } from '../lib/purgeFloor.js';
 import type { AuthVariables } from '../types/authTypes.js';
+import { relinkCalendarMarkersForUser } from './calendar.js';
 
 const DEFAULT_STALE_DEVICE_DAYS = 90;
 
@@ -116,4 +117,16 @@ export const maintenanceRoutes = new Hono<{ Variables: AuthVariables }>()
         const ops = await healSplitSuccessorRoutines(user.id, dayjs().toISOString());
         const revivedSuccessors = ops.filter((op) => op.entityType === 'routine').length;
         return c.json({ revivedSuccessors, totalOps: ops.length }, 200);
+    })
+
+    // ---------------------------------------------------------------------------
+    // POST /maintenance/relink-calendar-markers — resolve stranded lastKnown* markers
+    // ---------------------------------------------------------------------------
+    // Actively fetches each same-account disconnect marker's event by id and relinks/converges it —
+    // the on-demand form of the full-sync relink sweep, healing entities stranded before the sweep
+    // shipped without waiting for a disconnect/reconnect cycle. Idempotent. Scoped to the session user.
+    .post('/relink-calendar-markers', authenticateRequest, async (c) => {
+        const { user } = c.get('session');
+        const result = await relinkCalendarMarkersForUser(user.id);
+        return c.json(result, 200);
     });

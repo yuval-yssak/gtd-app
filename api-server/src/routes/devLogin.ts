@@ -4,6 +4,7 @@ import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { SESSION_COOKIE_NAME } from '../auth/constants.js';
+import type { GCalEvent } from '../calendarProviders/CalendarProvider.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import { auth, db } from '../loaders/mainLoader.js';
 
@@ -594,6 +595,56 @@ export const devLoginRoutes = new Hono()
         };
         const result = await simulateBackfillRelink(body.masters, { integration, config }, ctx);
         return c.json({ ok: true, ...result, opsRecorded: ctx.ops.length });
+    })
+
+    // POST /dev/calendar/simulate-relink-sweep — drives the active relink sweep
+    // (`relinkStrandedMarkers`) with a caller-supplied event set standing in for `provider.getEvent`
+    // (which needs a live Google account). GCal-write methods on the stub provider record their
+    // calls into the response so specs can assert what would have been pushed. Used by the
+    // calendar-relink-sweep e2e. Mirrors the trust boundary of the other simulate-* routes
+    // (dev-only module, unmountable in prod).
+    .post('/calendar/simulate-relink-sweep', async (c) => {
+        const { default: calendarIntegrationsDAO } = await import('../dataAccess/calendarIntegrationsDAO.js');
+        const { relinkStrandedMarkers } = await import('./calendar.js');
+        const body = await c.req.json<{
+            userId: string;
+            integrationId: string;
+            events: GCalEvent[];
+        }>();
+        if (!body.userId || !body.integrationId || !Array.isArray(body.events)) {
+            return c.json({ error: 'userId, integrationId, events[] required' }, 400);
+        }
+        const integration = await calendarIntegrationsDAO.findOne({ _id: body.integrationId, user: body.userId });
+        if (!integration) {
+            return c.json({ error: 'integration not found' }, 404);
+        }
+        const pushedUpdates: Array<{ eventId: string; updates: unknown }> = [];
+        const pushedCreates: Array<{ title: string; timeStart: string }> = [];
+        const createdSeries: string[] = [];
+        const stubProvider = {
+            getEvent: async (_calendarId: string, eventId: string) => body.events.find((event) => event.id === eventId) ?? null,
+            getCalendarTimeZone: async () => 'Asia/Jerusalem',
+            updateEvent: async (_calendarId: string, eventId: string, updates: unknown) => {
+                pushedUpdates.push({ eventId, updates });
+            },
+            createEvent: async (_calendarId: string, event: { title: string; timeStart: string }) => {
+                pushedCreates.push({ title: event.title, timeStart: event.timeStart });
+                return { eventId: `sim-recreated-${generateId(8)}` };
+            },
+            createRecurringEvent: async () => {
+                const id = `sim-series-${generateId(8)}`;
+                createdSeries.push(id);
+                return id;
+            },
+        };
+        // Cast through unknown is safe here — the sweep only calls the methods stubbed above on
+        // this dev-only path (getEvent for resolution; update/create via the stubbed factory).
+        type Provider = Parameters<typeof relinkStrandedMarkers>[1];
+        const provider = stubProvider as unknown as Provider;
+        const now = dayjs().toISOString();
+        const ctx: Parameters<typeof relinkStrandedMarkers>[2] = { userId: body.userId, now, ops: [] };
+        const result = await relinkStrandedMarkers(integration, provider, ctx, () => provider);
+        return c.json({ ok: true, ...result, pushedUpdates, pushedCreates, createdSeries, opsRecorded: ctx.ops.length });
     })
 
     // POST /dev/api-tokens — issue a personal API token for the currently logged-in user.

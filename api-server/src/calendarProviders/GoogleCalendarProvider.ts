@@ -498,6 +498,24 @@ export class GoogleCalendarProvider implements CalendarProvider {
         return parseGCalEvents(response.data.items as Array<Record<string, unknown>> | undefined);
     }
 
+    async getEvent(calendarId: string, eventId: string): Promise<GCalEvent | null> {
+        const cal = google.calendar({ version: 'v3', auth: this.auth });
+        try {
+            const response = await cal.events.get({ calendarId, eventId });
+            // parseGCalEvents drops confirmed events with no summary/timing (sparse rows a list sync
+            // can't use) — for a direct get, treat that the same as "gone": there is nothing to relink to.
+            const [event] = parseGCalEvents([response.data as Record<string, unknown>]);
+            return event ?? null;
+        } catch (err) {
+            // 404: the event never existed on this calendar (or its tombstone aged out). 410: Google
+            // reports the event as permanently deleted. Both mean "gone" to the relink sweep.
+            if (isGoogleApiError(err) && (err.code === 404 || err.code === 410)) {
+                return null;
+            }
+            throw err;
+        }
+    }
+
     async listEventsIncremental(calendarId: string, syncToken: string): Promise<EventSyncResult> {
         try {
             // syncToken returns only events changed since the token was issued.
