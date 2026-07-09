@@ -21,6 +21,7 @@ import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
 import Select from '@mui/material/Select';
 import Switch from '@mui/material/Switch';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import dayjs from 'dayjs';
@@ -673,14 +674,23 @@ function IntegrationActions({ isSyncing, isRepairing, hasAvailableCalendars, act
                     Add calendar
                 </Button>
             )}
-            <Button variant="outlined" size="small" onClick={actions.onSyncNow} disabled={isSyncing}>
-                {isSyncing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
-                {isSyncing ? 'Syncing…' : 'Sync now'}
-            </Button>
-            <Button variant="outlined" size="small" onClick={actions.onRepair} disabled={isRepairing} data-testid="repairSyncButton">
-                {isRepairing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
-                {isRepairing ? 'Repairing…' : 'Repair sync'}
-            </Button>
+            {/* Tooltip children are wrapped in <span> so the tooltip keeps working while the button is disabled. */}
+            <Tooltip title="Fetch the latest changes from Google Calendar right now, without waiting for automatic sync. Also pushes app-created items that haven't reached Google yet.">
+                <span>
+                    <Button variant="outlined" size="small" onClick={actions.onSyncNow} disabled={isSyncing}>
+                        {isSyncing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
+                        {isSyncing ? 'Syncing…' : 'Sync now'}
+                    </Button>
+                </span>
+            </Tooltip>
+            <Tooltip title="Reconnect items and routines that lost their link to Google Calendar — for example after disconnecting and reconnecting an account. Runs for every signed-in account; safe to use any time.">
+                <span>
+                    <Button variant="outlined" size="small" onClick={actions.onRepair} disabled={isRepairing} data-testid="repairSyncButton">
+                        {isRepairing ? <CircularProgress size={14} sx={{ mr: 0.5 }} /> : null}
+                        {isRepairing ? 'Repairing…' : 'Repair sync'}
+                    </Button>
+                </span>
+            </Tooltip>
             <Button variant="outlined" size="small" color="error" onClick={actions.onDisconnect}>
                 Disconnect
             </Button>
