@@ -360,8 +360,14 @@ describe('PATCH /v1/routines — GCal-linked calendar routine (pushback suppress
         // land so the not-called assertions are meaningful rather than a race win.
         await new Promise((resolve) => setTimeout(resolve, 200));
 
-        const replacement = await itemsDAO.findOne({ user: userId, routineId: created._id, status: 'calendar', timeStart: `${tomorrow}T09:00:00` } as never);
-        expect(replacement?.timeEnd).toBe(`${tomorrow}T09:30:00`);
+        // findArray + length check (not findOne): the historical flake here was the fire-and-forget
+        // notes propagation resurrecting the trashed pre-edit item, leaving TWO live items at this
+        // timeStart — findOne then returned whichever the natural order surfaced first.
+        const occupants = await itemsDAO.findArray({ user: userId, routineId: created._id, status: 'calendar', timeStart: `${tomorrow}T09:00:00` } as never);
+        expect(occupants).toHaveLength(1);
+        const [replacement] = occupants;
+        if (!replacement) throw new Error('expected the regenerated occurrence');
+        expect(replacement.timeEnd).toBe(`${tomorrow}T09:30:00`);
         // The regen ops (trash + creates) must NOT reach the per-instance pushback branches —
         // suppressGCalPushback in propagateCalendarRoutineEdit is what keeps them out.
         expect(updateRecurringInstance).not.toHaveBeenCalled();
