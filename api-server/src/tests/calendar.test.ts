@@ -14337,4 +14337,138 @@ describe('relink sweep — active resolution of stranded lastKnown* markers', ()
         expect(item?.lastKnownCalendarEventId).toBeUndefined();
         expect(updateEventSpy).not.toHaveBeenCalled();
     });
+
+    // ── Split-successor markers (calendarRebasedEventId) ─────────────────────
+    // After a "this and all following" split, the live master lives under the raw `_R<anchor>` id
+    // while the bare id is the capped stump. A successor marker routine must therefore resolve
+    // against its OWN rebased master — fetching only the bare id can never relink it.
+
+    const REBASED_ID = 'gcal-split-base_R20260601T060000Z';
+    const BARE_ID = 'gcal-split-base';
+
+    function makeSuccessorMarkerRoutine(userId: string, overrides: Partial<RoutineInterface> = {}) {
+        return makeRoutine(userId, {
+            _id: 'routine-split-successor',
+            active: false,
+            updatedTs: dayjs().subtract(7, 'day').toISOString(),
+            calendarRebasedEventId: REBASED_ID,
+            lastKnownCalendarEventId: BARE_ID,
+            lastKnownCalendarIntegrationId: 'int-1',
+            lastKnownCalendarSyncConfigId: 'sync-config-dead',
+            lastKnownCalendarAccountEmail: 'alice@example.com',
+            ...overrides,
+        });
+    }
+
+    function makeLiveRebasedMaster() {
+        return {
+            id: REBASED_ID,
+            title: 'Standup',
+            timeStart: FUTURE_START,
+            timeEnd: FUTURE_END,
+            updated: dayjs().subtract(6, 'day').toISOString(),
+            status: 'confirmed' as const,
+            recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+        };
+    }
+
+    it('relinks a stranded split-successor routine through its rebased _R master — the bare stump id is never fetched', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        await routinesDAO.insertOne(makeSuccessorMarkerRoutine(userId));
+        const getEventSpy = vi
+            .spyOn(GoogleCalendarProvider.prototype, 'getEvent')
+            .mockImplementation(async (_calendarId: string, eventId: string) => (eventId === REBASED_ID ? makeLiveRebasedMaster() : null));
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const routine = await routinesDAO.findByOwnerAndId('routine-split-successor', userId);
+        // Linked on the BARE id (GCal instance ids use it), with the rebased idempotency key preserved.
+        expect(routine?.calendarEventId).toBe(BARE_ID);
+        expect(routine?.calendarIntegrationId).toBe(integration._id);
+        expect(routine?.calendarRebasedEventId).toBe(REBASED_ID);
+        expect(routine?.lastKnownCalendarEventId).toBeUndefined();
+        expect(routine?.lastKnownCalendarAccountEmail).toBeUndefined();
+        // Open inbound rrule + inactive local → the disconnect-inflicted pause is lifted.
+        expect(routine?.active).toBe(true);
+        expect(getEventSpy.mock.calls.every(([, eventId]) => eventId === REBASED_ID)).toBe(true);
+    });
+
+    it('a gone bare master never gone-resolves a successor whose own master is alive: base sheds markers, successor relinks', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        const staleTouch = dayjs().subtract(7, 'day').toISOString();
+        // The capped base of the split, also stranded — inactive, as the disconnect cascade left it.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-split-base',
+                active: false,
+                updatedTs: staleTouch,
+                rrule: `FREQ=WEEKLY;BYDAY=MO;UNTIL=${dayjs().subtract(30, 'day').format('YYYYMMDD')}T000000Z`,
+                lastKnownCalendarEventId: BARE_ID,
+                lastKnownCalendarIntegrationId: 'int-1',
+                lastKnownCalendarSyncConfigId: 'sync-config-dead',
+                lastKnownCalendarAccountEmail: 'alice@example.com',
+            }),
+        );
+        await routinesDAO.insertOne(makeSuccessorMarkerRoutine(userId));
+        // The user deleted the capped stump on GCal (tombstone newer than any local touch) while the
+        // successor series lives on — the old grouped-by-bare-id sweep would have gone-resolved BOTH.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockImplementation(async (_calendarId: string, eventId: string) => {
+            if (eventId === REBASED_ID) {
+                return makeLiveRebasedMaster();
+            }
+            if (eventId === BARE_ID) {
+                return { id: BARE_ID, title: '', timeStart: '', timeEnd: '', updated: dayjs().subtract(1, 'day').toISOString(), status: 'cancelled' as const };
+            }
+            return null;
+        });
+        const createSeriesSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('never');
+
+        await runManualSync(sessionCookie, integration._id);
+
+        // Base: inactive + newer tombstone → deletion wins quietly (markers cleared, stays inactive).
+        const base = await routinesDAO.findByOwnerAndId('routine-split-base', userId);
+        expect(base?.lastKnownCalendarEventId).toBeUndefined();
+        expect(base?.active).toBe(false);
+        expect(base?.calendarEventId).toBeUndefined();
+        // Successor: relinked and reactivated against its own live master, untouched by the tombstone.
+        const successor = await routinesDAO.findByOwnerAndId('routine-split-successor', userId);
+        expect(successor?.calendarEventId).toBe(BARE_ID);
+        expect(successor?.active).toBe(true);
+        expect(successor?.lastKnownCalendarEventId).toBeUndefined();
+        expect(createSeriesSpy).not.toHaveBeenCalled();
+    });
+
+    it('never touches a split-successor marker stamped with a different account email — not even a rebased-id lookup', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        await routinesDAO.insertOne(
+            makeSuccessorMarkerRoutine(userId, {
+                lastKnownCalendarIntegrationId: 'int-WORK-dead',
+                lastKnownCalendarAccountEmail: 'work@example.com',
+            }),
+        );
+        const getEventSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(null);
+
+        await runManualSync(sessionCookie, integration._id);
+
+        const routine = await routinesDAO.findByOwnerAndId('routine-split-successor', userId);
+        expect(routine?.lastKnownCalendarEventId).toBe(BARE_ID);
+        expect(routine?.lastKnownCalendarAccountEmail).toBe('work@example.com');
+        expect(routine?.active).toBe(false);
+        expect(getEventSpy).not.toHaveBeenCalled();
+    });
+
+    it('recreates a fresh series for an ACTIVE split successor whose rebased master is hard-gone', async () => {
+        const { sessionCookie, userId, integration } = await seedSweepFixture();
+        await routinesDAO.insertOne(makeSuccessorMarkerRoutine(userId, { active: true, updatedTs: dayjs().toISOString() }));
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getEvent').mockResolvedValue(null);
+        const createSeriesSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockResolvedValue('fresh-successor-series');
+
+        await runManualSync(sessionCookie, integration._id);
+
+        expect(createSeriesSpy).toHaveBeenCalledTimes(1);
+        const routine = await routinesDAO.findByOwnerAndId('routine-split-successor', userId);
+        expect(routine?.lastKnownCalendarEventId).toBeUndefined();
+        expect(routine?.active).toBe(true);
+        expect(routine?.calendarEventId).toBeDefined();
+    });
 });

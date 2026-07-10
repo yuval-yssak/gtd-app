@@ -1834,12 +1834,77 @@ async function resolveGoneMarkerRoutine(
     }
 }
 
+/** Shared per-integration plumbing threaded through the routine half of the relink sweep. */
+interface RoutineSweepContext {
+    integration: CalendarIntegrationInterface;
+    configs: CalendarSyncConfigInterface[];
+    provider: CalendarProvider;
+    pushCtx: PushContext;
+    ctx: SyncContext;
+    result: RelinkSweepResult;
+}
+
+/** Groups marker routines by an event-id key, preserving insertion order. */
+function groupMarkerRoutinesBy(routines: RoutineInterface[], eventKey: (routine: RoutineInterface) => string): Map<string, RoutineInterface[]> {
+    const groups = new Map<string, RoutineInterface[]>();
+    for (const routine of routines) {
+        const key = eventKey(routine);
+        groups.set(key, [...(groups.get(key) ?? []), routine]);
+    }
+    return groups;
+}
+
 /**
- * Runs the routine half of the sweep: fetch each marker's master event by id, then feed every LIVE
- * master through `importRecurringMastersOrdered` — the full inbound onboarding path, whose
- * strong-key restore (`tryRestoreRoutineFromLastKnownEventId` / split-successor markers) relinks,
- * reactivates, and regenerates items with all the split/dedup invariants already encoded there.
- * Gone masters take the hybrid recreate/deactivate branch.
+ * Resolves one marker-routine group against a single master event id. A LIVE master feeds the
+ * supplied import path, whose strong-key restores relink, reactivate, and regenerate items with all
+ * the split/dedup invariants already encoded there. A gone/cancelled/recurrence-less master (no
+ * series left to relink to) takes the hybrid recreate/deactivate branch — gated on proven marker
+ * provenance, same as the item half: a legacy email-less marker that doesn't resolve here may
+ * simply live on an account we can't see.
+ */
+async function resolveMarkerRoutineGroup(
+    eventId: string,
+    routines: RoutineInterface[],
+    importLiveMaster: (event: GCalEvent, source: CalendarSource) => Promise<void>,
+    sweep: RoutineSweepContext,
+): Promise<void> {
+    const { integration, configs, provider, pushCtx, ctx, result } = sweep;
+    try {
+        const found = await findMarkerEventAcrossConfigs(eventId, configs, provider, integration._id);
+        if (!found || found.event.status === 'cancelled' || !hasAtLeastOne(found.event.recurrence ?? [])) {
+            for (const routine of routines.filter((r) => isMarkerProvenanceProven(r, integration))) {
+                await resolveGoneMarkerRoutine(routine, found?.event ?? null, pushCtx, ctx, result);
+            }
+            return;
+        }
+        const before = ctx.ops.length;
+        await importLiveMaster(found.event, { integration, config: found.config });
+        if (ctx.ops.length > before) {
+            result.relinkedRoutines += 1;
+        }
+    } catch (err) {
+        console.error(`[gcal-relink-sweep] routine sweep failed | eventId=${eventId}:`, err);
+    }
+}
+
+/** Bare-master import for the sweep: the full ordered inbound path, with the user's linked routines as split-classification context. */
+async function importBareMasterForSweep(event: GCalEvent, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const existingLinked = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarIntegrationId: source.integration._id,
+        calendarEventId: { $exists: true },
+    });
+    await importRecurringMastersOrdered([event], existingLinked, source, ctx);
+}
+
+/**
+ * Runs the routine half of the sweep. Base marker routines resolve against their bare
+ * `lastKnownCalendarEventId` master. Split successors (`calendarRebasedEventId` set) resolve against
+ * their OWN raw `_R<anchor>` rebased master instead: after a "this and all following" split the bare
+ * id is the capped stump, so fetching only it can never relink the live successor (the
+ * stranded-successor bug) — and a gone bare master must never gone-resolve a successor whose own
+ * master is alive. Bases run first, mirroring `importRecurringMastersOrdered`'s phase order, so a
+ * same-sweep base restore lands before its successor's reactivation.
  */
 async function sweepMarkerRoutines(
     integration: CalendarIntegrationInterface,
@@ -1849,38 +1914,22 @@ async function sweepMarkerRoutines(
     ctx: SyncContext,
     result: RelinkSweepResult,
 ): Promise<void> {
-    const markerRoutines = await routinesDAO.findArray(sameAccountMarkerFilter(ctx.userId, integration));
-    const routinesByEventId = new Map<string, RoutineInterface[]>();
-    for (const routine of markerRoutines.filter((r) => r.lastKnownCalendarEventId)) {
-        const eventId = routine.lastKnownCalendarEventId as string;
-        routinesByEventId.set(eventId, [...(routinesByEventId.get(eventId) ?? []), routine]);
+    const sweep: RoutineSweepContext = { integration, configs, provider, pushCtx, ctx, result };
+    const markerRoutines = (await routinesDAO.findArray(sameAccountMarkerFilter(ctx.userId, integration))).filter((r) => r.lastKnownCalendarEventId);
+    const bases = markerRoutines.filter((r) => !r.calendarRebasedEventId);
+    const successors = markerRoutines.filter((r) => r.calendarRebasedEventId);
+    for (const [eventId, group] of groupMarkerRoutinesBy(bases, (r) => r.lastKnownCalendarEventId as string)) {
+        await resolveMarkerRoutineGroup(eventId, group, (event, source) => importBareMasterForSweep(event, source, ctx), sweep);
     }
-    for (const [eventId, routines] of routinesByEventId) {
-        try {
-            const found = await findMarkerEventAcrossConfigs(eventId, configs, provider, integration._id);
-            if (!found || found.event.status === 'cancelled' || !hasAtLeastOne(found.event.recurrence ?? [])) {
-                // A master that lost its recurrence is treated as gone for routine purposes — there
-                // is no series left to relink the routine to. Same provenance gate as the item half:
-                // gone-master actions only fire on markers provably owned by this account.
-                for (const routine of routines.filter((r) => isMarkerProvenanceProven(r, integration))) {
-                    await resolveGoneMarkerRoutine(routine, found?.event ?? null, pushCtx, ctx, result);
-                }
-                continue;
-            }
-            const source: CalendarSource = { integration, config: found.config };
-            const existingLinked = await routinesDAO.findArray({
-                user: ctx.userId,
-                calendarIntegrationId: integration._id,
-                calendarEventId: { $exists: true },
-            });
-            const before = ctx.ops.length;
-            await importRecurringMastersOrdered([found.event], existingLinked, source, ctx);
-            if (ctx.ops.length > before) {
-                result.relinkedRoutines += 1;
-            }
-        } catch (err) {
-            console.error(`[gcal-relink-sweep] routine sweep failed | eventId=${eventId}:`, err);
-        }
+    for (const [rebasedId, group] of groupMarkerRoutinesBy(successors, (r) => r.calendarRebasedEventId as string)) {
+        // Straight into the phase-2 successor path — `tryRestoreSplitSuccessorFromMarkers` is keyed
+        // on exactly this (raw rebased id, bare lastKnown marker) pair.
+        await resolveMarkerRoutineGroup(
+            rebasedId,
+            group,
+            (event, source) => importRecurringEventAsRoutine(event, source, ctx, { forceSplitSuccessor: true }),
+            sweep,
+        );
     }
 }
 

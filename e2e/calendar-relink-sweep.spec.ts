@@ -46,6 +46,7 @@ async function seedCalendarForUser(userId: string, configId: string, integration
 
 interface SweepResponse {
     relinkedItems: number;
+    relinkedRoutines: number;
     trashedItems: number;
     recreatedEvents: number;
     pushedUpdates: Array<{ eventId: string; updates: { timeStart?: string } }>;
@@ -270,6 +271,84 @@ test.describe('active relink sweep for stranded lastKnown* markers', () => {
             await page.goto(`${CLIENT_URL}/trash`);
             await expect(page.getByText('Meeting that got cancelled')).toBeVisible({ timeout: 10_000 });
             await expect(page.getByText('Cancelled in Calendar')).toBeVisible();
+        } finally {
+            await closeContextQuietly(ctx);
+        }
+    });
+
+    test('stranded split-successor routine: sweep relinks it through its rebased _R master', async ({ browser }) => {
+        const stamp = dayjs().valueOf();
+        const email = `sweep-successor-${stamp}@example.com`;
+        const configId = `cfg-sweepsucc-${stamp}`;
+        const bareId = `evt-sweepsucc-${stamp}`;
+        // After a "this and all following" split, the live master's id carries a `_R<anchor>` suffix;
+        // the bare id is the capped stump. The sweep must fetch the successor's OWN rebased master.
+        const rebasedId = `${bareId}_R20260601T060000Z`;
+        const integrationId = `int-sweepsucc-${stamp}`;
+        await resetServerForEmails([email]);
+
+        const ctx = await browser.newContext();
+        try {
+            const page = await loginAs(ctx, email);
+            const userId = await getActiveUserId(page);
+            await seedCalendarForUser(userId, configId, integrationId);
+
+            // Seed the post-split, post-disconnect shape directly: a split-successor routine
+            // (calendarRebasedEventId set) whose link fields a disconnect-with-keep renamed to
+            // lastKnown* markers, paused by the disconnect cascade.
+            const created = await gtd.createRoutine(page, {
+                title: 'Split successor standup',
+                routineType: 'calendar',
+                rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                template: {},
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                active: true,
+            });
+            await gtd.updateRoutine(page, {
+                ...created,
+                active: false,
+                calendarRebasedEventId: rebasedId,
+                lastKnownCalendarEventId: bareId,
+                lastKnownCalendarIntegrationId: integrationId,
+                lastKnownCalendarSyncConfigId: 'cfg-dead',
+            });
+            await gtd.flush(page);
+
+            // The live master exists ONLY under the rebased id — a bare-id lookup finds nothing.
+            const seriesStart = dayjs().add(7, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+            const sweep = await postDevRoute<SweepResponse>(DEV_SIMULATE_RELINK_SWEEP_URL, {
+                userId,
+                integrationId,
+                events: [
+                    {
+                        id: rebasedId,
+                        title: 'Split successor standup',
+                        timeStart: seriesStart,
+                        timeEnd: dayjs(seriesStart).add(30, 'minute').toISOString(),
+                        updated: dayjs().subtract(3, 'day').toISOString(),
+                        status: 'confirmed',
+                        recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+                    },
+                ],
+            });
+            expect(sweep.relinkedRoutines).toBe(1);
+
+            // The client converges: relinked on the BARE id (GCal instance ids use it), reactivated,
+            // markers cleared, rebased idempotency key preserved.
+            await expect
+                .poll(async () => {
+                    await gtd.pull(page);
+                    const routine = (await gtd.listRoutines(page)).find((r) => r._id === created._id);
+                    return (
+                        routine && {
+                            eventId: routine.calendarEventId,
+                            rebasedId: routine.calendarRebasedEventId,
+                            active: routine.active,
+                            marker: routine.lastKnownCalendarEventId ?? null,
+                        }
+                    );
+                })
+                .toEqual({ eventId: bareId, rebasedId, active: true, marker: null });
         } finally {
             await closeContextQuietly(ctx);
         }
