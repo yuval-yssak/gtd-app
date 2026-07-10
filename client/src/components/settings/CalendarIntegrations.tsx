@@ -48,11 +48,12 @@ import type { StoredAccount } from '../../types/MyDB';
 import { buildCalendarPickerRows, defaultCalendarId } from './calendarPickerOrder';
 
 /**
- * Runs a calendar MUTATION with the active Better Auth session pinned to the managed account (see
- * AppData.withActiveAccountSession). Threaded from the root component down to every dialog/hook that
- * mutates calendar state, so each request resolves under the right user even when the ambient cookie
- * session has drifted (Bug A). Reads are intentionally left unwrapped — they run under the ambient
- * unified session.
+ * Runs a calendar request with the active Better Auth session pinned to the managed account (see
+ * AppData.withActiveAccountSession). Threaded from the root component down to every dialog/hook, so
+ * each request resolves under the right user even when the ambient cookie session has drifted
+ * (Bug A). READS are pinned too, not just mutations: the rows this page renders must belong to the
+ * account the "Managing calendars for …" banner names — under the ambient session, drift made the
+ * page show one account's calendars while the banner and every pinned action targeted another.
  */
 type WithActiveAccountSession = <T>(task: () => Promise<T>) => Promise<T>;
 
@@ -102,14 +103,17 @@ function formatAddCalendarError(err: unknown): string {
 }
 
 /** Fetches the calendar list for an integration, with unmount-safe cancellation. */
-function useCalendarList(integrationId: string): { calendars: GoogleCalendar[]; isLoading: boolean; fetchError: string | null } {
+function useCalendarList(
+    integrationId: string,
+    withActiveAccountSession: WithActiveAccountSession,
+): { calendars: GoogleCalendar[]; isLoading: boolean; fetchError: string | null } {
     const [calendars, setCalendars] = useState<GoogleCalendar[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [fetchError, setFetchError] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
-        listCalendars(integrationId)
+        withActiveAccountSession(() => listCalendars(integrationId))
             .then((cals) => {
                 // Ordering is owned by calendarSelectRows/defaultCalendarId (they sort internally), so
                 // we store the raw list and let the picker decide order — no need to pre-sort here.
@@ -124,18 +128,19 @@ function useCalendarList(integrationId: string): { calendars: GoogleCalendar[]; 
         return () => {
             cancelled = true;
         };
-    }, [integrationId]);
+    }, [integrationId, withActiveAccountSession]);
 
     return { calendars, isLoading, fetchError };
 }
 
 export function CalendarIntegrations() {
+    const { account, loggedInAccounts, syncAndRefresh, withActiveAccountSession } = useAppData();
     // `resource` is the promise the whole section suspends on. A refresh swaps in a fresh promise
     // inside startTransition (below) so mutations re-read without flashing the Suspense fallback.
-    const [resource, setResource] = useState(getCalendarIntegrationsResource);
+    // Reads run pinned to the active account so the rows match the banner (see WithActiveAccountSession).
+    const [resource, setResource] = useState(() => getCalendarIntegrationsResource(withActiveAccountSession));
     const details = use(resource);
     const [chooseCalendarFor, setChooseCalendarFor] = useState<CalendarIntegration | null>(null);
-    const { account, loggedInAccounts, syncAndRefresh, withActiveAccountSession } = useAppData();
     const navigate = useNavigate();
     // calendarConnected and calendarConnectError are set by the OAuth callback redirect; the first
     // auto-opens the calendar picker, the second renders a mismatch error inline.
@@ -144,9 +149,9 @@ export function CalendarIntegrations() {
     // Drops the resource cache and re-reads. The new promise is swapped in inside a transition so
     // the current rows stay on screen until the fresh tree resolves — no fallback flash.
     const refreshIntegrations = useCallback(() => {
-        const next = invalidateCalendarIntegrationsResource();
+        const next = invalidateCalendarIntegrationsResource(withActiveAccountSession);
         startTransition(() => setResource(next));
-    }, []);
+    }, [withActiveAccountSession]);
 
     useEffect(() => {
         // After the OAuth redirect lands (calendarConnected set), auto-open the picker, then strip
@@ -868,7 +873,7 @@ interface ChooseCalendarDialogProps {
 
 /** Shown after the OAuth callback redirect — lets the user pick an initial calendar to sync. */
 function ChooseCalendarDialog({ integration, onClose, onSaved, onStaleIntegration, withActiveAccountSession }: ChooseCalendarDialogProps) {
-    const { calendars, isLoading, fetchError: calendarFetchError } = useCalendarList(integration._id);
+    const { calendars, isLoading, fetchError: calendarFetchError } = useCalendarList(integration._id, withActiveAccountSession);
     const [selectedId, setSelectedId] = useState('');
     const [isSaving, setIsSaving] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);

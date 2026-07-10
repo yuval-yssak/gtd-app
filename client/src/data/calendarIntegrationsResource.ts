@@ -13,6 +13,14 @@ export interface IntegrationWithDetails {
     calendars: GoogleCalendar[] | null;
 }
 
+/**
+ * Session wrapper the reads run under. The settings page passes `withActiveAccountSession` so the
+ * rows it renders provably belong to the account its "Managing calendars for …" banner names —
+ * under the ambient cookie session, multi-session drift (IDB-active ≠ active cookie) made the rows
+ * show ONE account while the banner and every pinned mutation targeted ANOTHER.
+ */
+export type IntegrationsSessionScope = <T>(task: () => Promise<T>) => Promise<T>;
+
 // Module-level cache so two consumers `use()` the same promise (Suspense dedupe) and the result
 // stays warm across navigation. Mutations call `invalidate…` to drop it and re-read in a transition.
 //
@@ -28,11 +36,11 @@ let cached: Promise<IntegrationWithDetails[]> | null = null;
  * reference until invalidated — that identity is what lets `use()` dedupe and keep the resolved
  * value across re-renders.
  */
-export function getCalendarIntegrationsResource(): Promise<IntegrationWithDetails[]> {
+export function getCalendarIntegrationsResource(scope: IntegrationsSessionScope): Promise<IntegrationWithDetails[]> {
     if (cached) {
         return cached;
     }
-    cached = loadIntegrationsWithDetails();
+    cached = loadIntegrationsWithDetails(scope);
     return cached;
 }
 
@@ -41,17 +49,18 @@ export function getCalendarIntegrationsResource(): Promise<IntegrationWithDetail
  * inside `startTransition` so the existing UI keeps showing until the new tree resolves — no
  * fallback flash on refresh.
  */
-export function invalidateCalendarIntegrationsResource(): Promise<IntegrationWithDetails[]> {
-    cached = loadIntegrationsWithDetails();
+export function invalidateCalendarIntegrationsResource(scope: IntegrationsSessionScope): Promise<IntegrationWithDetails[]> {
+    cached = loadIntegrationsWithDetails(scope);
     return cached;
 }
 
-function loadIntegrationsWithDetails(): Promise<IntegrationWithDetails[]> {
+function loadIntegrationsWithDetails(scope: IntegrationsSessionScope): Promise<IntegrationWithDetails[]> {
     // Build the chain first, then attach the cache-clearing rejection handler to the SAME promise
     // consumers hold — so the rejection is always observed (no dangling unhandled rejection) and the
     // next read (e.g. the inline error boundary's Retry, which remounts) re-fetches instead of
-    // replaying the stale rejected promise forever.
-    const inFlight = listIntegrations().then((integrations) => Promise.all(integrations.map(loadDetailsFor)));
+    // replaying the stale rejected promise forever. The per-integration detail reads run INSIDE the
+    // scope's pin window — the pin restores the previous session when the task settles.
+    const inFlight = scope(() => listIntegrations().then((integrations) => Promise.all(integrations.map(loadDetailsFor))));
     inFlight.catch(() => {
         if (cached === inFlight) {
             cached = null;
