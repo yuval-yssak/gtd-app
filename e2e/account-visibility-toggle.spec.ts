@@ -108,4 +108,68 @@ test.describe('account visibility toggles', () => {
             await expect(page.locator('[data-testid^="accountVisibilityToggle-"]')).toHaveCount(0);
         });
     });
+
+    test('capturing while the active account is hidden warns and offers to show it', async ({ browser }) => {
+        const stamp = dayjs().valueOf();
+        const emailA = `vistoggle-capture-a-${stamp}@example.com`;
+        const emailB = `vistoggle-capture-b-${stamp}@example.com`;
+
+        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active }) => {
+            await reloadInbox(page);
+
+            // Hide the ACTIVE account — new captures still land under it, but the view filters them out.
+            await visibleToggleFor(page, active.userId).click();
+            await expect(visibleToggleFor(page, active.userId)).toHaveAttribute('data-account-hidden', 'true');
+
+            await page.getByPlaceholder("What's on your mind?").fill('Captured while hidden');
+            await page.getByPlaceholder("What's on your mind?").press('Enter');
+
+            // The item is created but stays invisible — the warning snackbar is the only signal.
+            await expect(page.getByText('Captured while hidden')).toBeHidden();
+            const snackbar = page.getByTestId('hiddenAccountCaptureSnackbar');
+            await expect(snackbar).toBeVisible();
+            await expect(snackbar).toContainText('hidden');
+
+            await page.getByTestId('showHiddenAccountButton').click();
+
+            await expect(visibleToggleFor(page, active.userId)).toHaveAttribute('data-account-hidden', 'false');
+            await expect(page.getByText('Captured while hidden')).toBeVisible();
+        });
+    });
+
+    test('"Show account" is a no-op if the account was already un-hidden via the avatar toggle', async ({ browser }) => {
+        const stamp = dayjs().valueOf();
+        const emailA = `vistoggle-capture-idempotent-a-${stamp}@example.com`;
+        const emailB = `vistoggle-capture-idempotent-b-${stamp}@example.com`;
+
+        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active }) => {
+            await reloadInbox(page);
+
+            await visibleToggleFor(page, active.userId).click();
+            await page.getByPlaceholder("What's on your mind?").fill('Race with manual unhide');
+            await page.getByPlaceholder("What's on your mind?").press('Enter');
+            await expect(page.getByTestId('hiddenAccountCaptureSnackbar')).toBeVisible();
+
+            // User manually un-hides via the avatar row while the snackbar is still up...
+            await visibleToggleFor(page, active.userId).click();
+            await expect(visibleToggleFor(page, active.userId)).toHaveAttribute('data-account-hidden', 'false');
+
+            // ...then clicks the now-stale "Show account" button — it must not flip the account back to hidden.
+            await page.getByTestId('showHiddenAccountButton').click();
+            await expect(visibleToggleFor(page, active.userId)).toHaveAttribute('data-account-hidden', 'false');
+            await expect(page.getByText('Race with manual unhide')).toBeVisible();
+        });
+    });
+
+    test('capturing into a visible account never shows the hidden-account warning', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `vistoggle-capture-visible-${dayjs().valueOf()}@example.com`, async (page) => {
+            await reloadInbox(page);
+
+            await page.getByPlaceholder("What's on your mind?").fill('Normal capture');
+            await page.getByPlaceholder("What's on your mind?").press('Enter');
+
+            await expect(page.getByText('Normal capture')).toBeVisible();
+            await expect(page.getByTestId('hiddenAccountCaptureSnackbar')).toBeHidden();
+        });
+    });
 });
