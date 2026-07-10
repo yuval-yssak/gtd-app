@@ -19,6 +19,7 @@ export type PublicRoutine = Pick<
     | 'title'
     | 'routineType'
     | 'rrule'
+    | 'recurrenceAnchor'
     | 'calendarEventId'
     | 'calendarIntegrationId'
     | 'calendarSyncConfigId'
@@ -38,6 +39,7 @@ const PUBLIC_FIELDS: ReadonlyArray<keyof PublicRoutine> = [
     'title',
     'routineType',
     'rrule',
+    'recurrenceAnchor',
     'calendarEventId',
     'calendarIntegrationId',
     'calendarSyncConfigId',

@@ -50,6 +50,7 @@ export interface ReassignItemEditPatch {
 export interface ReassignRoutineEditPatch {
     title?: string;
     rrule?: string;
+    recurrenceAnchor?: RoutineInterface['recurrenceAnchor'];
     startDate?: string;
     routineType?: RoutineInterface['routineType'];
     template?: RoutineInterface['template'];
@@ -570,6 +571,17 @@ function applyRoutineEditPatch(routine: RoutineInterface, patch: ReassignRoutine
     }
     if (typeof patch.active === 'boolean') {
         next.active = patch.active;
+    }
+    // recurrenceAnchor is only meaningful for nextAction routines — RoutineSnapshotSchema rejects
+    // it on a calendar routine. `next` starts as a spread of the source routine, so a type switch
+    // away from nextAction must explicitly CLEAR any inherited anchor, not just skip applying the
+    // patch's value — otherwise a stale anchor rides along and fails validation on the target write.
+    if (next.routineType === 'nextAction') {
+        if (patch.recurrenceAnchor === 'floating' || patch.recurrenceAnchor === 'fixed') {
+            next.recurrenceAnchor = patch.recurrenceAnchor;
+        }
+    } else {
+        delete next.recurrenceAnchor;
     }
     return next;
 }

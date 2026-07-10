@@ -36,6 +36,8 @@ export interface ReassignItemEditPatch {
 export interface ReassignRoutineEditPatch {
     title?: string;
     rrule?: string;
+    /** Only meaningful for routineType='nextAction'. See StoredRoutine.recurrenceAnchor. */
+    recurrenceAnchor?: 'floating' | 'fixed';
     startDate?: string;
     routineType?: 'nextAction' | 'calendar';
     template?: Record<string, unknown>;

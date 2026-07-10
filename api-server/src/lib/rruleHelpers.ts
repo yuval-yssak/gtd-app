@@ -69,3 +69,14 @@ export function computeNextOccurrence(rruleStr: string, afterDate: Date, include
     }
     return next;
 }
+
+/**
+ * Infer floating-vs-fixed from an rrule string alone, for routines with no explicit
+ * `recurrenceAnchor` stored (back-compat fallback — see `RoutineInterface.recurrenceAnchor`).
+ * 'fixed' when the rule pins a day via BYMONTHDAY/BYDAY; 'floating' otherwise (including DAILY,
+ * where the distinction is moot, and bare YEARLY, which has no day-of-year picker yet).
+ */
+export function deriveRecurrenceAnchor(rruleStr: string): 'floating' | 'fixed' {
+    const upper = rruleStr.toUpperCase();
+    return /(^|;)BYMONTHDAY=/.test(upper) || /(^|;)BYDAY=/.test(upper) ? 'fixed' : 'floating';
+}

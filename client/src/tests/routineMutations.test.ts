@@ -94,6 +94,67 @@ describe('removeRoutine', () => {
         expect(ops[0]?.entityType).toBe('routine');
         expect(ops[0]?.snapshot).toBeNull();
     });
+
+    it('trashes open items regardless of due date — unlike pause, delete has no forward-looking filter', async () => {
+        const routine = await createRoutine(db, routineFields());
+        await db.clear('syncOperations');
+
+        const today = dayjs().format('YYYY-MM-DD');
+        const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+        const openItem: StoredItem = {
+            _id: 'open-1',
+            userId: USER_ID,
+            status: 'nextAction',
+            title: 'open',
+            routineId: routine._id,
+            expectedBy: today,
+            createdTs: today,
+            updatedTs: today,
+        };
+        const pastDueItem: StoredItem = {
+            _id: 'past-1',
+            userId: USER_ID,
+            status: 'nextAction',
+            title: 'past-due',
+            routineId: routine._id,
+            expectedBy: yesterday,
+            createdTs: yesterday,
+            updatedTs: yesterday,
+        };
+        const doneItem: StoredItem = {
+            _id: 'done-1',
+            userId: USER_ID,
+            status: 'done',
+            title: 'done',
+            routineId: routine._id,
+            expectedBy: today,
+            createdTs: today,
+            updatedTs: today,
+        };
+        await db.put('items', openItem);
+        await db.put('items', pastDueItem);
+        await db.put('items', doneItem);
+
+        await removeRoutine(db, routine._id);
+
+        expect((await db.get('items', 'open-1'))?.status).toBe('trash');
+        expect((await db.get('items', 'past-1'))?.status).toBe('trash');
+        expect((await db.get('items', 'done-1'))?.status).toBe('done');
+
+        const itemOps = (await db.getAll('syncOperations')).filter((o) => o.entityType === 'item');
+        expect(itemOps.map((o) => o.entityId).sort()).toEqual(['open-1', 'past-1']);
+    });
+
+    it('is a clean no-op cascade when the routine has no open items', async () => {
+        const routine = await createRoutine(db, routineFields());
+        await db.clear('syncOperations');
+
+        await removeRoutine(db, routine._id);
+
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        expect(ops[0]?.entityType).toBe('routine');
+    });
 });
 
 describe('createRoutine — startDate', () => {

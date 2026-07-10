@@ -48,6 +48,18 @@ export function computeNextOccurrence(rruleStr: string, afterDate: Date, include
     return next;
 }
 
+/**
+ * Infer floating-vs-fixed from an rrule string alone, for routines with no explicit
+ * `recurrenceAnchor` stored (back-compat fallback — see `StoredRoutine.recurrenceAnchor`).
+ * 'fixed' when the rule pins a day via BYMONTHDAY/BYDAY; 'floating' otherwise (including DAILY,
+ * where the distinction is moot, and bare YEARLY, which has no day-of-year picker yet).
+ * Mirrors the server-side `deriveRecurrenceAnchor` in `api-server/src/lib/rruleHelpers.ts`.
+ */
+export function deriveRecurrenceAnchor(rruleStr: string): 'floating' | 'fixed' {
+    const upper = rruleStr.toUpperCase();
+    return /(^|;)BYMONTHDAY=/.test(upper) || /(^|;)BYDAY=/.test(upper) ? 'fixed' : 'floating';
+}
+
 const WEEKDAY_NAMES: Record<number, string> = { 0: 'Mon', 1: 'Tue', 2: 'Wed', 3: 'Thu', 4: 'Fri', 5: 'Sat', 6: 'Sun' };
 
 /** Convert an rrule string into a short human-readable label, e.g. "Every 3 days" or "Every Mon & Thu". */

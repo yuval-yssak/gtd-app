@@ -84,6 +84,7 @@ export const RoutineSnapshotSchema = z
         title: z.string(),
         routineType: z.enum(['nextAction', 'calendar']),
         rrule: rruleSchema,
+        recurrenceAnchor: z.enum(['floating', 'fixed']).optional(),
         triggerMode: z.enum(['afterCompletion', 'fixedSchedule']).optional(),
         afterCompletionDelayDays: z.number().nonnegative().optional(),
         calendarEventId: nonEmptyString.optional(),
@@ -133,6 +134,13 @@ export const RoutineSnapshotSchema = z
                     });
                 }
             }
+        }
+        if (routine.routineType !== 'nextAction' && routine.recurrenceAnchor !== undefined) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['recurrenceAnchor'],
+                message: `field "recurrenceAnchor" is only allowed on nextAction routines (routineType=${routine.routineType})`,
+            });
         }
     });
 

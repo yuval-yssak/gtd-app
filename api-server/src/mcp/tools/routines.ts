@@ -30,6 +30,16 @@ const calendarItemTemplateSchema = z
     })
     .strict();
 
+const recurrenceAnchorSchema = z
+    .enum(['floating', 'fixed'])
+    .optional()
+    .describe(
+        'nextAction routines only. "floating" (default if omitted and rrule has no BYMONTHDAY/BYDAY): the next ' +
+            'occurrence lands N periods after the day the item was actually completed. "fixed" (default if omitted ' +
+            'and rrule has BYMONTHDAY/BYDAY): the next occurrence is always pinned to a specific day-of-period ' +
+            'regardless of completion date.',
+    );
+
 const listRoutines = defineTool({
     name: 'gtd_list_routines',
     description: "List the user's routines. Sorted by updatedTs DESC. Default limit 100, max 500.",
@@ -67,6 +77,7 @@ const createRoutine = defineTool({
         title: z.string().min(1),
         routineType: z.enum(['nextAction', 'calendar']),
         rrule: z.string().regex(/FREQ=/),
+        recurrenceAnchor: recurrenceAnchorSchema,
         template: routineTemplateSchema,
         active: z.boolean(),
         startDate: z
@@ -90,6 +101,7 @@ const updateRoutine = defineTool({
         title: z.string().min(1).optional(),
         routineType: z.enum(['nextAction', 'calendar']).optional(),
         rrule: z.string().regex(/FREQ=/).optional().describe('RFC 5545 RRULE string. Must contain FREQ=.'),
+        recurrenceAnchor: recurrenceAnchorSchema,
         template: routineTemplateSchema.optional(),
         active: z.boolean().optional(),
         startDate: z
@@ -137,8 +149,8 @@ const splitRoutine = defineTool({
     description:
         'Composite gesture: cap the head routine with UNTIL=splitDate, delete its future calendar items, and ' +
         'create a new tail routine carrying optional edits. Useful for "this and following occurrences" changes. ' +
-        'tailEdits accepts: title, rrule, routineType (switch nextAction↔calendar going forward), template, ' +
-        'calendarItemTemplate, startDate, active.',
+        'tailEdits accepts: title, rrule, recurrenceAnchor, routineType (switch nextAction↔calendar going forward), ' +
+        'template, calendarItemTemplate, startDate, active.',
     inputSchema: {
         id: idSchema,
         splitDate: z
@@ -151,6 +163,7 @@ const splitRoutine = defineTool({
             .object({
                 title: z.string().optional(),
                 rrule: z.string().optional(),
+                recurrenceAnchor: recurrenceAnchorSchema,
                 routineType: z.enum(['nextAction', 'calendar']).optional(),
                 template: routineTemplateSchema.optional(),
                 calendarItemTemplate: calendarItemTemplateSchema.optional(),

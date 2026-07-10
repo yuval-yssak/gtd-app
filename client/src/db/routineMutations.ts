@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { deleteRoutineById, putRoutine } from './routineHelpers';
-import { trashFutureItemsFromDate } from './routineItemHelpers';
+import { trashAllOpenItemsForRoutine, trashFutureItemsFromDate } from './routineItemHelpers';
 import { queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
@@ -29,6 +29,11 @@ export async function updateRoutine(db: IDBPDatabase<MyDB>, routine: StoredRouti
 export async function removeRoutine(db: IDBPDatabase<MyDB>, routineId: string): Promise<void> {
     // Read the owning userId before delete so the queued delete op is scoped to the right account.
     const existing = await db.get('routines', routineId);
+    // Trash open items BEFORE deleting the routine row — mirrors pauseRoutine's ordering so a
+    // crash mid-operation can't leave an orphaned item with no trace the cascade was attempted.
+    if (existing?.userId) {
+        await trashAllOpenItemsForRoutine(db, existing.userId, routineId);
+    }
     await deleteRoutineById(db, routineId);
     await queueSyncOp(db, {
         opType: 'delete',

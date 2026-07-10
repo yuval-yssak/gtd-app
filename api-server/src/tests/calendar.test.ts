@@ -8119,8 +8119,8 @@ describe('calendar push-back — routines', () => {
                 createdTs: now,
                 updatedTs: now,
             },
-            // Item with the same routineId but a non-calendar status must NOT be touched —
-            // the cascade is scoped to the calendar projection of this routine.
+            // Item with the same routineId but a non-calendar status IS also trashed — the
+            // sibling nextAction cascade (trashGeneratedOpenNextActionItems) covers it.
             {
                 _id: 'gen-nextaction',
                 user: userId,
@@ -8147,11 +8147,11 @@ describe('calendar push-back — routines', () => {
         expect(g2?.status).toBe('trash');
         expect(other?.status).toBe('calendar');
         expect(otherRoutine?.status).toBe('calendar');
-        expect(naSibling?.status).toBe('nextAction');
+        expect(naSibling?.status).toBe('trash');
 
         // Each cascade-trashed item records an update op so other devices sync the state change.
-        const ops = await operationsDAO.findArray({ entityId: { $in: ['gen-1', 'gen-2'] } });
-        expect(ops).toHaveLength(2);
+        const ops = await operationsDAO.findArray({ entityId: { $in: ['gen-1', 'gen-2', 'gen-nextaction'] } });
+        expect(ops).toHaveLength(3);
         expect(ops.every((op) => op.opType === 'update' && op.snapshot?.status === 'trash')).toBe(true);
     });
 

@@ -218,6 +218,19 @@ export interface RoutineInterface {
      */
     rrule: string;
     /**
+     * Only meaningful for `routineType: 'nextAction'`. Modifies what `rrule` gets written as — it
+     * is NOT a separate computation path; `rrule` remains the single source of truth for actual
+     * date computation (`computeNextOccurrence` never branches on this field).
+     * - 'floating': `rrule` omits BYMONTHDAY/BYDAY, so the next occurrence's day-of-period floats
+     *   to whatever day the item is actually completed on (rrule's own DTSTART-day semantics).
+     * - 'fixed': `rrule` carries an explicit BYMONTHDAY/BYDAY, so the next occurrence is always
+     *   pinned to that day regardless of completion date.
+     * `undefined` means "derive from whether `rrule` currently has BYMONTHDAY/BYDAY" — see
+     * `deriveRecurrenceAnchor` in `lib/rruleHelpers.ts`. This keeps existing routines' behavior
+     * unchanged; the field only becomes concretely set once explicitly written.
+     */
+    recurrenceAnchor?: 'floating' | 'fixed';
+    /**
      * @deprecated Use routineType instead.
      */
     triggerMode?: 'afterCompletion' | 'fixedSchedule';

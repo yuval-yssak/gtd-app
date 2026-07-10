@@ -344,16 +344,22 @@ Routines are recurring task templates. They have a richer shape than items / peo
 
 | Method | Path | Scope | Notes |
 |---|---|---|---|
-| `POST` | `/v1/routines` | `routines.write` | Body shape: `{ title, routineType: 'nextAction' \| 'calendar', rrule, template: RoutineItemTemplate, active: boolean, ... }`. Returns 201. |
+| `POST` | `/v1/routines` | `routines.write` | Body shape: `{ title, routineType: 'nextAction' \| 'calendar', rrule, recurrenceAnchor?, template: RoutineItemTemplate, active: boolean, ... }`. Returns 201. |
 | `GET` | `/v1/routines` | `routines.read` | Standard pagination. |
 | `GET` | `/v1/routines/:id` | `routines.read` | |
-| `PATCH` | `/v1/routines/:id` | `routines.write` | Writable fields: `title`, `routineType`, `rrule`, `template`, `active`, `startDate`, `calendarItemTemplate`, `calendarEventId`, `calendarIntegrationId`, `calendarSyncConfigId`. Server-managed fields (`splitFromRoutineId`, `lastGeneratedDate`, `routineExceptions`, `lastPushedToGCalTs`, `lastSyncedNotes`) and deprecated fields (`triggerMode`, `afterCompletionDelayDays`) are rejected with `forbidden_field`. |
-| `DELETE` | `/v1/routines/:id` | `routines.write` | Idempotent. The pre-delete snapshot is hydrated from DB and logged so other devices can apply the cascade locally. |
+| `PATCH` | `/v1/routines/:id` | `routines.write` | Writable fields: `title`, `routineType`, `rrule`, `recurrenceAnchor`, `template`, `active`, `startDate`, `calendarItemTemplate`, `calendarEventId`, `calendarIntegrationId`, `calendarSyncConfigId`. Server-managed fields (`splitFromRoutineId`, `lastGeneratedDate`, `routineExceptions`, `lastPushedToGCalTs`, `lastSyncedNotes`) and deprecated fields (`triggerMode`, `afterCompletionDelayDays`) are rejected with `forbidden_field`. |
+| `DELETE` | `/v1/routines/:id` | `routines.write` | Idempotent. The pre-delete snapshot is hydrated from DB and logged so other devices can apply the cascade locally. Trashes every open generated item (both `calendar`- and `nextAction`-status), not just future ones. |
 | `POST` | `/v1/routines/:id/pause` | `routines.write` | Composite: trashes future open items + flips `active=false`. GCal cap-with-UNTIL fires downstream. |
 | `POST` | `/v1/routines/:id/resume` | `routines.write` | Composite: flips `active=true` and stamps `startDate=tomorrow` so the on-device generator starts a fresh series. |
 | `POST` | `/v1/routines/:id/split` | `routines.write` | Composite: caps the head with UNTIL, deletes future calendar items, creates a new tail routine. Body: `{ splitDate: 'YYYY-MM-DD', tailEdits?: { title?, rrule?, ... } }`. Returns 201 with `{ head, tail }`. |
 
 **Calendar-routine seeding limitation.** The server-side composite split caps the head and creates the tail routine, but does NOT materialize the tail's first calendar items — that lives client-side in `generateCalendarItemsToHorizon`. A pure-API consumer will see new items appear only after a connected client syncs. The GCal master event is still created via the existing `handleRoutinePush` pushback. This matches the in-app split gesture's contract.
+
+**`recurrenceAnchor` — floating vs fixed monthly/weekly recurrence.** Applies only to `nextAction` routines. Two modes:
+- `'floating'`: the next occurrence lands N periods after the day the item was actually completed (day-of-month/weekday drifts to match completion date).
+- `'fixed'`: the next occurrence is always pinned to a specific day-of-period, regardless of when the previous one was completed.
+
+The field only controls what's written into `rrule` (whether `BYMONTHDAY`/`BYDAY` is present) — `rrule` remains the single source of truth for computation. Omit the field entirely to preserve today's implicit behavior: a bare `FREQ=MONTHLY`/`FREQ=WEEKLY` (no `BYMONTHDAY`/`BYDAY`) floats; a rule with `BYMONTHDAY=N`/`BYDAY=...` is fixed. Note: a floating monthly routine completed on the 31st skips any month with no 31st entirely (e.g. Jan 31 → Mar 31, not Feb) — this is correct RFC 5545 behavior, not a bug.
 
 ---
 

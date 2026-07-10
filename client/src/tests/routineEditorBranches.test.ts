@@ -23,6 +23,7 @@ function buildCtx(overrides: Partial<SaveContext> = {}): SaveContext {
     return {
         trimmedTitle: 'Updated title',
         finalRrule: 'FREQ=DAILY;INTERVAL=1',
+        recurrenceAnchor: 'floating',
         routineType: 'nextAction',
         template: {},
         calendarItemTemplate: undefined,

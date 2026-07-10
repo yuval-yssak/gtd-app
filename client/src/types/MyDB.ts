@@ -101,6 +101,15 @@ export interface StoredRoutine {
     routineType: 'nextAction' | 'calendar';
     /** RFC 5545 RRULE string. Required for all routines. */
     rrule: string;
+    /**
+     * Only meaningful for `routineType: 'nextAction'`. Modifies what `rrule` gets written as — not
+     * a separate computation path; `rrule` remains the single source of truth. 'floating': `rrule`
+     * omits BYMONTHDAY/BYDAY, so the next occurrence's day-of-period floats to the completion date.
+     * 'fixed': `rrule` carries an explicit BYMONTHDAY/BYDAY, pinning the day regardless of
+     * completion date. `undefined` means "derive from whether `rrule` has BYMONTHDAY/BYDAY" — see
+     * `deriveRecurrenceAnchor` in `lib/rruleUtils.ts`. Mirrored from api-server's `RoutineInterface`.
+     */
+    recurrenceAnchor?: 'floating' | 'fixed';
     /** @deprecated Use routineType instead. */
     triggerMode?: 'afterCompletion' | 'fixedSchedule';
     /** @deprecated Use rrule instead. */

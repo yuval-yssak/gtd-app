@@ -38,7 +38,7 @@ import { useAutosave } from '../../hooks/useAutosave';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
-import { RruleExhaustedError } from '../../lib/rruleUtils';
+import { deriveRecurrenceAnchor, RruleExhaustedError } from '../../lib/rruleUtils';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import { offerUndo } from '../../lib/undoStore';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
@@ -65,6 +65,8 @@ export interface FormState {
     routineType: 'nextAction' | 'calendar';
     title: string;
     rrule: string; // base rrule without UNTIL/COUNT — those are stored in endsMode/endsDate/endsCount
+    /** Only meaningful for routineType='nextAction'. See StoredRoutine.recurrenceAnchor. */
+    recurrenceAnchor: 'floating' | 'fixed';
     workContextIds: string[];
     peopleIds: string[];
     energy: EnergyLevel | '';
@@ -131,6 +133,9 @@ export function initFormState(routine?: StoredRoutine): FormState {
         routineType: routine?.routineType ?? 'nextAction',
         title: routine?.title ?? '',
         rrule: stripEndClauses(routine?.rrule ?? 'FREQ=DAILY;INTERVAL=1'),
+        // Edits: stored value, or derive from the rrule shape when unset (back-compat). New
+        // routines default to floating — matches "current implicit behavior when unspecified".
+        recurrenceAnchor: routine ? (routine.recurrenceAnchor ?? deriveRecurrenceAnchor(routine.rrule)) : 'floating',
         workContextIds: routine?.template.workContextIds ?? [],
         peopleIds: routine?.template.peopleIds ?? [],
         energy: routine?.template.energy ?? '',
@@ -168,6 +173,7 @@ const ROUTINE_FIELD_LABELS: Record<keyof FormState, string> = {
     routineType: 'Type',
     title: 'Title',
     rrule: 'Frequency',
+    recurrenceAnchor: 'Frequency',
     workContextIds: 'Contexts',
     peopleIds: 'People',
     energy: 'Energy',
@@ -226,6 +232,8 @@ export function buildRoutineEditPatch(args: {
     /** All-day routines carry `{ allDay: true }`; timed routines carry `{ timeOfDay, duration }`. */
     calendarItemTemplate?: { allDay: true } | { timeOfDay: string; duration: number };
     startDate?: string;
+    /** Only meaningful for routineType='nextAction'. See StoredRoutine.recurrenceAnchor. */
+    recurrenceAnchor?: 'floating' | 'fixed';
     /**
      * True when the editor was opened on a paused routine and Save should also resume it.
      * Mirrors the same-account path's `resumeOnSave = !routine.active` semantics so a cross-account
@@ -251,6 +259,9 @@ export function buildRoutineEditPatch(args: {
     const nextStartDate = args.startDate ?? '';
     if (nextStartDate !== originalStartDate) {
         patch.startDate = nextStartDate;
+    }
+    if (args.recurrenceAnchor !== undefined && args.recurrenceAnchor !== args.routine.recurrenceAnchor) {
+        patch.recurrenceAnchor = args.recurrenceAnchor;
     }
     if (args.resumeOnSave) {
         patch.active = true;
@@ -305,6 +316,7 @@ interface CalendarLink {
 export interface SaveContext {
     trimmedTitle: string;
     finalRrule: string;
+    recurrenceAnchor: 'floating' | 'fixed';
     routineType: 'nextAction' | 'calendar';
     template: ReturnType<typeof buildTemplate>;
     calendarItemTemplate: ReturnType<typeof buildRoutineTemplateFromForm>;
@@ -343,9 +355,14 @@ export function buildUpdatedRoutine(routine: StoredRoutine, ctx: SaveContext, ac
         ...(ctx.calendarItemTemplate !== undefined ? { calendarItemTemplate: ctx.calendarItemTemplate } : {}),
         ...ctx.calendarLink,
         ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
+        // recurrenceAnchor is only meaningful for nextAction routines.
+        ...(ctx.routineType === 'nextAction' ? { recurrenceAnchor: ctx.recurrenceAnchor } : {}),
     };
     if (!ctx.formStartDate) {
         delete updated.startDate;
+    }
+    if (ctx.routineType !== 'nextAction') {
+        delete updated.recurrenceAnchor;
     }
     return updated;
 }
@@ -366,6 +383,7 @@ export function buildSplitPatch(ctx: SaveContext): Omit<StoredRoutine, '_id' | '
         ...(ctx.calendarItemTemplate !== undefined ? { calendarItemTemplate: ctx.calendarItemTemplate } : {}),
         ...ctx.calendarLink,
         ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
+        ...(ctx.routineType === 'nextAction' ? { recurrenceAnchor: ctx.recurrenceAnchor } : {}),
     };
 }
 
@@ -528,6 +546,7 @@ export async function saveCreate(db: IDBPDatabase<MyDB>, userId: string, ctx: Sa
         ...(ctx.calendarItemTemplate !== undefined ? { calendarItemTemplate: ctx.calendarItemTemplate } : {}),
         ...ctx.calendarLink,
         ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
+        ...(ctx.routineType === 'nextAction' ? { recurrenceAnchor: ctx.recurrenceAnchor } : {}),
     });
     try {
         await seedNewRoutineFirstItems(db, created, ctx);
@@ -792,6 +811,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
             return {
                 trimmedTitle,
                 finalRrule,
+                recurrenceAnchor: form.recurrenceAnchor,
                 routineType: form.routineType,
                 template: buildTemplate(form),
                 calendarItemTemplate: buildRoutineTemplateFromForm(form),
@@ -817,6 +837,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 template: ctx.template,
                 ...(ctx.calendarItemTemplate !== undefined ? { calendarItemTemplate: ctx.calendarItemTemplate } : {}),
                 ...(ctx.formStartDate ? { startDate: ctx.formStartDate } : {}),
+                ...(ctx.routineType === 'nextAction' ? { recurrenceAnchor: ctx.recurrenceAnchor } : {}),
                 ...(ctx.calendarLink.calendarIntegrationId !== undefined ? { targetIntegrationId: ctx.calendarLink.calendarIntegrationId } : {}),
                 ...(ctx.calendarLink.calendarSyncConfigId !== undefined ? { targetSyncConfigId: ctx.calendarLink.calendarSyncConfigId } : {}),
                 resumeOnSave: !currentRoutine.active,
@@ -858,6 +879,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         // All-day routines carry only `{ allDay: true }`; timed routines carry `{ timeOfDay, duration }`.
         calendarItemTemplate?: { allDay: true } | { timeOfDay: string; duration: number };
         startDate?: string;
+        recurrenceAnchor?: 'floating' | 'fixed';
         resumeOnSave?: boolean;
         targetIntegrationId?: string;
         targetSyncConfigId?: string;
@@ -980,7 +1002,8 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 <FrequencyPicker
                     key={`${routine?._id ?? 'new'}:${rruleSeedVersion}`}
                     value={form.rrule}
-                    onChange={(rrule) => patch({ rrule })}
+                    recurrenceAnchor={form.recurrenceAnchor}
+                    onChange={(rrule, recurrenceAnchor) => patch({ rrule, recurrenceAnchor })}
                     disabled={isEndedCalendar}
                 />
             </Box>

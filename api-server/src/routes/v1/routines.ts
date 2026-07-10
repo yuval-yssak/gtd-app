@@ -116,6 +116,7 @@ const WRITABLE_FIELDS = new Set<keyof RoutineInterface>([
     'title',
     'routineType',
     'rrule',
+    'recurrenceAnchor',
     'calendarEventId',
     'calendarIntegrationId',
     'calendarSyncConfigId',
@@ -261,7 +262,15 @@ export const v1RoutinesRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json({ error: 'routine not found', code: 'not_found' }, 404);
         }
         const now = dayjs().toISOString();
-        const snapshot = { ...existing, ...raw, updatedTs: now } as RoutineInterface;
+        const merged = { ...existing, ...raw, updatedTs: now } as RoutineInterface;
+        // recurrenceAnchor is only valid on nextAction routines (RoutineSnapshotSchema rejects it
+        // otherwise) — a PATCH that switches routineType away from nextAction without explicitly
+        // clearing a previously-set anchor would otherwise carry the stale value forward and fail
+        // validation on a legitimate type switch.
+        if (merged.routineType !== 'nextAction') {
+            delete merged.recurrenceAnchor;
+        }
+        const snapshot = merged;
         const result = await applyRoutineWrite(userId, tokenId, snapshot, 'update', now);
         if (!result.ok) {
             return c.json(

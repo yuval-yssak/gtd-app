@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeNextOccurrence, formatCalendarRrule, formatRrule } from '../lib/rruleUtils';
+import { computeNextOccurrence, deriveRecurrenceAnchor, formatCalendarRrule, formatRrule } from '../lib/rruleUtils';
 import type { StoredRoutine } from '../types/MyDB';
 
 describe('computeNextOccurrence', () => {
@@ -82,6 +82,105 @@ describe('computeNextOccurrence', () => {
             const next = computeNextOccurrence('FREQ=MONTHLY;BYMONTHDAY=15', anchor, true);
             expect(next.toISOString().slice(0, 10)).toBe('2024-01-15');
         });
+    });
+
+    // ── Floating vs fixed recurrence — locks in the already-correct rrule-library behavior that
+    //    `recurrenceAnchor` relies on. No computation change was needed for this feature; these
+    //    tests exist so a future refactor of computeNextOccurrence can't silently regress it.
+    describe('floating vs fixed monthly recurrence', () => {
+        it('floating (bare FREQ=MONTHLY): on-time completion advances one month from the same day', () => {
+            // Due day 15, completed exactly on day 15.
+            const completed = new Date('2024-01-15T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=MONTHLY', completed);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-02-15');
+        });
+
+        it('floating: early completion re-anchors to the earlier day, not the original due day', () => {
+            // Due day 15, completed early on day 10 — next occurrence floats to day 10, not 15.
+            const completed = new Date('2024-01-10T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=MONTHLY', completed);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-02-10');
+        });
+
+        it('floating: late completion re-anchors to the later day, not the original due day', () => {
+            // Due day 15, completed late on day 28 — next occurrence floats to day 28.
+            const completed = new Date('2024-01-28T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=MONTHLY', completed);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-02-28');
+        });
+
+        it('floating: multi-month-late completion advances one period from the ACTUAL completion date, not the original due date', () => {
+            // The routine was due months ago; whenever it's finally completed, the next occurrence
+            // is one period after the real completion date — this is the crux of "floating" and the
+            // most likely place a future refactor could regress it.
+            const completedMuchLater = new Date('2024-06-03T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=MONTHLY', completedMuchLater);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-07-03');
+        });
+
+        it('fixed BYMONTHDAY=31: skips a short month and lands on the next 31-day month', () => {
+            const anchor = new Date('2024-04-01T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=MONTHLY;BYMONTHDAY=31', anchor);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-05-31');
+        });
+
+        it('floating: completion on the 31st skips a month with no 31st entirely (documented, not a bug)', () => {
+            // Jan 31 -> next is Mar 31, NOT Feb (Feb has no 31st, so rrule skips the period).
+            const completed = new Date('2024-01-31T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=MONTHLY', completed);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-03-31');
+        });
+    });
+
+    describe('floating vs fixed weekly recurrence', () => {
+        it('floating (bare FREQ=WEEKLY): re-anchors to the completion weekday', () => {
+            // 2024-01-10 is a Wednesday.
+            const completed = new Date('2024-01-10T00:00:00Z');
+            const next = computeNextOccurrence('FREQ=WEEKLY', completed);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-01-17');
+        });
+
+        it('fixed BYDAY=MO: late completion still lands on the next Monday, not the completion weekday', () => {
+            // Due Monday, completed late on Wednesday — next occurrence is still Monday.
+            const completed = new Date('2024-01-10T00:00:00Z'); // Wednesday
+            const next = computeNextOccurrence('FREQ=WEEKLY;BYDAY=MO', completed);
+            expect(next.toISOString().slice(0, 10)).toBe('2024-01-15'); // next Monday
+        });
+    });
+});
+
+describe('deriveRecurrenceAnchor', () => {
+    it('bare FREQ=MONTHLY is floating', () => {
+        expect(deriveRecurrenceAnchor('FREQ=MONTHLY')).toBe('floating');
+    });
+
+    it('FREQ=MONTHLY;BYMONTHDAY=N is fixed', () => {
+        expect(deriveRecurrenceAnchor('FREQ=MONTHLY;BYMONTHDAY=15')).toBe('fixed');
+    });
+
+    it('bare FREQ=WEEKLY is floating', () => {
+        expect(deriveRecurrenceAnchor('FREQ=WEEKLY')).toBe('floating');
+    });
+
+    it('FREQ=WEEKLY;BYDAY=MO is fixed', () => {
+        expect(deriveRecurrenceAnchor('FREQ=WEEKLY;BYDAY=MO')).toBe('fixed');
+    });
+
+    it('FREQ=YEARLY is floating (no day-of-year picker exists yet)', () => {
+        expect(deriveRecurrenceAnchor('FREQ=YEARLY')).toBe('floating');
+    });
+
+    it('FREQ=DAILY is floating (moot, but must not throw)', () => {
+        expect(deriveRecurrenceAnchor('FREQ=DAILY;INTERVAL=3')).toBe('floating');
+    });
+
+    it('is robust to UNTIL/COUNT clause ordering around BYMONTHDAY', () => {
+        expect(deriveRecurrenceAnchor('FREQ=MONTHLY;COUNT=5;BYMONTHDAY=8')).toBe('fixed');
+        expect(deriveRecurrenceAnchor('UNTIL=20260101T000000Z;FREQ=MONTHLY')).toBe('floating');
+    });
+
+    it('is case-insensitive', () => {
+        expect(deriveRecurrenceAnchor('freq=monthly;bymonthday=8')).toBe('fixed');
     });
 });
 

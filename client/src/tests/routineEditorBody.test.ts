@@ -51,6 +51,7 @@ const BASE_ROUTINE: StoredRoutine = {
 const BASE_CTX = {
     trimmedTitle: 'Renamed',
     finalRrule: 'FREQ=WEEKLY;BYDAY=MO',
+    recurrenceAnchor: 'fixed' as const,
     routineType: 'nextAction' as const,
     template: { energy: 'high' as const },
     calendarItemTemplate: undefined,
@@ -115,6 +116,16 @@ describe('buildUpdatedRoutine', () => {
         const updated = buildUpdatedRoutine({ ...BASE_ROUTINE, startDate: '2026-01-01' }, { ...BASE_CTX, formStartDate: '2026-07-01' }, undefined);
         expect(updated.startDate).toBe('2026-07-01');
     });
+
+    it('writes recurrenceAnchor for a nextAction routine', () => {
+        const updated = buildUpdatedRoutine(BASE_ROUTINE, BASE_CTX, undefined);
+        expect(updated.recurrenceAnchor).toBe('fixed');
+    });
+
+    it('omits recurrenceAnchor for a calendar routine, even if a stale value exists on the stored routine', () => {
+        const updated = buildUpdatedRoutine({ ...BASE_ROUTINE, recurrenceAnchor: 'fixed' }, { ...BASE_CTX, routineType: 'calendar' }, undefined);
+        expect('recurrenceAnchor' in updated).toBe(false);
+    });
 });
 
 // Locks in the editedFields payload passed to splitRoutine. Both call sites (donePast-split and
@@ -154,5 +165,10 @@ describe('buildSplitPatch', () => {
         });
         expect(patch.calendarIntegrationId).toBe('i-1');
         expect(patch.calendarSyncConfigId).toBe('c-1');
+    });
+
+    it('emits recurrenceAnchor for a nextAction routine, omits it for calendar', () => {
+        expect(buildSplitPatch(BASE_CTX).recurrenceAnchor).toBe('fixed');
+        expect('recurrenceAnchor' in buildSplitPatch({ ...BASE_CTX, routineType: 'calendar' })).toBe(false);
     });
 });

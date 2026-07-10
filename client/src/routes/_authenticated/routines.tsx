@@ -86,6 +86,9 @@ function RoutinesPage() {
         setRoutineToDelete(null);
         await removeRoutine(db, target._id);
         await refreshRoutines();
+        // removeRoutine also trashes the routine's open items locally — refresh so the UI drops
+        // them immediately instead of waiting for syncAndRefresh's network round trip.
+        await refreshItems();
         // Push the delete + pull the server cascade (trashed generated calendar items)
         // so the Calendar view reflects the removal without waiting for an SSE tick.
         await syncAndRefresh();

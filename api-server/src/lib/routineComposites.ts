@@ -75,6 +75,7 @@ export interface SplitParams {
     tailEdits?: {
         title?: string;
         rrule?: string;
+        recurrenceAnchor?: 'floating' | 'fixed';
         routineType?: 'nextAction' | 'calendar';
         template?: RoutineInterface['template'];
         calendarItemTemplate?: RoutineInterface['calendarItemTemplate'];
@@ -200,6 +201,11 @@ function buildTail(head: RoutineInterface, params: SplitParams, now: string): Ro
         ...(head.calendarIntegrationId ? { calendarIntegrationId: head.calendarIntegrationId } : {}),
         ...(head.calendarSyncConfigId ? { calendarSyncConfigId: head.calendarSyncConfigId } : {}),
         ...(edits.startDate ? { startDate: edits.startDate } : {}),
+        // recurrenceAnchor is only meaningful for nextAction routines — never carry it onto a
+        // calendar-type tail (RoutineSnapshotSchema rejects it there).
+        ...((edits.recurrenceAnchor ?? head.recurrenceAnchor) && (edits.routineType ?? head.routineType) === 'nextAction'
+            ? { recurrenceAnchor: edits.recurrenceAnchor ?? head.recurrenceAnchor }
+            : {}),
     };
     return tail;
 }

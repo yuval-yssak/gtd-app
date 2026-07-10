@@ -526,6 +526,24 @@ export async function trashFutureItemsFromDate(db: IDBPDatabase<MyDB>, userId: s
 }
 
 /**
+ * Trashes (status='trash' + update op) every open item tied to a routine, regardless of date.
+ * Used by routine deletion, which — unlike pause — has no "keep working the backlog" nuance: the
+ * routine is gone, so every non-`done`/non-`trash` item it generated is trashed, including
+ * past-due ones that `trashFutureItemsFromDate` would leave alone.
+ */
+export async function trashAllOpenItemsForRoutine(db: IDBPDatabase<MyDB>, userId: string, routineId: string): Promise<void> {
+    const now = dayjs().toISOString();
+    const allItems = await db.getAllFromIndex('items', 'userId', userId);
+    const openItems = allItems.filter((i) => i.routineId === routineId && i.status !== 'done' && i.status !== 'trash');
+
+    for (const item of openItems) {
+        const updated: StoredItem = { ...item, status: 'trash', updatedTs: now };
+        await putItem(db, updated);
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
+    }
+}
+
+/**
  * Partitions a routine's past items into done vs non-done so the startDate-edit decision can branch:
  * - any `done` past items → trigger the split gesture (done items must remain tied to the old routine).
  * - no `done` past items → it's safe to hard-delete the past non-done items and update in place.

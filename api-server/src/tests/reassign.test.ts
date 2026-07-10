@@ -1641,9 +1641,9 @@ describe('POST /sync/reassign', () => {
             const bob = await seedUserSession('bob@example.com');
             const routine = makeRoutine(alice.userId);
             await routinesDAO.insertOne(routine);
-            // A generated `nextAction` item — outside the trash-on-cascade path (which only targets
-            // status='calendar'). With the cascade-only cleanup it must stay under Alice as-is, and
-            // Bob receives no transplanted history.
+            // A generated `nextAction` item. Reassign always deletes the source-side routine (even
+            // with editRoutinePatch — the patch only affects the target-side create), which fires
+            // pushRoutineDeletion's cascade: the item is trashed under Alice, not transplanted to Bob.
             const generated = makeItem(alice.userId, { routineId: routine._id, status: 'nextAction' });
             await itemsDAO.insertOne(generated);
 
@@ -1657,9 +1657,11 @@ describe('POST /sync/reassign', () => {
             });
 
             expect(res.status).toBe(200);
-            // Source-side generated next-action item remains under Alice (not in cascade scope).
+            // Source-side generated next-action item is trashed by the routine-delete cascade
+            // (fire-and-forget — poll briefly for it to land).
+            await waitFor(async () => (await itemsDAO.findByOwnerAndId(generated._id!, alice.userId))?.status === 'trash');
             const stillAlice = await itemsDAO.findByOwnerAndId(generated._id!, alice.userId);
-            expect(stillAlice?.status).toBe('nextAction');
+            expect(stillAlice?.status).toBe('trash');
             // Bob has no historical generated items.
             expect(await itemsDAO.findByOwnerAndId(generated._id!, bob.userId)).toBeNull();
         });
@@ -1702,6 +1704,31 @@ describe('POST /sync/reassign', () => {
             expect(res.status).toBe(200);
             const moved = await routinesDAO.findByOwnerAndId(routine._id, bob.userId);
             expect(moved?.routineType).toBe('nextAction');
+        });
+
+        // Regression: applyRoutineEditPatch spreads the source routine into `next` first, so a
+        // routineType switch away from nextAction must explicitly CLEAR an inherited
+        // recurrenceAnchor — otherwise the stale value rides along and fails RoutineSnapshotSchema's
+        // superRefine on the target-side create, breaking the reassign entirely.
+        it('switching routineType to calendar clears a stale recurrenceAnchor instead of failing the reassign', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const routine = makeRoutine(alice.userId, { routineType: 'nextAction', rrule: 'FREQ=MONTHLY;BYMONTHDAY=8', recurrenceAnchor: 'fixed' });
+            await routinesDAO.insertOne(routine);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, {
+                entityType: 'routine',
+                entityId: routine._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                editRoutinePatch: { routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } },
+            });
+
+            expect(res.status).toBe(200);
+            const moved = await routinesDAO.findByOwnerAndId(routine._id, bob.userId);
+            expect(moved?.routineType).toBe('calendar');
+            expect(moved?.recurrenceAnchor).toBeUndefined();
         });
     });
 
@@ -1852,3 +1879,14 @@ describe('POST /sync/reassign', () => {
         });
     });
 });
+
+/** GCal pushback (including the routine-delete item cascade) is fire-and-forget under the hood —
+ *  poll briefly for its effect to land rather than racing the assertion against it. */
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 1000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+        if (await predicate()) return;
+        await new Promise((r) => setTimeout(r, 10));
+    }
+    throw new Error('waitFor: predicate never became true');
+}

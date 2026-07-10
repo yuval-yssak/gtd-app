@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
+import { deriveRecurrenceAnchor, extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { extractLocalTime } from '../routes/calendar.js';
 
 describe('extractUntilFromRrule', () => {
@@ -27,6 +27,41 @@ describe('extractUntilFromRrule', () => {
 
     it('returns null for a malformed UNTIL value', () => {
         expect(extractUntilFromRrule('FREQ=DAILY;UNTIL=NOTADATE')).toBeNull();
+    });
+});
+
+describe('deriveRecurrenceAnchor', () => {
+    it('bare FREQ=MONTHLY is floating', () => {
+        expect(deriveRecurrenceAnchor('FREQ=MONTHLY')).toBe('floating');
+    });
+
+    it('FREQ=MONTHLY;BYMONTHDAY=N is fixed', () => {
+        expect(deriveRecurrenceAnchor('FREQ=MONTHLY;BYMONTHDAY=15')).toBe('fixed');
+    });
+
+    it('bare FREQ=WEEKLY is floating', () => {
+        expect(deriveRecurrenceAnchor('FREQ=WEEKLY')).toBe('floating');
+    });
+
+    it('FREQ=WEEKLY;BYDAY=MO is fixed', () => {
+        expect(deriveRecurrenceAnchor('FREQ=WEEKLY;BYDAY=MO')).toBe('fixed');
+    });
+
+    it('FREQ=YEARLY is floating (no day-of-year picker exists yet)', () => {
+        expect(deriveRecurrenceAnchor('FREQ=YEARLY')).toBe('floating');
+    });
+
+    it('FREQ=DAILY is floating (moot, but must not throw)', () => {
+        expect(deriveRecurrenceAnchor('FREQ=DAILY;INTERVAL=3')).toBe('floating');
+    });
+
+    it('is robust to UNTIL/COUNT clause ordering around BYMONTHDAY', () => {
+        expect(deriveRecurrenceAnchor('FREQ=MONTHLY;COUNT=5;BYMONTHDAY=8')).toBe('fixed');
+        expect(deriveRecurrenceAnchor('UNTIL=20260101T000000Z;FREQ=MONTHLY')).toBe('floating');
+    });
+
+    it('is case-insensitive', () => {
+        expect(deriveRecurrenceAnchor('freq=monthly;bymonthday=8')).toBe('fixed');
     });
 });
 

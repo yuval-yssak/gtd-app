@@ -56,6 +56,7 @@ interface PublicRoutine {
     title: string;
     routineType: 'nextAction' | 'calendar';
     rrule: string;
+    recurrenceAnchor?: 'floating' | 'fixed';
     template: { notes?: string };
     active: boolean;
     createdTs: string;
@@ -359,6 +360,121 @@ describe('writable-fields allowlist', () => {
         const body = (await res.json()) as { code: string; error: string };
         expect(body.code).toBe('forbidden_field');
         expect(body.error).toContain(field);
+    });
+});
+
+describe('recurrenceAnchor', () => {
+    it('accepts recurrenceAnchor on a nextAction routine and it round-trips through GET', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write', 'routines.read']);
+        const createRes = await app.fetch(
+            new Request('http://localhost:4000/v1/routines', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...validBody, recurrenceAnchor: 'floating' }),
+            }),
+        );
+        expect(createRes.status).toBe(201);
+        const created = (await createRes.json()) as PublicRoutine;
+        expect(created.recurrenceAnchor).toBe('floating');
+
+        const getRes = await app.fetch(new Request(`http://localhost:4000/v1/routines/${created._id}`, { headers: { Authorization: `Bearer ${token}` } }));
+        const fetched = (await getRes.json()) as PublicRoutine;
+        expect(fetched.recurrenceAnchor).toBe('floating');
+    });
+
+    it('omits recurrenceAnchor from the response when never set (no fabricated default)', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(validBody),
+            }),
+        );
+        const body = (await res.json()) as PublicRoutine;
+        expect('recurrenceAnchor' in body).toBe(false);
+    });
+
+    it('rejects recurrenceAnchor on a calendar routine (superRefine)', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: 'Standup',
+                    routineType: 'calendar',
+                    rrule: 'FREQ=WEEKLY;BYDAY=MO',
+                    template: {},
+                    active: true,
+                    calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                    recurrenceAnchor: 'fixed',
+                }),
+            }),
+        );
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('invalid_operation');
+    });
+
+    it('PATCH can set recurrenceAnchor on an existing nextAction routine', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        await routinesDAO.insertOne({
+            _id: 'r-anchor',
+            user: userId,
+            title: 't',
+            routineType: 'nextAction',
+            rrule: 'FREQ=MONTHLY',
+            template: {},
+            active: true,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines/r-anchor', {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ recurrenceAnchor: 'fixed' }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const stored = await routinesDAO.findByOwnerAndId('r-anchor', userId);
+        expect(stored?.recurrenceAnchor).toBe('fixed');
+    });
+
+    // Regression: PATCH merges `{ ...existing, ...raw }`, so switching routineType away from
+    // nextAction without explicitly clearing recurrenceAnchor used to carry the stale value
+    // forward and fail RoutineSnapshotSchema's superRefine — making the type switch impossible
+    // for any routine that ever had an anchor set.
+    it('PATCH switching routineType to calendar clears a stale recurrenceAnchor instead of failing validation', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        await routinesDAO.insertOne({
+            _id: 'r-switch',
+            user: userId,
+            title: 't',
+            routineType: 'nextAction',
+            rrule: 'FREQ=MONTHLY;BYMONTHDAY=8',
+            recurrenceAnchor: 'fixed',
+            template: {},
+            active: true,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines/r-switch', {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const stored = await routinesDAO.findByOwnerAndId('r-switch', userId);
+        expect(stored?.routineType).toBe('calendar');
+        expect(stored?.recurrenceAnchor).toBeUndefined();
     });
 });
 
