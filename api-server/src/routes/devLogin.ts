@@ -7,6 +7,7 @@ import { SESSION_COOKIE_NAME } from '../auth/constants.js';
 import type { GCalEvent } from '../calendarProviders/CalendarProvider.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import { auth, db } from '../loaders/mainLoader.js';
+import { deviceSyncStateId } from '../types/entities.js';
 
 // Guard: this module must never be loaded in production — throw immediately if it slips through.
 // The dynamic import in index.ts already prevents this; this is a belt-and-suspenders check.
@@ -253,6 +254,28 @@ export const devLoginRoutes = new Hono()
             db.collection('calendarSyncConfigs').deleteMany({}),
         ]);
         return c.json({ ok: true, scope: 'all' });
+    })
+
+    // POST /dev/reap-device — delete deviceSyncState row(s) for a device, simulating the stale-device
+    // reaper removing them while the device was offline. Lets Playwright drive the bootstrapRequired
+    // 409 recovery flow without waiting STALE_DEVICE_DAYS. With `email`, only the (deviceId, user)
+    // row for that user is removed; without, every user's row for the device goes. Auth-free like
+    // the other dev helpers — the module is unmountable in production (see guard at top of file).
+    .post('/reap-device', async (c) => {
+        const { deviceId, email } = await c.req.json<{ deviceId: string; email?: string }>();
+        if (!deviceId) {
+            return c.json({ error: 'deviceId required' }, 400);
+        }
+        if (email) {
+            const user = await db.collection<StoredUser>('user').findOne({ email: email.toLowerCase() });
+            if (!user) {
+                return c.json({ deletedRows: 0 });
+            }
+            const single = await db.collection('deviceSyncState').deleteOne({ _id: deviceSyncStateId(deviceId, user._id) } as never);
+            return c.json({ deletedRows: single.deletedCount });
+        }
+        const all = await db.collection('deviceSyncState').deleteMany({ deviceId });
+        return c.json({ deletedRows: all.deletedCount });
     })
 
     // GET /dev/device-users?deviceId=... — surface deviceUsers join rows so e2e specs can

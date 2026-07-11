@@ -1,6 +1,19 @@
 import type { DeviceSyncStateInterface } from '../types/entities.js';
 
 /**
+ * Days without any activity (BOTH `lastSeenTs` and `lastSyncedTs` older than the cutoff) before a
+ * device's `deviceSyncState` row is reaped, releasing its vote on the purge floor. Shared by the
+ * pull-time reaper (routes/sync.ts) and the maintenance purge default (routes/maintenance.ts) so
+ * the two paths can never drift apart.
+ *
+ * 30 days is only safe together with the `bootstrapRequired` 409 signal on /sync/pull: reaping a
+ * row lets ops the device never pulled be purged, so a reaped-then-returning device would silently
+ * skip that gap and believe it is fully synced. The 409 forces it into a full bootstrap instead.
+ * Lowering this constant without that signal widens a silent data-loss window.
+ */
+export const STALE_DEVICE_DAYS = 30;
+
+/**
  * The compound `(ts, _id)` purge floor: the exact position the slowest device has provably received.
  */
 export interface PurgeFloor {

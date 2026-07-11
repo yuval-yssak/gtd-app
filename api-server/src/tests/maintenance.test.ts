@@ -66,7 +66,7 @@ async function seedOp(opts: { id: string; userId: string; entityId: string; ts: 
     });
 }
 
-// lastSeenTs defaults to now() so a seeded device isn't accidentally swept by the 90-day stale
+// lastSeenTs defaults to now() so a seeded device isn't accidentally swept by the STALE_DEVICE_DAYS
 // cutoff — the floor-holding rows in these tests must survive a default purge. Tests exercising
 // stale-device removal pass an explicit old lastSeenTs.
 async function seedDeviceSyncState(opts: { deviceId: string; userId: string; lastSyncedTs: string; lastSyncedId?: string; lastSeenTs?: string }) {
@@ -119,12 +119,12 @@ describe('POST /maintenance/purge-operations', () => {
         const userId = await getUserId(cookie);
 
         const staleTs = dayjs().subtract(20, 'day').toISOString();
-        // A device stale by a 10-day cutoff (but not the 90-day default) pinned at epoch holds the floor.
+        // A device stale by a 10-day cutoff (but not the STALE_DEVICE_DAYS default) pinned at epoch holds the floor.
         await seedDeviceSyncState({ deviceId: 'dev-stale', userId, lastSyncedTs: dayjs(0).toISOString(), lastSyncedId: '', lastSeenTs: staleTs });
         await seedDeviceSyncState({ deviceId: 'dev-active', userId, lastSyncedTs: '2024-02-01T00:00:00.000Z', lastSyncedId: '￿' });
         await seedOp({ id: 'op-1', userId, entityId: 'e1', ts: '2024-01-15T00:00:00.000Z', snapshot: snap('e1', '2024-01-15T00:00:00.000Z') });
 
-        // Default 90-day cutoff: dev-stale survives (only 20 days old) → floor stuck at epoch → no purge.
+        // Default (STALE_DEVICE_DAYS) cutoff: dev-stale survives (only 20 days old) → floor stuck at epoch → no purge.
         const noopRes = await purge(cookie);
         const noopBody = (await noopRes.json()) as { deletedStaleDevices: number; deletedOps: number };
         expect(noopBody.deletedStaleDevices).toBe(0);

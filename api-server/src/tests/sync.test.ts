@@ -2,9 +2,10 @@
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
-import { type EntityType, MAX_OP_ID, type OpType } from '../types/entities.js';
+import { deviceSyncStateId, type EntityType, MAX_OP_ID, type OpType } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/sync', syncRoutes);
@@ -92,6 +93,23 @@ async function pull(sessionCookie: string, opts: { since?: string; sinceId?: str
     if (opts.deviceId !== undefined) params.set('deviceId', opts.deviceId);
     const query = params.toString() ? `?${params}` : '';
     return authenticatedRequest(app, { method: 'GET', path: `/sync/pull${query}`, sessionCookie });
+}
+
+/**
+ * Inserts a `deviceSyncState` row directly, mirroring the shape /sync/bootstrap creates. /sync/pull
+ * now answers 409 bootstrapRequired for a deviceId with no row (the reaped-device guard), so tests
+ * that model "a registered device pulls" must seed the row first — the real client always
+ * bootstraps before its first pull, which is exactly what this stands in for.
+ */
+async function registerDevice(deviceId: string, userId: string, row: { lastSyncedTs?: string; lastSyncedId?: string; lastSeenTs?: string } = {}) {
+    await db.collection('deviceSyncState').insertOne({
+        _id: deviceSyncStateId(deviceId, userId),
+        deviceId,
+        user: userId,
+        lastSyncedTs: row.lastSyncedTs ?? dayjs(0).toISOString(),
+        lastSyncedId: row.lastSyncedId ?? '',
+        lastSeenTs: row.lastSeenTs ?? dayjs().toISOString(),
+    });
 }
 
 /** Small delay to guarantee strictly-ordered ISO timestamps across sequential operations. */
@@ -287,7 +305,9 @@ describe('POST /sync/push', () => {
 describe('GET /sync/pull', () => {
     it('basic pull: returns all ops pushed by another device, sorted by ts', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
         const entityId = crypto.randomUUID();
+        await registerDevice('dev-2', userId);
 
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
 
@@ -301,8 +321,10 @@ describe('GET /sync/pull', () => {
 
     it('compound cursor: returns ops strictly after (since, sinceId)', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
         const id1 = crypto.randomUUID();
         const id2 = crypto.randomUUID();
+        await registerDevice('dev-2', userId);
 
         await push(cookie, 'dev-1', [makeClientOp('item', id1, 'create', makeItemSnapshot(id1, '2024-01-01T00:00:00.000Z'))]);
         // Record the (ts, _id) of the first op to use as the compound cursor
@@ -324,8 +346,10 @@ describe('GET /sync/pull', () => {
 
     it('old-client compat: missing sinceId re-checks the whole boundary ms ($gte since)', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
         const id1 = crypto.randomUUID();
         const id2 = crypto.randomUUID();
+        await registerDevice('dev-2', userId);
 
         await push(cookie, 'dev-1', [makeClientOp('item', id1, 'create', makeItemSnapshot(id1, '2024-01-01T00:00:00.000Z'))]);
         const firstOp = await db.collection('operations').findOne({ entityId: id1 });
@@ -350,6 +374,7 @@ describe('GET /sync/pull', () => {
         // Explicit-ack protocol: server records `ackedTs` (what the client has durably persisted),
         // not the response's `serverTs`. Client typically passes `ackedTs === since === IDB cursor`.
         const ackedTs = '2025-01-15T00:00:00.000Z';
+        await registerDevice('dev-2', userId);
         // Assert the pull itself succeeded before inspecting its DB side-effect. The handler awaits
         // the deviceSyncState upsert before responding, so a 200 guarantees the row exists; without
         // this guard a transient 500 (e.g. a Mongo hiccup under CI load) surfaces downstream as a
@@ -389,6 +414,8 @@ describe('GET /sync/pull', () => {
         const sharedTs = '2025-04-30T19:38:54.754Z';
         const aliceItemId = crypto.randomUUID();
         const bobItemId = crypto.randomUUID();
+        await registerDevice('shared-dev', aliceId);
+        await registerDevice('shared-dev', bobId);
         await db.collection('operations').insertMany([
             {
                 _id: crypto.randomUUID(),
@@ -437,6 +464,8 @@ describe('GET /sync/pull', () => {
 
         const aliceItemId = crypto.randomUUID();
         const bobItemId = crypto.randomUUID();
+        await registerDevice('shared-dev', aliceId);
+        await registerDevice('shared-dev', bobId);
 
         // Alice and Bob both push from the same deviceId. We capture the operations' actual ts
         // values rather than asserting they share one — the test is meaningful even if they differ.
@@ -482,6 +511,8 @@ describe('GET /sync/pull', () => {
 
     it('same-ms tie-group split across two pulls loses no op (compound cursor regression)', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-2', userId);
 
         // One push batch → applyAndPublishOperations stamps every op with one identical `ts`. This is
         // the exact shape that stranded the OOO item under the old `$gt ts` cursor.
@@ -613,7 +644,9 @@ describe('GET /sync/bootstrap', () => {
         expect(state?.lastSyncedTs).toBe(serverTs);
         expect(state?.deviceId).toBe('dev-boot');
         expect(state?.user).toBe(userId);
-        expect(state?.lastSeenTs).toBe(dayjs(0).toISOString());
+        // Fresh rows are stamped with a live lastSeenTs (not epoch) so they aren't born half-stale
+        // relative to the STALE_DEVICE_DAYS reaper.
+        expect(state?.lastSeenTs).toBe(serverTs);
     });
 
     it('returns serverId = MAX_OP_ID and a follow-up pull does not re-deliver ops at serverTs', async () => {
@@ -685,6 +718,7 @@ describe('Purge logic', () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
         const entityId = crypto.randomUUID();
+        await registerDevice('dev-1', userId);
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, dayjs().toISOString()))]);
         await tick();
 
@@ -713,6 +747,7 @@ describe('Purge logic', () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
         const entityId = crypto.randomUUID();
+        await registerDevice('dev-1', userId);
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, dayjs().toISOString()))]);
         await tick();
 
@@ -727,7 +762,11 @@ describe('Purge logic', () => {
 
     it('happy path: ops older than min(lastSyncedTs) across all devices are deleted after two-pull ack', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
         const entityId = crypto.randomUUID();
+        // Both pulling devices must be registered — push no longer creates device rows.
+        await registerDevice('dev-1', userId);
+        await registerDevice('dev-2', userId);
 
         // dev-1 pushes an op — server records it with ts = T
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
@@ -772,7 +811,9 @@ describe('Purge logic', () => {
 
     it('single device: push then two pulls deletes all older ops (ackedTs advances floor)', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
         const entityId = crypto.randomUUID();
+        await registerDevice('dev-1', userId);
 
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
@@ -790,6 +831,8 @@ describe('Purge logic', () => {
 
     it('boundary safety: same-ms ops past the acked _id are NOT purged prematurely', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-1', userId);
 
         // One batch of 3 ops sharing a single millisecond ts.
         const ids = Array.from({ length: 3 }, () => crypto.randomUUID());
@@ -818,10 +861,13 @@ describe('Purge logic', () => {
 
     it('compound-min floor: two devices at the same ts, different _id → floor is the lower _id', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
 
-        // 3 ops in one batch → one shared ms; devices ack to different positions within it. Push from
-        // dev-A so the only deviceSyncState rows are the two acking devices (a separate pushing
-        // device would hold the floor at epoch via its $setOnInsert cursor and mask the comparison).
+        // 3 ops in one batch → one shared ms; devices ack to different positions within it. Only
+        // dev-A and dev-B are registered (push never creates rows), so the floor comparison is
+        // exactly between the two acking devices.
+        await registerDevice('dev-A', userId);
+        await registerDevice('dev-B', userId);
         const ids = Array.from({ length: 3 }, () => crypto.randomUUID());
         await push(
             cookie,
@@ -847,8 +893,9 @@ describe('Purge logic', () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
 
-        // Push from dev-active so the only non-legacy cursor is the one we fully ack below — a
-        // separate pushing device would sit at an epoch floor and mask the legacy row's effect.
+        // Only dev-active is registered as a non-legacy cursor (push never creates rows), so the
+        // fully-acked cursor we write below is the only thing competing with the legacy row.
+        await registerDevice('dev-active', userId);
         const ids = Array.from({ length: 2 }, () => crypto.randomUUID());
         await push(
             cookie,
@@ -875,7 +922,9 @@ describe('Purge logic', () => {
 
     it('pull response is returned before purge completes (purge is non-blocking)', async () => {
         const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
         const entityId = crypto.randomUUID();
+        await registerDevice('dev-1', userId);
 
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
@@ -893,10 +942,12 @@ describe('Purge logic', () => {
 // ─── Stale device cleanup ──────────────────────────────────────────────────
 
 describe('Stale device cleanup', () => {
-    it('devices inactive for >90 days are pruned from deviceSyncState and pushSubscriptions on pull', async () => {
+    it('devices inactive past STALE_DEVICE_DAYS are pruned from deviceSyncState and pushSubscriptions on pull', async () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
-        const staleTs = dayjs().subtract(91, 'day').toISOString();
+        const staleTs = dayjs()
+            .subtract(STALE_DEVICE_DAYS + 1, 'day')
+            .toISOString();
 
         // Per-(device, user) row for the stale device. The push subscription is still keyed by
         // raw deviceId (subscriptions are device-scoped, not user-scoped).
@@ -906,6 +957,7 @@ describe('Stale device cleanup', () => {
         await db
             .collection('pushSubscriptions')
             .insertOne({ _id: 'dev-stale', user: userId, endpoint: 'https://push.example.com/stale', keys: { p256dh: 'k1', auth: 'k2' }, updatedTs: staleTs });
+        await registerDevice('dev-active', userId);
 
         // Active device pushes and pulls — pull triggers purge
         const entityId = crypto.randomUUID();
@@ -920,14 +972,17 @@ describe('Stale device cleanup', () => {
         expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-active' })).toBe(1);
     });
 
-    it('devices active within 90 days are not pruned', async () => {
+    it('devices active within STALE_DEVICE_DAYS are not pruned', async () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
-        const recentTs = dayjs().subtract(30, 'day').toISOString();
+        const recentTs = dayjs()
+            .subtract(STALE_DEVICE_DAYS - 1, 'day')
+            .toISOString();
 
         await db
             .collection('deviceSyncState')
             .insertOne({ _id: `dev-recent::${userId}`, deviceId: 'dev-recent', user: userId, lastSeenTs: recentTs, lastSyncedTs: recentTs });
+        await registerDevice('dev-active', userId);
 
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
@@ -941,12 +996,15 @@ describe('Stale device cleanup', () => {
     it('stale device removal unblocks operation purging', async () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
-        const staleTs = dayjs().subtract(91, 'day').toISOString();
+        const staleTs = dayjs()
+            .subtract(STALE_DEVICE_DAYS + 1, 'day')
+            .toISOString();
 
         // Abandoned device with epoch lastSyncedTs blocks purge
         await db
             .collection('deviceSyncState')
             .insertOne({ _id: `dev-abandoned::${userId}`, deviceId: 'dev-abandoned', user: userId, lastSeenTs: staleTs, lastSyncedTs: dayjs(0).toISOString() });
+        await registerDevice('dev-active', userId);
 
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
@@ -970,13 +1028,16 @@ describe('Stale device cleanup', () => {
     it('device with stale lastSeenTs but recent lastSyncedTs is not pruned', async () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
-        const staleTs = dayjs().subtract(91, 'day').toISOString();
+        const staleTs = dayjs()
+            .subtract(STALE_DEVICE_DAYS + 1, 'day')
+            .toISOString();
         const recentTs = dayjs().subtract(1, 'day').toISOString();
 
         // lastSeenTs is stale but lastSyncedTs is recent — device still pulls, just doesn't push
         await db
             .collection('deviceSyncState')
             .insertOne({ _id: `dev-pull-only::${userId}`, deviceId: 'dev-pull-only', user: userId, lastSeenTs: staleTs, lastSyncedTs: recentTs });
+        await registerDevice('dev-active', userId);
 
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
@@ -998,7 +1059,9 @@ describe('Stale device cleanup', () => {
         const bobCookie = await loginAsBob();
         const bobId = await getUserId(bobCookie);
 
-        const staleTs = dayjs().subtract(91, 'day').toISOString();
+        const staleTs = dayjs()
+            .subtract(STALE_DEVICE_DAYS + 1, 'day')
+            .toISOString();
         const recentTs = dayjs().subtract(1, 'day').toISOString();
 
         await db
@@ -1016,6 +1079,7 @@ describe('Stale device cleanup', () => {
         });
 
         // Alice's pull triggers her purge — only her stale row should go.
+        await registerDevice('dev-alice-active', aliceId);
         const entityId = crypto.randomUUID();
         await push(aliceCookie, 'dev-alice-active', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
         await tick();
@@ -1029,6 +1093,144 @@ describe('Stale device cleanup', () => {
     });
 });
 
+// ─── Reaped-device bootstrap guard ──────────────────────────────────────────
+
+describe('Reaped-device bootstrap guard', () => {
+    it('pull with a deviceId that has no row returns 409 { bootstrapRequired: true }', async () => {
+        const cookie = await loginAsAlice();
+
+        const res = await pull(cookie, { since: dayjs(0).toISOString(), deviceId: 'dev-reaped' });
+
+        expect(res.status).toBe(409);
+        expect(await res.json()).toEqual({ bootstrapRequired: true });
+    });
+
+    it('the 409 short-circuits before any write — no deviceSyncState row is created', async () => {
+        const cookie = await loginAsAlice();
+
+        const res = await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-reaped' });
+
+        expect(res.status).toBe(409);
+        // Re-registering the row on this path would pin the stale cursor back into the purge
+        // floor — the exact silent-data-loss bug the guard exists to prevent.
+        expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
+    });
+
+    it('regression (rejected Attempt-A design): a registered device whose full history was purged pulls 200 + newer ops', async () => {
+        // The rejected design 409'd when the pull cursor sorted below the user's oldest surviving
+        // op. That misfires for every healthy fully-purged device: the device acks through T,
+        // purge deletes everything ≤ T, a new op lands at T2 > T → the next pull from T sees
+        // oldest-op > cursor and would falsely 409. The row-missing trigger must return 200 here.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        const id1 = crypto.randomUUID();
+        await push(cookie, 'dev-src', [makeClientOp('item', id1, 'create', makeItemSnapshot(id1, '2024-01-01T00:00:00.000Z'))]);
+        const ackedOp = await db.collection('operations').findOne({ entityId: id1 });
+        if (!ackedOp) throw new Error('expected the pushed op to be recorded');
+        // dev-A registered exactly at the op's compound position — it has acked all history.
+        await registerDevice('dev-A', userId, { lastSyncedTs: ackedOp.ts as string, lastSyncedId: ackedOp._id as string });
+        // Purge everything at-or-below dev-A's cursor (what purgeOldOperations would have done).
+        await db.collection('operations').deleteMany({});
+
+        await tick();
+        const id2 = crypto.randomUUID();
+        await push(cookie, 'dev-src', [makeClientOp('item', id2, 'create', makeItemSnapshot(id2, '2024-01-02T00:00:00.000Z'))]);
+
+        const res = await pull(cookie, { since: ackedOp.ts as string, sinceId: ackedOp._id as string, deviceId: 'dev-A' });
+        expect(res.status).toBe(200);
+        const { ops } = (await res.json()) as { ops: { entityId: string }[] };
+        expect(ops.map((o) => o.entityId)).toEqual([id2]);
+    });
+
+    it('end-to-end reap: stale row swept by an active pull → stale device 409s on its next pull', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const staleTs = dayjs()
+            .subtract(STALE_DEVICE_DAYS + 1, 'day')
+            .toISOString();
+        await registerDevice('dev-dormant', userId, { lastSyncedTs: staleTs, lastSeenTs: staleTs });
+        await registerDevice('dev-active', userId);
+
+        // The active device's pull fires the (fire-and-forget) stale-device reaper.
+        const activeRes = await pull(cookie, { deviceId: 'dev-active' });
+        expect(activeRes.status).toBe(200);
+        await waitForPurge(async () => (await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })) === 0);
+        expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-dormant' })).toBe(0);
+
+        // The reaped device comes back online and pulls from its stale cursor → forced bootstrap.
+        const res = await pull(cookie, { since: staleTs, deviceId: 'dev-dormant' });
+        expect(res.status).toBe(409);
+        expect(await res.json()).toEqual({ bootstrapRequired: true });
+    });
+
+    it('push from an unregistered device applies ops but creates no deviceSyncState row', async () => {
+        const cookie = await loginAsAlice();
+        const entityId = crypto.randomUUID();
+
+        const res = await push(cookie, 'dev-unregistered', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+
+        expect(res.status).toBe(200);
+        // Offline work is never dropped: flushed ops land in entities + op log regardless.
+        expect(await db.collection('items').countDocuments({ _id: entityId })).toBe(1);
+        expect(await db.collection('operations').countDocuments({ entityId })).toBe(1);
+        // But the row is NOT resurrected — that would mask the row-missing 409 on the following
+        // pull and re-pin the purge floor at an epoch cursor (indefinitely, via the SW flush).
+        expect(await db.collection('deviceSyncState').countDocuments()).toBe(0);
+    });
+
+    it('push with an existing row refreshes lastSeenTs and leaves lastSyncedTs untouched', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const cursorTs = '2025-01-01T00:00:00.000Z';
+        const oldSeenTs = dayjs().subtract(3, 'day').toISOString();
+        await registerDevice('dev-1', userId, { lastSyncedTs: cursorTs, lastSeenTs: oldSeenTs });
+
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+
+        const row = await db.collection('deviceSyncState').findOne({ _id: `dev-1::${userId}` });
+        expect(row?.lastSyncedTs).toBe(cursorTs);
+        expect(dayjs(row?.lastSeenTs as string).isAfter(oldSeenTs)).toBe(true);
+    });
+
+    it('device-status: registered:false before bootstrap, true after', async () => {
+        const cookie = await loginAsAlice();
+
+        const before = await authenticatedRequest(app, { method: 'GET', path: '/sync/device-status?deviceId=dev-probe', sessionCookie: cookie });
+        expect(before.status).toBe(200);
+        expect(await before.json()).toEqual({ registered: false });
+
+        await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-probe', sessionCookie: cookie });
+
+        const after = await authenticatedRequest(app, { method: 'GET', path: '/sync/device-status?deviceId=dev-probe', sessionCookie: cookie });
+        expect(await after.json()).toEqual({ registered: true });
+    });
+
+    it('device-status without deviceId returns 400', async () => {
+        const cookie = await loginAsAlice();
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/device-status', sessionCookie: cookie });
+        expect(res.status).toBe(400);
+    });
+
+    it('unauthenticated device-status returns 401', async () => {
+        const res = await app.fetch(new Request('http://localhost:4000/sync/device-status?deviceId=dev-x'));
+        expect(res.status).toBe(401);
+    });
+
+    it('bootstrap stamps a fresh (non-epoch) lastSeenTs so new rows are not born half-stale', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-fresh', sessionCookie: cookie });
+        const { serverTs } = (await res.json()) as { serverTs: string };
+
+        const row = await db.collection('deviceSyncState').findOne({ _id: `dev-fresh::${userId}` });
+        expect(row?.lastSeenTs).toBe(serverTs);
+        expect(row?.lastSeenTs).not.toBe(dayjs(0).toISOString());
+    });
+});
+
 // ─── Multi-device round-trip ─────────────────────────────────────────────────
 
 describe('Multi-device round-trip', () => {
@@ -1038,6 +1240,9 @@ describe('Multi-device round-trip', () => {
         vi.restoreAllMocks();
         // Second login reuses the same Better Auth user (same email), returning a new session
         const dev2Cookie = await loginAsAlice();
+        const userId = await getUserId(dev1Cookie);
+        await registerDevice('dev-1', userId);
+        await registerDevice('dev-2', userId);
 
         const itemId = crypto.randomUUID();
         const ts = '2024-01-01T00:00:00.000Z';

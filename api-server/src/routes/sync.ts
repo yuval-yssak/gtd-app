@@ -10,7 +10,7 @@ import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { applyAndPublishOperations, OperationValidationError, type RawOperation } from '../lib/applyOperation.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
-import { computePurgeFloor } from '../lib/purgeFloor.js';
+import { computePurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
 import { vapidPublicKey } from '../lib/webPush.js';
@@ -39,8 +39,6 @@ interface ClientOp {
     rsvp?: RsvpOpPayload;
 }
 
-const STALE_DEVICE_DAYS = 90;
-
 async function purgeStaleDevices(userId: string): Promise<void> {
     const cutoffTs = dayjs().subtract(STALE_DEVICE_DAYS, 'day').toISOString();
     const staleDeviceIds = await deviceSyncStateDAO.deleteStaleDevices(userId, cutoffTs);
@@ -63,6 +61,27 @@ async function purgeOldOperations(userId: string): Promise<void> {
     if (!floor) return;
 
     await operationsDAO.deleteOlderThan(userId, floor.ts, floor.id);
+}
+
+/** True when a `deviceSyncState` row exists for this (device, user) pair — i.e. the device has bootstrapped and was not reaped. */
+async function isDeviceRegistered(deviceId: string, userId: string): Promise<boolean> {
+    const row = await deviceSyncStateDAO.findOne({ _id: deviceSyncStateId(deviceId, userId) });
+    return row !== null;
+}
+
+/**
+ * Records the (device, user) pull cursor on the EXISTING row only (`upsert: false`). Returns false
+ * when no row matched — the row was reaped by a concurrent pull's stale-device sweep mid-request.
+ * Callers must then answer 409 bootstrapRequired instead of the ops payload: re-creating the row
+ * at the stale cursor would re-register the device inside a purge gap (the original data-loss bug).
+ */
+async function recordPullCursorOnExistingRow(deviceId: string, userId: string, cursor: { lastSyncedTs: string; lastSyncedId: string }): Promise<boolean> {
+    const result = await deviceSyncStateDAO.updateOne(
+        { _id: deviceSyncStateId(deviceId, userId) },
+        { $set: { ...cursor, deviceId, user: userId } },
+        { upsert: false },
+    );
+    return result.matchedCount > 0;
 }
 
 /**
@@ -115,9 +134,12 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             // lastSyncedId = MAX_OP_ID: the snapshot already holds every op at exactly serverTs, so
             // the compound floor (serverTs, MAX_OP_ID) honestly means "all ops ≤ serverTs delivered"
             // and the first incremental pull won't re-deliver them.
+            // lastSeenTs: serverTs (in $set, not $setOnInsert) — a fresh row must not be born
+            // half-stale at epoch (one quiet month from the reaper), and a returning device's
+            // re-bootstrap is genuine activity worth refreshing on an existing row too.
             await deviceSyncStateDAO.updateOne(
                 { _id: deviceSyncStateId(deviceId, user.id) },
-                { $set: { lastSyncedTs: serverTs, lastSyncedId: MAX_OP_ID, deviceId, user: user.id }, $setOnInsert: { lastSeenTs: dayjs(0).toISOString() } },
+                { $set: { lastSyncedTs: serverTs, lastSyncedId: MAX_OP_ID, deviceId, user: user.id, lastSeenTs: serverTs } },
                 { upsert: true },
             );
         }
@@ -203,10 +225,18 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         // Per-(device, user) cursor — see DeviceSyncStateInterface. A single shared per-device row
         // would let user A's pull advance the cursor past user B's boundary op on the same device.
+        //
+        // upsert: false — push must NEVER create or resurrect a device row; /sync/bootstrap is the
+        // sole legitimate row creator. (a) The client flushes queued ops BEFORE pulling, so a reaped
+        // device with a queue would resurrect its row here and mask the row-missing 409 on the
+        // following pull — the silent purge-gap data loss would return. (b) A resurrected
+        // $setOnInsert row would sit at an epoch cursor, re-pinning the purge floor to epoch — and
+        // the Service-Worker background-sync flush pushes with NO subsequent pull, so that stall
+        // could persist indefinitely rather than just until the next foreground sync.
         await deviceSyncStateDAO.updateOne(
             { _id: deviceSyncStateId(deviceId, user.id) },
-            { $set: { lastSeenTs: now, deviceId, user: user.id }, $setOnInsert: { lastSyncedTs: dayjs(0).toISOString() } },
-            { upsert: true },
+            { $set: { lastSeenTs: now, deviceId, user: user.id } },
+            { upsert: false },
         );
 
         return c.json({ ok: true }, 200);
@@ -231,6 +261,16 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         const ackedId = c.req.query('ackedId');
         const deviceId = c.req.query('deviceId');
 
+        // Reaped-device guard — BEFORE any read or write. Invariant: ops are only purged
+        // at-or-below the floor = min acked cursor over REGISTERED rows, so a device whose row
+        // exists can never be inside a purge gap. The only way into a gap is having your row
+        // reaped while offline; genuinely-new devices bootstrap client-side and never hit /pull.
+        // Short-circuiting before the cursor write below is load-bearing: re-registering the row
+        // at its stale cursor would put the device right back inside the gap (silent data loss).
+        if (deviceId && !(await isDeviceRegistered(deviceId, user.id))) {
+            return c.json({ bootstrapRequired: true }, 409);
+        }
+
         const ops = await operationsDAO.findOpsAfter(user.id, since, sinceId);
 
         // `serverTs`/`serverId` mark the high-water mark of *what we just returned* — the client uses
@@ -249,14 +289,16 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             // not advance the purge floor past ops the client never committed. Old clients send
             // neither — `ackedId ?? sinceId` resolves to '' so their floor sits at the start of the
             // boundary ms, keeping every same-ms op until they upgrade.
-            await deviceSyncStateDAO.updateOne(
-                { _id: deviceSyncStateId(deviceId, user.id) },
-                {
-                    $set: { lastSyncedTs: ackedTs ?? since, lastSyncedId: ackedId ?? sinceId, deviceId, user: user.id },
-                    $setOnInsert: { lastSeenTs: dayjs(0).toISOString() },
-                },
-                { upsert: true },
-            );
+            const rowStillExists = await recordPullCursorOnExistingRow(deviceId, user.id, {
+                lastSyncedTs: ackedTs ?? since,
+                lastSyncedId: ackedId ?? sinceId,
+            });
+            // Mid-request reap race: a concurrent pull's stale-device sweep removed the row between
+            // the top-of-handler registration check and this write. Return 409 INSTEAD of the ops
+            // payload — the client must discard this response and bootstrap.
+            if (!rowStillExists) {
+                return c.json({ bootstrapRequired: true }, 409);
+            }
 
             // Fire-and-forget: purge ops all (device, user) rows have already seen to cap storage growth.
             // Async so the pull response isn't blocked by the deletion query.
@@ -264,6 +306,21 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         }
 
         return c.json({ ops, serverTs, serverId });
+    })
+
+    // ---------------------------------------------------------------------------
+    // GET /sync/device-status?deviceId=  — probe-before-flush registration check
+    // ---------------------------------------------------------------------------
+    // The client calls this BEFORE auto-flushing queued offline ops: a reaped device's user must
+    // get to choose push-vs-discard in the recovery dialog before anything is sent. Discovering
+    // the reap only via the pull 409 would be too late — the queue auto-flushes ahead of the pull.
+    .get('/device-status', authenticateRequest, async (c) => {
+        const { user } = c.get('session');
+        const deviceId = c.req.query('deviceId');
+        if (!deviceId) {
+            return c.json({ error: 'deviceId query param required' }, 400);
+        }
+        return c.json({ registered: await isDeviceRegistered(deviceId, user.id) });
     })
 
     // ---------------------------------------------------------------------------

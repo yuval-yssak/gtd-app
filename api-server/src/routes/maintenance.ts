@@ -5,11 +5,13 @@ import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import { healDuplicateCalendarItems, healSplitSuccessorRoutines, healStuckGCalRoutines } from '../lib/calendarHeal.js';
-import { computePurgeFloor, type PurgeFloor } from '../lib/purgeFloor.js';
+import { computePurgeFloor, type PurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import { relinkCalendarMarkersForUser } from './calendar.js';
 
-const DEFAULT_STALE_DEVICE_DAYS = 90;
+// Same cutoff as the /sync/pull fire-and-forget reaper — an on-demand purge with the default body
+// must not be more (or less) aggressive than what background pulls already do.
+const DEFAULT_STALE_DEVICE_DAYS = STALE_DEVICE_DAYS;
 
 /**
  * Removes this user's stale (device, user) rows where BOTH lastSeenTs AND lastSyncedTs predate the
@@ -42,7 +44,7 @@ export const maintenanceRoutes = new Hono<{ Variables: AuthVariables }>()
     // ---------------------------------------------------------------------------
     // POST /maintenance/purge-operations — on-demand op-log purge for the caller
     // ---------------------------------------------------------------------------
-    // The /sync/pull fire-and-forget purge only fires on pull with a 90-day stale cutoff. This lets a
+    // The /sync/pull fire-and-forget purge only fires on pull with the shared stale cutoff. This lets a
     // user dig out a bloated op log on demand and tune the stale-device cutoff down. Scoped to the
     // session user — never accepts a userId in the body.
     .post('/purge-operations', authenticateRequest, async (c) => {
