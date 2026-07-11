@@ -1,7 +1,9 @@
 import { API_SERVER } from '../constants/globals';
 import type { EntityType, OpType, SyncOperation } from '../types/MyDB';
+import { BootstrapRequiredError } from './bootstrapRequiredError';
 import { SyncAuthError } from './syncAuthError';
 
+export { BootstrapRequiredError } from './bootstrapRequiredError';
 export { SyncAuthError } from './syncAuthError';
 
 // ── Shared server-facing types ────────────────────────────────────────────────
@@ -78,8 +80,29 @@ export async function fetchSyncOps(since: string, sinceId: string, ackedTs: stri
         credentials: 'include',
         headers: { [DEVICE_ID_HEADER]: deviceId },
     });
+    // 409 = the server has no deviceSyncState row for this (device, user): the device was reaped
+    // while offline and its cursor can no longer be trusted (ops may be purged). Typed error so
+    // callers route into the bootstrap-recovery flow instead of retrying the pull forever.
+    if (res.status === 409) {
+        throw new BootstrapRequiredError('GET /sync/pull');
+    }
     if (!res.ok) throwForStatus(res, 'GET /sync/pull');
     return res.json() as Promise<PullPayload>;
+}
+
+/**
+ * Probe used BEFORE flushing a non-empty offline queue: when `registered` is false this device was
+ * reaped server-side and the user must choose push-vs-discard before any auto-flush runs (pushing
+ * first would moot the choice — see the probe-before-flush design in multiUserSync.syncOneUser).
+ */
+export async function fetchDeviceStatus(deviceId: string): Promise<{ registered: boolean }> {
+    const params = new URLSearchParams({ deviceId });
+    const res = await fetch(`${API_SERVER}/sync/device-status?${params}`, {
+        credentials: 'include',
+        headers: { [DEVICE_ID_HEADER]: deviceId },
+    });
+    if (!res.ok) throwForStatus(res, 'GET /sync/device-status');
+    return res.json() as Promise<{ registered: boolean }>;
 }
 
 // Returns { vapidPublicKey: null } on failure so the caller degrades gracefully without throwing.

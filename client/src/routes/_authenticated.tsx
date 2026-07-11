@@ -12,6 +12,7 @@ import { AppNav } from '../components/AppNav';
 import { NavigationProgress } from '../components/NavigationProgress';
 import { NotificationNudge } from '../components/NotificationNudge';
 import { RouteFallback } from '../components/RouteFallback';
+import { SyncRecoveryDialog } from '../components/SyncRecoveryDialog';
 import { UndoSnackbar } from '../components/UndoSnackbar';
 import { AppDataProvider } from '../contexts/AppDataProvider';
 import { PendingReassignProvider } from '../contexts/PendingReassignProvider';
@@ -31,6 +32,10 @@ export function AuthenticatedLayout() {
         <Box className={styles.appShell}>
             {/* Immediate feedback while a navigation's transition renders the destination page */}
             <NavigationProgress />
+            {/* Blocking reaped-device recovery dialog — mounted ONCE at the layout root (unlike the
+                reauth banner it must not double-mount with AppNav's drawers) and outside the route
+                Suspense boundary so it stays visible while recovery swaps the data underneath. */}
+            <SyncRecoveryDialog db={db} />
             {/* Mobile AppBar — fixed at top, hidden on desktop where the sidebar takes over */}
             <AppBar position="fixed" className={styles.mobileAppBar}>
                 <Toolbar>

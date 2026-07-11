@@ -1,10 +1,12 @@
 import type { IDBPDatabase } from 'idb';
-import { SyncAuthError } from '../api/syncClient';
+import { BootstrapRequiredError, SyncAuthError } from '../api/syncClient';
 import { dispatchAccountNeedsReauth } from '../contexts/accountReauthEvents';
+import { enterCase2Recovery } from '../contexts/syncRecoveryStore';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
 import { getActiveAccount, getLoggedInUserIds, setActiveAccount } from './accountHelpers';
 import { bootstrapFromServerUnguarded, flushSyncQueue, pullFromServerUnguarded, withSessionGate } from './syncHelpers';
+import { countQueuedOpsForUser, isDeviceUnregistered, recoverFromBootstrapRequiredUnderGate } from './syncRecovery';
 
 /**
  * Optional callbacks injected by tests + AppDataProvider so the orchestrator can drive
@@ -195,12 +197,28 @@ async function syncOneUser(
         await setActiveAccount(userId, db);
     }
     try {
+        // Probe-before-flush: a reaped device (server dropped its deviceSyncState row) with queued
+        // offline ops must NOT auto-flush — the recovery dialog's push-vs-discard choice would be
+        // moot once the ops are already on the server. The probe is skipped when the queue is empty
+        // (flush is a no-op there; a reap surfaces as the pull's 409 → Case 1 instead).
+        const queuedOpCount = await countQueuedOpsForUser(db, userId);
+        if (queuedOpCount > 0 && (await isDeviceUnregistered(db))) {
+            console.warn(`[multi-sync] device unregistered server-side with ${queuedOpCount} queued ops for ${userId} — deferring to recovery dialog`);
+            enterCase2Recovery(userId, queuedOpCount);
+            return;
+        }
         await flushSyncQueue(db, { userIdFilter: userId });
         await pullOrBootstrap(db, userId);
     } catch (err) {
         if (err instanceof SyncAuthError) {
             console.warn(`[multi-sync] session for ${userId} expired mid-sync — flagging for reauth`);
             dispatchAccountNeedsReauth(userId);
+            return;
+        }
+        if (err instanceof BootstrapRequiredError) {
+            // Pull 409'd: this device was reaped and its cursor is worthless. We already hold the
+            // session gate here, so the recovery routine uses the unguarded bootstrap internally.
+            await recoverFromBootstrapRequiredUnderGate(db, userId);
             return;
         }
         throw err;

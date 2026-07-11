@@ -14,7 +14,7 @@ import {
     useSyncExternalStore,
 } from 'react';
 import { listIntegrations, syncIntegration } from '../api/calendarApi';
-import { SyncAuthError } from '../api/syncClient';
+import { BootstrapRequiredError, SyncAuthError } from '../api/syncClient';
 import { AppResourceProvider, useAppResource } from '../data/AppResourceProvider';
 import { triggerAppResourceRefresh } from '../data/appResource';
 import { getInitialAuthBundle } from '../data/initialAuthBundle';
@@ -25,6 +25,7 @@ import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnections, openSseConnections } from '../db/sseClient';
 import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
+import { recoverFromBootstrapRequired } from '../db/syncRecovery';
 import { prefetchCalendarOptions } from '../hooks/useCalendarOptions';
 import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
@@ -318,6 +319,12 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     if (err instanceof SyncAuthError) {
                         console.warn(`[sse] session for ${userId} expired mid-sync — flagging for reauth`);
                         dispatchAccountNeedsReauth(userId);
+                        return;
+                    }
+                    if (err instanceof BootstrapRequiredError) {
+                        // Device reaped server-side — route into the blocking recovery flow (Case 1
+                        // auto-bootstrap or the Case-2 choice dialog, decided by the queue count).
+                        await recoverFromBootstrapRequired(db, userId);
                         return;
                     }
                     console.error('[sse] per-user sync failed:', err);

@@ -2,7 +2,7 @@
 import { clientsClaim } from 'workbox-core';
 import { createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
-import { SyncAuthError } from './api/syncClient';
+import { BootstrapRequiredError, SyncAuthError } from './api/syncClient';
 import { getActiveAccount } from './db/accountHelpers';
 import { openAppDB } from './db/indexedDB';
 import { flushSyncQueue, pullFromServer } from './db/syncHelpers';
@@ -124,6 +124,12 @@ self.addEventListener('push', (event) => {
                 } catch (err) {
                     if (err instanceof SyncAuthError) {
                         await notifyClientsAccountNeedsReauth(acct.id);
+                        return;
+                    }
+                    if (err instanceof BootstrapRequiredError) {
+                        // The SW can't show the recovery dialog. Swallow — the next foreground sync
+                        // (syncOneUser) detects the reaped device and runs the recovery flow there.
+                        console.log('[sw-push] pull requires full bootstrap — deferring recovery to the next foreground sync');
                         return;
                     }
                     throw err;
