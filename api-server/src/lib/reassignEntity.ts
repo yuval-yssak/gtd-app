@@ -8,7 +8,15 @@ import peopleDAO from '../dataAccess/peopleDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { validateOperation } from '../schemas/operations/index.js';
-import type { CalendarIntegrationInterface, EntityType, ItemInterface, PersonInterface, RoutineInterface, WorkContextInterface } from '../types/entities.js';
+import {
+    type CalendarIntegrationInterface,
+    type EntityType,
+    GCAL_OWNED_ROUTINE_KEYS,
+    type ItemInterface,
+    type PersonInterface,
+    type RoutineInterface,
+    type WorkContextInterface,
+} from '../types/entities.js';
 import { applyAndPublishOperation, OperationValidationError } from './applyOperation.js';
 import { ensureTimeZone } from './calendarPushback.js';
 import { markdownToHtml } from './markdownHtml.js';
@@ -582,6 +590,22 @@ function applyRoutineEditPatch(routine: RoutineInterface, patch: ReassignRoutine
         }
     } else {
         delete next.recurrenceAnchor;
+    }
+    // GCal master-mirror fields are calendar-only (RoutineSnapshotSchema superRefine) — same
+    // rationale as the recurrenceAnchor clear above: a type switch away from calendar must shed
+    // them or the target-side create fails validation on inherited fields.
+    if (next.routineType !== 'calendar') {
+        for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+            delete next[key];
+        }
+    }
+    // A type switch also drops the disconnect-with-keep markers — mirrors PATCH /v1/routines: a
+    // later reconnect's strong-key restore must not relink the old series onto the switched routine.
+    if (next.routineType !== routine.routineType) {
+        delete next.lastKnownCalendarEventId;
+        delete next.lastKnownCalendarIntegrationId;
+        delete next.lastKnownCalendarSyncConfigId;
+        delete next.lastKnownCalendarAccountEmail;
     }
     return next;
 }

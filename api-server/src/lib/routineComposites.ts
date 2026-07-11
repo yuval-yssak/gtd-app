@@ -101,6 +101,12 @@ export async function splitRoutine(ctx: CompositeContext, routineId: string, par
     const cappedHead = buildCappedHead(head, params.splitDate, now);
     const tail = buildTail(head, params, now);
     await deleteFutureCalendarItemsForRoutine(ctx, head._id, params.splitDate);
+    // A nextAction head's open native item must be trashed too (any date — the tail seeds its
+    // replacement below); the future-calendar delete above never matches it, so without this the
+    // open next action survives on the capped head and duplicates the tail's seed.
+    if (head.routineType === 'nextAction') {
+        await trashOpenNextActionItemsForRoutine(ctx, head._id, now);
+    }
     // Submit head-cap and tail-create as a single batch so the operations log preserves their
     // intended order even when other writes are interleaving in parallel.
     await applyAndPublishOperations(
@@ -111,6 +117,10 @@ export async function splitRoutine(ctx: CompositeContext, routineId: string, par
         ],
         { deviceId: `api:${ctx.tokenId}`, now, strict: true },
     );
+    // nextAction tails materialize their first item server-side (mirrors resumeRoutine) so a
+    // pure-API split — including a type-switch split (calendar head → nextAction tail) — produces
+    // a pending item without waiting for a client tick. No-op for calendar tails (see module note).
+    await ensureFirstRoutineItem(ctx, tail);
     return { ok: true, head: cappedHead, tail };
 }
 
@@ -136,6 +146,22 @@ async function trashFutureOpenItemsForRoutine(ctx: CompositeContext, routineId: 
             snapshot: { ...rest, status: 'trash' as const, updatedTs: now },
         };
     });
+    await applyAndPublishOperations(ctx.userId, ops, { deviceId: `api:${ctx.tokenId}`, now, strict: true });
+}
+
+/** Trash (update op) every item still in native `nextAction` status for the routine. Trash — not
+ *  hard delete — so other devices converge via LWW, matching the pause gesture's discipline. */
+async function trashOpenNextActionItemsForRoutine(ctx: CompositeContext, routineId: string, now: string): Promise<void> {
+    const openNative = await itemsDAO.findArray({ user: ctx.userId, routineId, status: 'nextAction' } as never);
+    if (!openNative.length) {
+        return;
+    }
+    const ops: RawOperation[] = openNative.map((item) => ({
+        entityType: 'item',
+        opType: 'update' as const,
+        entityId: item._id ?? '',
+        snapshot: { ...item, status: 'trash' as const, updatedTs: now },
+    }));
     await applyAndPublishOperations(ctx.userId, ops, { deviceId: `api:${ctx.tokenId}`, now, strict: true });
 }
 

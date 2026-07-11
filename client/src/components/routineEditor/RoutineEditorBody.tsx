@@ -31,6 +31,7 @@ import {
     regenerateFutureItemContent,
     restoreTrashedRoutineItem,
     syncOpenItemAfterNextActionEdit,
+    trashNativeItemsForTypeSwitch,
 } from '../../db/routineItemHelpers';
 import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import { splitRoutine } from '../../db/routineSplit';
@@ -364,6 +365,24 @@ export function buildUpdatedRoutine(routine: StoredRoutine, ctx: SaveContext, ac
     if (ctx.routineType !== 'nextAction') {
         delete updated.recurrenceAnchor;
     }
+    if (ctx.routineType !== routine.routineType) {
+        // Type switch drops the disconnect-with-keep markers: a later reconnect's strong-key
+        // restore would otherwise relink a calendar series onto a non-calendar routine (or a
+        // long-dead capped master onto a fresh calendar routine) — the flip-back churn class.
+        delete updated.lastKnownCalendarEventId;
+        delete updated.lastKnownCalendarIntegrationId;
+        delete updated.lastKnownCalendarSyncConfigId;
+        delete updated.lastKnownCalendarAccountEmail;
+    }
+    if (ctx.routineType !== 'calendar') {
+        // GCal master-mirror fields are calendar-only — RoutineSnapshotSchema rejects them on a
+        // nextAction routine, which would jam the push queue on the first type-switch update op.
+        delete updated.organizer;
+        delete updated.creator;
+        delete updated.attendees;
+        delete updated.responseStatus;
+        delete updated.eventType;
+    }
     return updated;
 }
 
@@ -420,6 +439,12 @@ export async function saveEditWithStartDateChange(db: IDBPDatabase<MyDB>, routin
     await hardDeletePastItems(db, nonDonePast);
     const updatedRoutine = buildUpdatedRoutine(routine, ctx, true);
     await updateRoutine(db, updatedRoutine);
+    if (routine.routineType !== ctx.routineType) {
+        // Type switch + startDate change: the old type's surviving items (a future-dated open
+        // nextAction item, or future calendar items) must go before the new type seeds, or the
+        // seed guard sees them as the open slot and the streams end up interleaved.
+        return transitionRoutineType(db, routine, updatedRoutine, ctx);
+    }
     return seedAfterStartDateChange(db, { previous: routine, next: updatedRoutine }, ctx);
 }
 
@@ -491,9 +516,72 @@ export async function saveEditWithoutStartDateChange(db: IDBPDatabase<MyDB>, rou
             scheduleChanged: decision.nextActionScheduleChanged,
         });
     }
-    // Type switch (nextAction ↔ calendar): old-type items are currently left behind — tracked
-    // as a follow-up task, deliberately out of scope here.
+    return transitionRoutineType(db, routine, updatedRoutine, ctx);
+}
+
+/**
+ * Type-switch branch (nextAction ↔ calendar) for UNLINKED routines: trash the old type's native
+ * items (calendar history keeps its past occurrences — only today-forward items go), then seed the
+ * new type's stream. GCal-linked calendar routines never reach here — `dispatchEditSameOwner`
+ * routes them through the split gesture so the master series gets capped.
+ *
+ * Exported for unit-testing.
+ */
+export async function transitionRoutineType(db: IDBPDatabase<MyDB>, previous: StoredRoutine, updated: StoredRoutine, ctx: SaveContext): Promise<null> {
+    await trashNativeItemsForTypeSwitch(db, previous);
+    if (ctx.routineType === 'calendar') {
+        await generateHorizonDeactivatingOnExhaustion(db, updated);
+        return null;
+    }
+    if (isFutureStartDate(ctx.formStartDate)) {
+        return null;
+    }
+    // A transformed (waitingFor/inbox/…) survivor still claims the routine's single open slot.
+    // Deliberately NARROWER than hasOpenRoutineItem: past calendar occurrences stay open-status
+    // as history after the switch and must not block the nextAction stream forever.
+    if (await hasTransformedSurvivor(db, updated.userId, updated._id)) {
+        return null;
+    }
+    await seedFirstItemDeactivatingOnExhaustion(db, updated);
     return null;
+}
+
+/** True when the routine has an open item the USER re-homed (not done/trash/native-calendar). */
+async function hasTransformedSurvivor(db: IDBPDatabase<MyDB>, userId: string, routineId: string): Promise<boolean> {
+    const items = await db.getAllFromIndex('items', 'userId', userId);
+    return items.some((i) => i.routineId === routineId && i.status !== 'done' && i.status !== 'trash' && i.status !== 'calendar');
+}
+
+/** Calendar analog of `seedFirstItemDeactivatingOnExhaustion`: an exhausted rrule (no occurrence
+ *  before the horizon) deactivates the routine instead of failing the save. */
+async function generateHorizonDeactivatingOnExhaustion(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<void> {
+    try {
+        await generateCalendarItemsToHorizon(db, routine.userId, routine);
+    } catch (err) {
+        if (!(err instanceof RruleExhaustedError)) {
+            throw err;
+        }
+        await updateRoutine(db, { ...routine, active: false });
+    }
+}
+
+/**
+ * A GCal-linked calendar routine cannot switch type in place: the master series would stay live on
+ * Google while the app routine stops being a calendar routine, and the inbound sync (which matches
+ * by calendarEventId) would keep rewriting it — the flip-back/churn class. Route the switch through
+ * the split gesture instead: the capped head keeps the link and its past items, the head's
+ * active→false transition caps the GCal master with UNTIL (existing pause pushback), and the tail
+ * is born as the new type. Returns the split date, or null when this edit is not a linked type
+ * switch — or when the series has no future occurrence (the Type toggle is disabled for ended
+ * calendar routines, so that case is unreachable from the UI).
+ *
+ * Exported for unit-testing.
+ */
+export function linkedTypeSwitchSplitDate(routine: StoredRoutine, ctx: SaveContext): string | null {
+    if (routine.routineType !== 'calendar' || ctx.routineType === 'calendar' || !routine.calendarEventId) {
+        return null;
+    }
+    return computeSplitDate(routine.rrule, routine.createdTs);
 }
 
 /** Computes the `EditDecision` for an edit (schedule-changed + paused→resume). Pure. */
@@ -821,6 +909,13 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         }
 
         async function dispatchEditSameOwner(currentRoutine: StoredRoutine, ctx: SaveContext): Promise<OpenItemSyncResult | null> {
+            // Linked calendar→nextAction switch goes through the split gesture — see
+            // linkedTypeSwitchSplitDate for why an in-place switch is unsafe for GCal-linked routines.
+            const linkedSplitDate = linkedTypeSwitchSplitDate(currentRoutine, ctx);
+            if (linkedSplitDate) {
+                await splitRoutine(db, currentRoutine.userId, currentRoutine, buildSplitPatch(ctx), linkedSplitDate);
+                return null;
+            }
             if (isStartDateChanged(currentRoutine, buildEditIntentFromContext(ctx))) {
                 return saveEditWithStartDateChange(db, currentRoutine, ctx);
             }

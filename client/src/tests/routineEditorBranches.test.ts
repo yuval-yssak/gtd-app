@@ -12,7 +12,14 @@ vi.mock('../lib/calendarHorizon', () => ({
     getCalendarHorizonMonths: () => 2,
 }));
 
-import { type SaveContext, saveCreate, saveEditWithoutStartDateChange, saveEditWithStartDateChange } from '../components/routineEditor/RoutineEditorBody';
+import {
+    buildUpdatedRoutine,
+    linkedTypeSwitchSplitDate,
+    type SaveContext,
+    saveCreate,
+    saveEditWithoutStartDateChange,
+    saveEditWithStartDateChange,
+} from '../components/routineEditor/RoutineEditorBody';
 import { waitForPendingFlush } from '../db/syncHelpers';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
@@ -328,5 +335,125 @@ describe('startDate change with a transformed survivor', () => {
         if (!survivor) throw new Error('expected the transformed survivor');
         expect(survivor.status).toBe('waitingFor');
         expect(survivor.expectedBy).toBe(tomorrow);
+    });
+});
+
+describe('routineType switch (nextAction ↔ calendar)', () => {
+    const calendarCtx = (overrides: Partial<SaveContext> = {}) =>
+        buildCtx({ routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 }, ...overrides });
+
+    it('nextAction → calendar: trashes the open native item and fills the calendar horizon', async () => {
+        const routine = buildRoutine();
+        await db.put('routines', routine);
+        await db.put('items', buildItem({ _id: 'open-na', status: 'nextAction', expectedBy: dayjs().format('YYYY-MM-DD') }));
+
+        await saveEditWithoutStartDateChange(db, routine, calendarCtx());
+
+        const oldItem = await db.get('items', 'open-na');
+        expect(oldItem?.status).toBe('trash');
+        const calendarItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.status === 'calendar');
+        expect(calendarItems.length).toBeGreaterThan(0);
+        const stored = await db.get('routines', routine._id);
+        expect(stored?.routineType).toBe('calendar');
+        // The trash must ride a queued update op — that sync breadcrumb is what converges other devices.
+        const trashOps = (await db.getAll('syncOperations')).filter((op) => op.entityId === 'open-na' && op.opType === 'update');
+        expect(trashOps.some((op) => op.snapshot !== null && 'status' in op.snapshot && op.snapshot.status === 'trash')).toBe(true);
+    });
+
+    it('calendar → nextAction: trashes only future calendar items, keeps past history, seeds the first item', async () => {
+        const routine = buildRoutine({ routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
+        await db.put('routines', routine);
+        const pastDate = dayjs().subtract(3, 'day').format('YYYY-MM-DD');
+        const futureDate = dayjs().add(3, 'day').format('YYYY-MM-DD');
+        await db.put('items', buildItem({ _id: 'past-cal', status: 'calendar', timeStart: `${pastDate}T09:00:00`, timeEnd: `${pastDate}T09:30:00` }));
+        await db.put('items', buildItem({ _id: 'future-cal', status: 'calendar', timeStart: `${futureDate}T09:00:00`, timeEnd: `${futureDate}T09:30:00` }));
+
+        await saveEditWithoutStartDateChange(db, routine, buildCtx({ routineType: 'nextAction' }));
+
+        expect((await db.get('items', 'past-cal'))?.status).toBe('calendar');
+        expect((await db.get('items', 'future-cal'))?.status).toBe('trash');
+        const seeded = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.status === 'nextAction');
+        expect(seeded).toHaveLength(1);
+        const [firstItem] = seeded;
+        if (!firstItem) throw new Error('expected a seeded nextAction item');
+        expect(firstItem.routineId).toBe(routine._id);
+    });
+
+    it('calendar → nextAction with a transformed survivor: does not seed a duplicate open item', async () => {
+        const routine = buildRoutine({ routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
+        await db.put('routines', routine);
+        await db.put('items', buildItem({ _id: 'transformed', status: 'waitingFor' }));
+
+        await saveEditWithoutStartDateChange(db, routine, buildCtx({ routineType: 'nextAction' }));
+
+        const open = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.status === 'nextAction');
+        expect(open).toHaveLength(0);
+        expect((await db.get('items', 'transformed'))?.status).toBe('waitingFor');
+    });
+
+    it('calendar → nextAction with an exhausted new schedule: trashes nothing extra and deactivates the routine', async () => {
+        const routine = buildRoutine({ routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
+        await db.put('routines', routine);
+
+        await saveEditWithoutStartDateChange(db, routine, buildCtx({ routineType: 'nextAction', finalRrule: 'FREQ=DAILY;UNTIL=20200101T000000Z' }));
+
+        const stored = await db.get('routines', routine._id);
+        expect(stored?.active).toBe(false);
+    });
+
+    it('type switch combined with a startDate change also runs the transition (no orphaned old-type items)', async () => {
+        const routine = buildRoutine({ routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
+        await db.put('routines', routine);
+        const futureDate = dayjs().add(2, 'day').format('YYYY-MM-DD');
+        await db.put('items', buildItem({ _id: 'future-cal-sd', status: 'calendar', timeStart: `${futureDate}T09:00:00`, timeEnd: `${futureDate}T09:30:00` }));
+
+        await saveEditWithStartDateChange(db, routine, buildCtx({ routineType: 'nextAction', formStartDate: dayjs().format('YYYY-MM-DD') }));
+
+        expect((await db.get('items', 'future-cal-sd'))?.status).toBe('trash');
+        const seeded = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.status === 'nextAction');
+        expect(seeded).toHaveLength(1);
+    });
+});
+
+describe('linkedTypeSwitchSplitDate', () => {
+    it('returns a split date only for a GCal-linked calendar → nextAction switch', () => {
+        const linked = buildRoutine({ routineType: 'calendar', calendarEventId: 'gcal-1', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
+        expect(linkedTypeSwitchSplitDate(linked, buildCtx({ routineType: 'nextAction' }))).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+        // Unlinked routine, same-type edit, and nextAction source all fall through to null.
+        expect(linkedTypeSwitchSplitDate(buildRoutine({ routineType: 'calendar' }), buildCtx({ routineType: 'nextAction' }))).toBeNull();
+        expect(linkedTypeSwitchSplitDate(linked, buildCtx({ routineType: 'calendar' }))).toBeNull();
+        expect(linkedTypeSwitchSplitDate(buildRoutine({ calendarEventId: 'gcal-1' }), buildCtx({ routineType: 'calendar' }))).toBeNull();
+    });
+});
+
+describe('buildUpdatedRoutine — type-switch field hygiene', () => {
+    it('drops GCal master mirrors and lastKnown* markers when switching away from calendar', () => {
+        const routine = buildRoutine({
+            routineType: 'calendar',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            organizer: { email: 'boss@example.com' },
+            attendees: [{ email: 'boss@example.com', responseStatus: 'accepted' }],
+            responseStatus: 'accepted',
+            lastKnownCalendarEventId: 'old-master',
+            lastKnownCalendarIntegrationId: 'integration-1',
+        });
+
+        const updated = buildUpdatedRoutine(routine, buildCtx({ routineType: 'nextAction' }), undefined);
+
+        expect(updated.organizer).toBeUndefined();
+        expect(updated.attendees).toBeUndefined();
+        expect(updated.responseStatus).toBeUndefined();
+        expect(updated.lastKnownCalendarEventId).toBeUndefined();
+        expect(updated.lastKnownCalendarIntegrationId).toBeUndefined();
+    });
+
+    it('drops lastKnown* markers when switching to calendar (fresh master, no relink to a capped one)', () => {
+        const routine = buildRoutine({ routineType: 'nextAction', lastKnownCalendarEventId: 'old-master' });
+        const updated = buildUpdatedRoutine(
+            routine,
+            buildCtx({ routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } }),
+            undefined,
+        );
+        expect(updated.lastKnownCalendarEventId).toBeUndefined();
     });
 });

@@ -14,7 +14,7 @@ import { applyAndPublishOperation, OperationValidationError } from '../../lib/ap
 import { pauseRoutine, resumeRoutine, type SplitParams, splitRoutine } from '../../lib/routineComposites.js';
 import { propagateRoutineEditToItems } from '../../lib/routineEditPropagation.js';
 import { ensureFirstRoutineItem } from '../../lib/routineItemGeneration.js';
-import type { RoutineInterface } from '../../types/entities.js';
+import { GCAL_OWNED_ROUTINE_KEYS, type RoutineInterface } from '../../types/entities.js';
 import { presentRoutine } from './projections/routine.js';
 
 /**
@@ -263,12 +263,42 @@ export const v1RoutinesRoutes = new Hono<{ Variables: BearerVariables }>()
         }
         const now = dayjs().toISOString();
         const merged = { ...existing, ...raw, updatedTs: now } as RoutineInterface;
+        const wantsTypeSwitch = merged.routineType !== existing.routineType;
+        // A GCal-linked routine cannot switch type in place: the master series would stay live on
+        // Google while the routine stops being a calendar routine, and the inbound sync (matching by
+        // calendarEventId) would keep rewriting it. The split composite is the supported gesture —
+        // it caps the master (pause pushback) and creates the new-type tail.
+        if (wantsTypeSwitch && existing.calendarEventId) {
+            return c.json(
+                {
+                    error: 'cannot switch routineType on a routine linked to a Google Calendar series — use POST /v1/routines/:id/split with tailEdits.routineType, or unlink the routine first',
+                    code: 'linked_routine_type_switch',
+                },
+                400,
+            );
+        }
         // recurrenceAnchor is only valid on nextAction routines (RoutineSnapshotSchema rejects it
         // otherwise) — a PATCH that switches routineType away from nextAction without explicitly
         // clearing a previously-set anchor would otherwise carry the stale value forward and fail
         // validation on a legitimate type switch.
         if (merged.routineType !== 'nextAction') {
             delete merged.recurrenceAnchor;
+        }
+        // GCal master-mirror fields are calendar-only (RoutineSnapshotSchema superRefine) — a type
+        // switch away from calendar must shed leftovers from a formerly-linked routine or the
+        // legitimate switch 400s on them.
+        if (merged.routineType !== 'calendar') {
+            for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+                delete merged[key];
+            }
+        }
+        // Type switch drops the disconnect-with-keep markers: a later reconnect's strong-key restore
+        // would otherwise relink the old calendar series onto the switched routine (flip-back churn).
+        if (wantsTypeSwitch) {
+            delete merged.lastKnownCalendarEventId;
+            delete merged.lastKnownCalendarIntegrationId;
+            delete merged.lastKnownCalendarSyncConfigId;
+            delete merged.lastKnownCalendarAccountEmail;
         }
         const snapshot = merged;
         const result = await applyRoutineWrite(userId, tokenId, snapshot, 'update', now);

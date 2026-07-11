@@ -526,6 +526,34 @@ export async function trashFutureItemsFromDate(db: IDBPDatabase<MyDB>, userId: s
 }
 
 /**
+ * Trashes (status='trash' + update op) the items still in the OLD type's native status when a
+ * routine's type switches (nextAction ↔ calendar). Native-status-only on purpose — a transformed
+ * (waitingFor/inbox/…) item is the user's own and is never touched. Scope differs per old type:
+ *  - nextAction: every open native item regardless of date (the new type reseeds its stream).
+ *  - calendar: future items only — past occurrences remain in the app as history.
+ */
+export async function trashNativeItemsForTypeSwitch(db: IDBPDatabase<MyDB>, previousRoutine: StoredRoutine): Promise<void> {
+    const now = dayjs().toISOString();
+    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+    const allItems = await db.getAllFromIndex('items', 'userId', previousRoutine.userId);
+    const nativeVictims = allItems.filter((i) => i.routineId === previousRoutine._id && isNativeOldTypeItem(i, previousRoutine.routineType, todayStr));
+
+    for (const item of nativeVictims) {
+        const updated: StoredItem = { ...item, status: 'trash', updatedTs: now };
+        await putItem(db, updated);
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
+    }
+}
+
+/** Predicate for `trashNativeItemsForTypeSwitch`: native-status item the type switch supersedes. */
+function isNativeOldTypeItem(item: StoredItem, previousType: StoredRoutine['routineType'], todayStr: string): boolean {
+    if (previousType === 'nextAction') {
+        return item.status === 'nextAction';
+    }
+    return item.status === 'calendar' && (item.timeStart ?? '') >= todayStr;
+}
+
+/**
  * Trashes (status='trash' + update op) every open item tied to a routine, regardless of date.
  * Used by routine deletion, which — unlike pause — has no "keep working the backlog" nuance: the
  * routine is gone, so every non-`done`/non-`trash` item it generated is trashed, including

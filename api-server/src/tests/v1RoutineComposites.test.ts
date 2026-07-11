@@ -3,6 +3,7 @@
  * pre/post-state of items+routine in Mongo and the operations log so a future refactor can't
  * silently change which ops the composite emits. */
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
+import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
@@ -238,5 +239,55 @@ describe('POST /v1/routines/:id/split', () => {
         expect(bobs?.active).toBe(true);
         const ops = await operationsDAO.findArray({ entityId: 'r-bob' });
         expect(ops).toHaveLength(0);
+    });
+});
+
+describe('POST /v1/routines/:id/split — nextAction head cleanup + tail seeding', () => {
+    it('trashes the head open nextAction item and seeds the tail first item', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        await routinesDAO.insertOne(makeRoutine(userId, { _id: 'r-na-head' }));
+        await itemsDAO.insertOne(makeItem(userId, 'r-na-head', { _id: 'i-open-na', expectedBy: '2024-01-01' }));
+
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines/r-na-head/split', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ splitDate: dayjs().add(1, 'day').format('YYYY-MM-DD'), tailEdits: { rrule: 'FREQ=WEEKLY;BYDAY=MO' } }),
+            }),
+        );
+        expect(res.status).toBe(201);
+        const body = (await res.json()) as { tail: { _id: string } };
+
+        // Head's open native item is superseded by the tail's seed — trashed, not left to duplicate.
+        const headItem = await itemsDAO.findByOwnerAndId('i-open-na', userId);
+        expect(headItem?.status).toBe('trash');
+        const tailItems = await itemsDAO.findArray({ user: userId, routineId: body.tail._id, status: 'nextAction' } as never);
+        expect(tailItems).toHaveLength(1);
+    });
+
+    it('type-switch split (calendar head → nextAction tail) seeds the tail and keeps past calendar history', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['routines.write']);
+        const head = makeRoutine(userId, { _id: 'r-cal-head', routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 60 } });
+        await routinesDAO.insertOne(head);
+        await itemsDAO.insertOne(makeItem(userId, 'r-cal-head', { _id: 'i-cal-past', status: 'calendar', timeStart: '2025-01-01T09:00:00.000Z' }));
+        await itemsDAO.insertOne(makeItem(userId, 'r-cal-head', { _id: 'i-cal-future', status: 'calendar', timeStart: '2099-04-01T09:00:00.000Z' }));
+
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/routines/r-cal-head/split', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ splitDate: dayjs().add(1, 'day').format('YYYY-MM-DD'), tailEdits: { routineType: 'nextAction' } }),
+            }),
+        );
+        expect(res.status).toBe(201);
+        const body = (await res.json()) as { tail: { _id: string; routineType: string } };
+        expect(body.tail.routineType).toBe('nextAction');
+
+        expect((await itemsDAO.findByOwnerAndId('i-cal-past', userId))?.status).toBe('calendar'); // history kept
+        expect(await itemsDAO.findByOwnerAndId('i-cal-future', userId)).toBeNull(); // upcoming removed
+        const tailItems = await itemsDAO.findArray({ user: userId, routineId: body.tail._id, status: 'nextAction' } as never);
+        expect(tailItems).toHaveLength(1);
     });
 });

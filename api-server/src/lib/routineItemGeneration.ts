@@ -74,11 +74,17 @@ export function buildRoutineItemSnapshot(routine: RoutineInterface, expectedBy: 
  *   - Anything else — logs and swallows. The parent request (POST /routines / resumeRoutine) must
  *     not fail because the item generator hit a snag.
  */
-export async function ensureFirstRoutineItem(ctx: RoutineItemGenerationContext, routine: RoutineInterface): Promise<void> {
+export async function ensureFirstRoutineItem(
+    ctx: RoutineItemGenerationContext,
+    routine: RoutineInterface,
+    opts?: { ignoreCalendarHistory?: boolean },
+): Promise<void> {
     if (routine.routineType !== 'nextAction' || !routine.active) {
         return;
     }
-    if (await hasOpenItem(ctx.userId, routine._id)) {
+    // ignoreCalendarHistory: the routineType-switch path leaves past calendar occurrences in
+    // open `calendar` status as history — they must not claim the nextAction open slot forever.
+    if (await hasOpenItem(ctx.userId, routine._id, opts?.ignoreCalendarHistory === true)) {
         return;
     }
     const anchor = computeFirstAnchor(routine.startDate);
@@ -185,12 +191,9 @@ async function deactivateRoutine(ctx: RoutineItemGenerationContext, routine: Rou
     );
 }
 
-/** The routine's open (non-done/non-trash) item, or null. There is at most one by invariant. */
-async function findOpenRoutineItem(userId: string, routineId: string): Promise<ItemInterface | null> {
-    return itemsDAO.findOne({ user: userId, routineId, status: { $nin: ['done', 'trash'] } } as never);
-}
-
-/** True when the routine already has a non-done/non-trash item — preserves "at most one open item". */
-async function hasOpenItem(userId: string, routineId: string): Promise<boolean> {
-    return (await findOpenRoutineItem(userId, routineId)) !== null;
+/** True when the routine already has a non-done/non-trash item — preserves "at most one open item".
+ *  `ignoreCalendarHistory` additionally excludes `calendar`-status items (type-switch leftovers). */
+async function hasOpenItem(userId: string, routineId: string, ignoreCalendarHistory: boolean): Promise<boolean> {
+    const excluded = ignoreCalendarHistory ? ['done', 'trash', 'calendar'] : ['done', 'trash'];
+    return (await itemsDAO.findOne({ user: userId, routineId, status: { $nin: excluded } } as never)) !== null;
 }

@@ -1730,6 +1730,36 @@ describe('POST /sync/reassign', () => {
             expect(moved?.routineType).toBe('calendar');
             expect(moved?.recurrenceAnchor).toBeUndefined();
         });
+
+        // Same spread-inheritance hazard as recurrenceAnchor, for the GCal master-mirror fields:
+        // a calendar→nextAction switch must shed organizer/attendees/… or the target-side create
+        // fails RoutineSnapshotSchema's superRefine on the inherited fields.
+        it('switching routineType to nextAction sheds inherited GCal master-mirror fields', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const routine = makeRoutine(alice.userId, {
+                routineType: 'calendar',
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+                organizer: { email: 'boss@example.com' },
+                attendees: [{ email: 'boss@example.com', responseStatus: 'accepted' }],
+            });
+            await routinesDAO.insertOne(routine);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, {
+                entityType: 'routine',
+                entityId: routine._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                editRoutinePatch: { routineType: 'nextAction' },
+            });
+
+            expect(res.status).toBe(200);
+            const moved = await routinesDAO.findByOwnerAndId(routine._id, bob.userId);
+            expect(moved?.routineType).toBe('nextAction');
+            expect(moved?.organizer).toBeUndefined();
+            expect(moved?.attendees).toBeUndefined();
+        });
     });
 
     // Edge cases for the editPatch whitelist that aren't covered above. These lock in the

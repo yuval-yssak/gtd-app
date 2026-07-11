@@ -412,3 +412,72 @@ describe('splitRoutine — startDate + nextAction', () => {
         expect(tailItems).toHaveLength(0);
     });
 });
+
+describe('splitRoutine — nextAction head cleanup', () => {
+    it('trashes the head open native nextAction item (any date) so the tail seed cannot duplicate it', async () => {
+        const { calendarItemTemplate: _omit, ...base } = buildRoutine({ _id: 'orig-nx-open', routineType: 'nextAction', rrule: 'FREQ=DAILY' });
+        const original: StoredRoutine = base;
+        await db.put('routines', original);
+        // Past-due open item — deleteFutureItemsFromDate never matches it (calendar-only), so
+        // this locks in the dedicated nextAction head cleanup.
+        await db.put('items', buildItem({ _id: 'open-na', routineId: 'orig-nx-open', status: 'nextAction', expectedBy: '2025-02-01' }));
+
+        const tail = await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            { title: original.title, routineType: 'nextAction', rrule: 'FREQ=DAILY', template: original.template },
+            dayjs().add(1, 'day').format('YYYY-MM-DD'),
+        );
+
+        const headItem = await db.get('items', 'open-na');
+        expect(headItem?.status).toBe('trash');
+        const tailItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === tail._id && i.status === 'nextAction');
+        expect(tailItems).toHaveLength(1);
+    });
+
+    it('type-switch split (nextAction head → calendar tail): head open item trashed, tail fills the horizon', async () => {
+        const { calendarItemTemplate: _omit, ...base } = buildRoutine({ _id: 'orig-nx-sw', routineType: 'nextAction', rrule: 'FREQ=DAILY' });
+        const original: StoredRoutine = base;
+        await db.put('routines', original);
+        await db.put('items', buildItem({ _id: 'open-na-sw', routineId: 'orig-nx-sw', status: 'nextAction', expectedBy: dayjs().format('YYYY-MM-DD') }));
+
+        const tail = await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            {
+                title: original.title,
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                template: original.template,
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            },
+            dayjs().add(1, 'day').format('YYYY-MM-DD'),
+        );
+
+        const headItem = await db.get('items', 'open-na-sw');
+        expect(headItem?.status).toBe('trash');
+        const tailItems = (await db.getAllFromIndex('items', 'userId', USER_ID)).filter((i) => i.routineId === tail._id);
+        expect(tailItems.length).toBeGreaterThan(0);
+        expect(tailItems.every((i) => i.status === 'calendar')).toBe(true);
+    });
+
+    it('leaves transformed (waitingFor) items of a nextAction head untouched', async () => {
+        const { calendarItemTemplate: _omit, ...base } = buildRoutine({ _id: 'orig-nx-tf', routineType: 'nextAction', rrule: 'FREQ=DAILY' });
+        const original: StoredRoutine = base;
+        await db.put('routines', original);
+        await db.put('items', buildItem({ _id: 'transformed-wf', routineId: 'orig-nx-tf', status: 'waitingFor' }));
+
+        await splitRoutine(
+            db,
+            USER_ID,
+            original,
+            { title: original.title, routineType: 'nextAction', rrule: 'FREQ=DAILY', template: original.template },
+            dayjs().add(1, 'day').format('YYYY-MM-DD'),
+        );
+
+        const transformed = await db.get('items', 'transformed-wf');
+        expect(transformed?.status).toBe('waitingFor');
+    });
+});

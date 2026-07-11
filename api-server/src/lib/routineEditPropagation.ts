@@ -1,11 +1,12 @@
 import dayjs from 'dayjs';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import routinesDAO from '../dataAccess/routinesDAO.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 import { applyAndPublishOperation } from './applyOperation.js';
 import { notifyChanges } from './notifyChange.js';
-import type { RoutineItemGenerationContext } from './routineItemGeneration.js';
-import { propagateRoutineContentToItems, regenerateFutureRoutineItems } from './routineItemRegeneration.js';
+import { ensureFirstRoutineItem, type RoutineItemGenerationContext } from './routineItemGeneration.js';
+import { propagateRoutineContentToItems, regenerateFutureRoutineItems, trashFutureCalendarItems } from './routineItemRegeneration.js';
 import { computeFirstOccurrenceDate, mergeRoutineEditIntoOpenItem } from './routineOpenItemMerge.js';
 import { isCalendarScheduleChanged, isNextActionScheduleChanged } from './rruleCanonical.js';
 import { RruleExhaustedError } from './rruleHelpers.js';
@@ -21,8 +22,10 @@ import { RruleExhaustedError } from './rruleHelpers.js';
  *    an exhausted schedule trashes the pending item and deactivates the routine.
  *  - calendar: schedule edits run the idempotent delta regeneration; content-only edits update
  *    title/notes on future items in place (per-instance GCal overrides win).
- *  - Only active routines propagate; done/trash/transformed items are never touched; type
- *    switches are out of scope (tracked separately).
+ *  - Only active routines propagate; done/trash/transformed items are never touched.
+ *  - type switch (nextAction ↔ calendar): the old type's native items are trashed (future-only
+ *    for calendar history) and the new type's stream is seeded. The PATCH handler rejects type
+ *    switches on GCal-linked routines, so no master-series handling is needed here.
  *
  * Never throws: item propagation must not fail the parent PATCH. Errors are logged and the
  * routine write stands. Returns the routine's final state — the exhausted path deactivates it
@@ -39,8 +42,9 @@ export async function propagateRoutineEditToItems(
         }
         if (previous.routineType === 'calendar' && next.routineType === 'calendar') {
             await propagateCalendarRoutineEdit(ctx, previous, next);
+            return next;
         }
-        return next;
+        return await transitionRoutineTypeItems(ctx, previous, next);
     } catch (err) {
         console.error('[routine] edit propagation to items failed; routine write stands', { routineId: next._id, err });
         return next;
@@ -143,6 +147,47 @@ async function propagateCalendarRoutineEdit(ctx: RoutineItemGenerationContext, p
         // self-referential fork churn class). For in-app routines pushback is a no-op anyway.
         // Same reasoning as the inbound-sync path, which fans out via notifyDevicesOfSyncOps.
         await notifyChanges(ops, { suppressGCalPushback: true });
+    }
+}
+
+/**
+ * Type switch (nextAction ↔ calendar): trash the old type's native-status items, then seed the new
+ * type. Mirrors the client editor's `transitionRoutineType` decision-for-decision:
+ *  - old nextAction: trash the open native item(s) regardless of date — the new stream reseeds.
+ *  - old calendar: trash future items only; past occurrences remain in the app as history.
+ *  - new calendar: horizon fill via the idempotent delta regen (no-op when the routine is paused).
+ *  - new nextAction: `ensureFirstRoutineItem` (open-item guard + exhausted-rrule deactivation).
+ * Returns the routine re-read after seeding — an exhausted new schedule deactivates it and the
+ * PATCH response must reflect that.
+ */
+async function transitionRoutineTypeItems(ctx: RoutineItemGenerationContext, previous: RoutineInterface, next: RoutineInterface): Promise<RoutineInterface> {
+    const now = dayjs().toISOString();
+    if (previous.routineType === 'nextAction') {
+        await trashOpenNativeItems(ctx, previous, now);
+        const ops = await regenerateFutureRoutineItems(next, ctx.userId, now, await lookupCalendarTimeZone(next));
+        if (ops.length > 0) {
+            // suppressGCalPushback: same reasoning as propagateCalendarRoutineEdit — the routine op
+            // published by the PATCH already drives any GCal master work via handleRoutinePush.
+            await notifyChanges(ops, { suppressGCalPushback: true });
+        }
+        return next;
+    }
+    const trashedOps = await trashFutureCalendarItems(previous, ctx.userId, now);
+    if (trashedOps.length > 0) {
+        await notifyChanges(trashedOps, { suppressGCalPushback: true });
+    }
+    await ensureFirstRoutineItem(ctx, next, { ignoreCalendarHistory: true });
+    // ensureFirstRoutineItem deactivates on an exhausted rrule via its own op — re-read so the
+    // caller returns the final state, mirroring the exhausted path of the nextAction recompute.
+    return (await routinesDAO.findByOwnerAndId(next._id, ctx.userId)) ?? next;
+}
+
+/** Trash every item still in native `nextAction` status for the routine (at most one by invariant,
+ *  but sweep all matches so a historical duplicate can't survive the switch). */
+async function trashOpenNativeItems(ctx: RoutineItemGenerationContext, routine: RoutineInterface, now: string): Promise<void> {
+    const openNative = await itemsDAO.findArray({ user: ctx.userId, routineId: routine._id, status: 'nextAction' });
+    for (const item of openNative) {
+        await publishItemUpdate(ctx, { ...item, status: 'trash', updatedTs: now }, now);
     }
 }
 

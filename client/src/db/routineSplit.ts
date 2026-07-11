@@ -4,7 +4,7 @@ import type { IDBPDatabase } from 'idb';
 import { addUntilToRrule } from '../lib/routineSplitUtils';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { putRoutine } from './routineHelpers';
-import { createNextRoutineItem, deleteFutureItemsFromDate, generateCalendarItemsToHorizon } from './routineItemHelpers';
+import { createNextRoutineItem, deleteFutureItemsFromDate, generateCalendarItemsToHorizon, trashNativeItemsForTypeSwitch } from './routineItemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
 
@@ -41,8 +41,15 @@ export async function splitRoutine(
     };
     await updateRoutine(db, cappedOriginal);
 
-    // 2. Delete future items from the original after the split point
+    // 2. Delete future items from the original after the split point. For a nextAction head the
+    //    open native item must be trashed too (any date — the tail seeds its replacement below);
+    //    deleteFutureItemsFromDate only covers calendar-status items, so without this the open
+    //    next action survives on the capped head and duplicates the tail's seed.
     await deleteFutureItemsFromDate(db, userId, original._id, splitDate);
+    if (original.routineType === 'nextAction') {
+        // Same native-item sweep the in-place type switch uses (trash + update op, any date).
+        await trashNativeItemsForTypeSwitch(db, original);
+    }
 
     // 3. Create the tail routine — createdTs = splitDate to anchor DTSTART.
     //    Build explicitly to avoid carrying over original-series fields like calendarEventId.

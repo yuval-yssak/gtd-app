@@ -2670,6 +2670,12 @@ async function restoreRoutineCalendarLink(
     source: CalendarSource,
     ctx: SyncContext,
 ): Promise<RoutineInterface | undefined> {
+    // Never restore a calendar link onto a routine that has since switched type: the type-switch
+    // paths drop the lastKnown* markers, but a stale op replay or legacy row can still carry them,
+    // and relinking would flip the routine back into the GCal-matched path (rrule reassert churn).
+    if (candidate.routineType !== 'calendar') {
+        return undefined;
+    }
     const reactivate = !candidate.active && rrule !== null && isOpenRrule(rrule);
     try {
         const result = await routinesDAO.updateOne(

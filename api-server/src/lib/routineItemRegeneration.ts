@@ -313,6 +313,17 @@ export async function regenerateFutureRoutineItems(routine: RoutineInterface, us
     return [...trashedOps, ...createdOps];
 }
 
+/**
+ * Trashes every FUTURE `calendar`-status item of the routine — past occurrences remain as history.
+ * Used by the routineType-switch propagation (calendar → nextAction): the routine stops generating
+ * calendar items, so today-forward ones are orphans. Reuses `trashOrphanedItems` with an empty
+ * required set so the instance-id-release discipline stays in one place.
+ */
+export async function trashFutureCalendarItems(routine: RoutineInterface, userId: string, now: string): Promise<OperationInterface[]> {
+    const liveByDate = await futureLiveItemsByDate(routine, userId);
+    return trashOrphanedItems(routine, userId, now, liveByDate, new Set());
+}
+
 /** Future `calendar`-status items for the routine, indexed by their `YYYY-MM-DD` occurrence date. */
 async function futureLiveItemsByDate(routine: RoutineInterface, userId: string): Promise<Map<string, ItemInterface>> {
     const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');

@@ -411,3 +411,89 @@ describe('PATCH /v1/routines — paused routines', () => {
         expect(after?.energy).toBeUndefined();
     });
 });
+
+describe('PATCH /v1/routines — routineType switch propagation', () => {
+    it('nextAction → calendar: trashes the open native item and fills the calendar horizon', async () => {
+        const { userId, token } = await setup();
+        const created = await createRoutineViaApi(token, naBody);
+        const open = await openItemOf(userId, created._id);
+        expect(open).not.toBeNull();
+
+        const res = await patchRoutine(token, created._id, { routineType: 'calendar', calendarItemTemplate: { timeOfDay: '09:00', duration: 30 } });
+        expect(res.status).toBe(200);
+
+        const oldItem = await itemsDAO.findOne({ _id: open?._id } as never);
+        expect(oldItem?.status).toBe('trash');
+        const calendarItems = await itemsDAO.findArray({ user: userId, routineId: created._id, status: 'calendar' } as never);
+        expect(calendarItems.length).toBeGreaterThan(0);
+    });
+
+    it('calendar → nextAction: trashes only future calendar items, keeps past history, seeds the first item', async () => {
+        const { userId, token } = await setup();
+        const created = await createRoutineViaApi(token, calendarBody);
+        const past = await seedCalendarItem(userId, created._id, dayjs().subtract(3, 'day').format('YYYY-MM-DD'));
+        const future = await seedCalendarItem(userId, created._id, dayjs().add(3, 'day').format('YYYY-MM-DD'));
+
+        const res = await patchRoutine(token, created._id, { routineType: 'nextAction' });
+        expect(res.status).toBe(200);
+
+        expect((await itemsDAO.findOne({ _id: past._id } as never))?.status).toBe('calendar');
+        expect((await itemsDAO.findOne({ _id: future._id } as never))?.status).toBe('trash');
+        const seeded = await itemsDAO.findArray({ user: userId, routineId: created._id, status: 'nextAction' } as never);
+        expect(seeded).toHaveLength(1);
+    });
+
+    it('calendar → nextAction with an exhausted rrule: seeds nothing and the response reflects the deactivation', async () => {
+        const { userId, token } = await setup();
+        const created = await createRoutineViaApi(token, calendarBody);
+
+        const res = await patchRoutine(token, created._id, { routineType: 'nextAction', rrule: 'FREQ=DAILY;UNTIL=20200101T000000Z' });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { active: boolean };
+        expect(body.active).toBe(false);
+
+        const seeded = await itemsDAO.findArray({ user: userId, routineId: created._id, status: 'nextAction' } as never);
+        expect(seeded).toHaveLength(0);
+    });
+
+    it('rejects a type switch on a GCal-linked routine with linked_routine_type_switch', async () => {
+        const { userId, token } = await setup();
+        const created = await createRoutineViaApi(token, calendarBody);
+        const existing = await routinesDAO.findByOwnerAndId(created._id, userId);
+        if (!existing) throw new Error('expected routine');
+        await routinesDAO.replaceById(created._id, { ...existing, calendarEventId: 'gcal-master-1' });
+
+        const res = await patchRoutine(token, created._id, { routineType: 'nextAction' });
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as { code: string };
+        expect(body.code).toBe('linked_routine_type_switch');
+
+        // Same-type PATCHes on the linked routine still work.
+        const okRes = await patchRoutine(token, created._id, { title: 'Renamed' });
+        expect(okRes.status).toBe(200);
+    });
+
+    it('sheds GCal master-mirror fields and lastKnown* markers on a switch away from calendar', async () => {
+        const { userId, token } = await setup();
+        const created = await createRoutineViaApi(token, calendarBody);
+        const existing = await routinesDAO.findByOwnerAndId(created._id, userId);
+        if (!existing) throw new Error('expected routine');
+        // Formerly-linked leftovers: mirrors + disconnect markers, but no live calendarEventId.
+        await routinesDAO.replaceById(created._id, {
+            ...existing,
+            organizer: { email: 'boss@example.com' },
+            attendees: [{ email: 'boss@example.com', responseStatus: 'accepted' }],
+            lastKnownCalendarEventId: 'old-master',
+            lastKnownCalendarIntegrationId: 'old-integ',
+        });
+
+        const res = await patchRoutine(token, created._id, { routineType: 'nextAction' });
+        expect(res.status).toBe(200);
+
+        const after = await routinesDAO.findByOwnerAndId(created._id, userId);
+        expect(after?.organizer).toBeUndefined();
+        expect(after?.attendees).toBeUndefined();
+        expect(after?.lastKnownCalendarEventId).toBeUndefined();
+        expect(after?.lastKnownCalendarIntegrationId).toBeUndefined();
+    });
+});
