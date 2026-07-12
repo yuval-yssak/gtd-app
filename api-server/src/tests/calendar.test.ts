@@ -3110,29 +3110,43 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
-        // Earlier today (relative to UTC, but well after start-of-today in any reasonable TZ).
-        const earlierTodayStart = dayjs().startOf('day').add(2, 'hour').toISOString();
-        const earlierTodayEnd = dayjs().startOf('day').add(3, 'hour').toISOString();
-        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
-            events: [
-                {
-                    id: 'evt-earlier-today',
-                    title: 'Earlier today',
-                    timeStart: earlierTodayStart,
-                    timeEnd: earlierTodayEnd,
-                    updated: dayjs().toISOString(),
-                    status: 'confirmed',
-                },
-            ],
-            nextSyncToken: 'tok-1',
-        });
+        // The seam under test: `isPastEvent` keys on timeEnd against start-of-today in the *config's*
+        // tz (Asia/Jerusalem, per makeSyncConfig) — so an event that already ENDED must still import
+        // as long as it ended after that cutoff. Pin the clock rather than deriving the window from
+        // the runner's local start-of-day: that made this fail on a UTC runner between 21:00Z-23:59Z,
+        // where JLM has rolled to tomorrow and the cutoff jumps forward to 21:00Z today.
+        // Frozen at Apr 25 12:00 UTC = 15:00 JLM. Cutoff = Apr 24 21:00 UTC. Event 09:00-10:00 UTC:
+        // ended, but comfortably after the cutoff.
+        const baseDay = dayjs.utc('2026-04-25T00:00:00Z');
+        vi.useFakeTimers();
+        vi.setSystemTime(baseDay.add(12, 'hour').toDate());
+        try {
+            const earlierTodayStart = baseDay.add(9, 'hour').toISOString();
+            const earlierTodayEnd = baseDay.add(10, 'hour').toISOString();
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [
+                    {
+                        id: 'evt-earlier-today',
+                        title: 'Earlier today',
+                        timeStart: earlierTodayStart,
+                        timeEnd: earlierTodayEnd,
+                        updated: dayjs().toISOString(),
+                        status: 'confirmed',
+                    },
+                ],
+                nextSyncToken: 'tok-1',
+            });
 
-        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
-        expect(res.status).toBe(200);
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
 
-        const item = await itemsDAO.findOne({ calendarEventId: 'evt-earlier-today' });
-        expect(item?.status).toBe('calendar');
-        expect(item?.title).toBe('Earlier today');
+            const item = await itemsDAO.findOne({ calendarEventId: 'evt-earlier-today' });
+            expect(item?.status).toBe('calendar');
+            expect(item?.title).toBe('Earlier today');
+            expect(item?.timeEnd).toBe(earlierTodayEnd); // proves the ended-today event imported intact
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('updates an existing item moved from later today to earlier today', async () => {
@@ -3140,45 +3154,58 @@ describe('POST /calendar/integrations/:id/sync — upsert paths', () => {
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
 
-        const laterTodayStart = dayjs().startOf('day').add(22, 'hour').toISOString();
-        const laterTodayEnd = dayjs().startOf('day').add(23, 'hour').toISOString();
-        const earlierTodayStart = dayjs().startOf('day').add(13, 'hour').toISOString();
-        const earlierTodayEnd = dayjs().startOf('day').add(14, 'hour').toISOString();
-        const createdTime = dayjs().subtract(2, 'day').toISOString();
-        await itemsDAO.insertOne({
-            _id: 'item-moved-earlier-today',
-            user: userId,
-            status: 'calendar',
-            title: 'Late today',
-            timeStart: laterTodayStart,
-            timeEnd: laterTodayEnd,
-            calendarEventId: 'evt-moved-earlier-today',
-            calendarIntegrationId: 'int-1',
-            createdTs: createdTime,
-            updatedTs: createdTime,
-        });
+        // Pin the clock: derived from the runner's local start-of-day, the "earlier" window landed
+        // *past* the Asia/Jerusalem cutoff on a UTC runner at 21:00Z-23:59Z. That never failed —
+        // `applyPastEventToExisting` funnels into the same `updateExistingCalendarItem` call as the
+        // live branch, so the assertions held while the test silently exercised the moved-into-the-past
+        // path instead of the intended one. Freezing "now" keeps it on the branch it names.
+        // Frozen at Apr 25 12:00 UTC = 15:00 JLM; both windows below stay ahead of that.
+        const baseDay = dayjs.utc('2026-04-25T00:00:00Z');
+        vi.useFakeTimers();
+        vi.setSystemTime(baseDay.add(12, 'hour').toDate());
+        try {
+            const laterTodayStart = baseDay.add(20, 'hour').toISOString();
+            const laterTodayEnd = baseDay.add(21, 'hour').toISOString();
+            const earlierTodayStart = baseDay.add(16, 'hour').toISOString();
+            const earlierTodayEnd = baseDay.add(17, 'hour').toISOString();
+            const createdTime = dayjs().subtract(2, 'day').toISOString();
+            await itemsDAO.insertOne({
+                _id: 'item-moved-earlier-today',
+                user: userId,
+                status: 'calendar',
+                title: 'Late today',
+                timeStart: laterTodayStart,
+                timeEnd: laterTodayEnd,
+                calendarEventId: 'evt-moved-earlier-today',
+                calendarIntegrationId: 'int-1',
+                createdTs: createdTime,
+                updatedTs: createdTime,
+            });
 
-        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
-            events: [
-                {
-                    id: 'evt-moved-earlier-today',
-                    title: 'Moved earlier',
-                    timeStart: earlierTodayStart,
-                    timeEnd: earlierTodayEnd,
-                    updated: dayjs().toISOString(),
-                    status: 'confirmed',
-                },
-            ],
-            nextSyncToken: 'tok-1',
-        });
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [
+                    {
+                        id: 'evt-moved-earlier-today',
+                        title: 'Moved earlier',
+                        timeStart: earlierTodayStart,
+                        timeEnd: earlierTodayEnd,
+                        updated: dayjs().toISOString(),
+                        status: 'confirmed',
+                    },
+                ],
+                nextSyncToken: 'tok-1',
+            });
 
-        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
-        expect(res.status).toBe(200);
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
 
-        const item = await itemsDAO.findOne({ _id: 'item-moved-earlier-today' });
-        expect(item?.status).toBe('calendar');
-        expect(item?.title).toBe('Moved earlier');
-        expect(item?.timeStart).toBe(earlierTodayStart);
+            const item = await itemsDAO.findOne({ _id: 'item-moved-earlier-today' });
+            expect(item?.status).toBe('calendar');
+            expect(item?.title).toBe('Moved earlier');
+            expect(item?.timeStart).toBe(earlierTodayStart);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('leaves an already-trashed item alone when event remains in past', async () => {
