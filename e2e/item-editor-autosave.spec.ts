@@ -65,6 +65,29 @@ test.describe('item editor — title/notes autosave', () => {
     });
 });
 
+test.describe('item editor — creation date', () => {
+    test('shows when the item was first created', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `item-created-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Created stamp');
+            await page.goto('/inbox');
+            await page.waitForSelector('text=Created stamp');
+
+            await page.getByRole('button', { name: 'Edit' }).first().click();
+            const dialog = page.getByRole('dialog', { name: 'Edit item' });
+            const created = dialog.getByTestId('itemEditorCreatedAt');
+            // Two independent assertions: the regex pins the display format (a self-derived
+            // dayjs.format() on both sides could not catch a format regression), and the
+            // toContainText proves it renders *this* item's date rather than a constant.
+            await expect(created).toHaveText(/^Created [A-Z][a-z]{2} \d{1,2}, \d{4} \d{1,2}:\d{2} (AM|PM)$/);
+            await expect(created).toContainText(dayjs(item.createdTs).format('MMM D, YYYY'));
+
+            // The caption lives in the shared body, so the page chrome gets it too.
+            await page.goto(`/item/${item._id}`);
+            await expect(page.getByTestId('itemEditorCreatedAt')).toContainText(dayjs(item.createdTs).format('MMM D, YYYY'));
+        });
+    });
+});
+
 test.describe('item editor — live merge while open', () => {
     test('a remote rename flows into the open editor when the field is untouched', async ({ browser }) => {
         const email = `item-merge-${dayjs().valueOf()}@example.com`;

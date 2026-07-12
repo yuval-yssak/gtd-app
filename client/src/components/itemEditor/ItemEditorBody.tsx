@@ -864,6 +864,18 @@ export function ItemEditorBody({
                 </>
             )}
 
+            <Divider />
+
+            <Typography
+                variant="caption"
+                data-testid="itemEditorCreatedAt"
+                sx={{
+                    color: 'text.secondary',
+                }}
+            >
+                Created {dayjs(liveItem.createdTs).format('MMM D, YYYY h:mm A')}
+            </Typography>
+
             {renderActions ? (
                 chrome === 'dialog' ? (
                     <DialogActions sx={{ px: 0 }}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose: closeEditor })}</DialogActions>
