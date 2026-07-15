@@ -56,6 +56,14 @@ describe('undoStore', () => {
         expect(getCurrentUndo()).toBeNull();
     });
 
+    it('carries an optional link through to the current offer', () => {
+        offerUndo({ key: 'item:1:save', message: 'Item updated', undo: async () => {}, link: '/item/1' });
+        expect(getCurrentUndo()?.link).toBe('/item/1');
+
+        offerUndo({ key: 'ctx:2', message: 'Saved', undo: async () => {} });
+        expect(getCurrentUndo()?.link).toBeUndefined();
+    });
+
     it('dismiss and undo are safe no-ops when nothing is offered', async () => {
         expect(() => dismissCurrentUndo()).not.toThrow();
         await expect(runCurrentUndo()).resolves.toBeUndefined();

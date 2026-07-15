@@ -483,6 +483,8 @@ export function ItemEditorBody({
         offerUndo({
             key: `item:${beforeSnapshot._id}:save`,
             message: 'Item updated',
+            // Editor closes on save (e.g. after clarifying an inbox item) — offer a jump back to it.
+            link: `/item/${beforeSnapshot._id}`,
             undo: async () => {
                 await updateItem(db, beforeSnapshot);
                 await onSaved();

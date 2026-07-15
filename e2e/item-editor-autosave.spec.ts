@@ -65,6 +65,32 @@ test.describe('item editor — title/notes autosave', () => {
     });
 });
 
+test.describe('item editor — save undo snackbar', () => {
+    test('after clarifying an inbox item, the undo snackbar links back to the item', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `clarify-view-link-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Clarify and view');
+            await page.goto('/inbox');
+            await page.waitForSelector('text=Clarify and view');
+
+            // UI-driven clarify: move to Next Action and commit via the explicit Save button,
+            // which closes the editor and offers the "Item updated" undo with a View link.
+            await page.getByRole('button', { name: 'Edit' }).first().click();
+            const dialog = page.getByRole('dialog', { name: 'Edit item' });
+            await dialog.getByRole('button', { name: 'Next Action' }).click();
+            await dialog.getByRole('button', { name: 'Save changes' }).click();
+
+            // The save undo offer carries a View link back to the just-clarified item.
+            const viewButton = page.getByTestId('undoSnackbarViewButton');
+            await expect(viewButton).toBeVisible();
+            await viewButton.click();
+
+            // View navigates to the item's page (the route may append a search param) and the snackbar goes away.
+            await expect(page).toHaveURL(new RegExp(`/item/${item._id}(\\?|$)`));
+            await expect(page.getByTestId('undoSnackbar')).toHaveCount(0);
+        });
+    });
+});
+
 test.describe('item editor — creation date', () => {
     test('shows when the item was first created', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `item-created-${dayjs().valueOf()}@example.com`, async (page) => {

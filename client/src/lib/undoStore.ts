@@ -19,6 +19,8 @@ export interface UndoOffer {
     key: string;
     message: string;
     undo: () => Promise<void>;
+    /** Optional in-app path (e.g. `/item/<id>`) surfaced as a "View" link alongside the Undo action. */
+    link?: string;
     /** Fired when the offer leaves the screen without being undone (timeout/dismiss/superseded). */
     onExpire?: () => void;
 }

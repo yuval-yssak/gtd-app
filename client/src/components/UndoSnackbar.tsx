@@ -1,5 +1,7 @@
 import Button from '@mui/material/Button';
 import Snackbar from '@mui/material/Snackbar';
+import Stack from '@mui/material/Stack';
+import { useNavigate } from '@tanstack/react-router';
 import { useSyncExternalStore, useTransition } from 'react';
 import { dismissCurrentUndo, getCurrentUndo, runCurrentUndo, subscribeToUndo } from '../lib/undoStore';
 
@@ -13,6 +15,7 @@ export const UNDO_SNACKBAR_DURATION_MS = 6000;
 export function UndoSnackbar() {
     const entry = useSyncExternalStore(subscribeToUndo, getCurrentUndo);
     const [isUndoing, startUndo] = useTransition();
+    const navigate = useNavigate();
 
     if (!entry) {
         return null;
@@ -22,6 +25,16 @@ export function UndoSnackbar() {
         startUndo(async () => {
             await runCurrentUndo();
         });
+    }
+
+    // Follow the offer's link, then dismiss so the snackbar doesn't linger over the destination.
+    function onViewClick() {
+        if (!entry?.link) {
+            return;
+        }
+        // `link` is a runtime-built path (e.g. `/item/<id>`); `as never` matches AppNav's dynamic-nav pattern.
+        navigate({ to: entry.link as never });
+        dismissCurrentUndo();
     }
 
     return (
@@ -38,9 +51,16 @@ export function UndoSnackbar() {
             }}
             message={entry.message}
             action={
-                <Button color="secondary" size="small" onClick={onUndoClick} disabled={isUndoing} data-testid="undoSnackbarButton">
-                    Undo
-                </Button>
+                <Stack direction="row" spacing={1}>
+                    {entry.link && (
+                        <Button color="secondary" size="small" onClick={onViewClick} data-testid="undoSnackbarViewButton">
+                            View
+                        </Button>
+                    )}
+                    <Button color="secondary" size="small" onClick={onUndoClick} disabled={isUndoing} data-testid="undoSnackbarButton">
+                        Undo
+                    </Button>
+                </Stack>
             }
             data-testid="undoSnackbar"
         />
