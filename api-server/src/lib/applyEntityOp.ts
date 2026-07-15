@@ -3,15 +3,16 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
-import type {
-    EntitySnapshot,
-    EntityType,
-    ItemInterface,
-    OperationInterface,
-    OpType,
-    PersonInterface,
-    RoutineInterface,
-    WorkContextInterface,
+import {
+    type EntitySnapshot,
+    type EntityType,
+    type ItemInterface,
+    ItemStatus,
+    type OperationInterface,
+    type OpType,
+    type PersonInterface,
+    type RoutineInterface,
+    type WorkContextInterface,
 } from '../types/entities.js';
 
 /**
@@ -74,6 +75,55 @@ export async function hydrateDeleteSnapshots(userId: string, ops: OperationInter
         return;
     }
     await Promise.all(targets.map((op) => hydrateOne(userId, op)));
+}
+
+/**
+ * Statuses whose GTD semantics are "this is no longer a scheduled event" — transitioning a
+ * calendar item to one of these must remove its Google Calendar presence. `done` and `trash`
+ * are intentionally absent: `done` keeps the event with a ✓ marker (matrix A8) and `trash`
+ * keeps `calendarEventId` on the snapshot, so the existing pushback branches handle both.
+ */
+const CALENDAR_DETACH_STATUSES: ReadonlySet<ItemStatus> = new Set([ItemStatus.inbox, ItemStatus.nextAction, ItemStatus.waitingFor, ItemStatus.somedayMaybe]);
+
+/**
+ * Clients strip `calendarEventId`/`timeStart` off the snapshot when clarifying a calendar item
+ * to an active non-calendar status (the status→field matrix forbids them there), so the op that
+ * reaches pushback carries no evidence of the GCal event that must now be removed. This hydrator
+ * captures the pre-update row onto `op.detachedCalendar` while it still exists — it MUST run
+ * before `applyEntityOp` overwrites the row. Pushback then deletes the linked event (or cancels
+ * the routine occurrence) from that sidecar.
+ */
+export async function hydrateCalendarDetachSnapshots(userId: string, ops: OperationInterface[]): Promise<void> {
+    const targets = ops.filter(isCalendarDetachCandidate);
+    if (!targets.length) {
+        return;
+    }
+    await Promise.all(targets.map((op) => hydrateDetachOne(userId, op)));
+}
+
+function isCalendarDetachCandidate(op: OperationInterface): boolean {
+    if (op.entityType !== 'item' || op.opType !== 'update' || !op.snapshot) {
+        return false;
+    }
+    return CALENDAR_DETACH_STATUSES.has((op.snapshot as ItemInterface).status);
+}
+
+async function hydrateDetachOne(userId: string, op: OperationInterface): Promise<void> {
+    const incoming = op.snapshot as ItemInterface;
+    const existing = (await itemsDAO.findByOwnerAndId(op.entityId, userId)) as ItemInterface | null;
+    if (!existing || existing.status !== ItemStatus.calendar) {
+        return;
+    }
+    // Mirror the LWW gate in applyEntitySnapshotOp: a stale op that will not replace the row
+    // must not cancel the GCal event of the (newer) state that stays in place.
+    if (existing.updatedTs > incoming.updatedTs) {
+        return;
+    }
+    const hasGCalPresence = Boolean(existing.calendarEventId) || Boolean(existing.routineId && existing.timeStart);
+    if (!hasGCalPresence) {
+        return;
+    }
+    op.detachedCalendar = existing;
 }
 
 async function hydrateOne(userId: string, op: OperationInterface): Promise<void> {

@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
 import type { EntitySnapshot, EntityType, OperationInterface, OpType, RsvpOpPayload } from '../types/entities.js';
-import { applyEntityOp, hydrateDeleteSnapshots } from './applyEntityOp.js';
+import { applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
 import { maybeCascadeReferenceRemoval } from './referenceCascades.js';
@@ -123,6 +123,12 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     // state to work from. Covers items, routines, people, and workContexts uniformly.
     await hydrateDeleteSnapshots(userId, [op]);
 
+    // Step 3b — calendar-detach hydration. An item update that moves a calendar item to an
+    // active non-calendar status arrives with the GCal linkage already stripped (status matrix);
+    // capture the pre-update row on `op.detachedCalendar` so pushback can remove the GCal event.
+    // Must also run before `applyEntityOp` — afterwards the linkage is gone from the DB too.
+    await hydrateCalendarDetachSnapshots(userId, [op]);
+
     // Steps 4 + 5 — persist + log. Apply first so a failure in `applyEntityOp` leaves no op in
     // the log; otherwise other devices would replay an op the server's collections never saw.
     // (The batch path below runs these in parallel as an accepted compromise inherited from the
@@ -233,6 +239,10 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     // Covers items / routines / people / workContexts; needed so the downstream fan-out has the
     // pre-delete state for GCal cancellation and reference cascades.
     await hydrateDeleteSnapshots(userId, ops);
+
+    // Calendar-detach hydration — same before-apply constraint as the delete hydration above:
+    // the pre-update row must be captured before the Promise.all below overwrites it.
+    await hydrateCalendarDetachSnapshots(userId, ops);
 
     await Promise.all([operationsDAO.insertMany(ops), ...ops.map((op) => applyEntityOp(userId, op))]);
 

@@ -433,6 +433,18 @@ export interface OperationInterface {
      */
     gcalMeta?: { sendUpdates: 'all' | 'none' };
     /**
+     * Pre-update snapshot of a calendar item whose update transitions it to an active
+     * non-calendar status (inbox/nextAction/waitingFor/somedayMaybe). Clients strip the GCal
+     * linkage fields off such snapshots before pushing, so by the time pushback runs the op
+     * itself no longer knows which GCal event to remove — this sidecar (hydrated server-side
+     * before `applyEntityOp` overwrites the row) carries that evidence. Absent otherwise.
+     *
+     * Intentionally persisted with the op (not stripped before insert): detach ops are rare, the
+     * duplicate snapshot is small relative to op-log volume, and keeping it makes the persisted
+     * op self-describing for audits/replays. Clients ignore unknown op fields on pull.
+     */
+    detachedCalendar?: ItemInterface;
+    /**
      * RSVP payload for opType === 'rsvp'. Required when opType === 'rsvp'; absent otherwise.
      */
     rsvp?: RsvpOpPayload;

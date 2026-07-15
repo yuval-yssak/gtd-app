@@ -97,6 +97,14 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
         await handleItemDelete(op.snapshot as ItemInterface | null, op.user, buildProvider);
         return;
     }
+    // Calendar → active-status transition (nextAction/somedayMaybe/waitingFor/inbox). The update
+    // snapshot itself carries no GCal linkage anymore (the status matrix stripped it), so the
+    // pre-update row rides on the op as `detachedCalendar` — remove its GCal presence and stop:
+    // the new status has no calendar representation left to push.
+    if (op.entityType === 'item' && op.detachedCalendar) {
+        await removeItemGCalPresence(op.detachedCalendar, op.user, buildProvider);
+        return;
+    }
     if (op.entityType === 'item' && op.snapshot) {
         await handleItemPush(op.snapshot as ItemInterface, op.user, buildProvider, sendUpdates);
         return;
@@ -108,18 +116,33 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
 
 /**
  * GCal-side cleanup when an item is hard-deleted (via `opType: 'delete'`, not a `status: 'trash'`
- * update). Three shapes:
- *  1. Calendar-linked standalone item — `calendarEventId` + integration ids on the snapshot →
- *     delete the GCal event.
- *  2. Routine-generated instance — `routineId` + `timeStart` on the snapshot → cancel that single
- *     occurrence on the routine's master recurring event.
- *  3. No GCal linkage (e.g. inbox item) — no-op.
+ * update). Delegates the shape handling to `removeItemGCalPresence`.
  *
  * Snapshot:null reaches here only when the row was already gone at hydration time (concurrent
  * delete from another device). No way to recover GCal state in that case — just no-op.
  */
 async function handleItemDelete(snapshot: ItemInterface | null, userId: string, buildProvider: ProviderFactory): Promise<void> {
     if (!snapshot) {
+        return;
+    }
+    await removeItemGCalPresence(snapshot, userId, buildProvider);
+}
+
+/**
+ * Removes an item's Google Calendar presence given its last calendar-linked snapshot. Shared by
+ * two callers whose snapshots describe a row state that no longer exists in the items collection:
+ *  - `handleItemDelete` — hard delete; the row is gone.
+ *  - the `detachedCalendar` branch of `maybePushToGCal` — the row still exists but was just
+ *    rewritten to an active non-calendar status, so its GCal event must be trashed.
+ * Same three shapes either way: linked standalone item → delete the event; routine-generated
+ * instance → cancel that single occurrence on the master; no linkage → no-op.
+ */
+async function removeItemGCalPresence(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+    // Disconnect-with-keep renamed the live linkage to lastKnown* — there is no live GCal event
+    // to remove. Defensive: today `calendarEventId` is always absent alongside lastKnown* (the
+    // rename invariant), but deleting by a stale id after a relink would hit the wrong event.
+    if (snapshot.lastKnownCalendarEventId) {
+        console.debug(`[debug-gcal-sync][pushback] skipping GCal removal — disconnect-kept item | itemId=${snapshot._id}`);
         return;
     }
     if (snapshot.calendarEventId) {
@@ -131,14 +154,15 @@ async function handleItemDelete(snapshot: ItemInterface | null, userId: string, 
             return;
         }
         const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
-        // Hard-delete: the item row is already gone by the time pushback runs, so heal can't write
-        // it back. Skip the heal context — the fallback inside resolvePushContext still kicks in.
+        // The row is either hard-deleted or rewritten without its GCal linkage by the time
+        // pushback runs, so heal has nothing valid to write back. Skip the heal context — the
+        // fallback inside resolvePushContext still kicks in.
         const ctx = await resolvePushContext(link, userId, buildProvider);
         if (!ctx) {
             return;
         }
         console.log(
-            `[gcal-pushback] deleting GCal event for hard-deleted item | eventId=${snapshot.calendarEventId} itemId=${snapshot._id} title=${snapshot.title}`,
+            `[gcal-pushback] deleting GCal event for removed/detached item | eventId=${snapshot.calendarEventId} itemId=${snapshot._id} title=${snapshot.title}`,
         );
         await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.deleteEvent(ctx.config.calendarId, snapshot.calendarEventId as string));
         return;
@@ -319,9 +343,9 @@ async function pushRoutineInstanceCancellation(
             snapshot.calendarInstanceEventId ? { instanceEventId: snapshot.calendarInstanceEventId } : undefined,
         ),
     );
-    // Skip stamping when the caller is `handleItemDelete` — the item row has already been
-    // hard-deleted by `applyEntityOp`, so the `updateOne` would silently no-op. Wasteful, not
-    // wrong, but cleaner to gate it explicitly.
+    // Skip stamping when the caller is `removeItemGCalPresence` — the item row is either already
+    // hard-deleted (the `updateOne` would silently no-op) or freshly rewritten to a non-calendar
+    // status (stamping `lastPushedToGCalTs` would smear GCal residue onto e.g. a nextAction row).
     if (!opts.skipStamp) {
         await stampItemLastPushed(userId, snapshot._id);
     }
