@@ -26,6 +26,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { updateItem } from '../../db/itemMutations';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { ticklerDayLabel } from '../../lib/ticklerDayLabel';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-tickler.module.css';
 
@@ -62,15 +63,6 @@ function TicklerPage() {
         const { ignoreBefore: _ib, ...rest } = item;
         await updateItem(db, rest as StoredItem);
         await refreshItems();
-    }
-
-    function dayLabel(dateStr: string): string {
-        const d = dayjs(dateStr);
-        const daysUntil = d.diff(dayjs(), 'day');
-        if (daysUntil === 0) return 'Today';
-        if (daysUntil === 1) return 'Tomorrow';
-        if (daysUntil < 7) return d.format('dddd');
-        return d.format('MMM D, YYYY');
     }
 
     if (ticklerItems.length === 0) {
@@ -138,7 +130,7 @@ function TicklerPage() {
                             mb: 1,
                         }}
                     >
-                        {dayLabel(dateKey)} — {dayjs(dateKey).format('MMM D')}
+                        {ticklerDayLabel(dateKey)}
                     </Typography>
                     <List disablePadding className={styles.list}>
                         {groupItems.map((item, idx) => (
