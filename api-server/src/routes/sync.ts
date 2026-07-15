@@ -13,8 +13,10 @@ import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { computePurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
+import { hasAtLeastOne } from '../lib/typeUtils.js';
 import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
+import { stripDisallowedStatusFields } from '../schemas/operations/index.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import { deviceSyncStateId, type EntitySnapshot, type EntityType, MAX_OP_ID, type OpType, type RsvpOpPayload } from '../types/entities.js';
 import { syncIssuesRoutes } from './syncIssues.js';
@@ -37,6 +39,23 @@ interface ClientOp {
      * persisted op to drive `events.patch` after a long offline period.
      */
     rsvp?: RsvpOpPayload;
+}
+
+// Deployed clients have shipped status transitions that leave a matrix-disallowed field on the
+// snapshot (e.g. `expectedBy` surviving nextAction→calendar). Strict validation would 400 the
+// whole batch and permanently jam the device's offline queue, so first-party sync strips the
+// offending fields instead. `/v1` keeps the strict 400 — API callers get immediate feedback and
+// have no queue to jam.
+function sanitizeItemSnapshot<T extends Record<string, unknown>>(op: ClientOp, snapshot: T): T {
+    if (op.entityType !== 'item' || (op.opType !== 'create' && op.opType !== 'update')) {
+        return snapshot;
+    }
+    const { sanitized, strippedFields } = stripDisallowedStatusFields(snapshot);
+    if (hasAtLeastOne(strippedFields)) {
+        console.warn(`[sync-push] stripped status-disallowed field(s) from item ${op.entityId}: ${strippedFields.join(', ')}`);
+    }
+    // Width-only assertion: stripping removes keys, it never changes remaining value types.
+    return sanitized as T;
 }
 
 async function purgeStaleDevices(userId: string): Promise<void> {
@@ -191,7 +210,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // for offline RSVPs.
         const rawOps: RawOperation[] = ops.map((op) => {
             const { userId: _stripped, ...snapshotFields } = op.snapshot ?? {};
-            const snapshot = op.snapshot ? ({ ...snapshotFields, user: user.id } as EntitySnapshot) : null;
+            const snapshot = op.snapshot ? (sanitizeItemSnapshot(op, { ...snapshotFields, user: user.id }) as EntitySnapshot) : null;
             return {
                 entityType: op.entityType,
                 entityId: op.entityId,

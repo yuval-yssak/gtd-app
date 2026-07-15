@@ -107,6 +107,9 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
         focus: _f,
         urgent: _u,
         waitingForPersonId: _wfp,
+        // expectedBy is not allowed on calendar items — leaving it on the snapshot makes
+        // /sync/push 400 (status_field_violation) and permanently jams the device's sync queue.
+        expectedBy: _eb,
         ignoreBefore: _ib,
         calendarSyncConfigId: _csc,
         calendarIntegrationId: _ci,

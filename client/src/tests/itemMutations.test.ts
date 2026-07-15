@@ -126,6 +126,21 @@ describe('clarifyToCalendar', () => {
         expect(cal.ignoreBefore).toBeUndefined();
     });
 
+    it('strips expectedBy — disallowed on calendar status, would 400 /sync/push and jam the queue', async () => {
+        const item = await collectItem(db, USER_ID, { title: 'Pay for thermostat replacement' });
+        await db.clear('syncOperations');
+
+        const withDeadline = { ...item, status: 'nextAction' as const, expectedBy: '2026-07-14', ignoreBefore: '2026-07-12', energy: 'low' as const, time: 30 };
+        const cal = await clarifyToCalendar(db, withDeadline, { timeStart: '2026-07-16T09:00:00', timeEnd: '2026-07-16T09:30:00' });
+
+        expect(cal.expectedBy).toBeUndefined();
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one sync op');
+        expect((op.snapshot as { expectedBy?: string }).expectedBy).toBeUndefined();
+    });
+
     it('sets calendarSyncConfigId and calendarIntegrationId when provided', async () => {
         const item = await collectItem(db, USER_ID, { title: 'Team standup' });
         await db.clear('syncOperations');

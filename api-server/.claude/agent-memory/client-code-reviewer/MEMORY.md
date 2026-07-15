@@ -1,3 +1,4 @@
 - [Shared dialog refresh gap](feedback_shared_dialog_refresh_gap.md) — Extracted edit dialogs (e.g. PersonEditDialog) often have callers that forget refreshXxx(); refresh should live inside the dialog.
 - [ItemEditorBody page-mode parity gap](feedback_item_editor_page_mode_parity.md) — Page route mounts ItemEditorBody directly (bypasses useItemEditor) — new optional props/Snackbars are easy to forget on /item/$itemId.
 - [Snackbar host vs teardown lifecycle](feedback_snackbar_host_lifecycle.md) — Per-route Snackbars vanish when the save success path unmounts the host (page route navigate, wizard last-step done). useItemEditor surfaces are immune; route/wizard surfaces are not.
+- [Status-field strip scattered across paths](feedback_status_field_strip_scattered.md) — clarifyTo*/apply*Form each hand-roll a strip list; fixes hit one path & miss siblings, leaking matrix-disallowed fields that jam /sync/push.

@@ -187,3 +187,25 @@ export function assertStatusFieldRules(snapshot: ItemSnapshot): StatusFieldViola
 }
 
 export const STATUS_SPECIFIC_FIELD_LIST: ReadonlyArray<StatusSpecificField> = STATUS_SPECIFIC_FIELDS;
+
+/**
+ * Strips status-specific fields the matrix disallows for the snapshot's status. `/sync/push`
+ * runs this BEFORE strict validation: deployed clients have shipped transitions that leave a
+ * disallowed field on the snapshot (e.g. `expectedBy` surviving nextAction→calendar), and a 400
+ * there permanently jams the device's offline queue — every later edit on that device is stuck
+ * behind the poisoned op. Sanitizing server-side heals already-queued ops with no user action.
+ * `/v1` callers keep the strict 400: they get immediate feedback and have no queue to jam.
+ */
+export function stripDisallowedStatusFields(snapshot: Record<string, unknown>): { sanitized: Record<string, unknown>; strippedFields: StatusSpecificField[] } {
+    // Destructure to read off the index signature (dot access trips TS4111, bracket trips Biome useLiteralKeys).
+    const { status } = snapshot;
+    const allowed = STATUS_FIELD_MATRIX[status as ItemInterface['status']];
+    // Unknown/missing status → nothing to strip; Zod rejects the snapshot downstream.
+    if (!allowed) {
+        return { sanitized: snapshot, strippedFields: [] };
+    }
+    const strippedFields = STATUS_SPECIFIC_FIELDS.filter((field) => snapshot[field] !== undefined && !allowed.has(field));
+    const strippedKeys = new Set<string>(strippedFields);
+    const sanitized = Object.fromEntries(Object.entries(snapshot).filter(([key]) => !strippedKeys.has(key)));
+    return { sanitized, strippedFields };
+}

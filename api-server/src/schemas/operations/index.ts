@@ -7,7 +7,7 @@ import { RoutineCreateSchema, RoutineDeleteSchema, RoutineUpdateSchema } from '.
 import { WorkContextCreateSchema, WorkContextDeleteSchema, WorkContextUpdateSchema } from './workContext.js';
 
 export type { ItemSnapshot, StatusFieldViolation } from './item.js';
-export { assertStatusFieldRules, ItemSnapshotSchema, RsvpOpPayloadSchema } from './item.js';
+export { assertStatusFieldRules, ItemSnapshotSchema, RsvpOpPayloadSchema, stripDisallowedStatusFields } from './item.js';
 export { PersonSnapshotSchema } from './person.js';
 export { RoutineSnapshotSchema } from './routine.js';
 export { WorkContextSnapshotSchema } from './workContext.js';

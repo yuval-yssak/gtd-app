@@ -52,7 +52,7 @@ async function push(sessionCookie: string, deviceId: string, ops: ReturnType<typ
 }
 
 describe('POST /sync/push — strict-mode validation', () => {
-    it('400 with status_field_violation when an op carries ignoreBefore on a calendar item', async () => {
+    it('strips status-disallowed fields (ignoreBefore on calendar) instead of 400 — a reject would jam the offline queue', async () => {
         const { sessionCookie } = await oauthLogin(app, 'google');
         const userId = await getUserId(sessionCookie!);
         const entityId = crypto.randomUUID();
@@ -72,15 +72,82 @@ describe('POST /sync/push — strict-mode validation', () => {
             }),
         ]);
 
-        expect(res.status).toBe(400);
-        const body = (await res.json()) as { code: string; extra?: { field?: string; status?: string } };
-        expect(body.code).toBe('status_field_violation');
-        expect(body.extra?.field).toBe('ignoreBefore');
-        expect(body.extra?.status).toBe('calendar');
+        expect(res.status).toBe(200);
+        const stored = await db.collection<{ ignoreBefore?: string; timeStart?: string }>('items').findOne({ _id: entityId } as never);
+        expect(stored?.timeStart).toBe('2026-05-09T10:00:00Z');
+        expect(stored?.ignoreBefore).toBeUndefined();
+    });
 
-        // Strict mode aborts the whole batch — nothing should have been persisted.
-        expect(await db.collection('items').countDocuments()).toBe(0);
-        expect(await db.collection('operations').countDocuments()).toBe(0);
+    it('strips expectedBy left behind by a nextAction→calendar transition (staging jam regression)', async () => {
+        // A deployed client's clarifyToCalendar failed to strip expectedBy, so the queued update op
+        // carried it forever — 400ing every flush and starving the device of all subsequent sync.
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const entityId = crypto.randomUUID();
+        await db.collection('items').insertOne({
+            _id: entityId,
+            user: userId,
+            status: 'nextAction',
+            title: 'Pay for thermostat replacement',
+            expectedBy: '2026-07-14',
+            ignoreBefore: '2026-07-12',
+            createdTs: '2026-07-06T15:08:09.712Z',
+            updatedTs: '2026-07-07T19:32:15.278Z',
+        } as never);
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('item', entityId, 'update', {
+                _id: entityId,
+                user: userId,
+                userId,
+                status: 'calendar',
+                title: 'Pay for thermostat replacement',
+                timeStart: '2026-07-16T09:00:00',
+                timeEnd: '2026-07-16T09:30:00',
+                expectedBy: '2026-07-14',
+                createdTs: '2026-07-06T15:08:09.712Z',
+                updatedTs: '2026-07-15T19:07:00.000Z',
+            }),
+        ]);
+
+        expect(res.status).toBe(200);
+        const stored = await db.collection<{ status: string; expectedBy?: string }>('items').findOne({ _id: entityId } as never);
+        expect(stored?.status).toBe('calendar');
+        expect(stored?.expectedBy).toBeUndefined();
+    });
+
+    it('preserves status-specific fields on done items — archival statuses allow everything, strip must be a no-op', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const entityId = crypto.randomUUID();
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('item', entityId, 'create', {
+                _id: entityId,
+                user: userId,
+                userId,
+                status: 'done',
+                title: 'completed with history',
+                energy: 'low',
+                time: 30,
+                expectedBy: '2026-07-14',
+                ignoreBefore: '2026-07-12',
+                timeStart: '2026-07-10T09:00:00Z',
+                timeEnd: '2026-07-10T09:30:00Z',
+                createdTs: '2026-07-06T15:08:09.712Z',
+                updatedTs: '2026-07-15T19:07:00.000Z',
+            }),
+        ]);
+
+        expect(res.status).toBe(200);
+        const stored = await db
+            .collection<{ energy?: string; time?: number; expectedBy?: string; ignoreBefore?: string; timeStart?: string }>('items')
+            .findOne({ _id: entityId } as never);
+        expect(stored?.energy).toBe('low');
+        expect(stored?.time).toBe(30);
+        expect(stored?.expectedBy).toBe('2026-07-14');
+        expect(stored?.ignoreBefore).toBe('2026-07-12');
+        expect(stored?.timeStart).toBe('2026-07-10T09:00:00Z');
     });
 
     it('400 with invalid_operation when an op snapshot is malformed (missing required field)', async () => {
@@ -150,8 +217,7 @@ describe('POST /sync/push — strict-mode validation', () => {
                 title: 'bad',
                 timeStart: '2026-05-09T10:00:00Z',
                 timeEnd: '2026-05-09T11:00:00Z',
-                ignoreBefore: '2026-05-08',
-                createdTs: '2026-05-08T10:00:00Z',
+                // createdTs missing on purpose — Zod-invalid (matrix violations no longer reject)
                 updatedTs: '2026-05-08T10:00:00Z',
             }),
         ]);
