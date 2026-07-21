@@ -65,7 +65,7 @@ export async function resumeRoutine(ctx: CompositeContext, routineId: string): P
     // Materialize the first nextAction item against the resumed routine. Pause has already
     // trashed any future-dated open items, so without this the resumed series produces nothing
     // until a manual intervention. No-op for calendar routines and errors are swallowed inside.
-    await ensureFirstRoutineItem(ctx, result.routine);
+    await ensureFirstRoutineItem({ userId: ctx.userId, deviceId: `api:${ctx.tokenId}` }, result.routine);
     return result;
 }
 
@@ -120,7 +120,7 @@ export async function splitRoutine(ctx: CompositeContext, routineId: string, par
     // nextAction tails materialize their first item server-side (mirrors resumeRoutine) so a
     // pure-API split — including a type-switch split (calendar head → nextAction tail) — produces
     // a pending item without waiting for a client tick. No-op for calendar tails (see module note).
-    await ensureFirstRoutineItem(ctx, tail);
+    await ensureFirstRoutineItem({ userId: ctx.userId, deviceId: `api:${ctx.tokenId}` }, tail);
     return { ok: true, head: cappedHead, tail };
 }
 

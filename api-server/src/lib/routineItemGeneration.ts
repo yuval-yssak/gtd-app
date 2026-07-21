@@ -29,7 +29,9 @@ dayjs.extend(utc);
 
 export interface RoutineItemGenerationContext {
     userId: string;
-    tokenId: string;
+    /** Full deviceId stamp for recorded ops — `api:<tokenId>` for public-API callers, `server` (or
+     *  `api:<tokenId>` via params) for the reassign orchestrator. */
+    deviceId: string;
 }
 
 /**
@@ -153,8 +155,7 @@ function computeDisposalAnchor(disposalDate: Date, startDate: string | undefined
 
 /**
  * Persist a fresh nextAction item snapshot through the shared apply pipeline so the op log + SSE
- * + web push + webhook fan-out cover this server-side generation. `deviceId: api:<tokenId>` matches
- * the convention every other public-API write uses.
+ * + web push + webhook fan-out cover this server-side generation.
  */
 async function publishRoutineItem(ctx: RoutineItemGenerationContext, routine: RoutineInterface, expectedBy: string): Promise<void> {
     const now = dayjs().toISOString();
@@ -162,7 +163,7 @@ async function publishRoutineItem(ctx: RoutineItemGenerationContext, routine: Ro
     await applyAndPublishOperation(
         ctx.userId,
         { entityType: 'item', opType: 'create', entityId: snapshot._id ?? '', snapshot },
-        { deviceId: `api:${ctx.tokenId}`, now },
+        { deviceId: ctx.deviceId, now },
     );
 }
 
@@ -184,11 +185,7 @@ async function handleGenerationError(ctx: RoutineItemGenerationContext, routine:
 async function deactivateRoutine(ctx: RoutineItemGenerationContext, routine: RoutineInterface): Promise<void> {
     const now = dayjs().toISOString();
     const snapshot: RoutineInterface = { ...routine, active: false, updatedTs: now };
-    await applyAndPublishOperation(
-        ctx.userId,
-        { entityType: 'routine', opType: 'update', entityId: routine._id, snapshot },
-        { deviceId: `api:${ctx.tokenId}`, now },
-    );
+    await applyAndPublishOperation(ctx.userId, { entityType: 'routine', opType: 'update', entityId: routine._id, snapshot }, { deviceId: ctx.deviceId, now });
 }
 
 /** True when the routine already has a non-done/non-trash item — preserves "at most one open item".

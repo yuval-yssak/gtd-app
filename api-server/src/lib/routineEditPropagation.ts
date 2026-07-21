@@ -61,7 +61,7 @@ async function publishItemUpdate(ctx: RoutineItemGenerationContext, item: ItemIn
     await applyAndPublishOperation(
         ctx.userId,
         { entityType: 'item', opType: 'update', entityId: item._id ?? '', snapshot: item },
-        { deviceId: `api:${ctx.tokenId}`, now },
+        { deviceId: ctx.deviceId, now },
     );
 }
 
@@ -119,7 +119,7 @@ async function recomputeOpenItemSchedule(
         await applyAndPublishOperation(
             ctx.userId,
             { entityType: 'routine', opType: 'update', entityId: routine._id, snapshot: deactivated },
-            { deviceId: `api:${ctx.tokenId}`, now: state.now },
+            { deviceId: ctx.deviceId, now: state.now },
         );
         return deactivated;
     }
