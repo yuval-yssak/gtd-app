@@ -48,22 +48,31 @@ test.describe('waiting-for sorting', () => {
             const aliceInbox = await gtd.collect(page, 'Ask Alice for the invoice');
             await gtd.clarifyToWaitingFor(page, aliceInbox, { waitingForPersonId: alice._id, expectedBy: '2026-07-10' });
 
+            const unassignedInbox = await gtd.collect(page, 'Await building permit');
+            await gtd.clarifyToWaitingFor(page, unassignedInbox, { expectedBy: '2026-07-20' });
+
             await gtd.flush(page);
 
             await page.goto(`${CLIENT_URL}/waiting-for`);
 
             const groupHeaders = page.locator('.MuiTypography-subtitle2');
-            await expect(groupHeaders).toHaveText(['Alice', 'Zoe']);
+            await expect(groupHeaders).toHaveText(['Alice', 'Zoe', 'Unassigned']);
+
+            // Person chips only render in the by-date view — grouping already names the person here.
+            await expect(page.getByTestId('waitingForPersonChip')).toHaveCount(0);
 
             await page.getByTestId('waitingForSortByDate').click();
             await expect(page).toHaveURL(/sortBy=date/);
 
             const rows = page.getByTestId('waitingForItemRow');
-            await expect(rows).toHaveText([/Ask Zoe for the report/, /Ask Alice for the invoice/]);
+            await expect(rows).toHaveText([/Ask Zoe for the report/, /Ask Alice for the invoice/, /Await building permit/]);
+
+            // The flat date view surfaces the awaited person as a chip; unassigned rows get none.
+            await expect(page.getByTestId('waitingForPersonChip')).toHaveText(['Zoe', 'Alice']);
 
             await page.getByTestId('waitingForSortByPerson').click();
             await expect(page).not.toHaveURL(/sortBy=/);
-            await expect(groupHeaders).toHaveText(['Alice', 'Zoe']);
+            await expect(groupHeaders).toHaveText(['Alice', 'Zoe', 'Unassigned']);
         });
     });
 });

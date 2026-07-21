@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupByWaitingForPerson, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../lib/waitingForGroups';
+import { groupByWaitingForPerson, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../lib/waitingForGroups';
 import type { StoredItem } from '../types/MyDB';
 
 const mkItem = (overrides: Partial<StoredItem> & { _id: string }): StoredItem => ({
@@ -29,6 +29,20 @@ describe('groupByWaitingForPerson', () => {
         const items = [mkItem({ _id: '1' })];
         const groups = groupByWaitingForPerson(items);
         expect(groups[UNASSIGNED_GROUP_KEY]?.map((i) => i._id)).toEqual(['1']);
+    });
+});
+
+describe('resolvePersonName', () => {
+    it('returns the mapped name when the person id is known', () => {
+        expect(resolvePersonName({ p1: 'Alice' }, 'p1')).toBe('Alice');
+    });
+
+    it('falls back to "Unknown" for an id missing from the map', () => {
+        expect(resolvePersonName({ p1: 'Alice' }, 'p2')).toBe('Unknown');
+    });
+
+    it('falls back to "Unknown" when the map is empty', () => {
+        expect(resolvePersonName({}, 'p1')).toBe('Unknown');
     });
 });
 

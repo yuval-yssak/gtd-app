@@ -11,11 +11,16 @@ export function groupByWaitingForPerson(items: StoredItem[]): Record<string, Sto
     }, {});
 }
 
+/** Resolves a person's display name, falling back to "Unknown" for ids missing from the map. */
+export function resolvePersonName(personMap: Record<string, string>, personId: string) {
+    return personMap[personId] ?? 'Unknown';
+}
+
 /** Orders group entries A→Z by resolved person name; "Unassigned" always sorts last. */
 export function sortGroupEntriesByPersonName(groups: Record<string, StoredItem[]>, personMap: Record<string, string>): Array<[string, StoredItem[]]> {
     return Object.entries(groups).sort(([aId], [bId]) => {
         if (aId === UNASSIGNED_GROUP_KEY) return bId === UNASSIGNED_GROUP_KEY ? 0 : 1;
         if (bId === UNASSIGNED_GROUP_KEY) return -1;
-        return (personMap[aId] ?? 'Unknown').localeCompare(personMap[bId] ?? 'Unknown', undefined, { sensitivity: 'base' });
+        return resolvePersonName(personMap, aId).localeCompare(resolvePersonName(personMap, bId), undefined, { sensitivity: 'base' });
     });
 }

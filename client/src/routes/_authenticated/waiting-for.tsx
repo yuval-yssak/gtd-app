@@ -28,7 +28,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
-import { groupByWaitingForPerson, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../../lib/waitingForGroups';
+import { groupByWaitingForPerson, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../../lib/waitingForGroups';
 import { parseWaitingForSearch } from '../../lib/waitingForUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-waiting-for.module.css';
@@ -108,6 +108,15 @@ function WaitingForPage() {
                                                 <RoutineIndicator
                                                     routineId={item.routineId}
                                                     routineTitle={routines.find((r) => r._id === item.routineId)?.title}
+                                                />
+                                            )}
+                                            {/* By-date view flattens the person groups, so surface who's owed on each row. */}
+                                            {sortBy === 'date' && item.waitingForPersonId && (
+                                                <Chip
+                                                    size="small"
+                                                    variant="outlined"
+                                                    label={resolvePersonName(personMap, item.waitingForPersonId)}
+                                                    data-testid="waitingForPersonChip"
                                                 />
                                             )}
                                             <AccountChip userId={item.userId} />
@@ -210,7 +219,7 @@ function WaitingForPage() {
                                   mb: 1,
                               }}
                           >
-                              {personId === UNASSIGNED_GROUP_KEY ? 'Unassigned' : (personMap[personId] ?? 'Unknown')}
+                              {personId === UNASSIGNED_GROUP_KEY ? 'Unassigned' : resolvePersonName(personMap, personId)}
                           </Typography>
                           {renderItemList(groupItems)}
                       </Box>
