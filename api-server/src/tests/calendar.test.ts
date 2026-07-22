@@ -4991,10 +4991,9 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
     });
 
     // Backfilling `calendarRebasedEventId` onto a pre-rollout successor (what the heal pass does for the
-    // existing chain) makes it converge exactly like a natively-onboarded one — proving the backfill is
-    // the supported remediation for legacy data. (An un-backfilled legacy successor does NOT converge on
-    // its own: phase 1 caps it, phase 2's `existing?.active` fallback then mints a fresh routine — hence
-    // the chain must be backfilled, not left to self-heal.)
+    // existing chain) makes it converge exactly like a natively-onboarded one. (An un-backfilled legacy
+    // successor now ALSO self-heals — phase 2's active-series fallback re-keys it in place, see the
+    // dedicated test below — but the heal-pass backfill remains the supported bulk remediation.)
     it('a backfilled calendarRebasedEventId makes a legacy successor converge', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -5408,6 +5407,244 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         expect(successor?.active).toBe(true);
     });
 
+    // Regression (staging sync jam, 2026-07-19): a series split a SECOND time reports an open `_R` master
+    // whose anchor differs from the successor routine's stored `calendarRebasedEventId`. The rebased-id
+    // lookup misses; the old `existing?.active` fallback was dead code (findExistingRoutineForEvent's
+    // base-only preference always returned the capped base) → phase 2 inserted a colliding twin →
+    // E11000 → recovery picked the base and reactivated it into a SECOND E11000 → the whole sync died
+    // every retry, blocking unrelated cancellation tombstones for days. The fix resolves the ACTIVE
+    // routine on the bare id, updates it, and re-keys its rebased id to the new anchor.
+    it('a re-split with a new _R anchor re-keys the existing successor instead of wedging the sync', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareId = 'resplit-master';
+        const staleRebasedId = `${bareId}_R20260608T074500`;
+        const newRebasedId = `${bareId}_R20260721T074500`;
+        // Construct tomorrow at 09:00 in the sync config's timezone (Asia/Jerusalem) so extractLocalTime
+        // round-trips to makeRoutine's timeOfDay "09:00" — see the convergence tests above.
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-base-rs',
+                active: false,
+                rrule: 'FREQ=WEEKLY;BYDAY=TH;UNTIL=20260720T205959Z',
+                calendarEventId: bareId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+            }),
+        );
+        // Live successor from the FIRST split — keyed on the now-stale anchor.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-successor-rs',
+                active: true,
+                rrule: 'FREQ=WEEKLY;BYDAY=TH',
+                calendarEventId: bareId,
+                calendarRebasedEventId: staleRebasedId,
+                splitFromRoutineId: 'routine-base-rs',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+            }),
+        );
+
+        // GCal reports the capped base + the SECOND split's open successor (new anchor).
+        const splitBatch = {
+            events: [
+                {
+                    id: bareId,
+                    title: 'Upcoming POCs',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed' as const,
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TH;UNTIL=20260720T205959Z'],
+                },
+                {
+                    id: newRebasedId,
+                    title: 'Upcoming POCs',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed' as const,
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TH'],
+                },
+            ],
+            nextSyncToken: 'tok-resplit',
+        };
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue(splitBatch);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue(splitBatch);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents').mockResolvedValue({ resourceId: 'res-1', expiration: dayjs().add(7, 'day').toISOString() });
+
+        for (let cycle = 0; cycle < 2; cycle++) {
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+        }
+
+        const routines = await routinesDAO.findArray({ user: userId, calendarEventId: bareId });
+        // No colliding twin minted — still exactly base + successor.
+        expect(routines.map((r) => r._id).sort()).toEqual(['routine-base-rs', 'routine-successor-rs']);
+        const successor = routines.find((r) => r._id === 'routine-successor-rs');
+        if (!successor) throw new Error('expected the successor to survive');
+        expect(successor.active).toBe(true);
+        expect(successor.rrule).not.toContain('UNTIL=');
+        // Re-keyed onto the new anchor, so the next sync resolves it via findSplitSuccessorByRebasedId.
+        expect(successor.calendarRebasedEventId).toBe(newRebasedId);
+        expect(routines.find((r) => r._id === 'routine-base-rs')?.active).toBe(false);
+    });
+
+    // Regression: a LEGACY successor (pre-rebased-id rollout, no calendarRebasedEventId) used to be
+    // unreachable in phase 2 — the base-only preference in findExistingRoutineForEvent made the old
+    // `existing?.active` fallback dead code, so a re-reported split minted a colliding twin (E11000).
+    // The active-series fallback now updates it in place AND backfills the rebased id.
+    it('an un-backfilled legacy successor self-heals: updated in place and re-keyed', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const bareId = 'legacy-successor-master';
+        const rebasedId = `${bareId}_R20260604T060000Z`;
+        const tomorrowAt9 = dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
+
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-base-lg',
+                active: false,
+                rrule: 'FREQ=WEEKLY;BYDAY=TH;UNTIL=20260603T205959Z',
+                calendarEventId: bareId,
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+            }),
+        );
+        // Legacy successor: NO calendarRebasedEventId.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-successor-lg',
+                active: true,
+                rrule: 'FREQ=WEEKLY;BYDAY=TH',
+                calendarEventId: bareId,
+                splitFromRoutineId: 'routine-base-lg',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+            }),
+        );
+
+        const splitBatch = {
+            events: [
+                {
+                    id: bareId,
+                    title: 'Upcoming POCs',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed' as const,
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TH;UNTIL=20260603T205959Z'],
+                },
+                {
+                    id: rebasedId,
+                    title: 'Upcoming POCs',
+                    timeStart: tomorrowAt9,
+                    timeEnd: dayjs(tomorrowAt9).add(30, 'minute').toISOString(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed' as const,
+                    recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TH'],
+                },
+            ],
+            nextSyncToken: 'tok-legacy-heal',
+        };
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue(splitBatch);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue(splitBatch);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents').mockResolvedValue({ resourceId: 'res-1', expiration: dayjs().add(7, 'day').toISOString() });
+
+        for (let cycle = 0; cycle < 2; cycle++) {
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+        }
+
+        const routines = await routinesDAO.findArray({ user: userId, calendarEventId: bareId });
+        expect(routines.map((r) => r._id).sort()).toEqual(['routine-base-lg', 'routine-successor-lg']);
+        const successor = routines.find((r) => r._id === 'routine-successor-lg');
+        if (!successor) throw new Error('expected the successor to survive');
+        expect(successor.active).toBe(true);
+        // Backfilled in place — the legacy row is now keyed like a natively-onboarded successor.
+        expect(successor.calendarRebasedEventId).toBe(rebasedId);
+    });
+
+    // Fault-isolation regression: one broken recurring series must not abort the whole sync. This
+    // mirrors the real incident — the routine-import crash ran BEFORE plain-event upserts, so a
+    // cancellation tombstone for an unrelated item was never applied and the item stayed live for days.
+    it('a failing recurring-series import does not block cancellation tombstones for other items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'item-blocked-tombstone',
+            user: userId,
+            status: 'calendar',
+            title: 'Cancelled on GCal during the jam',
+            timeStart: now,
+            timeEnd: now,
+            calendarEventId: 'evt-blocked-tombstone',
+            calendarIntegrationId: 'int-1',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        // The recurring master's routine insert blows up (any per-series failure — E11000, provider
+        // hiccup). The batch also carries the unrelated cancelled tombstone.
+        const insertSpy = vi.spyOn(routinesDAO, 'insertOne').mockImplementation(async (routine) => {
+            throw new Error(`simulated per-series failure for ${routine.calendarEventId}`);
+        });
+        try {
+            vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+                events: [
+                    {
+                        id: 'boom-series',
+                        title: 'Broken series',
+                        timeStart: now,
+                        timeEnd: dayjs(now).add(30, 'minute').toISOString(),
+                        updated: now,
+                        status: 'confirmed' as const,
+                        recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=TH'],
+                    },
+                    {
+                        id: 'evt-blocked-tombstone',
+                        title: 'Cancelled on GCal during the jam',
+                        timeStart: now,
+                        timeEnd: now,
+                        updated: now,
+                        status: 'cancelled' as const,
+                    },
+                ],
+                nextSyncToken: 'tok-isolated',
+            });
+            vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+            vi.spyOn(GoogleCalendarProvider.prototype, 'watchEvents').mockResolvedValue({
+                resourceId: 'res-1',
+                expiration: dayjs().add(7, 'day').toISOString(),
+            });
+
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+        } finally {
+            insertSpy.mockRestore();
+        }
+
+        // The tombstone landed despite the broken series.
+        const item = await itemsDAO.findOne({ _id: 'item-blocked-tombstone' });
+        expect(item?.status).toBe('trash');
+        expect(item?.cancelledByGCal).toBe(true);
+        // And the broken series was skipped, not half-imported.
+        const boomRoutines = await routinesDAO.findArray({ user: userId, calendarEventId: 'boom-series' });
+        expect(boomRoutines).toHaveLength(0);
+    });
+
     // Fix A regression: when duplicate routines linger on the same (user, calendarEventId, integration)
     // triple, an inbound master update must resolve to the LIVE routine — never a dead duplicate. Pre-fix,
     // findExistingRoutineForEvent returned the first arbitrary match, so the update could land on a
@@ -5665,8 +5902,10 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
     });
 
     // Fix B2 safety: a NON-duplicate error from the routine insert must NOT be swallowed by the E11000
-    // catch — it has to propagate so a real failure surfaces instead of silently dropping the routine.
-    it('createRoutineFromGCal re-throws a non-duplicate insert error (does not swallow real failures)', async () => {
+    // catch — createRoutineFromGCal re-throws it, so the series is skipped cleanly (no half-import, no
+    // silent "recovered" update). Since the per-series isolation wrapper, the throw no longer fails the
+    // whole sync (pre-isolation this test asserted a 502): it is logged and the sync completes.
+    it('createRoutineFromGCal re-throws a non-duplicate insert error — series skipped, sync completes', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await insertIntegrationWithConfig(userId);
@@ -5696,10 +5935,16 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         });
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
 
-        // The non-duplicate error escapes createRoutineFromGCal and is caught by the route's outer
-        // handler as a sync failure (502) — proving it was NOT swallowed by the E11000-only catch.
+        // The non-duplicate error escapes createRoutineFromGCal (NOT swallowed by the E11000-only
+        // catch — no bogus "recovered" update ran) and is contained by the per-series isolation
+        // wrapper: logged, series skipped, sync completes.
+        const errorSpy = vi.spyOn(console, 'error');
         const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
-        expect(res.status).toBe(502);
+        expect(res.status).toBe(200);
+        expect(errorSpy.mock.calls.some((call) => String(call[0]).includes('recurring-master import failed'))).toBe(true);
+        // Nothing half-imported for the failed series.
+        const failedSeriesRoutines = await routinesDAO.findArray({ user: userId, calendarEventId: 'non-dup-error-event' });
+        expect(failedSeriesRoutines).toHaveLength(0);
     });
 
     it('importCalendarEvents normalizes a suffixed recurringEventId on an instance so it is filtered as a series instance (not upserted as a standalone item)', async () => {
