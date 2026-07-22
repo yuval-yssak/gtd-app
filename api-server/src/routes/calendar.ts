@@ -2452,7 +2452,8 @@ async function importRecurringEventAsRoutine(
         // restore (relink + reactivate) before concluding the successor is new.
         const successor =
             (await findSplitSuccessorByRebasedId(rawEvent.id, source, ctx)) ??
-            (await tryRestoreSplitSuccessorFromMarkers(rawEvent.id, event, rrule, source, ctx));
+            (await tryRestoreSplitSuccessorFromMarkers(rawEvent.id, event, rrule, source, ctx)) ??
+            (await reanchorResplitSuccessor(rawEvent.id, event, source, ctx));
         if (successor) {
             console.log(
                 `[gcal-sync] updating split-successor routine (rebased-id match) | rebasedId=${rawEvent.id} routineId=${successor._id} active=${successor.active}`,
@@ -2499,6 +2500,61 @@ async function findSplitSuccessorByRebasedId(rebasedEventId: string, source: Cal
         calendarIntegrationId: source.integration._id,
     });
     return hasAtLeastOne(matches) ? pickMostRecentlyUpdated(matches) : undefined;
+}
+
+/**
+ * Find the routine currently holding the active slot of `uniq_active_routine_per_gcal_series` for a
+ * bare series id — the one an insert/activation on that key collides with. Unlike
+ * `findExistingRoutineForEvent`, this deliberately does NOT hide split successors: after a split the
+ * active holder IS the successor, and E11000 recovery must update it, not the inactive base.
+ */
+async function findActiveRoutineOnSeries(bareEventId: string, source: CalendarSource, ctx: SyncContext): Promise<RoutineInterface | undefined> {
+    const matches = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarEventId: bareEventId,
+        calendarIntegrationId: source.integration._id,
+        active: true,
+    });
+    return hasAtLeastOne(matches) ? pickMostRecentlyUpdated(matches) : undefined;
+}
+
+/**
+ * Re-split handling ("this and all following" applied AGAIN to an already-split series): the new open
+ * tail arrives with a NEW `_R<anchor>` suffix, so neither the stored `calendarRebasedEventId` (previous
+ * anchor) nor the disconnect markers match — yet the still-live successor on the same bare id IS the
+ * same logical series. Re-anchor that successor to the incoming raw id and hand it back as the update
+ * target. Without this, the caller falls through to create and collides with the old successor on
+ * `uniq_active_routine_per_gcal_series` (E11000), aborting the whole sync. Prefers the active successor
+ * (the one actually holding the unique slot); falls back to the most recently updated capped one (a
+ * same-batch base import may have wrongly capped it — the caller's `newlyLosesUntil` gate reactivates).
+ */
+async function reanchorResplitSuccessor(
+    rebasedEventId: string,
+    event: GCalEvent,
+    source: CalendarSource,
+    ctx: SyncContext,
+): Promise<RoutineInterface | undefined> {
+    const successors = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarEventId: event.id,
+        calendarIntegrationId: source.integration._id,
+        calendarRebasedEventId: { $exists: true, $ne: rebasedEventId },
+    });
+    if (!hasAtLeastOne(successors)) {
+        return undefined;
+    }
+    const live = successors.filter((routine) => routine.active);
+    const target = pickMostRecentlyUpdated(hasAtLeastOne(live) ? live : successors);
+    await routinesDAO.updateOne({ _id: target._id, user: ctx.userId }, { $set: { calendarRebasedEventId: rebasedEventId, updatedTs: ctx.now } });
+    const reanchored = await routinesDAO.findByOwnerAndId(target._id, ctx.userId);
+    if (!reanchored) {
+        return undefined;
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: target._id, snapshot: reanchored, opType: 'update', now: ctx.now }));
+    console.log(
+        `[gcal-sync] re-anchored split successor to new rebased id | routineId=${target._id} oldRebasedId=${target.calendarRebasedEventId} newRebasedId=${rebasedEventId}`,
+    );
+    return reanchored;
 }
 
 /**
@@ -2928,7 +2984,12 @@ async function createRoutineFromGCal(
         // created the live routine makes us the race loser — re-resolve and update that one instead of
         // duplicating. Mirrors the item-side race-loser pattern in createItemForOrphanedException.
         if (isDuplicateKeyError(err)) {
-            const existing = await findExistingRoutineForEvent(event, rrule, source, ctx);
+            // Resolve the routine we actually collided with: the ACTIVE holder of the unique slot.
+            // `findExistingRoutineForEvent` prefers the (inactive) base and hides split successors, so
+            // re-resolving through it alone would target the wrong routine — and updating the base with
+            // an open tail rrule would reactivate it into a SECOND E11000 while the successor still
+            // holds the slot, aborting the whole sync (the staging re-split incident).
+            const existing = (await findActiveRoutineOnSeries(event.id, source, ctx)) ?? (await findExistingRoutineForEvent(event, rrule, source, ctx));
             if (existing) {
                 console.warn(`[gcal-sync] createRoutineFromGCal raced E11000 — updating existing routine | eventId=${event.id} routineId=${existing._id}`);
                 await updateRoutineFromGCal(existing, event, rrule, source, ctx);
@@ -3024,7 +3085,12 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     // invisible forever even after GCal re-extends the series. Only fires when the local routine was
     // capped (had UNTIL) and is currently inactive — a user-paused routine on a still-uncapped series
     // is untouched.
-    const newlyLosesUntil = structurallyNewer && existing.rrule.includes('UNTIL=') && !rrule.includes('UNTIL=') && !existing.active;
+    const seriesUncapped = structurallyNewer && existing.rrule.includes('UNTIL=') && !rrule.includes('UNTIL=') && !existing.active;
+    // Never reactivate into an occupied active slot: when another routine (typically a split successor)
+    // already holds the `uniq_active_routine_per_gcal_series` slot for this series, flipping this one
+    // active would E11000 on the replace below and abort the whole sync — the exact failure that jammed
+    // staging on a re-split series. The active holder IS the live series; this routine stays paused.
+    const newlyLosesUntil = seriesUncapped && !(await isActiveSlotTakenByAnother(existing, ctx));
 
     // Re-fetch: routineExceptions may have been written by syncRoutineExceptions earlier in the same
     // sync cycle, and the `existing` snapshot we were passed predates that write. Using the stale
@@ -3070,9 +3136,10 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     // rewritten with an identical snapshot (only `updatedTs` differs) and a redundant `update` op was
     // emitted each sync — bloating the op log and spamming web push. Skip only the routine-entity
     // write when nothing but `updatedTs` changed; item-side propagation below has its own guards.
-    if (stableStringify({ ...updated, updatedTs: '' }) !== stableStringify({ ...fresh, updatedTs: '' })) {
-        await routinesDAO.replaceById(routineId, updated);
-        ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
+    const hasEntityDelta = stableStringify({ ...updated, updatedTs: '' }) !== stableStringify({ ...fresh, updatedTs: '' });
+    const persisted = hasEntityDelta ? await replaceRoutineGuardingActiveSlot(routineId, updated, fresh) : updated;
+    if (hasEntityDelta) {
+        ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: persisted, opType: 'update', now: ctx.now }));
     }
 
     // When GCal adds UNTIL (series split via "this and all following"), trash items past the UNTIL date.
@@ -3097,13 +3164,55 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
     // near-term instance window when fetching exceptions, so relying on `syncRoutineExceptions`
     // alone leaves far-future items stuck on the old schedule/title.
     if (structurallyNewer) {
-        await propagateMasterScheduleChanges(existing, updated, source, ctx);
+        await propagateMasterScheduleChanges(existing, persisted, source, ctx);
     }
     // GCal-owned master changes (attendee added/removed, organizer changed, eventType flipped) must
     // reach existing items too, independent of schedule/title propagation. Items that already carry
     // a per-instance routine exception (override) keep their per-key override values.
     if (gcalOwnedDelta) {
-        await propagateMasterGCalOwnedChangesToItems(updated, ctx);
+        await propagateMasterGCalOwnedChangesToItems(persisted, ctx);
+    }
+}
+
+/**
+ * True when a DIFFERENT routine of the same user already holds the active slot of
+ * `uniq_active_routine_per_gcal_series` for this routine's series key. Used to veto a reactivation
+ * that would collide with a live split successor.
+ */
+async function isActiveSlotTakenByAnother(routine: RoutineInterface, ctx: SyncContext): Promise<boolean> {
+    if (!routine.calendarEventId || !routine.calendarIntegrationId) {
+        return false;
+    }
+    const holders = await routinesDAO.findArray({
+        user: ctx.userId,
+        calendarEventId: routine.calendarEventId,
+        calendarIntegrationId: routine.calendarIntegrationId,
+        active: true,
+        _id: { $ne: routine._id },
+    });
+    return hasAtLeastOne(holders);
+}
+
+/**
+ * `replaceById` wrapper that survives an activation race on `uniq_active_routine_per_gcal_series`:
+ * a write flipping `active: true` can still collide when a concurrent sync activated another routine
+ * on the same series between the slot check and this write. A duplicate-key abort here used to kill
+ * the WHOLE sync — and, because the sync token never advances on failure, every retry died at the
+ * same spot. Instead, retry once keeping the routine inactive (the slot holder is the live series);
+ * any other error, or an E11000 not caused by our activation, still propagates.
+ */
+async function replaceRoutineGuardingActiveSlot(routineId: string, updated: RoutineInterface, fresh: RoutineInterface): Promise<RoutineInterface> {
+    try {
+        await routinesDAO.replaceById(routineId, updated);
+        return updated;
+    } catch (err) {
+        if (!isDuplicateKeyError(err) || !updated.active || fresh.active) {
+            throw err;
+        }
+        console.warn(`[gcal-sync] routine reactivation raced E11000 — keeping it inactive | routineId=${routineId}`);
+        const keptInactive: RoutineInterface = { ...updated, active: false };
+        await routinesDAO.replaceById(routineId, keptInactive);
+        return keptInactive;
     }
 }
 
