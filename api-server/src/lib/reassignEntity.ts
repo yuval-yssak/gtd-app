@@ -20,6 +20,9 @@ import {
 import { applyAndPublishOperation, OperationValidationError } from './applyOperation.js';
 import { ensureTimeZone } from './calendarPushback.js';
 import { markdownToHtml } from './markdownHtml.js';
+import { notifyChanges } from './notifyChange.js';
+import { ensureFirstRoutineItem } from './routineItemGeneration.js';
+import { regenerateFutureRoutineItems } from './routineItemRegeneration.js';
 
 /** Optional GCal target — REQUIRED when reassigning a calendar-linked item across accounts. */
 export interface TargetCalendar {
@@ -491,9 +494,9 @@ async function persistItemMove(item: ItemInterface, params: ReassignParams): Pro
  *     (recoverable, not falsely marked done) — see `trashGeneratedCalendarItems`.
  *   - the routine's GCal recurring master event is hard-deleted from the source account.
  * Target-side: Bob receives the routine itself with calendar-link fields stripped (so he doesn't
- * push to Alice's GCal) and starts generating fresh from his side. He does NOT inherit Alice's
- * historical generated items — those are intentionally left as trash on the source side, and the
- * routine generator will produce new instances under Bob from the next tick onward.
+ * push to Alice's GCal) and his item stream is seeded immediately by `seedTargetRoutineItems`
+ * (first nextAction item / calendar horizon fill). He does NOT inherit Alice's historical
+ * generated items — those are intentionally left as trash on the source side.
  *
  * `_buildProvider` is reserved for a future GCal master-series re-link.
  */
@@ -506,7 +509,11 @@ async function reassignRoutine(params: ReassignParams, _buildProvider: ReassignP
     // reflects what was actually trashed (`trashGeneratedCalendarItems` only touches
     // status='calendar' rows — done/trash rows are left as-is, by matrix design).
     const cascadedCount = (await itemsDAO.findArray({ user: params.fromUserId, routineId: params.entityId, status: 'calendar' })).length;
-    await persistRoutineMove(routine, params);
+    const movedRoutine = await persistRoutineMove(routine, params);
+    // Seed the new owner's item stream immediately — no client tick covers this: the SSE-driven
+    // per-user pull never runs the nextAction materialize backstop, and calendar routines have no
+    // backstop at all, so without this the moved routine sits itemless on the target indefinitely.
+    await seedTargetRoutineItems(movedRoutine, params);
     console.log(
         `[reassign] cascaded routine source-cleanup | routineId=${params.entityId} fromUserId=${params.fromUserId} toUserId=${params.toUserId} cascadedItems=${cascadedCount} gcalEventId=${routine.calendarEventId ?? '(none)'}`,
     );
@@ -519,7 +526,7 @@ async function reassignRoutine(params: ReassignParams, _buildProvider: ReassignP
  * re-link manually if desired. Step 5's GCal move only covers single calendar items;
  * recurring-event re-linking is deferred.
  */
-async function persistRoutineMove(routine: RoutineInterface, params: ReassignParams): Promise<void> {
+async function persistRoutineMove(routine: RoutineInterface, params: ReassignParams): Promise<RoutineInterface> {
     // Destructure to drop the keys entirely (rather than assigning undefined) to keep
     // exactOptionalPropertyTypes happy.
     const { calendarEventId: _ce, calendarIntegrationId: _ci, calendarSyncConfigId: _cs, ...routineWithoutCalLinks } = routine;
@@ -548,6 +555,34 @@ async function persistRoutineMove(routine: RoutineInterface, params: ReassignPar
         { entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot, opType: 'create' },
         { deviceId: ctx.deviceId, now: ctx.now, strict: true },
     );
+    return newSnapshot;
+}
+
+/**
+ * Materialize the moved routine's items under the new owner. Runs after the move committed, so
+ * failures must never surface as a reassign error — `ensureFirstRoutineItem` swallows its own
+ * errors, and the calendar leg is wrapped here to match that contract.
+ *
+ * nextAction: same first-item bootstrap as POST /v1/routines.
+ * calendar: idempotent horizon fill via `regenerateFutureRoutineItems`. The moved routine is never
+ * GCal-linked (persistRoutineMove strips the link fields), so no timeZone is needed and the regen
+ * ops carry no instance ids; `suppressGCalPushback` mirrors the edit-propagation path — the fresh
+ * items must not push events onto the target's GCal.
+ */
+async function seedTargetRoutineItems(routine: RoutineInterface, params: ReassignParams): Promise<void> {
+    const ctx = { userId: params.toUserId, deviceId: params.deviceId ?? 'server' };
+    if (routine.routineType === 'nextAction') {
+        await ensureFirstRoutineItem(ctx, routine);
+        return;
+    }
+    try {
+        const ops = await regenerateFutureRoutineItems(routine, params.toUserId, dayjs().toISOString());
+        if (ops.length > 0) {
+            await notifyChanges(ops, { suppressGCalPushback: true });
+        }
+    } catch (err) {
+        console.error('[reassign] failed to seed calendar items for moved routine; move stands', { routineId: routine._id, err });
+    }
 }
 
 /**

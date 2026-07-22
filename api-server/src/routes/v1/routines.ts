@@ -207,7 +207,7 @@ export const v1RoutinesRoutes = new Hono<{ Variables: BearerVariables }>()
         // on a client tick to materialize their first occurrence. No-op for calendar routines and
         // inactive routines. Errors inside `ensureFirstRoutineItem` are logged + swallowed so a
         // bad rrule or item-generation hiccup never fails the parent create.
-        await ensureFirstRoutineItem({ userId, tokenId }, snapshot);
+        await ensureFirstRoutineItem({ userId, deviceId: `api:${tokenId}` }, snapshot);
         return c.json(presentRoutine(snapshot), 201);
     })
 
@@ -312,7 +312,7 @@ export const v1RoutinesRoutes = new Hono<{ Variables: BearerVariables }>()
         // tick to do it. nextAction: 3-way merge + schedule recompute on the open item; calendar:
         // delta regen / in-place content refresh. Errors are logged + swallowed inside; the
         // returned routine reflects a possible exhausted-schedule deactivation.
-        const finalRoutine = await propagateRoutineEditToItems({ userId, tokenId }, existing, snapshot);
+        const finalRoutine = await propagateRoutineEditToItems({ userId, deviceId: `api:${tokenId}` }, existing, snapshot);
         return c.json(presentRoutine(finalRoutine));
     })
 

@@ -88,6 +88,16 @@ async function fetchServerItem(entityId: string): Promise<ServerItem | null> {
     return body.doc;
 }
 
+/** Server-generated items (routine seeding) have ids the test can't know — filter by owner + routine + status. */
+async function fetchServerItemForRoutine(userId: string, routineId: string, status: string): Promise<(ServerItem & { status: string }) | null> {
+    const res = await fetch(`${DEV_FIND_ENTITY_URL}?collection=items&user=${userId}&routineId=${routineId}&status=${status}`);
+    if (!res.ok) {
+        return null;
+    }
+    const body = (await res.json()) as { doc: (ServerItem & { status: string }) | null };
+    return body.doc;
+}
+
 test.describe('RoutineDialog cross-account reassign — atomic edit + move', () => {
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
@@ -157,6 +167,63 @@ test.describe('RoutineDialog cross-account reassign — atomic edit + move', () 
             await expect.poll(async () => (await fetchServerRoutine(routineId))?.user, { timeout: 5_000 }).toBe(secondary.userId);
             const moved = await fetchServerRoutine(routineId);
             expect(moved?.active).toBe(true);
+        });
+    });
+
+    test('moved nextAction routine seeds its first item under the target account', async ({ browser }) => {
+        const stamp = dayjs().valueOf();
+        const emailA = `routine-seed-a-${stamp}@example.com`;
+        const emailB = `routine-seed-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
+        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
+            const routineId = await seedRoutineOnServer(active.userId, { title: 'Daily check', rrule: 'FREQ=DAILY' });
+            await page.goto(INBOX_URL);
+
+            const result = await gtd.reassign(page, {
+                entityType: 'routine',
+                entityId: routineId,
+                fromUserId: active.userId,
+                toUserId: secondary.userId,
+            });
+            expect(result.ok).toBe(true);
+
+            // The reassign must seed the first nextAction occurrence server-side — the SSE pull
+            // path never runs the client materialize backstop, so without seeding the routine
+            // would sit itemless on the target until an app reload.
+            await expect
+                .poll(async () => (await fetchServerItemForRoutine(secondary.userId, routineId, 'nextAction'))?.user, { timeout: 5_000 })
+                .toBe(secondary.userId);
+        });
+    });
+
+    test('moved calendar routine seeds horizon items under the target account', async ({ browser }) => {
+        const stamp = dayjs().valueOf();
+        const emailA = `routine-calseed-a-${stamp}@example.com`;
+        const emailB = `routine-calseed-b-${stamp}@example.com`;
+        await resetServerForEmails([emailA, emailB]);
+        await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
+            const routineId = await seedRoutineOnServer(active.userId, {
+                title: 'Morning swim',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                calendarItemTemplate: { timeOfDay: '07:30', duration: 45 },
+            });
+            await page.goto(INBOX_URL);
+
+            const result = await gtd.reassign(page, {
+                entityType: 'routine',
+                entityId: routineId,
+                fromUserId: active.userId,
+                toUserId: secondary.userId,
+            });
+            expect(result.ok).toBe(true);
+
+            // Calendar routines have no client-side generation backstop at all — the server-side
+            // horizon fill on reassign is the only thing standing between the target and an
+            // items-less routine.
+            await expect
+                .poll(async () => (await fetchServerItemForRoutine(secondary.userId, routineId, 'calendar'))?.user, { timeout: 5_000 })
+                .toBe(secondary.userId);
         });
     });
 });

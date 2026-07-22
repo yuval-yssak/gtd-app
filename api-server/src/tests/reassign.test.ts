@@ -2,6 +2,7 @@
 import { createHmac } from 'node:crypto';
 import { generateId } from 'better-auth';
 import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SESSION_COOKIE_NAME } from '../auth/constants.js';
@@ -16,6 +17,8 @@ import * as buildCalendarProviderModule from '../lib/buildCalendarProvider.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
 import type { ItemInterface, PersonInterface, RoutineInterface, WorkContextInterface } from '../types/entities.js';
+
+dayjs.extend(utc);
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/sync', syncRoutes);
 
@@ -346,6 +349,71 @@ describe('POST /sync/reassign', () => {
             // Bob inherits NO historical generated items — the routine starts fresh on his side.
             expect(await itemsDAO.findByOwnerAndId(item1._id!, bob.userId)).toBeNull();
             expect(await itemsDAO.findByOwnerAndId(item2._id!, bob.userId)).toBeNull();
+        });
+
+        it('seeds the first nextAction item for the new owner — the moved routine must not sit itemless', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const routine = makeRoutine(alice.userId, { rrule: 'FREQ=DAILY' });
+            await routinesDAO.insertOne(routine);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'routine', entityId: routine._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobItems = await itemsDAO.findArray({ user: bob.userId, routineId: routine._id, status: 'nextAction' });
+            expect(bobItems).toHaveLength(1);
+            const [seeded] = bobItems;
+            if (!seeded) throw new Error('expected one seeded nextAction item');
+            expect(seeded.title).toBe(routine.title);
+            // Routine-generated items are ticklered until their due date; daily rrule lands today.
+            expect(seeded.expectedBy).toBe(dayjs.utc().format('YYYY-MM-DD'));
+            expect(seeded.ignoreBefore).toBe(seeded.expectedBy);
+            // The seed op must be recorded on Bob's op log so his devices pull the item.
+            const seededOps = await operationsDAO.findArray({ user: bob.userId, entityType: 'item', entityId: seeded._id });
+            expect(seededOps).toHaveLength(1);
+            const [seedOp] = seededOps;
+            if (!seedOp) throw new Error('expected one seed op');
+            // The in-app /sync/reassign path stamps 'server' (not api:<tokenId>) — the exact
+            // behavior the deviceId-context refactor exists to preserve.
+            expect(seedOp.deviceId).toBe('server');
+        });
+
+        it('seeds calendar items to the horizon for the new owner of a calendar routine', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const routine = makeRoutine(alice.userId, {
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                calendarItemTemplate: { timeOfDay: '10:00', duration: 60 },
+            });
+            await routinesDAO.insertOne(routine);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'routine', entityId: routine._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const bobItems = await itemsDAO.findArray({ user: bob.userId, routineId: routine._id, status: 'calendar' });
+            expect(bobItems.length).toBeGreaterThan(0);
+            for (const item of bobItems) {
+                expect(item.timeStart).toMatch(/T10:00:00$/);
+                // The moved routine is never GCal-linked, so seeded items carry no link fields.
+                expect(item.calendarInstanceEventId).toBeUndefined();
+                expect(item.calendarIntegrationId).toBeUndefined();
+            }
+        });
+
+        it('does not seed items for an inactive moved routine', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const routine = makeRoutine(alice.userId, { rrule: 'FREQ=DAILY', active: false });
+            await routinesDAO.insertOne(routine);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'routine', entityId: routine._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            expect(await itemsDAO.findArray({ user: bob.userId, routineId: routine._id })).toHaveLength(0);
         });
     });
 

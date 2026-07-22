@@ -423,7 +423,7 @@ async function maybeAdvanceRoutineForItem(item: ItemInterface, ctx: { userId: st
     if (!routine || !routine.active) {
         return;
     }
-    await advanceRoutineAfterDisposal({ userId: ctx.userId, tokenId: ctx.tokenId }, routine, dayjs().toDate());
+    await advanceRoutineAfterDisposal({ userId: ctx.userId, deviceId: `api:${ctx.tokenId}` }, routine, dayjs().toDate());
 }
 
 interface TrashContext {

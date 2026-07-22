@@ -361,16 +361,22 @@ export const devLoginRoutes = new Hono()
 
     // GET /dev/reassign/find-entity?collection=items&entityId=... — read a single entity by _id
     // for e2e assertions that need to verify server-side state without poking MongoDB directly.
+    // Alternatively filter by user / routineId / status (any combination) for assertions where the
+    // server generated the entity and the test doesn't know its id (e.g. routine-seeded items).
     .get('/reassign/find-entity', async (c) => {
         const collection = c.req.query('collection');
-        const entityId = c.req.query('entityId');
-        if (!collection || !entityId) {
-            return c.json({ error: 'collection and entityId required' }, 400);
+        const filter = Object.fromEntries(
+            (['entityId', 'user', 'routineId', 'status'] as const)
+                .map((key) => [key === 'entityId' ? '_id' : key, c.req.query(key)])
+                .filter(([, value]) => value !== undefined),
+        );
+        if (!collection || Object.keys(filter).length === 0) {
+            return c.json({ error: 'collection and at least one of entityId/user/routineId/status required' }, 400);
         }
         if (!['items', 'routines', 'people', 'workContexts'].includes(collection)) {
             return c.json({ error: 'disallowed collection' }, 400);
         }
-        const doc = await db.collection(collection).findOne({ _id: entityId } as never);
+        const doc = await db.collection(collection).findOne(filter as never);
         return c.json({ doc });
     })
 
