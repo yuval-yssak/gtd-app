@@ -2273,7 +2273,7 @@ async function importRecurringMastersOrdered(
     const phaseOne = masters.filter((e) => !successorIds.has(e.id));
 
     for (const event of phaseOne) {
-        await importRecurringEventAsRoutine(event, source, ctx);
+        await importRecurringMasterIsolated(event, source, ctx);
     }
     // Group successors by bare id; run each group sequentially so two successors on the same series
     // don't race their inserts. Distinct series run in parallel — safe against the unique active index
@@ -2288,10 +2288,29 @@ async function importRecurringMastersOrdered(
     await Promise.all(
         [...byBareId.values()].map(async (group) => {
             for (const event of group) {
-                await importRecurringEventAsRoutine(event, source, ctx, { forceSplitSuccessor: true });
+                await importRecurringMasterIsolated(event, source, ctx, { forceSplitSuccessor: true });
             }
         }),
     );
+}
+
+/**
+ * Per-series fault isolation: one broken recurring series must not abort the whole integration's
+ * sync. Pre-isolation, a single routine-import throw here left the syncToken stuck, so every retry
+ * replayed the same delta into the same crash — cancellation tombstones for UNRELATED items stayed
+ * unapplied for days. The failed series is logged loudly and self-heals on a later delta or full sync.
+ */
+async function importRecurringMasterIsolated(
+    event: GCalEvent,
+    source: CalendarSource,
+    ctx: SyncContext,
+    opts?: { forceSplitSuccessor?: boolean },
+): Promise<void> {
+    try {
+        await importRecurringEventAsRoutine(event, source, ctx, opts);
+    } catch (err) {
+        console.error(`[gcal-sync] recurring-master import failed — skipping series | eventId=${event.id}`, err);
+    }
 }
 
 const normalizeTitle = (t: string) => t.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -2463,11 +2482,21 @@ async function importRecurringEventAsRoutine(
             await updateRoutineFromGCal(successor, event, rrule, source, ctx);
             return;
         }
-        // Legacy fallback (pre-rebased-id routines): an already-active routine on the bare id IS the
-        // successor → update it, never the inactive parent. `findExistingRoutineForEvent` prefers active.
-        if (existing?.active) {
-            console.log(`[gcal-sync] updating split-successor routine | eventId=${event.id} title=${event.title} routineId=${existing._id}`);
-            await updateRoutineFromGCal(existing, event, rrule, source, ctx);
+        // The rebased-id lookups miss when the successor predates the rebased-id rollout OR the series
+        // was split AGAIN (GCal mints a NEW `_R<anchor>` per split, so the stored key goes stale). In
+        // both cases the ACTIVE routine on the bare id IS the live successor — the active-partial unique
+        // index guarantees at most one. Update it and re-key it onto the current raw id instead of
+        // inserting a colliding twin. (Checking `existing?.active` here is NOT equivalent:
+        // `findExistingRoutineForEvent` prefers the capped BASE whenever a rebased-keyed successor
+        // exists, so that check is false exactly when the stale-anchor collision happens — the E11000
+        // that wedged whole-integration syncing and blocked unrelated cancellation tombstones for days.)
+        const activeOnSeries = await findActiveRoutineOnSeries(event.id, source, ctx);
+        if (activeOnSeries) {
+            console.log(
+                `[gcal-sync] updating split-successor routine (active-series match) | rebasedId=${rawEvent.id} routineId=${activeOnSeries._id} title=${event.title}`,
+            );
+            const rekeyed = await rekeySuccessorRebasedId(activeOnSeries, rawEvent.id, ctx);
+            await updateRoutineFromGCal(rekeyed, event, rrule, source, ctx);
             return;
         }
         const parentId = await resolveSplitParentId(event.id, source, ctx);
@@ -2499,6 +2528,41 @@ async function findSplitSuccessorByRebasedId(rebasedEventId: string, source: Cal
         calendarIntegrationId: source.integration._id,
     });
     return hasAtLeastOne(matches) ? pickMostRecentlyUpdated(matches) : undefined;
+}
+
+/**
+ * Resolve the single ACTIVE routine on a bare series id — the live successor/owner of the series.
+ * `uniq_active_routine_per_gcal_series` guarantees at most one; `pickMostRecentlyUpdated` is a
+ * defensive tiebreak only.
+ */
+async function findActiveRoutineOnSeries(bareEventId: string, source: CalendarSource, ctx: SyncContext): Promise<RoutineInterface | undefined> {
+    const matches = await routinesDAO.findArray({
+        user: ctx.userId,
+        active: true,
+        calendarEventId: bareEventId,
+        calendarIntegrationId: source.integration._id,
+    });
+    return hasAtLeastOne(matches) ? pickMostRecentlyUpdated(matches) : undefined;
+}
+
+/**
+ * Re-key a live successor routine onto the raw `_R<anchor>` id GCal currently reports, so the next
+ * sync's `findSplitSuccessorByRebasedId` finds it directly. Covers legacy successors that never got
+ * a `calendarRebasedEventId` and series split a second time (each split mints a new anchor).
+ * Targeted `$set` (not replaceById) so `routineExceptions` written earlier in the same sync cycle
+ * are preserved.
+ */
+async function rekeySuccessorRebasedId(routine: RoutineInterface, rebasedEventId: string, ctx: SyncContext): Promise<RoutineInterface> {
+    if (routine.calendarRebasedEventId === rebasedEventId) {
+        return routine;
+    }
+    await routinesDAO.updateOne({ _id: routine._id, user: ctx.userId }, { $set: { calendarRebasedEventId: rebasedEventId, updatedTs: ctx.now } });
+    const fresh = await routinesDAO.findByOwnerAndId(routine._id, ctx.userId);
+    if (!fresh) {
+        return { ...routine, calendarRebasedEventId: rebasedEventId, updatedTs: ctx.now };
+    }
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routine._id, snapshot: fresh, opType: 'update', now: ctx.now }));
+    return fresh;
 }
 
 /**
@@ -2544,7 +2608,12 @@ async function findExistingRoutineForEvent(
         // it, so the routine flip-flops every webhook fire (rrule oscillates bare↔UNTIL) and
         // propagateMasterScheduleChanges trashes+recreates all future items each sync. Prefer the
         // non-successor; fall back to the full set only when every match is a successor (no base present).
-        const baseOnly = byEventId.filter((routine) => !routine.calendarRebasedEventId);
+        // A LEGACY successor (pre-rebased-id rollout) carries no calendarRebasedEventId but does carry
+        // splitFromRoutineId when sharing the base's bare id — exclude it on that marker too, else the
+        // bare capped master caps the live legacy successor and phase 2's active-series fallback then
+        // finds no active routine and mints a twin.
+        const isSuccessorMarker = (routine: RoutineInterface) => Boolean(routine.calendarRebasedEventId ?? routine.splitFromRoutineId);
+        const baseOnly = byEventId.filter((routine) => !isSuccessorMarker(routine));
         const candidates = hasAtLeastOne(baseOnly) ? baseOnly : byEventId;
         // When duplicate routines linger on the same series, an inbound master update must land on the
         // live one — never on a paused/replaced dead duplicate. Among live routines (or, if none are
@@ -2928,10 +2997,18 @@ async function createRoutineFromGCal(
         // created the live routine makes us the race loser — re-resolve and update that one instead of
         // duplicating. Mirrors the item-side race-loser pattern in createItemForOrphanedException.
         if (isDuplicateKeyError(err)) {
-            const existing = await findExistingRoutineForEvent(event, rrule, source, ctx);
-            if (existing) {
-                console.warn(`[gcal-sync] createRoutineFromGCal raced E11000 — updating existing routine | eventId=${event.id} routineId=${existing._id}`);
-                await updateRoutineFromGCal(existing, event, rrule, source, ctx);
+            // The active-partial unique index only rejects when an ACTIVE routine already holds this
+            // series — that winner is the live routine, so resolve it directly. `findExistingRoutineForEvent`
+            // must not be the first choice: its base-only preference resolves a split pair to the capped
+            // base, and updating THAT with an open rrule reactivates it into the very same index
+            // violation — a second, uncaught E11000 that used to kill the whole sync. It remains only as
+            // a fallback for the narrow window where the winner deactivated between throw and re-resolve
+            // (reactivation is then collision-free).
+            const winner = (await findActiveRoutineOnSeries(event.id, source, ctx)) ?? (await findExistingRoutineForEvent(event, rrule, source, ctx));
+            if (winner) {
+                console.warn(`[gcal-sync] createRoutineFromGCal raced E11000 — updating existing routine | eventId=${event.id} routineId=${winner._id}`);
+                const target = opts?.rebasedEventId ? await rekeySuccessorRebasedId(winner, opts.rebasedEventId, ctx) : winner;
+                await updateRoutineFromGCal(target, event, rrule, source, ctx);
                 return;
             }
         }
