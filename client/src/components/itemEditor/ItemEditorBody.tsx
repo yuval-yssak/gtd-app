@@ -39,6 +39,7 @@ import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
+import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { offerUndo } from '../../lib/undoStore';
 import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
@@ -126,6 +127,9 @@ export interface ItemEditorActionsApi {
 export interface ItemEditorBodyProps {
     item: StoredItem;
     db: IDBPDatabase<MyDB>;
+    /** Picker option pools — scoped to the owner account internally (scopeOptionsToOwner). Callers
+     *  that can host an item whose owner account is visibility-hidden (deep-link pages) must pass
+     *  the unfiltered all* sets, or the picker degrades to already-assigned strays only. */
     people: StoredPerson[];
     workContexts: StoredWorkContext[];
     onClose: () => void;
@@ -179,7 +183,7 @@ export function ItemEditorBody({
     const { options: calendarOptions } = useCalendarOptions();
     // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
     // when this item's owner account is toggled out of view (editor reached via deep link).
-    const { loggedInAccounts, allRoutines, allItems } = useAppData();
+    const { loggedInAccounts, allRoutines, allItems, allWorkContexts, allPeople } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
     const reassignInFlight = isPending('item', item._id);
 
@@ -215,6 +219,22 @@ export function ItemEditorBody({
     );
     const [wfForm, setWfForm] = useState<WaitingForFormState>(() => itemToWaitingForForm(item));
     const [smForm, setSmForm] = useState<SomedayMaybeFormState>(() => itemToSomedayMaybeForm(item));
+
+    // Picker options scoped to the owner account (mirrors visibleCalendarOptions above): the
+    // merged multi-account sets would otherwise offer another account's identically-named
+    // contexts/people — duplicate "anywhere" chips — and allow cross-account tagging.
+    const pickerWorkContexts = useMemo(
+        () => scopeOptionsToOwner(workContexts, { ownerUserId, assignedIds: naForm.workContextIds, allOptions: allWorkContexts }),
+        [workContexts, ownerUserId, naForm.workContextIds, allWorkContexts],
+    );
+    const assignedPeopleIds = useMemo(
+        () => [...naForm.peopleIds, ...(wfForm.waitingForPersonId ? [wfForm.waitingForPersonId] : [])],
+        [naForm.peopleIds, wfForm.waitingForPersonId],
+    );
+    const pickerPeople = useMemo(
+        () => scopeOptionsToOwner(people, { ownerUserId, assignedIds: assignedPeopleIds, allOptions: allPeople }),
+        [people, ownerUserId, assignedPeopleIds, allPeople],
+    );
 
     // Bundle the per-status forms so the merge/patch builders take one cohesive argument.
     const forms: EditorForms = { na: naForm, cal: calForm, wf: wfForm, sm: smForm };
@@ -810,7 +830,12 @@ export function ItemEditorBody({
             {status === 'nextAction' && (
                 <>
                     <Divider />
-                    <NextActionFields value={naForm} onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))} workContexts={workContexts} people={people} />
+                    <NextActionFields
+                        value={naForm}
+                        onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))}
+                        workContexts={pickerWorkContexts}
+                        people={pickerPeople}
+                    />
                 </>
             )}
 
@@ -841,7 +866,7 @@ export function ItemEditorBody({
             {status === 'waitingFor' && (
                 <>
                     <Divider />
-                    <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={people} />
+                    <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={pickerPeople} />
                 </>
             )}
 

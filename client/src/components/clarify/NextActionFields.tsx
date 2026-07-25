@@ -92,6 +92,7 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                             <Chip
                                 key={ctx._id}
                                 label={ctx.name}
+                                data-testid="editorWorkContextChip"
                                 size="small"
                                 variant={value.workContextIds.includes(ctx._id) ? 'filled' : 'outlined'}
                                 color={value.workContextIds.includes(ctx._id) ? 'primary' : 'default'}
@@ -125,6 +126,7 @@ export function NextActionFields({ value, onChange, workContexts, people }: Prop
                             <Chip
                                 key={p._id}
                                 label={p.name}
+                                data-testid="editorPersonChip"
                                 size="small"
                                 variant={value.peopleIds.includes(p._id) ? 'filled' : 'outlined'}
                                 color={value.peopleIds.includes(p._id) ? 'primary' : 'default'}

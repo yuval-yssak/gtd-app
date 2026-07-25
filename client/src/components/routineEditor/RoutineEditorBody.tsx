@@ -15,7 +15,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useEffect, useRef, useState, useTransition } from 'react';
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import type { ReassignRoutineEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
@@ -38,8 +38,10 @@ import { splitRoutine } from '../../db/routineSplit';
 import { useAutosave } from '../../hooks/useAutosave';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
+import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
 import { deriveRecurrenceAnchor, RruleExhaustedError } from '../../lib/rruleUtils';
+import { sortByName } from '../../lib/sortByName';
 import { hasAtLeastOne } from '../../lib/typeUtils';
 import { offerUndo } from '../../lib/undoStore';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
@@ -666,6 +668,9 @@ export interface RoutineEditorBodyProps {
     db: IDBPDatabase<MyDB>;
     /** Default-owner userId for new routines. Ignored for edits — the routine carries its own owner. */
     userId: string;
+    /** Picker option pools — scoped to the owner account internally (scopeOptionsToOwner). Callers
+     *  that can host a routine whose owner account is visibility-hidden (deep-link pages) must pass
+     *  the unfiltered all* sets, or the picker degrades to already-assigned strays only. */
     workContexts: StoredWorkContext[];
     people: StoredPerson[];
     /** Pass an existing routine to edit it; omit to create a new one. */
@@ -689,9 +694,9 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
     const [form, setForm] = useState<FormState>(() => initFormState(routine));
     const [isSaving, startSaving] = useTransition();
     const { options: calendarOptions } = useCalendarOptions();
-    // allRoutines (unfiltered): the live-row lookup must keep working when this routine's owner
-    // account is toggled out of view (editor reached via deep link).
-    const { loggedInAccounts, allRoutines } = useAppData();
+    // all* (unfiltered) sets: the live-row lookup and assigned-tag resolution must keep working
+    // when this routine's owner account is toggled out of view (editor reached via deep link).
+    const { loggedInAccounts, allRoutines, allWorkContexts, allPeople } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
 
     // Live row — reflects remote sync merges and our own committed autosaves. Every persistence
@@ -804,6 +809,18 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
     const [ownerUserId, setOwnerUserId] = useState<string>(routine?.userId ?? userId);
     const ownerUserIdRef = useRef(ownerUserId);
     ownerUserIdRef.current = ownerUserId;
+
+    // Picker options scoped to the owner account: the merged multi-account sets would otherwise
+    // offer another account's identically-named contexts/people — duplicate "anywhere" chips —
+    // and allow cross-account tagging on the routine template.
+    const pickerWorkContexts = useMemo(
+        () => scopeOptionsToOwner(workContexts, { ownerUserId, assignedIds: form.workContextIds, allOptions: allWorkContexts }),
+        [workContexts, ownerUserId, form.workContextIds, allWorkContexts],
+    );
+    const pickerPeople = useMemo(
+        () => scopeOptionsToOwner(people, { ownerUserId, assignedIds: form.peopleIds, allOptions: allPeople }),
+        [people, ownerUserId, form.peopleIds, allPeople],
+    );
 
     // ── Unsaved-changes guard ────────────────────────────────────────────────
     // Schedule/type/template edits (and the whole form in create mode) only persist on explicit
@@ -1121,8 +1138,8 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
             ) : (
                 <TemplateFields
                     form={form}
-                    workContexts={workContexts}
-                    people={people}
+                    workContexts={pickerWorkContexts}
+                    people={pickerPeople}
                     onPatch={patch}
                     onToggleWorkContext={toggleWorkContext}
                     onTogglePerson={togglePerson}
@@ -1381,10 +1398,11 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                             mt: 0.5,
                         }}
                     >
-                        {workContexts.map((ctx) => (
+                        {sortByName(workContexts).map((ctx) => (
                             <Chip
                                 key={ctx._id}
                                 label={ctx.name}
+                                data-testid="routineTemplateWorkContextChip"
                                 size="small"
                                 variant={form.workContextIds.includes(ctx._id) ? 'filled' : 'outlined'}
                                 color={form.workContextIds.includes(ctx._id) ? 'primary' : 'default'}
@@ -1414,10 +1432,11 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                             mt: 0.5,
                         }}
                     >
-                        {people.map((p) => (
+                        {sortByName(people).map((p) => (
                             <Chip
                                 key={p._id}
                                 label={p.name}
+                                data-testid="routineTemplatePersonChip"
                                 size="small"
                                 variant={form.peopleIds.includes(p._id) ? 'filled' : 'outlined'}
                                 color={form.peopleIds.includes(p._id) ? 'primary' : 'default'}
