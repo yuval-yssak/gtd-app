@@ -89,6 +89,45 @@ test.describe('item editor — save undo snackbar', () => {
             await expect(page.getByTestId('undoSnackbar')).toHaveCount(0);
         });
     });
+
+    test('the close button dismisses the snackbar without undoing the change', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `snackbar-close-${dayjs().valueOf()}@example.com`, async (page) => {
+            await gtd.collect(page, 'Close me');
+            await page.goto('/inbox');
+            await page.waitForSelector('text=Close me');
+
+            await page.getByRole('button', { name: 'Edit' }).first().click();
+            const dialog = page.getByRole('dialog', { name: 'Edit item' });
+            await dialog.getByLabel('Title').fill('Close me — renamed');
+            await expect(page.getByTestId('undoSnackbar')).toBeVisible();
+
+            // Close dismisses immediately (it hides action buttons underneath) but keeps the save.
+            await page.getByTestId('undoSnackbarCloseButton').click();
+            // Well under UNDO_SNACKBAR_DURATION_MS (6s) so the auto-hide timer cannot be what dismissed it.
+            await expect(page.getByTestId('undoSnackbar')).toHaveCount(0, { timeout: 1500 });
+            const titles = (await gtd.listItems(page)).map((i) => i.title);
+            expect(titles).toContain('Close me — renamed');
+            expect(titles).not.toContain('Close me'); // proves Close did not run the undo
+        });
+    });
+
+    test('closing the snackbar mid-burst does not cancel the still-pending autosave', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `snackbar-close-midburst-${dayjs().valueOf()}@example.com`, async (page) => {
+            await gtd.collect(page, 'Mid burst');
+            await page.goto('/inbox');
+            await page.waitForSelector('text=Mid burst');
+
+            await page.getByRole('button', { name: 'Edit' }).first().click();
+            const dialog = page.getByRole('dialog', { name: 'Edit item' });
+            await dialog.getByLabel('Title').fill('Mid burst — first');
+            await expect(page.getByTestId('undoSnackbar')).toBeVisible();
+            await page.getByTestId('undoSnackbarCloseButton').click();
+
+            // endBurst() only re-baselines the undo; the debounce for this second edit must still fire.
+            await dialog.getByLabel('Title').fill('Mid burst — second');
+            await expect.poll(async () => (await gtd.listItems(page)).map((i) => i.title)).toContain('Mid burst — second');
+        });
+    });
 });
 
 test.describe('item editor — creation date', () => {

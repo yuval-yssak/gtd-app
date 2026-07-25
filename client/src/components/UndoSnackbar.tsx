@@ -1,4 +1,6 @@
+import CloseIcon from '@mui/icons-material/Close';
 import Button from '@mui/material/Button';
+import IconButton from '@mui/material/IconButton';
 import Snackbar from '@mui/material/Snackbar';
 import Stack from '@mui/material/Stack';
 import { useNavigate } from '@tanstack/react-router';
@@ -60,6 +62,10 @@ export function UndoSnackbar() {
                     <Button color="secondary" size="small" onClick={onUndoClick} disabled={isUndoing} data-testid="undoSnackbarButton">
                         Undo
                     </Button>
+                    {/* Manual dismiss: clickaway is deliberately ignored (above), so without this the snackbar blocks the buttons underneath for the full 6s. */}
+                    <IconButton size="small" color="inherit" aria-label="Close" onClick={dismissCurrentUndo} data-testid="undoSnackbarCloseButton">
+                        <CloseIcon fontSize="small" />
+                    </IconButton>
                 </Stack>
             }
             data-testid="undoSnackbar"
