@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { ServerOp } from '#api/syncClient';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import { describeDevice } from '../lib/deviceLabel';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type {
     EntityType,
@@ -325,7 +326,9 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
     await assertActiveSessionMatches(db, userId, 'bootstrapFromServer');
     const deviceId = await getOrCreateDeviceId(db);
 
-    const { items, routines, people, workContexts, serverTs, serverId } = await fetchBootstrap(deviceId);
+    // describeDevice gives the row a human-readable label for Settings → Connected devices.
+    // navigator.userAgent exists in both window and Service Worker globals.
+    const { items, routines, people, workContexts, serverTs, serverId } = await fetchBootstrap(deviceId, describeDevice(navigator.userAgent));
 
     const mappedItems = items.map((doc) => remapUser(doc) as unknown as StoredItem);
     const mappedRoutines = routines.map((doc) => remapUser(doc) as unknown as StoredRoutine);

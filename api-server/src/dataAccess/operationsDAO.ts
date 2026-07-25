@@ -90,6 +90,14 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
         );
     }
 
+    /**
+     * Count-only sibling of `findOpsAfter` — the same compound-cursor predicate without materializing
+     * ops. Backs the connected-devices list's per-device "operations behind" figure.
+     */
+    async countOpsAfter(userId: string, since: string, sinceId: string): Promise<number> {
+        return await this.countDocuments({ user: userId, $or: [{ ts: { $gt: since } }, { ts: since, _id: { $gt: sinceId } } as never] });
+    }
+
     async deleteOlderThan(userId: string, minTs: string, minId: string): Promise<number> {
         // Delete only ops at-or-below the compound floor `(minTs, minId)` — the exact position the
         // slowest device has provably received. The same-ms clause MUST be `_id: { $lte: minId }`,

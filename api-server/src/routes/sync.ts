@@ -129,6 +129,9 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     .get('/bootstrap', authenticateRequest, async (c) => {
         const { user } = c.get('session');
         const deviceId = c.req.query('deviceId');
+        // Client-derived display label ("Chrome on macOS") for the connected-devices list. Length-capped
+        // server-side — it's a raw user-agent derivative, not a validated field.
+        const deviceLabel = c.req.query('deviceLabel')?.trim().slice(0, 80);
         // One serverTs for both the response body and the deviceSyncState row, so the recorded
         // floor exactly matches what the client claims it has after consuming this response.
         const serverTs = dayjs().toISOString();
@@ -155,7 +158,16 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             // re-bootstrap is genuine activity worth refreshing on an existing row too.
             await deviceSyncStateDAO.updateOne(
                 { _id: deviceSyncStateId(deviceId, user.id) },
-                { $set: { lastSyncedTs: serverTs, lastSyncedId: MAX_OP_ID, deviceId, user: user.id, lastSeenTs: serverTs } },
+                {
+                    $set: {
+                        lastSyncedTs: serverTs,
+                        lastSyncedId: MAX_OP_ID,
+                        deviceId,
+                        user: user.id,
+                        lastSeenTs: serverTs,
+                        ...(deviceLabel ? { autoLabel: deviceLabel } : {}),
+                    },
+                },
                 { upsert: true },
             );
         }

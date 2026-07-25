@@ -1,0 +1,32 @@
+.loadingState {
+    color: var(--mui-palette-text-secondary);
+    font-style: italic;
+}
+
+.loadError,
+.actionError {
+    color: var(--mui-palette-error-main);
+}
+
+.primaryLine {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.rowActions {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.freedSummary {
+    color: var(--mui-palette-success-main);
+    margin-top: 0.5rem;
+}
+
+.opsSummary {
+    display: block;
+    margin-top: 0.75rem;
+    color: var(--mui-palette-text-secondary);
+}

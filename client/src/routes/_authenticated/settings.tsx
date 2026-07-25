@@ -18,6 +18,7 @@ import { getPushStatus } from '../../api/pushApi';
 import { AppErrorBoundary } from '../../components/AppErrorBoundary';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
 import { CalendarIntegrationsSkeleton } from '../../components/settings/CalendarIntegrationsSkeleton';
+import { ConnectedDevices } from '../../components/settings/ConnectedDevices';
 import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
@@ -128,6 +129,32 @@ function SettingsPage() {
             <ItemEditorSection />
             {/* Notifications section */}
             <NotificationsSection db={db} />
+            {/* Connected devices */}
+            <Paper variant="outlined" className={styles.section}>
+                <Box className={styles.sectionContent}>
+                    <Typography
+                        variant="subtitle1"
+                        sx={{
+                            fontWeight: 600,
+                            mb: 0.5,
+                        }}
+                    >
+                        Connected devices
+                    </Typography>
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                            mb: 2,
+                        }}
+                    >
+                        Every device signed in to this account keeps its own sync position, and sync history is retained until the slowest device catches up.
+                        Remove a device you no longer use to free the history it is holding on to.
+                    </Typography>
+                    <Divider className={styles.divider} />
+                    <ConnectedDevices db={db} />
+                </Box>
+            </Paper>
             {/* Personal API tokens */}
             <Paper variant="outlined" className={styles.section}>
                 <Box className={styles.sectionContent}>

@@ -500,7 +500,14 @@ export interface DeviceSyncStateInterface {
      * to the server.
      */
     lastSeenTs: string;
-    name?: string; // user-given label, e.g. "iPhone", "Work laptop"
+    name?: string; // user-given label, e.g. "iPhone", "Work laptop" — set via PATCH /devices/:deviceId, wins over autoLabel
+    /**
+     * Client-derived label sent with /sync/bootstrap (e.g. "Chrome on macOS"). Refreshed on every
+     * bootstrap; display fallback when the user hasn't named the device. Rows created before this
+     * field existed (or via /sync/pull cursor writes alone) have neither — the UI shows a generic
+     * "Unknown device" for those.
+     */
+    autoLabel?: string;
 }
 
 /**

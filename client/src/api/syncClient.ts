@@ -57,11 +57,17 @@ export async function pushSyncOps(deviceId: string, ops: SyncOperation[]): Promi
     if (!res.ok) throwForStatus(res, 'POST /sync/push');
 }
 
-export async function fetchBootstrap(deviceId: string): Promise<BootstrapPayload> {
+export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Promise<BootstrapPayload> {
     // Sending deviceId in the query string lets the server register a deviceSyncState row at
     // bootstrap time, so its purge floor is established before any sibling device pulls. Without
     // it the floor could drop below ops this device still needs (sync race).
-    const res = await fetch(`${API_SERVER}/sync/bootstrap?deviceId=${encodeURIComponent(deviceId)}`, {
+    // deviceLabel ("Chrome on macOS") rides along so the row is displayable in Settings →
+    // Connected devices; bootstrap is the row's sole creation path, so this is the one chance.
+    const params = new URLSearchParams({ deviceId });
+    if (deviceLabel) {
+        params.set('deviceLabel', deviceLabel);
+    }
+    const res = await fetch(`${API_SERVER}/sync/bootstrap?${params}`, {
         credentials: 'include',
         headers: { [DEVICE_ID_HEADER]: deviceId },
     });

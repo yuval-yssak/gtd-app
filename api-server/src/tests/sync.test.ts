@@ -649,6 +649,32 @@ describe('GET /sync/bootstrap', () => {
         expect(state?.lastSeenTs).toBe(serverTs);
     });
 
+    it('stores a trimmed, length-capped autoLabel when ?deviceLabel= is present', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        const longLabel = `  Chrome on macOS${'x'.repeat(100)}`;
+        await authenticatedRequest(app, {
+            method: 'GET',
+            path: `/sync/bootstrap?deviceId=dev-boot&deviceLabel=${encodeURIComponent(longLabel)}`,
+            sessionCookie: cookie,
+        });
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
+        expect(state?.autoLabel).toBe(longLabel.trim().slice(0, 80));
+    });
+
+    it('a bootstrap without deviceLabel keeps the previously stored autoLabel', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot&deviceLabel=Firefox%20on%20Linux', sessionCookie: cookie });
+        await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot', sessionCookie: cookie });
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
+        expect(state?.autoLabel).toBe('Firefox on Linux');
+    });
+
     it('returns serverId = MAX_OP_ID and a follow-up pull does not re-deliver ops at serverTs', async () => {
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);

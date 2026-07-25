@@ -1,5 +1,5 @@
 import type { MongoClient } from 'mongodb';
-import type { DeviceSyncStateInterface } from '../types/entities.js';
+import { type DeviceSyncStateInterface, deviceSyncStateId } from '../types/entities.js';
 import AbstractDAO from './abstractDAO.js';
 
 class DeviceSyncStateDAO extends AbstractDAO<DeviceSyncStateInterface> {
@@ -15,6 +15,16 @@ class DeviceSyncStateDAO extends AbstractDAO<DeviceSyncStateInterface> {
 
     async upsert(state: DeviceSyncStateInterface): Promise<void> {
         await this._collection.replaceOne({ _id: state._id }, state, { upsert: true });
+    }
+
+    /**
+     * Removes a single (device, user) row — the user-initiated analog of the stale-device reaper.
+     * Returns false when no row existed so the /devices/:deviceId handler can answer 404 instead of
+     * pretending a removal happened.
+     */
+    async deleteDeviceRow(deviceId: string, userId: string): Promise<boolean> {
+        const result = await this._collection.deleteOne({ _id: deviceSyncStateId(deviceId, userId) } as never);
+        return result.deletedCount > 0;
     }
 
     /**
