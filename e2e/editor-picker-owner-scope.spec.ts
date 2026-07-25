@@ -1,112 +1,13 @@
-import { expect, type Page, test } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withTwoAccountsOnOneDevice } from './helpers/context';
+import { seedNextActionForUser, seedPersonForUser, seedRoutineForUser, seedWaitingForForUser, seedWorkContextForUser } from './helpers/seed';
 
 // The item-editor work-context/people pickers must offer only the OWNING account's entities.
 // In the merged multi-account view each account owns its own "anywhere" context, and before the
 // owner-scoping fix the /item/:id page fed the unfiltered all* sets into the picker — rendering
 // two indistinguishable "anywhere" chips and allowing cross-account tagging. Already-assigned
 // cross-account tags must still render (resolved via the unfiltered sets), not silently vanish.
-
-/** Seeds a StoredWorkContext directly into the device's IDB under the supplied userId. */
-async function seedWorkContextForUser(page: Page, userId: string, name: string): Promise<string> {
-    return page.evaluate(
-        ({ userId, name }) => {
-            type IDBWorkContext = { _id: string; userId: string; name: string; createdTs: string; updatedTs: string };
-            type DBHandle = { put(store: 'workContexts', value: IDBWorkContext): Promise<unknown> };
-            const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-            const id = `seed-ctx-${Math.random().toString(36).slice(2, 10)}`;
-            const now = new Date().toISOString();
-            return dbHandle.put('workContexts', { _id: id, userId, name, createdTs: now, updatedTs: now }).then(() => id);
-        },
-        { userId, name },
-    );
-}
-
-/** Seeds a nextAction StoredItem directly into IDB, optionally pre-tagged with work contexts. */
-async function seedNextActionForUser(page: Page, userId: string, title: string, workContextIds: string[] = []): Promise<string> {
-    return page.evaluate(
-        ({ userId, title, workContextIds }) => {
-            type IDBItem = { _id: string; userId: string; status: string; title: string; createdTs: string; updatedTs: string; workContextIds?: string[] };
-            type DBHandle = { put(store: 'items', value: IDBItem): Promise<unknown> };
-            const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-            const id = `seed-item-${Math.random().toString(36).slice(2, 10)}`;
-            const now = new Date().toISOString();
-            const item: IDBItem = { _id: id, userId, status: 'nextAction', title, createdTs: now, updatedTs: now };
-            if (workContextIds.length > 0) {
-                item.workContextIds = workContextIds;
-            }
-            return dbHandle.put('items', item).then(() => id);
-        },
-        { userId, title, workContextIds },
-    );
-}
-
-/** Seeds a StoredPerson directly into the device's IDB under the supplied userId. */
-async function seedPersonForUser(page: Page, userId: string, name: string): Promise<string> {
-    return page.evaluate(
-        ({ userId, name }) => {
-            type IDBPerson = { _id: string; userId: string; name: string; createdTs: string; updatedTs: string };
-            type DBHandle = { put(store: 'people', value: IDBPerson): Promise<unknown> };
-            const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-            const id = `seed-person-${Math.random().toString(36).slice(2, 10)}`;
-            const now = new Date().toISOString();
-            return dbHandle.put('people', { _id: id, userId, name, createdTs: now, updatedTs: now }).then(() => id);
-        },
-        { userId, name },
-    );
-}
-
-/** Seeds a waitingFor StoredItem directly into IDB, blocked on the supplied person. */
-async function seedWaitingForForUser(page: Page, userId: string, title: string, waitingForPersonId: string): Promise<string> {
-    return page.evaluate(
-        ({ userId, title, waitingForPersonId }) => {
-            type IDBItem = { _id: string; userId: string; status: string; title: string; createdTs: string; updatedTs: string; waitingForPersonId: string };
-            type DBHandle = { put(store: 'items', value: IDBItem): Promise<unknown> };
-            const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-            const id = `seed-item-${Math.random().toString(36).slice(2, 10)}`;
-            const now = new Date().toISOString();
-            return dbHandle.put('items', { _id: id, userId, status: 'waitingFor', title, createdTs: now, updatedTs: now, waitingForPersonId }).then(() => id);
-        },
-        { userId, title, waitingForPersonId },
-    );
-}
-
-/** Seeds a minimal nextAction StoredRoutine directly into IDB under the supplied userId. */
-async function seedRoutineForUser(page: Page, userId: string, title: string): Promise<string> {
-    return page.evaluate(
-        ({ userId, title }) => {
-            type IDBRoutine = {
-                _id: string;
-                userId: string;
-                title: string;
-                routineType: 'nextAction';
-                rrule: string;
-                template: Record<string, never>;
-                active: boolean;
-                createdTs: string;
-                updatedTs: string;
-            };
-            type DBHandle = { put(store: 'routines', value: IDBRoutine): Promise<unknown> };
-            const dbHandle = (window as unknown as { __gtd: { db: DBHandle } }).__gtd.db;
-            const id = `seed-routine-${Math.random().toString(36).slice(2, 10)}`;
-            const now = new Date().toISOString();
-            const routine: IDBRoutine = {
-                _id: id,
-                userId,
-                title,
-                routineType: 'nextAction',
-                rrule: 'FREQ=DAILY',
-                template: {},
-                active: true,
-                createdTs: now,
-                updatedTs: now,
-            };
-            return dbHandle.put('routines', routine).then(() => id);
-        },
-        { userId, title },
-    );
-}
 
 test.describe('editor picker owner scoping', () => {
     test('item-page picker shows only the owner account\'s contexts when both accounts have an "anywhere"', async ({ browser }) => {

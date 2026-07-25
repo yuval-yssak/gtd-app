@@ -35,6 +35,20 @@ describe('matchesFilters', () => {
         expect(matchesFilters(item({}), { person: 'p1' })).toBe(false);
     });
 
+    it('matches any id of the expanded same-name group (merged multi-account chips)', () => {
+        const groups = { contextIds: new Set(['c1', 'c1-twin']), personIds: new Set(['p1', 'p1-twin']) };
+        expect(matchesFilters(item({ workContextIds: ['c1-twin'] }), { context: 'c1' }, groups)).toBe(true);
+        expect(matchesFilters(item({ workContextIds: ['c9'] }), { context: 'c1' }, groups)).toBe(false);
+        expect(matchesFilters(item({ peopleIds: ['p1-twin'] }), { person: 'p1' }, groups)).toBe(true);
+        expect(matchesFilters(item({ peopleIds: ['p9'] }), { person: 'p1' }, groups)).toBe(false);
+    });
+
+    it('falls back to exact id matching for a filter with no supplied group', () => {
+        const groups = { contextIds: new Set(['c1', 'c1-twin']) }; // no personIds
+        expect(matchesFilters(item({ workContextIds: ['c1-twin'], peopleIds: ['p1'] }), { context: 'c1', person: 'p1' }, groups)).toBe(true);
+        expect(matchesFilters(item({ workContextIds: ['c1-twin'], peopleIds: ['p-other'] }), { context: 'c1', person: 'p1' }, groups)).toBe(false);
+    });
+
     it('hides ticklered items until their ignoreBefore date, regardless of filters', () => {
         expect(matchesFilters(item({ ignoreBefore: '2999-01-01' }), {})).toBe(false);
         expect(matchesFilters(item({ ignoreBefore: '2000-01-01' }), {})).toBe(true);
