@@ -123,6 +123,11 @@ describe('POST /maintenance/purge-operations', () => {
         await seedDeviceSyncState({ deviceId: 'dev-stale', userId, lastSyncedTs: dayjs(0).toISOString(), lastSyncedId: '', lastSeenTs: staleTs });
         await seedDeviceSyncState({ deviceId: 'dev-active', userId, lastSyncedTs: '2024-02-01T00:00:00.000Z', lastSyncedId: '￿' });
         await seedOp({ id: 'op-1', userId, entityId: 'e1', ts: '2024-01-15T00:00:00.000Z', snapshot: snap('e1', '2024-01-15T00:00:00.000Z') });
+        // deviceUsers join rows ride along with the reap: the stale device's goes, the active one's stays.
+        await db.collection('deviceUsers').insertMany([
+            { _id: `dev-stale:${userId}`, deviceId: 'dev-stale', userId, createdTs: staleTs, lastSeenTs: staleTs },
+            { _id: `dev-active:${userId}`, deviceId: 'dev-active', userId, createdTs: staleTs, lastSeenTs: dayjs().toISOString() },
+        ] as never[]);
 
         // Default (STALE_DEVICE_DAYS) cutoff: dev-stale survives (only 20 days old) → floor stuck at epoch → no purge.
         const noopRes = await purge(cookie);
@@ -136,6 +141,45 @@ describe('POST /maintenance/purge-operations', () => {
         expect(body.deletedStaleDevices).toBe(1);
         expect(body.deletedOps).toBe(1);
         expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
+        // The reaped pair's deviceUsers row is gone; the active device's row is untouched.
+        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
+        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-active' })).toBe(1);
+    });
+
+    it('reaping one account’s stale row on a shared device keeps the other account’s join row and the push subscription', async () => {
+        const aliceCookie = await loginAsAlice();
+        const aliceId = await getUserId(aliceCookie);
+        vi.restoreAllMocks();
+        const bobCookie = await loginAsBob();
+        const bobId = await getUserId(bobCookie);
+
+        const staleTs = dayjs().subtract(20, 'day').toISOString();
+        // One physical device hosting both accounts: Alice's sync row is stale, Bob's is live.
+        await seedDeviceSyncState({ deviceId: 'dev-shared', userId: aliceId, lastSyncedTs: dayjs(0).toISOString(), lastSyncedId: '', lastSeenTs: staleTs });
+        await seedDeviceSyncState({ deviceId: 'dev-shared', userId: bobId, lastSyncedTs: '2024-02-01T00:00:00.000Z', lastSyncedId: '￿' });
+        await db.collection('deviceUsers').insertMany([
+            { _id: `dev-shared:${aliceId}`, deviceId: 'dev-shared', userId: aliceId, createdTs: staleTs, lastSeenTs: staleTs },
+            { _id: `dev-shared:${bobId}`, deviceId: 'dev-shared', userId: bobId, createdTs: staleTs, lastSeenTs: dayjs().toISOString() },
+        ] as never[]);
+        await db.collection('pushSubscriptions').insertOne({
+            _id: 'dev-shared',
+            user: aliceId,
+            endpoint: 'https://push.example/e',
+            keys: { p256dh: 'k', auth: 'a' },
+            updatedTs: dayjs().toISOString(),
+        } as never);
+
+        const res = await purge(aliceCookie, { staleDeviceDays: 10 });
+        const body = (await res.json()) as { deletedStaleDevices: number };
+        expect(body.deletedStaleDevices).toBe(1);
+
+        // Alice's rows are reaped; Bob's sync + join rows survive, and the device is NOT drained,
+        // so the shared push subscription must survive for Bob's account.
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-shared::${aliceId}` } as never)).toBe(0);
+        expect(await db.collection('deviceSyncState').countDocuments({ _id: `dev-shared::${bobId}` } as never)).toBe(1);
+        expect(await db.collection('deviceUsers').countDocuments({ _id: `dev-shared:${aliceId}` } as never)).toBe(0);
+        expect(await db.collection('deviceUsers').countDocuments({ _id: `dev-shared:${bobId}` } as never)).toBe(1);
+        expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-shared' } as never)).toBe(1);
     });
 
     it('returns floor=null and deletes nothing when the user has no device rows', async () => {

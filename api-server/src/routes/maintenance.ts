@@ -3,9 +3,9 @@ import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
-import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import { healDuplicateCalendarItems, healSplitSuccessorRoutines, healStuckGCalRoutines } from '../lib/calendarHeal.js';
 import { computePurgeFloor, type PurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
+import { reapStaleDevices } from '../lib/staleDevices.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import { relinkCalendarMarkersForUser } from './calendar.js';
 
@@ -15,16 +15,14 @@ const DEFAULT_STALE_DEVICE_DAYS = STALE_DEVICE_DAYS;
 
 /**
  * Removes this user's stale (device, user) rows where BOTH lastSeenTs AND lastSyncedTs predate the
- * cutoff, dropping the push subscriptions of any device left with no active sessions. Returns the
- * number of rows removed. Mirrors sync.ts's purgeStaleDevices but with a caller-supplied cutoff.
+ * cutoff, with the shared cleanup (deviceUsers join rows, push subscriptions of drained devices).
+ * Returns the number of devices whose row was removed for this user. Same reap as sync.ts's
+ * pull-time purgeStaleDevices, but with a caller-supplied cutoff.
  */
 async function purgeStaleDevices(userId: string, staleDeviceDays: number): Promise<number> {
     const cutoffTs = dayjs().subtract(staleDeviceDays, 'day').toISOString();
-    const drainedDeviceIds = await deviceSyncStateDAO.deleteStaleDevices(userId, cutoffTs);
-    if (drainedDeviceIds.length) {
-        await pushSubscriptionsDAO.deleteByDeviceIds(drainedDeviceIds, userId);
-    }
-    return drainedDeviceIds.length;
+    const { removedDeviceIds } = await reapStaleDevices(userId, cutoffTs);
+    return removedDeviceIds.length;
 }
 
 /** Recomputes the compound purge floor across the user's remaining device rows, or null if none. */

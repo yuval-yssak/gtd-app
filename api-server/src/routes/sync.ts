@@ -5,7 +5,6 @@ import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
-import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { applyAndPublishOperations, OperationValidationError, type RawOperation } from '../lib/applyOperation.js';
@@ -13,6 +12,7 @@ import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { computePurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
+import { reapStaleDevices } from '../lib/staleDevices.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
 import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
@@ -60,13 +60,10 @@ function sanitizeItemSnapshot<T extends Record<string, unknown>>(op: ClientOp, s
 
 async function purgeStaleDevices(userId: string): Promise<void> {
     const cutoffTs = dayjs().subtract(STALE_DEVICE_DAYS, 'day').toISOString();
-    const staleDeviceIds = await deviceSyncStateDAO.deleteStaleDevices(userId, cutoffTs);
-    if (!staleDeviceIds.length) {
-        return;
+    const { removedDeviceIds } = await reapStaleDevices(userId, cutoffTs);
+    if (removedDeviceIds.length) {
+        console.log(`[purge] removed ${removedDeviceIds.length} stale device(s) for user ${userId}: ${removedDeviceIds.join(', ')}`);
     }
-
-    console.log(`[purge] removed ${staleDeviceIds.length} stale device(s) for user ${userId}: ${staleDeviceIds.join(', ')}`);
-    await pushSubscriptionsDAO.deleteByDeviceIds(staleDeviceIds, userId);
 }
 
 async function purgeOldOperations(userId: string): Promise<void> {

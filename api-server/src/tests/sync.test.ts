@@ -957,6 +957,10 @@ describe('Stale device cleanup', () => {
         await db
             .collection('pushSubscriptions')
             .insertOne({ _id: 'dev-stale', user: userId, endpoint: 'https://push.example.com/stale', keys: { p256dh: 'k1', auth: 'k2' }, updatedTs: staleTs });
+        // deviceUsers join row rides along with the reap so push fan-out stops targeting the pair.
+        await db
+            .collection('deviceUsers')
+            .insertOne({ _id: `dev-stale:${userId}`, deviceId: 'dev-stale', userId, createdTs: staleTs, lastSeenTs: staleTs } as never);
         await registerDevice('dev-active', userId);
 
         // Active device pushes and pulls — pull triggers purge
@@ -968,6 +972,7 @@ describe('Stale device cleanup', () => {
         await waitForPurge(async () => (await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })) === 0);
         expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
         expect(await db.collection('pushSubscriptions').countDocuments({ _id: 'dev-stale' })).toBe(0);
+        expect(await db.collection('deviceUsers').countDocuments({ deviceId: 'dev-stale' })).toBe(0);
         // Active device still exists
         expect(await db.collection('deviceSyncState').countDocuments({ deviceId: 'dev-active' })).toBe(1);
     });
