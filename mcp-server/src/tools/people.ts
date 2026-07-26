@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs } from './types.js';
+import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
  * People CRUD. People are named contacts referenced from items via `peopleIds` and
@@ -45,7 +45,7 @@ const createPerson = defineTool({
         email: z.string().optional(),
         phone: z.string().optional(),
         externalCalendarId: z.string().optional(),
-        notes: z.string().optional(),
+        notes: notesSchema,
         account: accountSchema,
     },
     handler: async ({ account, ...body }, api) => api.request('POST', '/v1/people', body, undefined, requestOptsFromArgs({ account })),
@@ -60,7 +60,7 @@ const updatePerson = defineTool({
         email: z.string().optional(),
         phone: z.string().optional(),
         externalCalendarId: z.string().optional(),
-        notes: z.string().optional(),
+        notes: notesSchema,
         account: accountSchema,
     },
     handler: async ({ id, account, ...patch }, api) =>

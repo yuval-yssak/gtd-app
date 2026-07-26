@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs } from './types.js';
+import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
  * Tool definitions for the item surface of the GTD /v1 API. Field shapes mirror what the API
@@ -29,7 +29,7 @@ const capture = defineTool({
         'Without externalId, identical (title, notes) within 24h are best-effort de-duped.',
     inputSchema: {
         title: z.string().min(1).describe('Required. Non-empty after trim.'),
-        notes: z.string().optional().describe('Optional markdown body.'),
+        notes: notesSchema,
         externalId: z.string().min(1).optional().describe('Caller-supplied dedupe key for strict idempotency.'),
         account: accountSchema,
     },
@@ -87,7 +87,7 @@ const updateItem = defineTool({
     inputSchema: {
         id: idSchema,
         title: z.string().min(1).optional(),
-        notes: z.string().optional(),
+        notes: notesSchema,
         status: itemStatusSchema.optional(),
         workContextIds: z.array(z.string()).optional(),
         peopleIds: z.array(z.string()).optional(),
@@ -97,10 +97,7 @@ const updateItem = defineTool({
         focus: z.boolean().optional(),
         urgent: z.boolean().optional(),
         expectedBy: z.string().optional().describe('YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe.'),
-        ignoreBefore: z
-            .string()
-            .optional()
-            .describe('YYYY-MM-DD. Tickler — hides item until this date. Allowed on nextAction / waitingFor / somedayMaybe.'),
+        ignoreBefore: z.string().optional().describe('YYYY-MM-DD. Tickler — hides item until this date. Allowed on nextAction / waitingFor / somedayMaybe.'),
         timeStart: z.string().optional().describe('Floating ISO datetime. Allowed only on calendar items.'),
         timeEnd: z.string().optional().describe('Floating ISO datetime. Allowed only on calendar items.'),
         calendarEventId: z.string().optional(),
