@@ -13,6 +13,7 @@ vi.mock('../db/multiUserSync', () => ({
 
 import dayjs from 'dayjs';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import { SYNC_APPLY_LOCK } from '../db/crossContextLock';
 import { MAX_OP_ID } from '../db/deviceId';
 import { syncSingleUser } from '../db/multiUserSync';
 import {
@@ -462,6 +463,173 @@ describe('pullFromServer — item ops', () => {
         expect(item?.userId).toBe('user-target');
     });
 
+    // Pins the transactional-apply layer itself (the Web Lock tests below pin the OTHER layer).
+    // IDB only guarantees the owner/LWW check is atomic with the write it guards when both run in
+    // the SAME readwrite transaction — a regression to separate get-then-write calls necessarily
+    // opens more than one items transaction per op (idb's db.get/db.put route through
+    // db.transaction too), which is exactly what this counts.
+    describe('apply atomicity — one readwrite transaction per op', () => {
+        function countItemsTransactions(): { calls: Array<{ store: unknown; mode: unknown }> } {
+            const recorded: Array<{ store: unknown; mode: unknown }> = [];
+            const originalTransaction = db.transaction.bind(db);
+            vi.spyOn(db, 'transaction').mockImplementation(((...args: Parameters<typeof db.transaction>) => {
+                const [store, mode] = args;
+                if (store === 'items' || (Array.isArray(store) && store.includes('items'))) {
+                    recorded.push({ store, mode });
+                }
+                return originalTransaction(...args);
+            }) as typeof db.transaction);
+            return { calls: recorded };
+        }
+
+        it('a delete op does its owner check and delete in one readwrite items transaction', async () => {
+            await db.put('items', makeItem('item-atomic-delete'));
+            const counter = countItemsTransactions();
+            vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+                ops: [{ entityType: 'item', entityId: 'item-atomic-delete', opType: 'delete', snapshot: null }],
+                serverTs: '2025-06-01T00:00:00.000Z',
+                serverId: '',
+            });
+
+            await pullFromServer(db, USER_ID);
+
+            // Snapshot before the verification reads below add their own (readonly) transactions.
+            const applyCalls = [...counter.calls];
+            expect(await db.get('items', 'item-atomic-delete')).toBeUndefined();
+            expect(applyCalls).toEqual([{ store: 'items', mode: 'readwrite' }]);
+        });
+
+        it('an update op does its LWW check and put in one readwrite items transaction', async () => {
+            await db.put('items', makeItem('item-atomic-update', '2025-01-01T00:00:00.000Z'));
+            const counter = countItemsTransactions();
+            vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+                ops: [
+                    {
+                        entityType: 'item',
+                        entityId: 'item-atomic-update',
+                        opType: 'update',
+                        snapshot: serverItem('item-atomic-update', '2025-02-01T00:00:00.000Z'),
+                    },
+                ],
+                serverTs: '2025-06-01T00:00:00.000Z',
+                serverId: '',
+            });
+
+            await pullFromServer(db, USER_ID);
+
+            const applyCalls = [...counter.calls];
+            expect((await db.get('items', 'item-atomic-update'))?.updatedTs).toBe('2025-02-01T00:00:00.000Z');
+            expect(applyCalls).toEqual([{ store: 'items', mode: 'readwrite' }]);
+        });
+    });
+
+    // The server clamps future updatedTs on write, but its correcting echo is OLDER than the
+    // poisoned local row — plain LWW can never repair the device that created the poison. These
+    // pin the client-side escape hatch (and its tolerance, so normal skew never trips it).
+    describe('poisoned-watermark self-heal', () => {
+        it('an older inbound snapshot replaces a local row stamped far in the future', async () => {
+            const poisonedTs = dayjs().add(2, 'hour').toISOString();
+            await db.put('items', { ...makeItem('item-poisoned', poisonedTs), title: 'stale poisoned state' });
+            const correctedTs = dayjs().toISOString();
+            vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+                ops: [{ entityType: 'item', entityId: 'item-poisoned', opType: 'update', snapshot: serverItem('item-poisoned', correctedTs) }],
+                serverTs: '2025-06-01T00:00:00.000Z',
+                serverId: '',
+            });
+
+            await pullFromServer(db, USER_ID);
+
+            const item = await db.get('items', 'item-poisoned');
+            expect(item?.updatedTs).toBe(correctedTs);
+            expect(item?.title).toBe('Item');
+        });
+
+        it('ordinary clock skew within the tolerance still loses LWW (no false self-heal)', async () => {
+            const slightlyAheadTs = dayjs().add(1, 'minute').toISOString();
+            await db.put('items', { ...makeItem('item-skewed', slightlyAheadTs), title: 'newer local edit' });
+            vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+                ops: [
+                    {
+                        entityType: 'item',
+                        entityId: 'item-skewed',
+                        opType: 'update',
+                        snapshot: serverItem('item-skewed', dayjs().subtract(1, 'hour').toISOString()),
+                    },
+                ],
+                serverTs: '2025-06-01T00:00:00.000Z',
+                serverId: '',
+            });
+
+            await pullFromServer(db, USER_ID);
+
+            const item = await db.get('items', 'item-skewed');
+            expect(item?.title).toBe('newer local edit');
+            expect(item?.updatedTs).toBe(slightlyAheadTs);
+        });
+    });
+
+    it('never rewinds the cursor when the response boundary is older than the stored cursor', async () => {
+        // The fetch runs outside the cross-context apply lock, so another context pulling the SAME
+        // user can advance the cursor while this response is in flight. Re-applying the older op
+        // range is harmless (idempotent LWW), but writing its boundary would rewind the cursor and
+        // re-fetch that range on every later pull. Simulate the other context inside the fetch mock.
+        await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: '2025-01-01T00:00:00.000Z', lastSyncedId: '' });
+        vi.mocked(fetchSyncOps).mockImplementationOnce(async () => {
+            await db.put('syncCursors', { userId: USER_ID, lastSyncedTs: '2025-09-01T00:00:00.000Z', lastSyncedId: 'op-newer' });
+            return { ops: [], serverTs: '2025-03-01T00:00:00.000Z', serverId: 'op-older' };
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const cursor = await db.get('syncCursors', USER_ID);
+        expect(cursor?.lastSyncedTs).toBe('2025-09-01T00:00:00.000Z');
+        expect(cursor?.lastSyncedId).toBe('op-newer');
+    });
+
+    // The Web Lock is the cross-context half of the apply-race fix (module guards don't reach the
+    // Service Worker); these wiring tests pin that pull AND bootstrap actually request it, since a
+    // silently-unwrapped path would revert to unserialized applies with no test noticing.
+    describe('cross-context apply lock wiring', () => {
+        function installRecordingLocks(): string[] {
+            const names: string[] = [];
+            const request = vi.fn((name: string, cb: () => Promise<unknown>) => {
+                names.push(name);
+                return cb();
+            });
+            Object.defineProperty(navigator, 'locks', { value: { request }, configurable: true });
+            return names;
+        }
+
+        afterEach(() => {
+            Reflect.deleteProperty(navigator, 'locks');
+        });
+
+        it('doPull runs under the gtd-sync-apply Web Lock', async () => {
+            const names = installRecordingLocks();
+            vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [], serverTs: '2025-06-01T00:00:00.000Z', serverId: '' });
+
+            await pullFromServer(db, USER_ID);
+
+            expect(names).toContain(SYNC_APPLY_LOCK);
+        });
+
+        it('bootstrap runs under the gtd-sync-apply Web Lock', async () => {
+            const names = installRecordingLocks();
+            vi.mocked(fetchBootstrap).mockResolvedValueOnce({
+                items: [],
+                routines: [],
+                people: [],
+                workContexts: [],
+                serverTs: '2025-06-01T00:00:00.000Z',
+                serverId: MAX_OP_ID,
+            });
+
+            await bootstrapFromServer(db, USER_ID);
+
+            expect(names).toContain(SYNC_APPLY_LOCK);
+        });
+    });
+
     it('advances the per-user compound cursor to (serverTs, serverId) after a successful pull', async () => {
         const serverTs = '2025-09-01T12:00:00.000Z';
         const serverId = 'op-9f29';
@@ -617,17 +785,22 @@ describe('pullFromServer — item ops', () => {
         // First call: server returns ops but applyServerOp throws — cursor stays at epoch.
         const op = { entityType: 'item' as const, entityId: 'lost-item', opType: 'create' as const, snapshot: serverItem('lost-item') };
         vi.mocked(fetchSyncOps).mockResolvedValueOnce({ ops: [op], serverTs: '2026-02-01T00:00:00.000Z', serverId: '' });
-        // Force the first items-store put to fail so setLastSyncedTs never runs. The default
-        // implementation delegates back to the real db.put so the second call (the retry) and
-        // the cursor write inside setLastSyncedTs both succeed.
-        const originalPut = db.put.bind(db);
-        const passthrough = ((store: string, value: unknown, key?: IDBValidKey) => originalPut(store as never, value as never, key as never)) as typeof db.put;
-        vi.spyOn(db, 'put')
-            .mockImplementationOnce(((store: string, value: unknown, key?: IDBValidKey) => {
-                if (store === 'items') return Promise.reject(new Error('IDB transaction aborted'));
-                return originalPut(store as never, value as never, key as never);
-            }) as typeof db.put)
-            .mockImplementation(passthrough);
+        // Force the first items-store APPLY to fail so setSyncCursor never runs. applyEntityOp
+        // opens one readwrite transaction per op (the atomic read-check-write), so the injection
+        // point is db.transaction — after the once-mock is consumed the spy falls back to the real
+        // implementation, letting the retry and the cursor write succeed.
+        // Flag rather than mockImplementationOnce: idb's convenience helpers (db.get etc.) also
+        // route through db.transaction, so a once-mock would be consumed by an earlier unrelated
+        // store before the items apply ever runs.
+        const originalTransaction = db.transaction.bind(db);
+        let injectedFailure = false;
+        vi.spyOn(db, 'transaction').mockImplementation(((...args: Parameters<typeof db.transaction>) => {
+            if (!injectedFailure && args[0] === 'items') {
+                injectedFailure = true;
+                throw new Error('IDB transaction aborted');
+            }
+            return originalTransaction(...args);
+        }) as typeof db.transaction);
 
         await expect(pullFromServer(db, USER_ID)).rejects.toThrow('IDB transaction aborted');
 

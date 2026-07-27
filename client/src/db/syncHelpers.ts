@@ -17,12 +17,10 @@ import type {
     SyncOperation,
 } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
+import { SYNC_APPLY_LOCK, withCrossContextLock } from './crossContextLock';
 import { getOrCreateDeviceId, getSyncCursor, MAX_OP_ID, setSyncCursor } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
-import { bulkPutItems, deleteItemById, putItem } from './itemHelpers';
-import { deletePersonById, putPerson } from './personHelpers';
-import { deleteRoutineById, putRoutine } from './routineHelpers';
-import { deleteWorkContextById, putWorkContext } from './workContextHelpers';
+import { bulkPutItems } from './itemHelpers';
 
 interface BaseSyncOpParams {
     entityType: EntityType;
@@ -321,7 +319,13 @@ export function bootstrapFromServer(db: IDBPDatabase<MyDB>, userId: string): Pro
     return withSessionGate(() => bootstrapFromServerUnguarded(db, userId));
 }
 
-/** Bootstrap without acquiring the session gate. Caller must already hold it. */
+/**
+ * Bootstrap without acquiring the session gate. Caller must already hold it. The IDB hydration runs
+ * under the cross-context apply lock: the session gate is per-context, so without the lock a
+ * Service Worker pull could interleave entity writes with this tab's snapshot hydration. The
+ * network fetch stays OUTSIDE the lock — holding it across a slow request would wedge every other
+ * context's sync for the duration (the exact failure mode the session gate's timeout exists for).
+ */
 export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
     await assertActiveSessionMatches(db, userId, 'bootstrapFromServer');
     const deviceId = await getOrCreateDeviceId(db);
@@ -335,21 +339,23 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
     const mappedPeople = people.map((doc) => remapUser(doc) as unknown as StoredPerson);
     const mappedWorkContexts = workContexts.map((doc) => remapUser(doc) as unknown as StoredWorkContext);
 
-    await bulkPutItems(db, mappedItems);
+    await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
+        await bulkPutItems(db, mappedItems);
 
-    const routinesTx = db.transaction('routines', 'readwrite');
-    await Promise.all([...mappedRoutines.map((r) => routinesTx.store.put(r)), routinesTx.done]);
+        const routinesTx = db.transaction('routines', 'readwrite');
+        await Promise.all([...mappedRoutines.map((r) => routinesTx.store.put(r)), routinesTx.done]);
 
-    const peopleTx = db.transaction('people', 'readwrite');
-    await Promise.all([...mappedPeople.map((p) => peopleTx.store.put(p)), peopleTx.done]);
+        const peopleTx = db.transaction('people', 'readwrite');
+        await Promise.all([...mappedPeople.map((p) => peopleTx.store.put(p)), peopleTx.done]);
 
-    const workContextsTx = db.transaction('workContexts', 'readwrite');
-    await Promise.all([...mappedWorkContexts.map((wc) => workContextsTx.store.put(wc)), workContextsTx.done]);
+        const workContextsTx = db.transaction('workContexts', 'readwrite');
+        await Promise.all([...mappedWorkContexts.map((wc) => workContextsTx.store.put(wc)), workContextsTx.done]);
 
-    // Per-user compound cursor at (serverTs, serverId) — the snapshot already delivered the current
-    // state, so incremental pull starts from here. serverId is MAX_OP_ID (suppresses re-delivery of
-    // ops at exactly serverTs); fall back to that sentinel if an old server omits it.
-    await setSyncCursor(db, userId, serverTs, serverId ?? MAX_OP_ID);
+        // Per-user compound cursor at (serverTs, serverId) — the snapshot already delivered the current
+        // state, so incremental pull starts from here. serverId is MAX_OP_ID (suppresses re-delivery of
+        // ops at exactly serverTs); fall back to that sentinel if an old server omits it.
+        await setSyncCursor(db, userId, serverTs, serverId ?? MAX_OP_ID);
+    });
 }
 
 // Active-session-dependent operations (pulls, orchestrator passes) all read or mutate the global
@@ -469,50 +475,80 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
         ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}@${(op.snapshot as { updatedTs?: string } | null)?.updatedTs ?? 'n/a'}`),
     );
 
-    for (const op of ops) {
-        await applyServerOp(db, userId, op);
+    // Cross-context lock around apply + ack: `pullInFlight`/`sessionGate` only dedupe within THIS
+    // context, but every tab and the Service Worker share one IndexedDB. Two contexts pulling
+    // different accounts can interleave applies for the same entityId (a cross-account reassign
+    // emits delete+create under two users) — the delete's owner guard then reads a row the other
+    // context is mid-replace, and the entity vanishes from IDB while the server stays correct.
+    // The network fetch above deliberately stays OUTSIDE the lock so a slow request can't wedge
+    // every other context's sync; the per-op transaction in `applyEntityOp` is the second layer
+    // for browsers without Web Locks.
+    await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
+        for (const op of ops) {
+            await applyServerOp(db, userId, op);
+        }
+        await advanceSyncCursor(db, userId, serverTs, serverId ?? '');
+    });
+}
+
+/**
+ * Forward-only cursor write. Because the fetch runs outside the apply lock, another context may
+ * have pulled the SAME user meanwhile and advanced the cursor past this response's `serverTs` —
+ * re-applying that older op range is harmless (idempotent LWW snapshots), but blindly writing its
+ * boundary would REWIND the cursor and re-fetch the range on every subsequent pull.
+ * `serverId ?? ''` (caller) guards against an old server omitting the id — '' keeps $gte boundary
+ * re-check semantics (safe).
+ */
+async function advanceSyncCursor(db: IDBPDatabase<MyDB>, userId: string, serverTs: string, serverId: string): Promise<void> {
+    const current = await getSyncCursor(db, userId);
+    const isForward = serverTs > current.ts || (serverTs === current.ts && serverId > current.id);
+    if (isForward) {
+        await setSyncCursor(db, userId, serverTs, serverId);
     }
-
-    // serverId ?? '' guards against an old server that omits it — '' keeps $gte boundary re-check semantics (safe).
-    await setSyncCursor(db, userId, serverTs, serverId ?? '');
-}
-
-// Handlers for each entity type used by applyEntityOp to stay DRY across entity types.
-// Each entry provides the three DB operations needed to apply a server op.
-interface EntityApplyHandlers {
-    getExisting: (id: string) => Promise<{ updatedTs: string; userId: string } | undefined>;
-    put: (entity: unknown) => Promise<void>;
-    remove: (id: string) => Promise<void>;
-}
-
-function buildEntityHandlers(db: IDBPDatabase<MyDB>): Record<EntityType, EntityApplyHandlers> {
-    return {
-        item: {
-            getExisting: (id) => db.get('items', id),
-            put: (e) => putItem(db, e as StoredItem),
-            remove: (id) => deleteItemById(db, id),
-        },
-        routine: {
-            getExisting: (id) => db.get('routines', id),
-            put: (e) => putRoutine(db, e as StoredRoutine),
-            remove: (id) => deleteRoutineById(db, id),
-        },
-        person: {
-            getExisting: (id) => db.get('people', id),
-            put: (e) => putPerson(db, e as StoredPerson),
-            remove: (id) => deletePersonById(db, id),
-        },
-        workContext: {
-            getExisting: (id) => db.get('workContexts', id),
-            put: (e) => putWorkContext(db, e as StoredWorkContext),
-            remove: (id) => deleteWorkContextById(db, id),
-        },
-    };
 }
 
 async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: ServerOp): Promise<void> {
-    const handlers = buildEntityHandlers(db);
-    await applyEntityOp(pullUserId, op, handlers[op.entityType]);
+    // Exhaustive switch rather than a lookup map: pairing each entityType literal with its store
+    // literal keeps `tx.store.put` typed to THAT store's value. A union-typed store name would
+    // widen put to accept any entity into any store, silently allowing cross-store corruption from
+    // a malformed wire op.
+    switch (op.entityType) {
+        case 'item':
+            return applyEntityOp(db, 'items', pullUserId, op);
+        case 'routine':
+            return applyEntityOp(db, 'routines', pullUserId, op);
+        case 'person':
+            return applyEntityOp(db, 'people', pullUserId, op);
+        case 'workContext':
+            return applyEntityOp(db, 'workContexts', pullUserId, op);
+        default: {
+            // Compile-time exhaustiveness: a new EntityType without a case here becomes a type
+            // error instead of a silent runtime no-op for that entity's ops.
+            const unreachable: never = op.entityType;
+            throw new Error(`applyServerOp: unhandled entityType ${String(unreachable)}`);
+        }
+    }
+}
+
+/** The IDB stores that back syncable entities. */
+type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts';
+
+/**
+ * Ordinary clock skew between devices must never trip the poisoned-watermark escape below —
+ * only a genuinely wrong timestamp (hours ahead, e.g. derived from a local date) qualifies.
+ */
+const POISONED_WATERMARK_TOLERANCE_MINUTES = 5;
+
+/**
+ * A local row stamped in the FUTURE rejects every legitimately-newer inbound edit until the wall
+ * clock catches up — the poisoned-watermark incident (a calendar edit was silently dropped for
+ * hours). The server now clamps future `updatedTs` on write, but its correcting echo is by
+ * construction OLDER than the poisoned local row, so plain LWW can never repair the device that
+ * created the poison. When the local watermark is impossibly far ahead of now, let the inbound
+ * snapshot win regardless of LWW.
+ */
+function isPoisonedWatermark(existingUpdatedTs: string): boolean {
+    return dayjs(existingUpdatedTs).isAfter(dayjs().add(POISONED_WATERMARK_TOLERANCE_MINUTES, 'minute'));
 }
 
 /**
@@ -521,28 +557,37 @@ async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: Ser
  * to that user. Without this guard, a cross-account reassign emits two ops with the same entityId
  * (delete under source, create under target). If the orchestrator pulls target before source, the
  * source's later delete blindly removes the post-move row by `_id` — the entity disappears.
+ *
+ * The whole read-check-write runs inside ONE readwrite transaction: IndexedDB serializes
+ * overlapping readwrite transactions per store, so the owner/LWW check and the write it guards are
+ * atomic even against another JS context (tab or Service Worker) applying ops or a local mutation
+ * landing concurrently. Separate awaited get-then-put calls left a TOCTOU window that let a
+ * reassign's delete op remove the freshly-reassigned row another context had just written.
  */
-async function applyEntityOp(pullUserId: string, op: ServerOp, handlers: EntityApplyHandlers): Promise<void> {
+async function applyEntityOp<Name extends EntityStoreName>(db: IDBPDatabase<MyDB>, storeName: Name, pullUserId: string, op: ServerOp): Promise<void> {
+    const tx = db.transaction(storeName, 'readwrite');
+    const existing = (await tx.store.get(op.entityId)) as { updatedTs: string; userId: string } | undefined;
     if (op.opType === 'delete') {
-        const existing = await handlers.getExisting(op.entityId);
         if (existing && existing.userId !== pullUserId) {
             console.log(
                 `[debug-gcal-sync][client] applyEntityOp delete skipped — owner mismatch | type=${op.entityType} id=${op.entityId} pullUserId=${pullUserId} existingUserId=${existing.userId}`,
             );
+            await tx.done;
             return;
         }
-        await handlers.remove(op.entityId);
+        await tx.store.delete(op.entityId);
+        await tx.done;
         return;
     }
     if (!op.snapshot) {
+        await tx.done;
         return;
     }
-    // Cast to the minimal shape needed here (updatedTs for conflict resolution);
-    // handlers.put receives the full object as unknown and re-casts to the concrete type.
-    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as { updatedTs: string };
-    const existing = await handlers.getExisting(op.entityId);
-    if (!existing || existing.updatedTs <= incoming.updatedTs) {
-        await handlers.put(incoming);
+    // Wire-data trust boundary: the remapped server snapshot is cast to this store's value type —
+    // the same trust the previous per-entity helpers placed in `e as StoredItem` etc.
+    const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as MyDB[Name]['value'] & { updatedTs: string };
+    if (!existing || existing.updatedTs <= incoming.updatedTs || isPoisonedWatermark(existing.updatedTs)) {
+        await tx.store.put(incoming);
         console.log(
             `[debug-gcal-sync][client] applyEntityOp put | type=${op.entityType} id=${op.entityId} existingTs=${existing?.updatedTs ?? 'none'} incomingTs=${incoming.updatedTs}`,
         );
@@ -551,4 +596,5 @@ async function applyEntityOp(pullUserId: string, op: ServerOp, handlers: EntityA
             `[debug-gcal-sync][client] applyEntityOp skipped (LWW) | type=${op.entityType} id=${op.entityId} existingTs=${existing.updatedTs} incomingTs=${incoming.updatedTs}`,
         );
     }
+    await tx.done;
 }

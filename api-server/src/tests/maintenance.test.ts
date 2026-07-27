@@ -499,7 +499,15 @@ describe('POST /maintenance/heal-duplicate-calendar-items', () => {
 
 // ─── POST /maintenance/heal-stuck-gcal-routines ───────────────────────────────
 
-async function seedRoutine(opts: { id: string; userId: string; rrule: string; active: boolean; calendarEventId?: string; updatedTs?: string }) {
+async function seedRoutine(opts: {
+    id: string;
+    userId: string;
+    rrule: string;
+    active: boolean;
+    calendarEventId?: string;
+    updatedTs?: string;
+    retiredByGCal?: boolean;
+}) {
     await db.collection('routines').insertOne({
         _id: opts.id,
         user: opts.userId,
@@ -508,6 +516,7 @@ async function seedRoutine(opts: { id: string; userId: string; rrule: string; ac
         rrule: opts.rrule,
         template: {},
         active: opts.active,
+        ...(opts.retiredByGCal ? { retiredByGCal: true } : {}),
         calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
         ...(opts.calendarEventId !== undefined ? { calendarEventId: opts.calendarEventId, calendarIntegrationId: 'int-1' } : {}),
         createdTs: '2026-01-01T00:00:00.000Z',
@@ -547,6 +556,30 @@ describe('POST /maintenance/heal-stuck-gcal-routines', () => {
         expect(itemOps.length).toBeGreaterThan(0);
         const liveItems = await db.collection('items').find({ user: userId, routineId: 'r-stuck', status: 'calendar' }).toArray();
         expect(liveItems.length).toBeGreaterThan(0);
+    });
+
+    it('never revives a routine retired by a GCal cancellation (retiredByGCal marker)', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        // Exactly the shape a cancellation retirement leaves behind — inactive AND capped in the past —
+        // which without the marker this heal matches and resurrects, regenerating the phantom items the
+        // retirement just removed.
+        await seedRoutine({
+            id: 'r-retired',
+            userId,
+            rrule: 'FREQ=WEEKLY;WKST=SU;UNTIL=20251210T215959Z;BYDAY=MO,TU,WE',
+            active: false,
+            calendarEventId: 'evt-retired',
+            retiredByGCal: true,
+        });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedRoutines: number };
+        expect(body.revivedRoutines).toBe(0);
+        const routine = await db.collection('routines').findOne({ _id: 'r-retired' });
+        expect(routine?.active).toBe(false);
+        expect(routine?.rrule).toContain('UNTIL=');
+        expect(await db.collection('items').countDocuments({ user: userId, routineId: 'r-retired' })).toBe(0);
     });
 
     it('leaves a healthy active routine (future UNTIL, active) untouched', async () => {
@@ -742,6 +775,28 @@ describe('POST /maintenance/heal-split-successor-routines', () => {
         expect(body.revivedSuccessors).toBe(0);
         const active = await db.collection('routines').find({ user: userId, calendarEventId: 'evt-ambig', active: true }).toArray();
         expect(active).toHaveLength(0);
+    });
+
+    it('does not revive a successor whose series was cancelled outright (retiredByGCal marker)', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        // The direct cancelled-master path retires WITHOUT capping, so a retired successor can look
+        // exactly like a stranded split tail (paused + open rrule) next to its capped parent stump.
+        await seedRoutine({ id: 'stump', userId, rrule: 'FREQ=WEEKLY;UNTIL=20251110T215959Z;BYDAY=MO', active: false, calendarEventId: 'evt-dead' });
+        await seedRoutine({
+            id: 'retired-tail',
+            userId,
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            active: false,
+            calendarEventId: 'evt-dead',
+            updatedTs: '2026-05-24T00:00:00.000Z',
+            retiredByGCal: true,
+        });
+
+        const res = await heal(cookie);
+        const body = (await res.json()) as { revivedSuccessors: number };
+        expect(body.revivedSuccessors).toBe(0);
+        expect((await db.collection('routines').findOne({ _id: 'retired-tail' }))?.active).toBe(false);
     });
 
     it('does not revive a deliberately-paused single routine with no capped sibling', async () => {

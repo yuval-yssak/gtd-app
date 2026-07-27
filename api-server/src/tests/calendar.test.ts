@@ -15,7 +15,7 @@ import { regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js'
 import * as sseConnections from '../lib/sseConnections.js';
 import * as webPush from '../lib/webPush.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { calendarRoutes, classifyRecurringMaster, pickSplitParent } from '../routes/calendar.js';
+import { bareIdsWithLiveMasterInBatch, calendarRoutes, classifyRecurringMaster, pickSplitParent } from '../routes/calendar.js';
 import { maintenanceRoutes } from '../routes/maintenance.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
@@ -9242,6 +9242,107 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
         expect(routine!.lastSyncedFromGCalTs).toBe(gcalUpdated);
     });
 
+    it('clears retiredByGCal when a confirmed master proves the series alive again', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // A reap-retired routine (capped + paused + marked). If the user later restores the series in
+        // GCal, the inbound confirmed master must both revive the routine (newlyLosesUntil) AND drop
+        // the stale marker — otherwise the /maintenance heals keep treating the live routine as a
+        // deliberate retirement forever.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'recurring-master-revived',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Daily sync',
+                rrule: 'FREQ=WEEKLY;WKST=SU;UNTIL=20251210T215959Z;BYDAY=MO,TU,WE',
+                active: false,
+                retiredByGCal: true,
+                lastSyncedFromGCalTs: undefined,
+            }),
+        );
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-revived',
+                    title: 'Daily sync',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    updated: dayjs().subtract(2, 'hour').toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-revived' });
+        expect(routine!.active).toBe(true);
+        expect(routine!.retiredByGCal).toBeUndefined();
+    });
+
+    it('does NOT clear retiredByGCal from an out-of-order older payload', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // A notes-only change on a payload OLDER than the structural anchor rides the merge path past
+        // the !structurallyNewer early return — the one reachable way a stale payload meets the marker.
+        // A fresher cancellation set this marker; a stale confirmed payload must not clear it, or a
+        // delayed webhook replay would strip the heal protection right after the retirement.
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'recurring-master-stale-payload',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                title: 'Daily sync',
+                rrule: 'FREQ=WEEKLY;WKST=SU;UNTIL=20251210T215959Z;BYDAY=MO,TU,WE',
+                active: false,
+                retiredByGCal: true,
+                updatedTs: dayjs().subtract(3, 'hour').toISOString(),
+                lastSyncedFromGCalTs: dayjs().toISOString(),
+                lastSyncedNotes: '<p>old</p>',
+            }),
+        );
+
+        const futureTs = dayjs().add(1, 'day').toISOString();
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'recurring-master-stale-payload',
+                    title: 'Daily sync',
+                    timeStart: futureTs,
+                    timeEnd: futureTs,
+                    // Older than the anchor (structurallyNewer=false) but newer than local updatedTs,
+                    // so the notes conflict resolves to GCal and the merge path actually runs.
+                    updated: dayjs().subtract(2, 'hour').toISOString(),
+                    status: 'confirmed',
+                    description: '<p>new</p>',
+                    recurrence: ['RRULE:FREQ=WEEKLY;WKST=SU;BYDAY=MO,TU,WE'],
+                },
+            ],
+            nextSyncToken: 'tok-1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ calendarEventId: 'recurring-master-stale-payload' });
+        // Load-bearing: proves the merge path ran (payload not rejected outright) …
+        expect(routine!.template.notes).toBe('new');
+        // … and yet the stale payload neither cleared the marker nor revived the routine.
+        expect(routine!.retiredByGCal).toBe(true);
+        expect(routine!.active).toBe(false);
+        expect(routine!.rrule).toContain('UNTIL=');
+    });
+
     it('does NOT reactivate a user-paused routine on a still-uncapped series (newlyLosesUntil guard)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
@@ -9877,6 +9978,299 @@ describe('POST /calendar/integrations/:id/sync — recurring event import', () =
         expect(past!.title).toBe('Old name');
         const future = await itemsDAO.findOne({ _id: 'item-future' });
         expect(future!.title).toBe('New name');
+    });
+});
+
+// ── Cancelled master → orphaned split-successor reap ──────────────────────
+//
+// A "this and all following" split leaves TWO routines on one bare GCal id: the capped base and the live
+// successor. `findExistingRoutineForEvent` resolves that bare id to the BASE (so a capped master can't
+// clobber the live successor on the update path), which means a cancellation retires only the base and
+// strands the successor active + open-ended, generating phantom items at the old time forever. The reap
+// sweep closes that hole — but must not fire when the batch also carries the tail's own live master.
+
+const CANCELLED_MASTER_TITLE = 'Standup';
+
+/** Seeds a split series on one bare id: capped/inactive base + active successor (optionally `_R`-anchored). */
+async function seedSplitSeries(userId: string, bareId: string, successorOverrides: Partial<RoutineInterface> = {}): Promise<void> {
+    const link = { calendarEventId: bareId, calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' };
+    await routinesDAO.insertOne(
+        makeRoutine(userId, {
+            ...link,
+            _id: `${bareId}-base`,
+            title: CANCELLED_MASTER_TITLE,
+            rrule: 'FREQ=WEEKLY;UNTIL=20260101T235959Z;BYDAY=MO',
+            active: false,
+        }),
+    );
+    await routinesDAO.insertOne(
+        makeRoutine(userId, {
+            ...link,
+            _id: `${bareId}-successor`,
+            title: CANCELLED_MASTER_TITLE,
+            splitFromRoutineId: `${bareId}-base`,
+            active: true,
+            ...successorOverrides,
+        }),
+    );
+}
+
+/** A cancelled master tombstone as GCal delivers it — no recurrence, no times. */
+function cancelledMaster(id: string): GCalEvent {
+    return { id, title: '', timeStart: '', timeEnd: '', updated: dayjs().toISOString(), status: 'cancelled' };
+}
+
+/** A live master — the tail that keeps a series alive. `rrule` defaults to open-ended. */
+function liveMaster(id: string, rrule = 'FREQ=WEEKLY;BYDAY=MO'): GCalEvent {
+    const start = dayjs().add(1, 'day');
+    return {
+        id,
+        title: CANCELLED_MASTER_TITLE,
+        timeStart: start.format('YYYY-MM-DDT09:00:00'),
+        timeEnd: start.format('YYYY-MM-DDT09:30:00'),
+        updated: dayjs().toISOString(),
+        status: 'confirmed',
+        recurrence: [`RRULE:${rrule}`],
+    };
+}
+
+/** The single active routine on a series, asserting there is exactly one (catches duplicate twins). */
+async function expectSoleActiveRoutine(userId: string, bareId: string): Promise<RoutineInterface> {
+    const active = await routinesDAO.findArray({ user: userId, calendarEventId: bareId, active: true });
+    expect(active).toHaveLength(1);
+    const [live] = active;
+    if (!live) throw new Error('expected exactly one active routine on the series');
+    return live;
+}
+
+describe('cancelled master — orphaned split-successor reap', () => {
+    beforeEach(() => {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+    });
+
+    it('retires a legacy successor sharing the bare id, trashing its future items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Legacy successor: no calendarRebasedEventId, so no master of its own will ever cancel it.
+        await seedSplitSeries(userId, 'master-orphan');
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-orphan-future', title: CANCELLED_MASTER_TITLE, routineId: 'master-orphan-successor' }));
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [cancelledMaster('master-orphan')],
+            nextSyncToken: 'tok-orphan',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const successor = await routinesDAO.findOne({ _id: 'master-orphan-successor' });
+        expect(successor!.active).toBe(false);
+        // Capped as well as paused, so `newlyLosesUntil` can revive it if GCal ever reports the series live.
+        expect(successor!.rrule).toContain('UNTIL=');
+        // Marked as a deliberate GCal retirement so the /maintenance heals ("Repair sync") never
+        // resurrect it — without this, healStuckGCalRoutines matches the capped+paused shape and
+        // regenerates every phantom item this reap just trashed.
+        expect(successor!.retiredByGCal).toBe(true);
+        const item = await itemsDAO.findOne({ _id: 'item-orphan-future' });
+        expect(item!.status).toBe('trash');
+    });
+
+    // Pins the use of the RAW `_R` id rather than the normalized bare id: swapping them would still pass
+    // the other tests here while silently sparing every genuinely-dead tail.
+    it('retires a rebased successor when its OWN _R master is the one cancelled', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const rebasedId = 'master-own_R20260102T090000';
+        await seedSplitSeries(userId, 'master-own', { calendarRebasedEventId: rebasedId });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [cancelledMaster(rebasedId)],
+            nextSyncToken: 'tok-own',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const successor = await routinesDAO.findOne({ _id: 'master-own-successor' });
+        expect(successor!.active).toBe(false);
+        expect(successor!.rrule).toContain('UNTIL=');
+    });
+
+    it('spares a rebased successor when only the base segment master is cancelled', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedSplitSeries(userId, 'master-spare', { calendarRebasedEventId: 'master-spare_R20260102T090000' });
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-spare-future', title: CANCELLED_MASTER_TITLE, routineId: 'master-spare-successor' }));
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [cancelledMaster('master-spare')],
+            nextSyncToken: 'tok-spare',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const live = await expectSoleActiveRoutine(userId, 'master-spare');
+        expect(live._id).toBe('master-spare-successor');
+        // The user-visible damage of a false reap is trashed items, not the flag — assert they survive.
+        const item = await itemsDAO.findOne({ _id: 'item-spare-future' });
+        expect(item!.status).toBe('calendar');
+    });
+
+    // Same-batch guard 1 (anchor-less successor): a full sync after a base deletion re-reports the live
+    // tail alongside the cancelled base. Reaping in phase 1 killed the routine phase 2 then re-created as
+    // a duplicate twin — hence the exactly-one-active assertion.
+    it('spares an anchor-less successor when the batch also carries a live _R master', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedSplitSeries(userId, 'master-batch1');
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [cancelledMaster('master-batch1'), liveMaster('master-batch1_R20260102T090000')],
+            nextSyncToken: 'tok-batch1',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const live = await expectSoleActiveRoutine(userId, 'master-batch1');
+        expect(live._id).toBe('master-batch1-successor');
+    });
+
+    // Same-batch guard 2 (re-split): applying "this and all following" to a segment's FIRST occurrence
+    // empties it, so GCal cancels that _R master and mints a new one. Reaping in phase 1 paused the
+    // successor with an OPEN rrule, which no reactivation gate can undo — the series died with zero
+    // active routines.
+    it('spares a rebased successor being re-split within the same batch', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedSplitSeries(userId, 'master-batch2', { calendarRebasedEventId: 'master-batch2_R20260102T090000' });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [cancelledMaster('master-batch2_R20260102T090000'), liveMaster('master-batch2_R20260201T090000')],
+            nextSyncToken: 'tok-batch2',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const live = await expectSoleActiveRoutine(userId, 'master-batch2');
+        expect(live._id).toBe('master-batch2-successor');
+    });
+
+    // A sibling capped with a FUTURE UNTIL still produces occurrences for months — the series is alive.
+    // Treating liveness as "open-ended only" reaped it, and unrecoverably: `newlyLosesUntil` waits for an
+    // inbound OPEN rrule that a permanently-capped tail never sends.
+    it('spares a successor when the batch carries a sibling capped in the future', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await seedSplitSeries(userId, 'master-capped');
+        await itemsDAO.insertOne(makeItem(userId, { _id: 'item-capped-future', title: CANCELLED_MASTER_TITLE, routineId: 'master-capped-successor' }));
+
+        const futureUntil = dayjs().add(60, 'day').format('YYYYMMDD[T235959Z]');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [cancelledMaster('master-capped'), liveMaster('master-capped_R20260102T090000', `FREQ=WEEKLY;BYDAY=MO;UNTIL=${futureUntil}`)],
+            nextSyncToken: 'tok-capped',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const live = await expectSoleActiveRoutine(userId, 'master-capped');
+        expect(live._id).toBe('master-capped-successor');
+        const item = await itemsDAO.findOne({ _id: 'item-capped-future' });
+        expect(item!.status).toBe('calendar');
+    });
+
+    // `findActiveRoutineOnSeries` returns ANY active routine on the series — including a plain base with no
+    // successor markers that phase 1's cancelled branch just declined to touch as our own echo. The reap
+    // must honour that same window rather than silently overriding it on a pre-existing path.
+    it('honours the own-echo window and leaves a just-pushed routine alone', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const now = dayjs().toISOString();
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-echo',
+                calendarEventId: 'master-echo',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                active: true,
+                lastPushedToGCalTs: now,
+            }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [{ ...cancelledMaster('master-echo'), updated: now }],
+            nextSyncToken: 'tok-echo',
+        });
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ _id: 'routine-echo' });
+        expect(routine!.active).toBe(true);
+        expect(routine!.rrule).not.toContain('UNTIL=');
+    });
+});
+
+// ─── bareIdsWithLiveMasterInBatch — unit tests ────────────────────────────
+//
+// The reap's liveness predicate: which bare series ids still have a master producing occurrences. Getting
+// this wrong in the "dead" direction retires a live series, so pin each case directly rather than only
+// through the sync route.
+
+describe('bareIdsWithLiveMasterInBatch', () => {
+    const now = '2026-07-27T12:00:00.000Z';
+    const master = (id: string, overrides: Partial<GCalEvent> = {}): GCalEvent => ({
+        id,
+        title: 'Standup',
+        timeStart: '2026-07-28T09:00:00',
+        timeEnd: '2026-07-28T09:30:00',
+        updated: now,
+        status: 'confirmed',
+        recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+        ...overrides,
+    });
+
+    it('counts an open-ended master as live', () => {
+        expect(bareIdsWithLiveMasterInBatch([master('evt-open')], now)).toEqual(new Set(['evt-open']));
+    });
+
+    it('counts a master capped in the future as live — it still produces occurrences', () => {
+        const capped = master('evt-future', { recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260925T235959Z'] });
+        expect(bareIdsWithLiveMasterInBatch([capped], now)).toEqual(new Set(['evt-future']));
+    });
+
+    // A capped all-day series legally emits a date-only UNTIL; pins that it parses rather than falling through.
+    it('counts a master capped with a date-only future UNTIL as live', () => {
+        const capped = master('evt-dateonly', { recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260925'] });
+        expect(bareIdsWithLiveMasterInBatch([capped], now)).toEqual(new Set(['evt-dateonly']));
+    });
+
+    it('treats a master capped in the past as dead — the finished stump a split leaves behind', () => {
+        const stump = master('evt-past', { recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260606T205959Z'] });
+        expect(bareIdsWithLiveMasterInBatch([stump], now)).toEqual(new Set());
+    });
+
+    it('treats a cancelled master as dead regardless of its rrule', () => {
+        expect(bareIdsWithLiveMasterInBatch([master('evt-cancelled', { status: 'cancelled' })], now)).toEqual(new Set());
+    });
+
+    it('treats a master with no recurrence as dead — the series is no longer recurring', () => {
+        const { recurrence: _omitted, ...single } = master('evt-single');
+        expect(bareIdsWithLiveMasterInBatch([single], now)).toEqual(new Set());
+    });
+
+    it('normalizes _R rebased ids onto the bare series id', () => {
+        expect(bareIdsWithLiveMasterInBatch([master('evt-bare_R20260102T090000')], now)).toEqual(new Set(['evt-bare']));
     });
 });
 

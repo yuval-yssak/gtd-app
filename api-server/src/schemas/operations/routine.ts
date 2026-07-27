@@ -115,6 +115,9 @@ export const RoutineSnapshotSchema = z
         htmlLink: z.string().optional(),
         template: routineItemTemplateSchema,
         active: z.boolean(),
+        // GCal-cancellation retirement marker — see entities.ts. Clients echo it back in snapshots,
+        // so the strict op schema must accept it or every marked routine's update op jams the queue.
+        retiredByGCal: z.boolean().optional(),
         createdTs: isoDateTime,
         updatedTs: isoDateTime,
         startDate: isoDate.optional(),

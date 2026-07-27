@@ -139,6 +139,8 @@ export interface StoredRoutine {
     eventType?: GCalEventType;
     template: StoredRoutineTemplate;
     active: boolean;
+    /** True when GCal cancelled this routine's series and the server retired it — see RoutineInterface. Server-owned; echoed back in snapshots. */
+    retiredByGCal?: boolean;
     createdTs: string;
     updatedTs: string;
     /**

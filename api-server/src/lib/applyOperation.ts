@@ -65,6 +65,55 @@ export class OperationValidationError extends Error {
 }
 
 /**
+ * Caps a client-supplied `updatedTs` at server time. A device with a fast clock — or an API/MCP
+ * caller deriving timestamps from a local date — otherwise stamps `updatedTs` in the future, and
+ * every later legitimate edit loses last-write-wins to it: the stale snapshot survives on every
+ * device until the poisoned watermark passes (a real incident — a calendar edit was silently
+ * dropped for hours). Only the FUTURE side is clamped, deliberately: an old timestamp on an
+ * offline edit replayed late is meaningful history and must keep losing LWW to newer edits.
+ *
+ * This heals the server and every OTHER device, but not the device that wrote the future
+ * timestamp — the clamped echo is by construction older than its poisoned local row, so plain
+ * LWW rejects it there. The client closes that leg itself: `applyEntityOp` (client
+ * `db/syncHelpers.ts`) treats a local `updatedTs` far ahead of the wall clock as a poisoned
+ * watermark and lets the inbound snapshot win.
+ */
+function clampUpdatedTs(snapshot: EntitySnapshot, now: string): EntitySnapshot {
+    if (snapshot.updatedTs <= now) {
+        return snapshot;
+    }
+    console.warn(`[apply-op] clamping future updatedTs ${snapshot.updatedTs} -> ${now} | entity=${snapshot._id}`);
+    return { ...snapshot, updatedTs: now };
+}
+
+/** Server-side provenance stamped onto every persisted op: which device wrote it, and when. */
+interface OpStamp {
+    deviceId: string;
+    now: string;
+}
+
+/**
+ * Builds the server-authoritative op from a raw client op: server-assigned `_id` and `ts`, the
+ * caller-supplied `user` stripped and re-stamped (the misroute guard in `/sync/push` rejects
+ * mismatches up-front; this is defense in depth), and `updatedTs` clamped to server time.
+ */
+function toServerOperation(userId: string, raw: RawOperation, stamp: OpStamp): OperationInterface {
+    const { deviceId, now } = stamp;
+    return {
+        _id: randomUUID(),
+        user: userId,
+        deviceId,
+        ts: now,
+        entityType: raw.entityType,
+        entityId: raw.entityId,
+        opType: raw.opType,
+        snapshot: raw.snapshot ? clampUpdatedTs({ ...raw.snapshot, user: userId } as EntitySnapshot, now) : null,
+        ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
+        ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
+    };
+}
+
+/**
  * Single shared apply pipeline. Both `/sync/push` and every `/v1/*` write route flow through here
  * so the contract validation, persistence, op log, and notification fan-out can never drift.
  *
@@ -101,22 +150,9 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
         }
     }
 
-    // Step 2 — server-authoritative op. Strip any caller-supplied user from the snapshot and stamp
-    // ours. The misroute guard in `/sync/push` rejects mismatches up-front; we re-stamp here to be
-    // defensive.
+    // Step 2 — server-authoritative op.
     const now = opts.now ?? dayjs().toISOString();
-    const op: OperationInterface = {
-        _id: randomUUID(),
-        user: userId,
-        deviceId: opts.deviceId,
-        ts: now,
-        entityType: raw.entityType,
-        entityId: raw.entityId,
-        opType: raw.opType,
-        snapshot: raw.snapshot ? ({ ...raw.snapshot, user: userId } as EntitySnapshot) : null,
-        ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
-        ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
-    };
+    const op = toServerOperation(userId, raw, { deviceId: opts.deviceId, now });
 
     // Step 3 — delete-op snapshot hydration. Mutates op.snapshot in place so the downstream
     // notify fan-out (GCal pushback, person/workContext reference cascades) has the pre-delete
@@ -222,18 +258,7 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     }
 
     const now = opts.now ?? dayjs().toISOString();
-    const ops: OperationInterface[] = raws.map((raw) => ({
-        _id: randomUUID(),
-        user: userId,
-        deviceId: opts.deviceId,
-        ts: now,
-        entityType: raw.entityType,
-        entityId: raw.entityId,
-        opType: raw.opType,
-        snapshot: raw.snapshot ? ({ ...raw.snapshot, user: userId } as EntitySnapshot) : null,
-        ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
-        ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
-    }));
+    const ops: OperationInterface[] = raws.map((raw) => toServerOperation(userId, raw, { deviceId: opts.deviceId, now }));
 
     // Hydrate delete-op snapshots before the apply Promise.all races against the deletion.
     // Covers items / routines / people / workContexts; needed so the downstream fan-out has the
