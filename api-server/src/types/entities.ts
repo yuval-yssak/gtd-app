@@ -317,6 +317,16 @@ export interface RoutineInterface {
      */
     template: RoutineItemTemplate;
     active: boolean;
+    /**
+     * True when the routine was deactivated because Google Calendar cancelled its series (the
+     * cancelled-master branch or the orphaned-successor reap — both via `deactivateRoutineFromGCal`).
+     * Mirrors `ItemInterface.cancelledByGCal`. The `/maintenance` heal endpoints treat a marked row as
+     * a DELIBERATE retirement and never resurrect it — without this marker, `healStuckGCalRoutines`
+     * matches the exact shape a retirement leaves behind (`!active || past UNTIL`) and regenerates the
+     * phantom items the retirement removed. Cleared whenever a structurally-newer CONFIRMED master
+     * arrives for the routine (GCal itself proving the series alive supersedes the stale marker).
+     */
+    retiredByGCal?: boolean;
     createdTs: string;
     updatedTs: string;
     /**

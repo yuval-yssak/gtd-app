@@ -71,9 +71,14 @@ function hasPastUntil(rrule: string, now: string): boolean {
     return until !== null && dayjs(until).isBefore(dayjs(now));
 }
 
-/** A GCal-linked routine is "stuck" (generates no future items) when it's inactive or capped in the past. */
+/**
+ * A GCal-linked routine is "stuck" (generates no future items) when it's inactive or capped in the past —
+ * UNLESS it carries `retiredByGCal`: that exact shape is what a deliberate cancellation retirement leaves
+ * behind, and reviving it would regenerate the phantom items the retirement removed. A stale marker cannot
+ * strand a live series: an inbound confirmed master clears it (`updateRoutineFromGCal`).
+ */
 function isStuckRoutine(routine: RoutineInterface, now: string): boolean {
-    return Boolean(routine.calendarEventId) && (!routine.active || hasPastUntil(routine.rrule, now));
+    return Boolean(routine.calendarEventId) && !routine.retiredByGCal && (!routine.active || hasPastUntil(routine.rrule, now));
 }
 
 /** Reactivates one stuck routine: strips the past UNTIL, sets active, records the op, regenerates items. */
@@ -128,9 +133,13 @@ function groupBySeries(routines: RoutineInterface[]): RoutineInterface[][] {
     return [...bySeries.values()];
 }
 
-/** True when a routine is the stranded live tail of a GCal split: paused with an OPEN (no-UNTIL) rrule. */
+/**
+ * True when a routine is the stranded live tail of a GCal split: paused with an OPEN (no-UNTIL) rrule.
+ * A `retiredByGCal` row is excluded — its series was cancelled outright (the direct cancelled-master
+ * path retires without capping), so reviving it would resurrect a series GCal deleted.
+ */
 function isStrandedSuccessor(routine: RoutineInterface): boolean {
-    return !routine.active && !routine.rrule.includes('UNTIL=');
+    return !routine.active && !routine.rrule.includes('UNTIL=') && !routine.retiredByGCal;
 }
 
 /**

@@ -40,6 +40,7 @@ import {
     regenerateFutureRoutineItems,
     routineGeneratesOccurrenceOnDate,
 } from '../lib/routineItemRegeneration.js';
+import { addUntilToRrule } from '../lib/routineSplitUtils.js';
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { applyRsvpToAttendees, resolveSyncConfigForItem } from '../lib/rsvpHelpers.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
@@ -2292,6 +2293,9 @@ async function importRecurringMastersOrdered(
             }
         }),
     );
+    // Phase 3: retire successors stranded active on series this batch cancelled. Must run last — see
+    // `reapOrphanedSeriesSuccessors` for why sweeping any earlier destroys a live same-batch tail.
+    await reapOrphanedSeriesSuccessors(masters, source, ctx);
 }
 
 /**
@@ -2448,6 +2452,8 @@ async function importRecurringEventAsRoutine(
     if (event.status === 'cancelled') {
         console.log(`[gcal-sync] deactivating routine | eventId=${event.id} title=${event.title}`);
         await deactivateRoutineFromGCal(existing, ctx);
+        // A successor stranded on this same bare id is retired by `reapOrphanedSeriesSuccessors`, which
+        // runs once the whole batch is imported — see its docstring for why it cannot happen here.
         return;
     }
 
@@ -2514,6 +2520,112 @@ async function importRecurringEventAsRoutine(
 
     console.log(`[gcal-sync] creating routine | eventId=${event.id} title=${event.title} rrule=${rrule}`);
     await createRoutineFromGCal(event, rrule, source, ctx);
+}
+
+/** One cancelled master plus the batch-wide liveness signal needed to judge whether its series is dead. */
+type SeriesCancellation = { master: GCalEvent; liveBareIdsInBatch: Set<string> };
+
+/**
+ * Bare series ids that still have a master PRODUCING OCCURRENCES somewhere in this batch.
+ *
+ * "Open-ended" is too narrow a test for liveness: a confirmed master capped with a FUTURE `UNTIL` (the user
+ * gave the series an end date) keeps generating occurrences for months, and reaping its routine would strand
+ * a live series with no active row — unrecoverably, since `newlyLosesUntil` waits for an inbound OPEN rrule
+ * that a permanently-capped tail will never send. Only a PAST `UNTIL` — the finished stump a split leaves
+ * behind — means the segment can no longer be what keeps the series alive. Erring toward live costs at most
+ * one sync cycle of phantom items; erring toward dead costs the series.
+ *
+ * Exported for unit testing.
+ */
+export function bareIdsWithLiveMasterInBatch(masters: GCalEvent[], now: string): Set<string> {
+    const live = masters.filter((event) => {
+        if (event.status === 'cancelled') {
+            return false;
+        }
+        const rrule = extractRrule(event.recurrence ?? []);
+        if (!rrule) {
+            return false;
+        }
+        const until = extractUntilFromRrule(rrule);
+        return until === null || !dayjs(until).isBefore(dayjs(now));
+    });
+    return new Set(live.map((event) => normalizeMasterEventId(event.id)));
+}
+
+/**
+ * Retire routines left stranded ACTIVE on a series GCal just cancelled.
+ *
+ * A cancelled master kills the WHOLE series, but `importRecurringEventAsRoutine`'s cancelled branch only
+ * retires the ONE routine `findExistingRoutineForEvent` resolved to — and that resolver deliberately
+ * prefers the non-successor BASE (correct on the update path: it stops a capped master from clobbering the
+ * live successor). So a split successor sharing that bare id survives, still active and open-ended, and
+ * keeps generating phantom items at the old time forever. Nothing else reclaims it: once GCal re-splits the
+ * series onto a brand-new master id, phase 2 never visits this bare id again, and a legacy successor
+ * (created before `calendarRebasedEventId` existed) carries no rebased key for phase 2 to match on.
+ *
+ * Runs AFTER phase 2 by design, NOT inline in the cancelled branch. A cancellation and the live tail's own
+ * master routinely arrive in the SAME batch — on every full sync following a base-segment deletion, and
+ * whenever "this and all following" is applied to a segment's FIRST occurrence (that empties the segment,
+ * so GCal cancels it outright rather than capping it). Sweeping during phase 1 would retire the very
+ * routine phase 2 was about to claim, and because phase 2 then finds the unique active slot free it mints
+ * a duplicate twin — or, worse, re-anchors the routine it can no longer reactivate, leaving a live series
+ * with zero active routines and no recovery path. Running last, phase 2 has already re-anchored the live
+ * tail onto its current master, so the rebased-id check below spares it on its own.
+ *
+ * `importBareMasterForSweep` also routes through `importRecurringMastersOrdered`, so this runs there too —
+ * harmless only because `resolveMarkerRoutineGroup` filters cancelled events out before calling it. Revisit
+ * if that filter ever changes, or the relink sweep would reap on a single-event batch with no series context.
+ */
+async function reapOrphanedSeriesSuccessors(masters: GCalEvent[], source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const liveBareIdsInBatch = bareIdsWithLiveMasterInBatch(masters, ctx.now);
+    for (const master of masters.filter((event) => event.status === 'cancelled')) {
+        await reapOrphanedSuccessorIsolated({ master, liveBareIdsInBatch }, source, ctx);
+    }
+}
+
+/** Per-series fault isolation, mirroring `importRecurringMasterIsolated` — a throw here must not wedge the sync. */
+async function reapOrphanedSuccessorIsolated(cancellation: SeriesCancellation, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    try {
+        await reapOrphanedSuccessor(cancellation, source, ctx);
+    } catch (err) {
+        console.error(`[gcal-sync] orphaned-successor reap failed — skipping series | eventId=${cancellation.master.id}`, err);
+    }
+}
+
+async function reapOrphanedSuccessor(cancellation: SeriesCancellation, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const { master, liveBareIdsInBatch } = cancellation;
+    const bareEventId = normalizeMasterEventId(master.id);
+    // A sibling master in this batch still produces occurrences for the series, so the series is not dead.
+    // Phase 2 owns that tail — and if its import threw, leaving the routine alone is still the safe call.
+    if (liveBareIdsInBatch.has(bareEventId)) {
+        return;
+    }
+    const successor = await findActiveRoutineOnSeries(bareEventId, source, ctx);
+    if (!successor) {
+        return;
+    }
+    // Honour the same echo window phase 1's cancelled branch does. `findActiveRoutineOnSeries` returns ANY
+    // active routine on the series — including a plain base with no successor markers that phase 1 just
+    // declined to touch — so without this the reap would silently override that decision on a pre-existing
+    // path. A genuinely orphaned successor's `lastPushedToGCalTs` is old, so this never blocks the real fix.
+    if (successor.lastPushedToGCalTs && isOwnEcho(successor.lastPushedToGCalTs, master.updated)) {
+        return;
+    }
+    // The successor GCal will cancel under its OWN master carries a rebased id naming some other master;
+    // deleting just the base segment of an `_R` split must leave that live tail running. An anchor-less
+    // successor has no such master to be cancelled by — every full sync since the rebased-id rollout
+    // back-fills the anchor via `rekeySuccessorRebasedId` — so a still-anchor-less one is strong evidence
+    // its master is gone. Residual risk: an anchor gone stale between syncs spares a dead tail instead,
+    // which the next full sync corrects.
+    const rebasedId = successor.calendarRebasedEventId;
+    if (rebasedId && rebasedId !== master.id) {
+        console.log(`[gcal-sync] sparing successor — owns its own rebased master | rebasedId=${rebasedId} routineId=${successor._id}`);
+        return;
+    }
+    console.log(`[gcal-sync] retiring orphaned split successor | eventId=${bareEventId} routineId=${successor._id}`);
+    // `dayjs.utc` to match `addUntilToRrule`, which parses this date as UTC — server-local would cap a day
+    // late on any host east of UTC during its evening hours.
+    await deactivateRoutineFromGCal(successor, ctx, { capRruleFrom: dayjs.utc(ctx.now).format('YYYY-MM-DD') });
 }
 
 /**
@@ -3181,7 +3293,12 @@ async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEven
         ...pickGCalOwnedFields(event),
         updatedTs: ctx.now,
     };
-    const updated = clearOmittedGCalOwnedRoutineFields(mergedWithGCalOwned, event);
+    // This function only runs for CONFIRMED masters (the cancelled branch returns earlier), so a
+    // structurally-newer payload is GCal itself proving the series alive — any cancellation-retirement
+    // marker is stale and must not keep blocking the heal endpoints. Gated on `structurallyNewer` so an
+    // out-of-order older payload cannot clear a marker a fresher cancellation just set.
+    const merged = structurallyNewer ? clearRetirementMarker(mergedWithGCalOwned) : mergedWithGCalOwned;
+    const updated = clearOmittedGCalOwnedRoutineFields(merged, event);
 
     // No-op guard: `structurallyNewer` uses `>=` (GCal wins ties within the same second), so an
     // *unchanged* GCal event whose `updated` equals the stored `lastSyncedFromGCalTs` still counts as
@@ -3370,7 +3487,13 @@ async function propagateMasterScheduleChanges(previous: RoutineInterface, next: 
     }
 }
 
-async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined, ctx: SyncContext): Promise<void> {
+/** Drops the GCal-cancellation retirement marker — see `RoutineInterface.retiredByGCal`. */
+function clearRetirementMarker(routine: RoutineInterface): RoutineInterface {
+    const { retiredByGCal: _stale, ...rest } = routine;
+    return rest;
+}
+
+async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined, ctx: SyncContext, opts?: { capRruleFrom?: string }): Promise<void> {
     if (!existing || !existing.active) {
         return;
     }
@@ -3378,7 +3501,17 @@ async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined,
     const routineId = existing._id;
     // Re-fetch to pick up any writes from the exception sync that ran earlier in the same cycle.
     const fresh = await routinesDAO.findByOwnerAndId(routineId, ctx.userId);
-    const updated: RoutineInterface = { ...(fresh ?? existing), active: false, updatedTs: ctx.now };
+    const current = fresh ?? existing;
+    // `capRruleFrom` keeps the retirement REVERSIBLE. `updateRoutineFromGCal`'s `newlyLosesUntil` gate
+    // only revives a routine that is both paused AND capped, so pausing one whose rrule is still open is a
+    // one-way door no later GCal report can undo. Callers acting on direct evidence (this master is
+    // cancelled) omit it; the heuristic reap sweep passes it so a wrong guess self-heals. The cap also keeps
+    // `healSplitSuccessorRoutines` off the reaped row — its `isStrandedSuccessor` requires an OPEN rrule, so
+    // without the cap the heal endpoint would revive exactly what the reap just retired, and they'd ping-pong.
+    const cappedRrule = opts?.capRruleFrom ? { rrule: addUntilToRrule(current.rrule, opts.capRruleFrom) } : {};
+    // `retiredByGCal` records that this deactivation is GCal truth, not an accident of sync — the
+    // `/maintenance` heals skip marked rows instead of resurrecting the phantoms this retirement removes.
+    const updated: RoutineInterface = { ...current, ...cappedRrule, active: false, retiredByGCal: true, updatedTs: ctx.now };
     await routinesDAO.replaceById(routineId, updated);
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: updated, opType: 'update', now: ctx.now }));
 
