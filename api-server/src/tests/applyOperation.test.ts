@@ -90,6 +90,106 @@ describe('applyAndPublishOperation — happy path', () => {
     });
 });
 
+describe('applyAndPublishOperation — updatedTs clamping', () => {
+    it('clamps a future updatedTs to server time in both the collection row and the op log', async () => {
+        const now = '2026-05-08T12:00:00.000Z';
+        // A fast device clock (or an MCP caller deriving timestamps from a local date) stamps the
+        // future; unclamped, every later legitimate edit would lose LWW to this snapshot.
+        const poisoned = baseInboxItem({ updatedTs: '2026-05-09T23:00:00.000Z' });
+
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: poisoned },
+            { deviceId: 'api:tok-1', now },
+        );
+
+        expect((op.snapshot as ItemInterface).updatedTs).toBe(now);
+        const stored = await itemsDAO.findByOwnerAndId('item-1', userId);
+        expect(stored?.updatedTs).toBe(now);
+
+        // The poison scenario end-to-end: a later legitimate edit must now win LWW.
+        const laterEdit = baseInboxItem({ title: 'buy oat milk', updatedTs: '2026-05-08T12:30:00.000Z' });
+        await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'update', entityId: 'item-1', snapshot: laterEdit },
+            { deviceId: 'api:tok-1', now: '2026-05-08T12:30:00.000Z' },
+        );
+        expect((await itemsDAO.findByOwnerAndId('item-1', userId))?.title).toBe('buy oat milk');
+    });
+
+    it('leaves updatedTs === now untouched and does not warn (clamp is strictly future-side)', async () => {
+        const now = '2026-05-08T12:00:00.000Z';
+        const warn = vi.spyOn(console, 'warn');
+
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: baseInboxItem({ updatedTs: now }) },
+            { deviceId: 'api:tok-1', now },
+        );
+
+        expect((op.snapshot as ItemInterface).updatedTs).toBe(now);
+        expect(warn.mock.calls.filter(([msg]) => typeof msg === 'string' && msg.includes('clamping future updatedTs'))).toHaveLength(0);
+    });
+
+    it('keeps the calendar-detach gate consistent with the apply gate for a clamped stale op', async () => {
+        // The detach hydrator and the LWW apply both compare existing.updatedTs against the
+        // incoming snapshot. Clamping can flip the incoming below an existing future-stamped row;
+        // both gates must then skip TOGETHER — detaching the GCal event of a row that stays in
+        // place would strand a live calendar item with its event deleted.
+        const now = '2026-05-08T12:00:00.000Z';
+        const existing = baseInboxItem({
+            status: 'calendar',
+            timeStart: '2026-05-10T09:00:00+03:00',
+            timeEnd: '2026-05-10T09:30:00+03:00',
+            calendarEventId: 'evt-detach-clamp',
+            calendarIntegrationId: 'int-1',
+            updatedTs: '2026-05-08T13:00:00.000Z',
+        });
+        await itemsDAO.insertOne(existing);
+
+        const staleClarify = baseInboxItem({ status: 'nextAction', updatedTs: '2026-05-09T00:00:00.000Z' });
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'update', entityId: 'item-1', snapshot: staleClarify },
+            { deviceId: 'api:tok-1', now },
+        );
+
+        const stored = await itemsDAO.findByOwnerAndId('item-1', userId);
+        expect(stored?.status).toBe('calendar');
+        expect(op.detachedCalendar).toBeUndefined();
+    });
+
+    it('leaves a past updatedTs untouched — offline history must keep losing LWW to newer edits', async () => {
+        const now = '2026-05-08T12:00:00.000Z';
+        const offlineEdit = baseInboxItem({ updatedTs: '2026-05-01T09:00:00.000Z' });
+
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: offlineEdit },
+            { deviceId: 'api:tok-1', now },
+        );
+
+        expect((op.snapshot as ItemInterface).updatedTs).toBe('2026-05-01T09:00:00.000Z');
+    });
+
+    it('clamps future updatedTs in the batch path too', async () => {
+        const now = '2026-05-08T12:00:00.000Z';
+        const ops = await applyAndPublishOperations(
+            userId,
+            [
+                { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: baseInboxItem({ updatedTs: '2027-01-01T00:00:00.000Z' }) },
+                { entityType: 'item', opType: 'create', entityId: 'item-2', snapshot: baseInboxItem({ _id: 'item-2', updatedTs: '2026-05-08T11:00:00.000Z' }) },
+            ],
+            { deviceId: 'dev-1', now },
+        );
+
+        expect((ops[0]!.snapshot as ItemInterface).updatedTs).toBe(now);
+        // The non-poisoned sibling keeps its own timestamp.
+        expect((ops[1]!.snapshot as ItemInterface).updatedTs).toBe('2026-05-08T11:00:00.000Z');
+        expect((await itemsDAO.findByOwnerAndId('item-1', userId))?.updatedTs).toBe(now);
+    });
+});
+
 describe('applyAndPublishOperation — strict-mode validation', () => {
     it('throws OperationValidationError for ignoreBefore on calendar item', async () => {
         const snapshot = baseInboxItem({
