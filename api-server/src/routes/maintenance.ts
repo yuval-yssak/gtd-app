@@ -6,6 +6,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import { healDuplicateCalendarItems, healSplitSuccessorRoutines, healStuckGCalRoutines } from '../lib/calendarHeal.js';
 import { computePurgeFloor, type PurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { reapStaleDevices } from '../lib/staleDevices.js';
+import { runSyncDoctor } from '../lib/syncDoctor.js';
 import type { AuthVariables } from '../types/authTypes.js';
 import { relinkCalendarMarkersForUser } from './calendar.js';
 
@@ -117,6 +118,20 @@ export const maintenanceRoutes = new Hono<{ Variables: AuthVariables }>()
         const ops = await healSplitSuccessorRoutines(user.id, dayjs().toISOString());
         const revivedSuccessors = ops.filter((op) => op.entityType === 'routine').length;
         return c.json({ revivedSuccessors, totalOps: ops.length }, 200);
+    })
+
+    // ---------------------------------------------------------------------------
+    // POST /maintenance/sync-doctor — read-only invariant sweep over the caller's sync state
+    // ---------------------------------------------------------------------------
+    // Reports every known sync-corruption class (duplicate active series, phantom items on inactive
+    // routines, duplicate live calendar items, unmarked retirements, poisoned LWW watermarks, future
+    // cursors, dangling integration refs) without writing anything. The single opt-in write is
+    // `{ healPoisonedWatermarks: true }`, which re-stamps future-dated rows to now and records ops.
+    .post('/sync-doctor', authenticateRequest, async (c) => {
+        const { user } = c.get('session');
+        const body = await c.req.json<{ healPoisonedWatermarks?: boolean }>().catch(() => ({}) as { healPoisonedWatermarks?: boolean });
+        const report = await runSyncDoctor(user.id, dayjs().toISOString(), { healPoisonedWatermarks: body.healPoisonedWatermarks === true });
+        return c.json(report, 200);
     })
 
     // ---------------------------------------------------------------------------
