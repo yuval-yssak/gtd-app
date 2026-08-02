@@ -52,12 +52,12 @@ test.describe('Item editor — page mode UX', () => {
             expect(labelId).toBeTruthy();
             await expect(page.locator(`#${labelId}`)).toHaveText('Notes (Markdown)');
 
-            // Clicking the explicit Edit affordance swaps to the textarea and focuses it.
+            // Clicking the explicit Edit affordance swaps to the CodeMirror editor and focuses it.
             await page.getByRole('button', { name: 'Edit notes' }).click();
-            const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
             await expect(notesEditor).toBeVisible();
             await expect(notesEditor).toBeFocused();
-            await expect(notesEditor).toHaveValue('Hello **world**');
+            await expect(notesEditor).toHaveText('Hello **world**');
 
             // Blur: clicking the title input takes focus elsewhere; the editor returns to preview.
             await page.getByRole('textbox', { name: 'Title' }).click();
@@ -78,7 +78,7 @@ test.describe('Item editor — page mode UX', () => {
             // to be actionable and dispatches the key to it, so there's no separate focus() step to
             // race under load (a detached page.keyboard.press could land on the wrong element).
             await preview.press('Enter');
-            const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
             // Gate on visible before focus — under load the editor's mount+autofocus lagged the keypress.
             // Generous timeout: the React mount can take several seconds under hook saturation.
             await expect(notesEditor).toBeVisible({ timeout: 15_000 });
@@ -106,7 +106,7 @@ test.describe('Item editor — page mode UX', () => {
             const editNotesButton = page.getByRole('button', { name: 'Edit notes' });
             await expect(editNotesButton).toBeVisible();
             await editNotesButton.click();
-            const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
             // Generous timeout: under full-suite saturation the React mount of the editor can take
             // several seconds. Then click into it to own focus deterministically — because the notes
             // are non-empty, a missed autofocus would collapse the editor back to preview before a
@@ -119,7 +119,7 @@ test.describe('Item editor — page mode UX', () => {
             // collapse to a preview (there's nothing to preview, and the user is mid-flow).
             await notesEditor.fill('');
             await page.getByRole('textbox', { name: 'Title' }).click();
-            await expect(page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.')).toBeVisible();
+            await expect(page.getByRole('textbox', { name: 'Notes (Markdown)' })).toBeVisible();
             await expect(page.getByTestId('pageNotesPreview')).toHaveCount(0);
         });
     });
@@ -129,7 +129,7 @@ test.describe('Item editor — page mode UX', () => {
             const item = await gtd.collect(page, 'Item that gets notes');
 
             await page.goto(`/item/${item._id}`);
-            const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
             await expect(notesEditor).toBeVisible();
             await expect(page.getByTestId('pageNotesPreview')).toHaveCount(0);
 
@@ -144,21 +144,19 @@ test.describe('Item editor — page mode UX', () => {
         });
     });
 
-    test('notes default to editor when empty (so the textarea affordance is obvious) and does not steal focus on mount', async ({ browser }) => {
+    test('notes default to editor when empty (so the editing affordance is obvious) and does not steal focus on mount', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `page-notes-empty-${dayjs().valueOf()}@example.com`, async (page) => {
             const item = await gtd.collect(page, 'Item without notes');
 
             await page.goto(`/item/${item._id}`);
             await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
 
-            // No preview region rendered when there are no notes — the textarea is shown directly.
-            // (MUI multiline TextField renders a second hidden mirror textarea for sizing —
-            // filter to the visible one by placeholder.)
+            // No preview region rendered when there are no notes — the editor is shown directly.
             await expect(page.getByTestId('pageNotesPreview')).toHaveCount(0);
-            const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
             await expect(notesEditor).toBeVisible();
 
-            // The textarea must NOT auto-focus on initial mount — the same complaint that motivated
+            // The editor must NOT auto-focus on initial mount — the same complaint that motivated
             // removing title autofocus would otherwise just move one field down.
             await expect(notesEditor).not.toBeFocused();
         });
@@ -245,10 +243,10 @@ test.describe('Item editor — page mode UX', () => {
             const editNotesButton = page.getByRole('button', { name: 'Edit notes' });
             await expect(editNotesButton).toBeVisible();
             await editNotesButton.click();
-            const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
             await expect(notesEditor).toBeVisible({ timeout: 15_000 });
 
-            // First ESC (on the textarea): steps out to the preview, does not navigate.
+            // First ESC (in the editor): steps out to the preview, does not navigate.
             await notesEditor.press('Escape');
             await expect(page.getByTestId('pageNotesPreview')).toBeVisible();
             await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));

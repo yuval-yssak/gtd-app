@@ -1,0 +1,116 @@
+/* Shell mirrors the MUI OutlinedInput look (same divider border + primary focus ring as the
+ * sibling .preview boxes) so swapping TextField → CodeMirror doesn't change the page rhythm. */
+.editor {
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
+    border-radius: 0.25rem;
+    overflow: hidden;
+}
+
+.editor:hover {
+    border-color: var(--mui-palette-action-active, rgba(0, 0, 0, 0.54));
+}
+
+.editor:focus-within {
+    border-color: var(--mui-palette-primary-main, #1976d2);
+    outline: 0.0625rem solid var(--mui-palette-primary-main, #1976d2);
+}
+
+/* Suspense fallback keeps the editor's footprint while the CodeMirror chunk loads. */
+.loadingFallback {
+    height: 8.5rem;
+}
+
+/* Degraded editor when the CodeMirror chunk can't load — same shell so the page doesn't shift. */
+.fallbackTextarea {
+    composes: editor;
+    display: block;
+    width: 100%;
+    min-height: 8rem;
+    padding: 0.75rem 0.875rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
+    background: transparent;
+    resize: vertical;
+}
+
+.fallbackTextarea:focus {
+    outline: none;
+}
+
+.editor :global(.cm-editor) {
+    outline: none;
+}
+
+.editor :global(.cm-scroller) {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.875rem;
+    line-height: 1.6;
+    max-height: 60vh;
+}
+
+.editor :global(.cm-content) {
+    padding: 0.75rem 0;
+    min-height: 6.5rem;
+    /* Inert while drawSelection() hides the native caret (.cm-cursor is themed below instead);
+     * kept so the caret stays readable if drawSelection is ever removed. */
+    caret-color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
+}
+
+.editor :global(.cm-line) {
+    padding: 0 0.875rem;
+}
+
+.editor :global(.cm-placeholder) {
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+}
+
+/* Find/replace panel — restyle CodeMirror's defaults with theme surfaces. */
+.editor :global(.cm-panels) {
+    background: var(--mui-palette-background-default, #fff);
+    color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
+    border-bottom: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+}
+
+.editor :global(.cm-panel.cm-search) {
+    font-size: 0.8125rem;
+}
+
+.editor :global(.cm-textfield) {
+    background: var(--mui-palette-background-paper, #fff);
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
+    color: inherit;
+}
+
+.editor :global(.cm-button) {
+    background-image: none;
+    background-color: var(--mui-palette-action-hover, rgba(0, 0, 0, 0.04));
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
+    color: inherit;
+}
+
+.editor :global(.cm-searchMatch) {
+    background: var(--mui-palette-action-focus, rgba(0, 0, 0, 0.12));
+}
+
+.editor :global(.cm-searchMatch-selected) {
+    background: var(--mui-palette-warning-light, #ffb74d);
+}
+
+/* highlightSelectionMatches decorations (other occurrences of the selected text). */
+.editor :global(.cm-selectionMatch) {
+    background: var(--mui-palette-action-selected, rgba(0, 0, 0, 0.08));
+}
+
+/* drawSelection() paints its own selection layer (needed for multi-cursor) — restore a
+ * selection blue instead of its gray default, and theme every caret. */
+.editor :global(.cm-selectionBackground),
+.editor :global(.cm-focused .cm-selectionBackground) {
+    background: color-mix(in srgb, var(--mui-palette-primary-main, #1976d2) 25%, transparent);
+}
+
+.editor :global(.cm-cursor),
+.editor :global(.cm-dropCursor) {
+    border-left-color: var(--mui-palette-text-primary, rgba(0, 0, 0, 0.87));
+}

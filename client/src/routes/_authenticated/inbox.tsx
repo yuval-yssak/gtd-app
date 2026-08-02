@@ -33,7 +33,6 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
 import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
@@ -44,6 +43,8 @@ import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { MarkdownNotesEditor, NOTES_PLACEHOLDER } from '../../components/markdown/MarkdownNotesEditor';
+import { MarkdownPreview } from '../../components/markdown/MarkdownPreview';
 import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -501,18 +502,10 @@ function InboxPage() {
                             <Tab label="Preview" value={1} />
                         </Tabs>
                         {notesTab === 0 ? (
-                            <TextField
-                                label="Notes (Markdown)"
-                                value={notes}
-                                onChange={(e) => onCaptureFieldsChange(draft, e.target.value)}
-                                fullWidth
-                                multiline
-                                rows={5}
-                                placeholder="Supports **bold**, _italic_, `code`, lists, etc."
-                            />
+                            <MarkdownNotesEditor value={notes} onValueChange={(next) => onCaptureFieldsChange(draft, next)} placeholder={NOTES_PLACEHOLDER} />
                         ) : (
                             <div className={styles.notesPreview}>
-                                {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles.notesEmpty}>Nothing to preview.</span>}
+                                {notes.trim() ? <MarkdownPreview markdown={notes} /> : <span className={styles.notesEmpty}>Nothing to preview.</span>}
                             </div>
                         )}
                     </Box>

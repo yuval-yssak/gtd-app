@@ -3,11 +3,11 @@ import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useId, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
 import { type ItemEditorChrome, notesAreEmpty } from '../editItemDialogLogic';
+import { MarkdownNotesEditor, NOTES_EDITOR_LABEL, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
+import { MarkdownPreview } from '../markdown/MarkdownPreview';
 import styles from './ItemEditorBody.module.css';
 
 interface NotesSectionProps {
@@ -19,8 +19,8 @@ interface NotesSectionProps {
 /**
  * Notes editor section. Two surface variants:
  * - Page mode: click-to-edit. Defaults to a Markdown preview when notes exist; clicking the
- *   preview switches to a focused textarea; blurring with non-empty notes returns to preview.
- *   Empty notes start in the editor so the affordance is obvious.
+ *   preview switches to a focused CodeMirror editor; blurring with non-empty notes returns to
+ *   preview. Empty notes start in the editor so the affordance is obvious.
  * - All other chromes (dialog/popover/expand): tabbed Edit/Preview, unchanged from the previous
  *   behaviour. The page-mode redesign was scoped intentionally — the smaller surfaces are short
  *   and edit-oriented and don't need the read-mostly default.
@@ -37,12 +37,16 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
     // start in preview so the page reads like a document.
     const [editing, setEditing] = useState(() => notesAreEmpty(notes));
     // Auto-focus must only fire on the user's preview→edit transition, not the initial mount.
-    // Otherwise a freshly opened item with empty notes would yank focus to the textarea — the
+    // Otherwise a freshly opened item with empty notes would yank focus to the editor — the
     // exact pattern we removed from the title input. The flag persists across re-renders via ref.
     const focusOnNextEditMount = useRef(false);
-    // Per-instance id for the preview region's aria-labelledby — useId guarantees uniqueness if
+    // Per-instance id for the section label's aria-labelledby — useId guarantees uniqueness if
     // the section ever renders more than once in a tree (split pane, side-by-side comparison).
     const labelId = useId();
+    // The editor's Escape/blur callbacks read notes through a ref so they always see the latest
+    // value even though CodeMirror captures them once at mount.
+    const notesRef = useRef(notes);
+    notesRef.current = notes;
     const enterEdit = () => {
         focusOnNextEditMount.current = true;
         setEditing(true);
@@ -55,30 +59,31 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
         focusOnNextEditMount.current = false;
         return (
             <Box>
-                <TextField
-                    label="Notes (Markdown)"
+                <Typography variant="caption" id={labelId} className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600 }}>
+                    {NOTES_EDITOR_LABEL}
+                </Typography>
+                <MarkdownNotesEditor
                     value={notes}
-                    onChange={(e) => onNotesChange(e.target.value)}
-                    onBlur={() => {
+                    onValueChange={onNotesChange}
+                    placeholder={NOTES_PLACEHOLDER}
+                    autoFocus={shouldFocus}
+                    onBlurOutside={() => {
                         // Stay in editor when notes are still empty — the user can keep typing.
-                        if (!notesAreEmpty(notes)) {
+                        if (!notesAreEmpty(notesRef.current)) {
                             setEditing(false);
                         }
                     }}
-                    onKeyDown={(e) => {
-                        // First ESC steps out to the preview; preventDefault tells the page-level
-                        // ESC listener the key was claimed, so it doesn't also navigate back.
-                        // With empty notes the editor is the resting state — let ESC fall through.
-                        if (e.key === 'Escape' && !notesAreEmpty(notes)) {
-                            e.preventDefault();
-                            setEditing(false);
+                    onEscape={() => {
+                        // First ESC steps out to the preview; claiming the key (return true) makes
+                        // CodeMirror preventDefault so the page-level ESC listener doesn't also
+                        // navigate back. With empty notes the editor is the resting state — let
+                        // ESC fall through.
+                        if (notesAreEmpty(notesRef.current)) {
+                            return false;
                         }
+                        setEditing(false);
+                        return true;
                     }}
-                    fullWidth
-                    multiline
-                    minRows={4}
-                    placeholder="Supports **bold**, _italic_, `code`, lists, etc."
-                    {...(shouldFocus ? { autoFocus: true } : {})}
                 />
             </Box>
         );
@@ -88,7 +93,7 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
         <Box>
             <Box className={styles.notesHeader}>
                 <Typography variant="caption" id={labelId} className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600, mb: 0 }}>
-                    Notes (Markdown)
+                    {NOTES_EDITOR_LABEL}
                 </Typography>
                 <IconButton size="small" aria-label="Edit notes" onClick={enterEdit}>
                     <EditOutlinedIcon fontSize="small" />
@@ -108,7 +113,7 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
                     }
                 }}
             >
-                <ReactMarkdown>{notes}</ReactMarkdown>
+                <MarkdownPreview markdown={notes} />
             </Box>
         </Box>
     );
@@ -123,18 +128,10 @@ function TabbedNotesSection({ notes, onNotesChange }: { notes: string; onNotesCh
                 <Tab label="Preview" value={1} />
             </Tabs>
             {tab === 0 ? (
-                <TextField
-                    label="Notes (Markdown)"
-                    value={notes}
-                    onChange={(e) => onNotesChange(e.target.value)}
-                    fullWidth
-                    multiline
-                    rows={4}
-                    placeholder="Supports **bold**, _italic_, `code`, lists, etc."
-                />
+                <MarkdownNotesEditor value={notes} onValueChange={onNotesChange} placeholder={NOTES_PLACEHOLDER} />
             ) : (
                 <Box className={styles.preview}>
-                    {notes.trim() ? <ReactMarkdown>{notes}</ReactMarkdown> : <span className={styles.empty}>Nothing to preview.</span>}
+                    {notes.trim() ? <MarkdownPreview markdown={notes} /> : <span className={styles.empty}>Nothing to preview.</span>}
                 </Box>
             )}
         </Box>

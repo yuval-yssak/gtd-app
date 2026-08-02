@@ -170,9 +170,9 @@ test.describe('Routine editor — page mode notes markdown', () => {
             await expect(preview.locator('strong')).toHaveText('routine');
 
             await page.getByRole('button', { name: 'Edit notes' }).click();
-            const notesEditor = page.getByPlaceholder('Supports **bold**, _italic_, `code`, lists, etc.');
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
             await expect(notesEditor).toBeVisible();
-            await expect(notesEditor).toHaveValue('Hello **routine**');
+            await expect(notesEditor).toHaveText('Hello **routine**');
         });
     });
 });

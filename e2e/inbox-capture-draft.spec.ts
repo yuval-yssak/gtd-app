@@ -4,7 +4,7 @@ import type { StoredDraft } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice } from './helpers/context';
 
 const CLIENT_URL = 'http://localhost:4173';
-const NOTES_PLACEHOLDER = 'Supports **bold**, _italic_, `code`, lists, etc.';
+const NOTES_EDITOR_NAME = 'Notes (Markdown)';
 
 // Reads the drafts store through the dev-tools harness so the specs can wait for the debounced
 // IDB write deterministically instead of sleeping past the debounce interval.
@@ -18,15 +18,19 @@ test.describe('inbox capture draft persistence', () => {
             await page.goto(`${CLIENT_URL}/inbox`);
             await page.getByPlaceholder("What's on your mind?").fill('Half-typed thought');
             await page.getByTestId('inboxAddNoteButton').click();
-            await page.getByPlaceholder(NOTES_PLACEHOLDER).fill('with a **markdown** note');
+            await page.getByRole('textbox', { name: NOTES_EDITOR_NAME }).fill('with a **markdown** note');
 
-            await expect.poll(async () => (await readDrafts(page)).map((d) => d.title)).toEqual(['Half-typed thought']);
+            // Wait for BOTH fields to reach IDB — polling on the title alone races the notes'
+            // debounce tick against the reload, and a draft without notes doesn't reopen the panel.
+            await expect
+                .poll(async () => (await readDrafts(page)).map((d) => ({ title: d.title, notes: d.notes })))
+                .toEqual([{ title: 'Half-typed thought', notes: 'with a **markdown** note' }]);
 
             await page.reload();
 
             await expect(page.getByPlaceholder("What's on your mind?")).toHaveValue('Half-typed thought');
             // The notes panel re-opens automatically because the draft carried notes.
-            await expect(page.getByPlaceholder(NOTES_PLACEHOLDER)).toHaveValue('with a **markdown** note');
+            await expect(page.getByRole('textbox', { name: NOTES_EDITOR_NAME })).toHaveText('with a **markdown** note');
         });
     });
 
