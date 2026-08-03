@@ -3401,7 +3401,6 @@ async function propagateMasterGCalOwnedChangesToItems(routine: RoutineInterface,
         return;
     }
     const exceptionsByDate = new Map((routine.routineExceptions ?? []).filter((e) => e.type === 'modified').map((e) => [e.date, e]));
-    const masterSlice = pickGCalOwnedRoutineFields(routine);
 
     await Promise.all(
         items.map(async (item) => {
@@ -3412,9 +3411,11 @@ async function propagateMasterGCalOwnedChangesToItems(routine: RoutineInterface,
             const occurrenceDate = (item.timeStart ?? '').slice(0, 10);
             const override = exceptionsByDate.get(occurrenceDate);
             // Per-key merge: exception override wins per-key; absent override key ⇒ inherit master.
+            // Same responseStatus carve-out as the exception-apply path — a per-instance RSVP must
+            // survive a master attendee/organizer change reaching this item.
             const overrideSlice = override ? pickGCalOwnedExceptionFields(override) : {};
-            const merged = { ...masterSlice, ...overrideSlice };
-            const updateOps = buildGCalOwnedFieldUpdate(merged);
+            const { merged, clearableKeys } = mergeGCalOwnedForInstance(routine, overrideSlice);
+            const updateOps = buildGCalOwnedFieldUpdate(merged, clearableKeys);
             if (updateOps.$set === undefined && updateOps.$unset === undefined) {
                 return;
             }
@@ -3439,27 +3440,29 @@ async function propagateMasterGCalOwnedChangesToItems(routine: RoutineInterface,
 }
 
 /**
- * Builds `$set` / `$unset` slices for a Mongo update so a GCal-owned key whose target value is
- * undefined gets `$unset` (clearing inherited stale values) and present keys get `$set`. Returns
- * undefined slices when neither operation has any keys, so the caller can skip the write.
+ * Builds `$set` / `$unset` slices for a Mongo update: present merged keys get `$set`, and
+ * `clearableKeys` (keys carried by neither surface, minus the responseStatus carve-out — see
+ * `mergeGCalOwnedForInstance`) get `$unset` to clear inherited stale values. Returns undefined
+ * slices when neither operation has any keys, so the caller can skip the write.
  */
-function buildGCalOwnedFieldUpdate(merged: Partial<Pick<RoutineInterface, (typeof GCAL_OWNED_ROUTINE_KEYS)[number]>>): {
+function buildGCalOwnedFieldUpdate(
+    merged: GCalOwnedSlice,
+    clearableKeys: (typeof GCAL_OWNED_ROUTINE_KEYS)[number][],
+): {
     $set?: Record<string, unknown>;
     $unset?: Record<string, ''>;
 } {
     const setOps: Record<string, unknown> = {};
-    const unsetOps: Record<string, ''> = {};
     for (const key of GCAL_OWNED_ROUTINE_KEYS) {
         const value = merged[key];
-        if (value === undefined) {
-            unsetOps[key] = '';
-        } else {
+        if (value !== undefined) {
             setOps[key] = value;
         }
     }
+    const unsetOps = Object.fromEntries(clearableKeys.map((key) => [key, '' as const]));
     return {
         ...(Object.keys(setOps).length > 0 ? { $set: setOps } : {}),
-        ...(Object.keys(unsetOps).length > 0 ? { $unset: unsetOps } : {}),
+        ...(clearableKeys.length > 0 ? { $unset: unsetOps } : {}),
     };
 }
 
@@ -4339,26 +4342,8 @@ export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalE
     }
 
     if (ex.type === 'modified') {
-        const sharedFields = {
-            updatedTs: ctx.now,
-            ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
-            ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
-            // ex.notes is raw HTML from GCal — convert to markdown for storage, keep HTML as lastSyncedNotes
-            ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
-            // Per-instance GCal-owned overrides win over the master values that buildCalendarItem
-            // already mirrored onto the item. Absent on the exception ⇒ instance inherits master
-            // and the item's mirrored value (which was set from master) stays put.
-            ...(ex.organizer !== undefined ? { organizer: ex.organizer } : {}),
-            ...(ex.creator !== undefined ? { creator: ex.creator } : {}),
-            ...(ex.attendees !== undefined ? { attendees: ex.attendees } : {}),
-            ...(ex.responseStatus !== undefined ? { responseStatus: ex.responseStatus } : {}),
-            ...(ex.eventType !== undefined ? { eventType: ex.eventType } : {}),
-            ...(ex.meetingLink !== undefined ? { meetingLink: ex.meetingLink } : {}),
-            ...(ex.location !== undefined ? { location: ex.location } : {}),
-            ...(ex.htmlLink !== undefined ? { htmlLink: ex.htmlLink } : {}),
-        };
         if (hasAtLeastOne(target.matches)) {
-            await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
+            await applyModifiedExceptionToMatches(target.matches, ex, buildModifiedExceptionPatch(routine, ex, ctx), ctx);
             return;
         }
         // Past-cutoff guard: on a fresh reconnect (lastSyncedTs unset), GCal returns every modified
@@ -4417,6 +4402,61 @@ async function resolveExceptionTarget(routine: RoutineInterface, ex: GCalExcepti
 }
 
 /**
+ * Field-level payload for applying a `modified` exception onto matched items: the `$set` slice
+ * (exception overrides merged over the routine master's GCal-owned mirror) plus the GCal-owned
+ * keys carried by neither surface, which must be `$unset` from items still holding a stale value.
+ */
+interface ModifiedExceptionFieldPatch {
+    sharedFields: Record<string, unknown>;
+    absentGCalOwnedKeys: (typeof GCAL_OWNED_ROUTINE_KEYS)[number][];
+}
+
+type GCalOwnedSlice = Partial<Pick<RoutineInterface, (typeof GCAL_OWNED_ROUTINE_KEYS)[number]>>;
+
+/**
+ * Exception-over-master merge of the GCal-owned slice (RFC 5545 per-key inheritance) with one
+ * carve-out: `responseStatus` denormalizes the SELF attendee's response, and a per-instance RSVP —
+ * which forks the instance on GCal — legitimately diverges from the series response. The master's
+ * value must never inherit onto instances (no inbound parser emits `responseStatus` on exceptions,
+ * so plain inheritance would overwrite every per-instance RSVP with the series value on the next
+ * sync). It is instead derived from the merged attendee list — the provider's own parse rule — and
+ * when underivable the key is excluded from `clearableKeys` too, so a local RSVP is never touched
+ * by inheritance. Keys carried by NEITHER surface land in `clearableKeys` for the caller to `$unset`
+ * so a real "GCal removed all attendees" edit still propagates.
+ */
+function mergeGCalOwnedForInstance(
+    routine: RoutineInterface,
+    override: GCalOwnedSlice,
+): { merged: GCalOwnedSlice; clearableKeys: (typeof GCAL_OWNED_ROUTINE_KEYS)[number][] } {
+    const { responseStatus: _seriesResponse, ...inheritableMaster } = pickGCalOwnedRoutineFields(routine);
+    const base: GCalOwnedSlice = { ...inheritableMaster, ...override };
+    const selfResponse = base.responseStatus ?? base.attendees?.find((attendee) => attendee.self)?.responseStatus;
+    const merged = { ...base, ...(selfResponse !== undefined ? { responseStatus: selfResponse } : {}) };
+    const clearableKeys = GCAL_OWNED_ROUTINE_KEYS.filter((key) => key !== 'responseStatus' && merged[key] === undefined);
+    return { merged, clearableKeys };
+}
+
+/**
+ * Builds the patch for a `modified` exception. GCal-owned keys use `mergeGCalOwnedForInstance` —
+ * the same inheritance buildCalendarItem and createItemForOrphanedException implement. Master-backed
+ * keys are re-asserted rather than left alone: the previous "absent on exception ⇒ item keeps its
+ * value" contract silently stripped attendees, because the unset path cleared inherited keys and
+ * the re-mirror it counted on never ran.
+ */
+function buildModifiedExceptionPatch(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): ModifiedExceptionFieldPatch {
+    const { merged, clearableKeys } = mergeGCalOwnedForInstance(routine, pickGCalOwnedExceptionFields(ex));
+    const sharedFields = {
+        updatedTs: ctx.now,
+        ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
+        ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
+        // ex.notes is raw HTML from GCal — convert to markdown for storage, keep HTML as lastSyncedNotes
+        ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
+        ...merged,
+    };
+    return { sharedFields, absentGCalOwnedKeys: clearableKeys };
+}
+
+/**
  * Applies a `modified` exception to the already-resolved match set. Writes use an `updateOne`
  * conditional on the row's `updatedTs` matching what we resolved — protects against a concurrent
  * `/sync/push` edit landing between `resolveExceptionTarget` and apply that we would otherwise
@@ -4429,10 +4469,10 @@ async function resolveExceptionTarget(routine: RoutineInterface, ex: GCalExcepti
 async function applyModifiedExceptionToMatches(
     matches: NonEmptyArray<ItemInterface>,
     ex: GCalException,
-    sharedFields: Record<string, unknown>,
+    patch: ModifiedExceptionFieldPatch,
     ctx: SyncContext,
 ): Promise<void> {
-    await Promise.all(matches.map((item) => applyModifiedExceptionToOne(item, ex, sharedFields, ctx)));
+    await Promise.all(matches.map((item) => applyModifiedExceptionToOne(item, ex, patch, ctx)));
 }
 
 /**
@@ -4451,7 +4491,7 @@ function isItemUpdateNoop(item: ItemInterface, setFields: Record<string, unknown
     return Object.entries(meaningfulSetFields).every(([key, value]) => stableStringify(item[key as keyof ItemInterface]) === stableStringify(value));
 }
 
-async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalException, sharedFields: Record<string, unknown>, ctx: SyncContext): Promise<void> {
+async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalException, patch: ModifiedExceptionFieldPatch, ctx: SyncContext): Promise<void> {
     const itemId = item._id;
     if (!itemId) {
         return;
@@ -4460,14 +4500,14 @@ async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalExceptio
     // item is already done (e.g. our own pushback echo). Otherwise a routine-instance round-trip
     // would corrupt the stored title with the marker we ourselves applied.
     const title = ex.title !== undefined && item.status === 'done' ? stripDoneMarker(ex.title) : (ex.title ?? item.title);
-    const setFields = { ...sharedFields, title } as Record<string, unknown>;
-    // GCal-owned keys absent on the exception ⇒ instance inherits master per RFC 5545. Any keys the
-    // item carried as a prior per-instance override must be explicitly unset so the regenerator can
-    // re-mirror the master values; otherwise a "removed an attendee, reverted to master" GCal edit
-    // would leave the item stuck on the stale 3-attendee override.
+    const setFields = { ...patch.sharedFields, title } as Record<string, unknown>;
+    // GCal-owned keys carried by neither the exception nor the master (pre-computed by the caller)
+    // are cleared so a "GCal removed all attendees" edit propagates. Keys absent on the exception
+    // but present on the master are NOT here — they arrive via `sharedFields` with the master value,
+    // which also heals items a prior version of this function wrongly stripped.
     const unsetFields: Record<string, ''> = {};
-    for (const key of GCAL_OWNED_ROUTINE_KEYS) {
-        if (ex[key] === undefined && item[key] !== undefined) {
+    for (const key of patch.absentGCalOwnedKeys) {
+        if (item[key] !== undefined) {
             unsetFields[key] = '';
         }
     }
@@ -4632,21 +4672,7 @@ async function applyExceptionAfterDuplicate(routine: RoutineInterface, ex: GCalE
         console.warn(`[gcal-sync] applyExceptionAfterDuplicate: index hit but re-resolve missed | routineId=${routine._id} eventId=${ex.googleEventId}`);
         return;
     }
-    const sharedFields = {
-        updatedTs: ctx.now,
-        ...(ex.newTimeStart ? { timeStart: ex.newTimeStart } : {}),
-        ...(ex.newTimeEnd ? { timeEnd: ex.newTimeEnd } : {}),
-        ...(ex.notes !== undefined ? { notes: htmlToMarkdown(ex.notes), lastSyncedNotes: ex.notes } : {}),
-        ...(ex.organizer !== undefined ? { organizer: ex.organizer } : {}),
-        ...(ex.creator !== undefined ? { creator: ex.creator } : {}),
-        ...(ex.attendees !== undefined ? { attendees: ex.attendees } : {}),
-        ...(ex.responseStatus !== undefined ? { responseStatus: ex.responseStatus } : {}),
-        ...(ex.eventType !== undefined ? { eventType: ex.eventType } : {}),
-        ...(ex.meetingLink !== undefined ? { meetingLink: ex.meetingLink } : {}),
-        ...(ex.location !== undefined ? { location: ex.location } : {}),
-        ...(ex.htmlLink !== undefined ? { htmlLink: ex.htmlLink } : {}),
-    };
-    await applyModifiedExceptionToMatches(target.matches, ex, sharedFields, ctx);
+    await applyModifiedExceptionToMatches(target.matches, ex, buildModifiedExceptionPatch(routine, ex, ctx), ctx);
 }
 
 /** Picks `timeStart`/`timeEnd` for an orphan-create from the exception's move times, falling back to the routine's regular schedule. */
@@ -4690,10 +4716,10 @@ async function revertItemToMasterTime(routine: RoutineInterface, date: string, c
     if (!hasAtLeastOne(matches)) {
         return;
     }
-    // sharedFields carries the master time + allDay; applyModifiedExceptionToOne also unsets any
-    // GCal-owned per-instance overrides the item still holds, restoring full master inheritance.
-    const sharedFields = { ...masterTimes, updatedTs: ctx.now };
-    await applyModifiedExceptionToMatches(matches, bareException, sharedFields, ctx);
+    // The bare exception carries no GCal-owned keys, so the patch re-asserts the master's values on
+    // the item and unsets only keys the master itself lacks — restoring full master inheritance.
+    const patch = buildModifiedExceptionPatch(routine, bareException, ctx);
+    await applyModifiedExceptionToMatches(matches, bareException, { ...patch, sharedFields: { ...patch.sharedFields, ...masterTimes } }, ctx);
 }
 
 /**

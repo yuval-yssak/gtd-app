@@ -47,6 +47,8 @@
 - [Routine-instance `attendees` push is an override, not an echo](project_routine_instance_attendees_override_pitfall.md) — forwarded unconditionally, gated only by client UI, so any edit forks that instance silently.
 - [`lastPushedToGCalTs` stamped after await can blow echo window](project_lastpushed_ts_stamped_after_await.md) — 5s window vs PATCH+Pub/Sub latency; prefer pre-await stamp or Google's `data.updated`.
 - [Routine master attendees propagation now partial](project_routine_master_attendees_no_propagation.md) — applyModifiedExceptionToOne's bare $unset still corrupts items on exception-only cycles.
+- [responseStatus is never emitted by the exception parser](project_response_status_never_emitted_by_exception_parser.md) — phantom field; any master∪override merge silently clobbers per-instance RSVPs. Carve it out.
+- [Prove tests discriminate by stashing the SOURCE file](feedback_verify_tests_discriminate_by_stashing_source.md) — stash src (never the test file), re-run, confirm failure. Recurring non-discriminating-test pattern.
 - [Id normalization fixes must be symmetric](project_id_normalization_asymmetry_pattern.md) — normalize-on-write that misses read/compare sites re-creates the bug from the other direction.
 - [Cascade-emitted ops traverse the full pipeline](project_cascade_emitted_ops_traverse_full_pipeline.md) — cascades get full GCal/SSE/webhook fan-out. Demand suppressGCalPushback + regression test.
 - [Snapshot-replace defeats LWW on concurrent edits](project_snapshot_replace_defeats_lww_on_concurrent_edits.md) — find→snapshot→apply(now) clobbers concurrent writes. Demand conditional updateOne or re-read.

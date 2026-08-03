@@ -17,7 +17,14 @@ import * as webPush from '../lib/webPush.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { bareIdsWithLiveMasterInBatch, calendarRoutes, classifyRecurringMaster, pickSplitParent } from '../routes/calendar.js';
 import { maintenanceRoutes } from '../routes/maintenance.js';
-import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
+import type {
+    CalendarIntegrationInterface,
+    CalendarSyncConfigInterface,
+    GCalAttendee,
+    ItemInterface,
+    OperationInterface,
+    RoutineInterface,
+} from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/calendar', calendarRoutes);
@@ -787,6 +794,245 @@ describe('POST /calendar/integrations/:id/sync', () => {
         // updatedTs untouched — the item was not rewritten.
         const unchanged = await itemsDAO.findByOwnerAndId('item-noop-ex', userId);
         expect(unchanged?.updatedTs).toBe(itemTs);
+    });
+
+    it('re-asserts master attendees on an exception-date item when the exception omits them (RFC 5545 inheritance)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Regression: buildModifiedException omits attendees when the instance list equals the
+        // master's. The old apply path $unset any GCal-owned key absent on the exception and relied
+        // on a re-mirror that never ran — permanently stripping participants from every
+        // exception-date item. The fix must restore the master values on such an item.
+        const masterAttendees: GCalAttendee[] = [
+            { email: 'alice@example.com', responseStatus: 'accepted' },
+            { email: 'bob@example.com', responseStatus: 'needsAction' },
+        ];
+        const date = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        const newTimeStart = `${date}T10:15:00`;
+        const newTimeEnd = `${date}T10:30:00`;
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-inherit',
+            calendarIntegrationId: 'int-1',
+            attendees: masterAttendees,
+            organizer: { email: 'alice@example.com' },
+            routineExceptions: [{ date, type: 'modified', newTimeStart, newTimeEnd }],
+        });
+        await routinesDAO.insertOne(routine);
+
+        // Item already stripped by the pre-fix behavior: no attendees/organizer despite the master carrying them.
+        await itemsDAO.insertOne({
+            _id: 'item-stripped',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'inst-stripped',
+            timeStart: newTimeStart,
+            timeEnd: newTimeEnd,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: date, googleEventId: 'inst-stripped', type: 'modified', title: 'Standup', newTimeStart, newTimeEnd },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const healed = await itemsDAO.findByOwnerAndId('item-stripped', userId);
+        expect(healed?.attendees).toEqual(masterAttendees);
+        expect(healed?.organizer).toEqual({ email: 'alice@example.com' });
+        // The heal is a real change and must be recorded as an op so other devices converge.
+        const itemOps = await operationsDAO.findArray({ entityId: 'item-stripped', entityType: 'item' });
+        expect(itemOps).toHaveLength(1);
+    });
+
+    it('keeps a per-instance attendee override winning over the master list', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const masterAttendees: GCalAttendee[] = [{ email: 'alice@example.com', responseStatus: 'accepted' }];
+        const overrideAttendees: GCalAttendee[] = [
+            { email: 'alice@example.com', responseStatus: 'accepted' },
+            { email: 'guest@example.com', responseStatus: 'tentative' },
+        ];
+        const date = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-override',
+            calendarIntegrationId: 'int-1',
+            attendees: masterAttendees,
+            routineExceptions: [{ date, type: 'modified', attendees: overrideAttendees }],
+        });
+        await routinesDAO.insertOne(routine);
+
+        await itemsDAO.insertOne({
+            _id: 'item-override',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'inst-override',
+            timeStart: `${date}T09:00:00`,
+            timeEnd: `${date}T09:30:00`,
+            attendees: masterAttendees,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: date, googleEventId: 'inst-override', type: 'modified', title: 'Standup', attendees: overrideAttendees },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const updated = await itemsDAO.findByOwnerAndId('item-override', userId);
+        expect(updated?.attendees).toEqual(overrideAttendees);
+    });
+
+    it('unsets GCal-owned keys carried by neither the exception nor the master', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // "GCal removed all attendees" case: master no longer mirrors any attendees and the
+        // exception reports none either — a stale mirrored list on the item must be cleared,
+        // not resurrected by the inheritance merge.
+        const date = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        const newTimeStart = `${date}T11:00:00`;
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-clear',
+            calendarIntegrationId: 'int-1',
+            routineExceptions: [{ date, type: 'modified', newTimeStart }],
+        });
+        await routinesDAO.insertOne(routine);
+
+        await itemsDAO.insertOne({
+            _id: 'item-stale-att',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'inst-stale-att',
+            timeStart: `${date}T09:00:00`,
+            timeEnd: `${date}T09:30:00`,
+            attendees: [{ email: 'ghost@example.com', responseStatus: 'declined' }],
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: date, googleEventId: 'inst-stale-att', type: 'modified', title: 'Standup', newTimeStart },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const cleared = await itemsDAO.findByOwnerAndId('item-stale-att', userId);
+        expect(cleared?.attendees).toBeUndefined();
+    });
+
+    it('does not overwrite a per-instance RSVP responseStatus with the master series response', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // buildModifiedException NEVER emits responseStatus, so a naive master∪override merge resolves
+        // it to the series value on every sync — silently replacing the user's own per-instance RSVP
+        // (the one local-write exception to GCal ownership) with data contradicting the attendees array.
+        const date = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        const masterAttendees: GCalAttendee[] = [{ email: 'me@example.com', responseStatus: 'needsAction', self: true }];
+        const myRsvpAttendees: GCalAttendee[] = [{ email: 'me@example.com', responseStatus: 'declined', self: true }];
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-rsvp',
+                calendarIntegrationId: 'int-1',
+                attendees: masterAttendees,
+                responseStatus: 'needsAction',
+            }),
+        );
+        await itemsDAO.insertOne({
+            _id: 'item-rsvped',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'inst-rsvped',
+            timeStart: `${date}T09:00:00`,
+            timeEnd: `${date}T09:30:00`,
+            attendees: myRsvpAttendees,
+            responseStatus: 'declined',
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        // The forked instance reports the diverged attendee list but carries no responseStatus.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: date, googleEventId: 'inst-rsvped', type: 'modified', attendees: myRsvpAttendees },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const after = await itemsDAO.findByOwnerAndId('item-rsvped', userId);
+        // The denorm must agree with the attendees array in the same document.
+        expect(after?.responseStatus).toBe('declined');
+        expect(after?.attendees).toEqual(myRsvpAttendees);
+    });
+
+    it('restores master GCal-owned fields when reverting an item to master time', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Reconcile-away path: GCal stopped reporting the instance as overridden (user dragged it back
+        // to its master time), so the local exception is dropped and the item reverts. The revert must
+        // positively RE-ASSERT the master's GCal-owned values — the previous implementation relied on
+        // unset-everything plus a re-mirror that never ran, leaving the item bare.
+        const masterAttendees: GCalAttendee[] = [
+            { email: 'alice@example.com', responseStatus: 'accepted' },
+            { email: 'bob@example.com', responseStatus: 'needsAction' },
+        ];
+        const date = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                calendarEventId: 'gcal-evt-revert',
+                calendarIntegrationId: 'int-1',
+                attendees: masterAttendees,
+                organizer: { email: 'alice@example.com' },
+                location: 'Room 4',
+                // Pure-time move ⇒ isReconcilable, and the date is inside the reconcile window.
+                routineExceptions: [{ date, type: 'modified', newTimeStart: `${date}T14:00:00`, newTimeEnd: `${date}T14:30:00` }],
+            }),
+        );
+        // Item sits at the MOVED time and has been stripped of master values by the old behavior.
+        await itemsDAO.insertOne({
+            _id: 'item-reverting',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            calendarInstanceEventId: 'inst-reverting',
+            timeStart: `${date}T14:00:00`,
+            timeEnd: `${date}T14:30:00`,
+            location: 'Stale Room 9',
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        // GCal no longer reports the override ⇒ reconcileRemovedExceptions reverts + drops it.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const reverted = await itemsDAO.findByOwnerAndId('item-reverting', userId);
+        // masterTimes must win over the patch's sharedFields — the item returns to the 09:00 template time.
+        expect(reverted?.timeStart).toBe(`${date}T09:00:00`);
+        // …and the master's GCal-owned slice is re-asserted rather than left bare.
+        expect(reverted?.attendees).toEqual(masterAttendees);
+        expect(reverted?.organizer).toEqual({ email: 'alice@example.com' });
+        expect(reverted?.location).toBe('Room 4');
+        // The reconciled-away exception is gone from the routine.
+        const routineAfter = await routinesDAO.findByOwnerAndId('routine-1', userId);
+        expect(routineAfter?.routineExceptions ?? []).toHaveLength(0);
     });
 
     it('reverts a modified-instance item to master time and drops the exception when GCal stops reporting it', async () => {
@@ -13909,13 +14155,18 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         const userId = await getUserId(sessionCookie);
         const routine = await setupRoutineAndIntegration(userId);
 
-        const instanceEventId = 'gcal-evt-master_20260801T060000Z';
+        // Dynamic future dates — a hardcoded date rots into `isExceptionBeforeToday`'s past-cutoff
+        // guard once the calendar catches up, making the orphan create silently skip.
+        const originalDate = dayjs().add(10, 'day').format('YYYY-MM-DD');
+        const movedStart = dayjs(`${originalDate}T09:00:00Z`).add(1, 'day').toISOString();
+        const movedEnd = dayjs(`${originalDate}T09:30:00Z`).add(1, 'day').toISOString();
+        const instanceEventId = `gcal-evt-master_${originalDate.replaceAll('-', '')}T060000Z`;
         const exception = {
-            originalDate: '2026-08-01',
+            originalDate,
             type: 'modified' as const,
             googleEventId: instanceEventId,
-            newTimeStart: '2026-08-02T09:00:00Z',
-            newTimeEnd: '2026-08-02T09:30:00Z',
+            newTimeStart: movedStart,
+            newTimeEnd: movedEnd,
             title: 'Standup (raced move)',
         };
 
@@ -13936,7 +14187,7 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         if (!winner) throw new Error('expected one winner');
         // The winning row carries the move's title/time, regardless of which caller inserted.
         expect(winner.title).toBe('Standup (raced move)');
-        expect(winner.timeStart).toBe('2026-08-02T09:00:00Z');
+        expect(winner.timeStart).toBe(movedStart);
     });
 
     it('dead-twin demote (REGRESSION): trashed twin on a different routine is demoted so the active routine can insert', async () => {
