@@ -6,6 +6,7 @@ import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, Outlet } from '@tanstack/react-router';
 import { Suspense, useState } from 'react';
+import { AccountReauthDialog } from '../components/AccountReauthDialog';
 import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { AppNav } from '../components/AppNav';
@@ -36,6 +37,9 @@ export function AuthenticatedLayout() {
                 reauth banner it must not double-mount with AppNav's drawers) and outside the route
                 Suspense boundary so it stays visible while recovery swaps the data underneath. */}
             <SyncRecoveryDialog db={db} />
+            {/* Blocking "account needs re-login" dialog — mounted ONCE here (its banner counterpart
+                double-mounts inside AppNav's drawers; a modal must not). */}
+            <AccountReauthDialog db={db} />
             {/* Mobile AppBar — fixed at top, hidden on desktop where the sidebar takes over */}
             <AppBar position="fixed" className={styles.mobileAppBar}>
                 <Toolbar>

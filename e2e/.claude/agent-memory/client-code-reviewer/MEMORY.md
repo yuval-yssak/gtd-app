@@ -6,3 +6,4 @@
 - [Search button on empty list pages](feedback_search_button_on_empty_list_pages.md) — Extending the in-page search pattern to a new list surface can leave the header search button visible on the truly-empty state; compare sibling pages.
 - [Dismiss-button e2e tests can pass by timeout](feedback_dismiss_button_tests_pass_by_timeout.md) — Auto-hiding UI (Snackbar/Alert) hides on its own; assert still-visible-then-fast-disappear or the test greens with a dead handler.
 - [Merged multi-account entity labels + stranded URL ids](feedback_merged_entity_display_name_and_stranded_url_id.md) — Collapsing same-named entities: check which twin's name renders, and the hidden-account shrinking-group path.
+- [Two-tier dismissal stores (dialog over banner)](feedback_two_tier_dismissal_stores.md) — Acknowledge must key off flagged ids not the filtered render list; flagged-but-unknown account renders no warning at all.

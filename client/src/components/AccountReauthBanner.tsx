@@ -6,6 +6,7 @@ import { useSyncExternalStore } from 'react';
 import { dismissAccountReauth, ensureAccountReauthBridge, getReauthFlaggedUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
 import { useAccounts } from '../hooks/useAccounts';
 import type { MyDB } from '../types/MyDB';
+import { staleAccountRows } from './AccountReauthDialog';
 
 // Install the window→store bridge at import time so the shared store is fed even before any banner
 // mounts (and exactly once, regardless of how many banner instances AppNav double-mounts).
@@ -14,6 +15,8 @@ ensureAccountReauthBridge();
 /**
  * Surfaces accounts the sync orchestrator had to skip because they have no Better Auth multi-session
  * entry on this device (Bug B). Without this, such an account's data silently never appears here.
+ * The loud, first-line surface is `AccountReauthDialog` (blocking modal at the layout root); this
+ * banner is the persistent reminder that remains after the dialog is acknowledged.
  *
  * State lives in the shared `accountReauthEvents` store (flagged + dismissed userId sets), not in
  * component state, because AppNav double-mounts this banner (permanent + keepMounted temporary
@@ -30,9 +33,9 @@ export function AccountReauthBanner({ db }: { db: IDBPDatabase<MyDB> }) {
     const { allAccounts, reauthForUserId } = useAccounts(db);
     const flaggedUserIds = useSyncExternalStore(subscribeAccountReauth, getReauthFlaggedUserIds);
 
-    // Render only accounts that are flagged AND known locally (so we can show an email).
-    const flagged = new Set(flaggedUserIds);
-    const visibleAccounts = allAccounts.filter((a) => flagged.has(a.id));
+    // Includes flagged ids with no locally-known account row (generic label) — hiding those would
+    // remove every trace of the broken-sync warning. See staleAccountRows.
+    const visibleAccounts = staleAccountRows(flaggedUserIds, allAccounts);
     if (visibleAccounts.length === 0) {
         return null;
     }
@@ -50,7 +53,7 @@ export function AccountReauthBanner({ db }: { db: IDBPDatabase<MyDB> }) {
                         </Button>
                     }
                 >
-                    Your account {account.email} needs re-login to sync.
+                    {account.email === null ? 'An account needs re-login to sync.' : `Your account ${account.email} needs re-login to sync.`}
                 </Alert>
             ))}
         </Box>

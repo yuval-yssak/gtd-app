@@ -30,19 +30,32 @@ export function dispatchAccountNeedsReauth(userId: string): void {
 // (no reload), an explicit un-flag path must be added here or a stale banner will linger.
 const flaggedUserIds = new Set<string>();
 const dismissedUserIds = new Set<string>();
+// Separate, weaker tier than `dismissedUserIds`: closing the blocking dialog ("Not now") only
+// acknowledges the dialog — the status-bar banner keeps showing so the untrustworthy-sync state
+// stays visible. Dismissing the banner is the stronger action and silences both surfaces.
+const dialogAcknowledgedUserIds = new Set<string>();
 const listeners = new Set<() => void>();
 
-// Cached snapshot — useSyncExternalStore requires getSnapshot to return a referentially stable value
-// between notifications, so we rebuild it only when the visible set actually changes.
+// Cached snapshots — useSyncExternalStore requires getSnapshot to return a referentially stable
+// value between notifications, so we rebuild each only when its visible set actually changes.
 let visibleSnapshot: string[] = [];
+let dialogSnapshot: string[] = [];
 
-function recomputeVisible(): void {
-    const next = [...flaggedUserIds].filter((id) => !dismissedUserIds.has(id));
+function nextSnapshotFor(current: string[], excluded: Set<string>): string[] {
+    const next = [...flaggedUserIds].filter((id) => !excluded.has(id));
     // Preserve reference identity when membership is unchanged (avoids a needless re-render loop).
-    if (next.length === visibleSnapshot.length && next.every((id, i) => id === visibleSnapshot[i])) {
+    const isUnchanged = next.length === current.length && next.every((id, i) => id === current[i]);
+    return isUnchanged ? current : next;
+}
+
+function recomputeSnapshots(): void {
+    const nextVisible = nextSnapshotFor(visibleSnapshot, dismissedUserIds);
+    const nextDialog = nextSnapshotFor(dialogSnapshot, dialogAcknowledgedUserIds);
+    if (nextVisible === visibleSnapshot && nextDialog === dialogSnapshot) {
         return;
     }
-    visibleSnapshot = next;
+    visibleSnapshot = nextVisible;
+    dialogSnapshot = nextDialog;
     for (const notify of listeners) {
         notify();
     }
@@ -54,7 +67,7 @@ export function flagAccountNeedsReauth(userId: string): void {
         return;
     }
     flaggedUserIds.add(userId);
-    recomputeVisible();
+    recomputeSnapshots();
 }
 
 /** Dismisses the banner for `userId` for the rest of this session, surviving the orchestrator's re-dispatches. */
@@ -63,7 +76,22 @@ export function dismissAccountReauth(userId: string): void {
         return;
     }
     dismissedUserIds.add(userId);
-    recomputeVisible();
+    // Banner dismissal is the stronger action — it must also stop the blocking dialog re-opening.
+    dialogAcknowledgedUserIds.add(userId);
+    recomputeSnapshots();
+}
+
+/**
+ * Closes the blocking dialog for `userId` for the rest of this session ("Not now" / Escape). The
+ * status-bar banner intentionally keeps showing — the app is not trustworthy while sync is down,
+ * so acknowledging the dialog must not remove every trace of the warning.
+ */
+export function acknowledgeAccountReauthDialog(userId: string): void {
+    if (dialogAcknowledgedUserIds.has(userId)) {
+        return;
+    }
+    dialogAcknowledgedUserIds.add(userId);
+    recomputeSnapshots();
 }
 
 /** useSyncExternalStore subscribe — registers a re-render callback, returns the unsubscribe. */
@@ -77,6 +105,11 @@ export function subscribeAccountReauth(onChange: () => void): () => void {
 /** useSyncExternalStore getSnapshot — the userIds with an active, non-dismissed reauth flag. */
 export function getReauthFlaggedUserIds(): string[] {
     return visibleSnapshot;
+}
+
+/** useSyncExternalStore getSnapshot — the userIds the blocking dialog should currently show. */
+export function getReauthDialogUserIds(): string[] {
+    return dialogSnapshot;
 }
 
 /**
@@ -99,5 +132,7 @@ export function ensureAccountReauthBridge(): void {
 export function resetAccountReauthStore(): void {
     flaggedUserIds.clear();
     dismissedUserIds.clear();
+    dialogAcknowledgedUserIds.clear();
     visibleSnapshot = [];
+    dialogSnapshot = [];
 }

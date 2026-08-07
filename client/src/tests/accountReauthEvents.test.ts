@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     ACCOUNT_NEEDS_REAUTH_EVENT,
+    acknowledgeAccountReauthDialog,
     dismissAccountReauth,
     dispatchAccountNeedsReauth,
     flagAccountNeedsReauth,
+    getReauthDialogUserIds,
     getReauthFlaggedUserIds,
     resetAccountReauthStore,
     subscribeAccountReauth,
@@ -63,6 +65,63 @@ describe('account reauth store', () => {
         unsubscribe();
         flagAccountNeedsReauth('user-b');
         expect(onChange).toHaveBeenCalledTimes(1); // no further notifications after unsubscribe
+    });
+
+    it('a fresh flag shows on both the dialog and banner tiers', () => {
+        flagAccountNeedsReauth('user-a');
+
+        expect(getReauthDialogUserIds()).toEqual(['user-a']);
+        expect(getReauthFlaggedUserIds()).toEqual(['user-a']);
+    });
+
+    it('acknowledging the dialog hides it but keeps the banner showing', () => {
+        flagAccountNeedsReauth('user-a');
+        acknowledgeAccountReauthDialog('user-a');
+
+        expect(getReauthDialogUserIds()).toEqual([]);
+        expect(getReauthFlaggedUserIds()).toEqual(['user-a']);
+    });
+
+    it('keeps an acknowledged dialog closed when the orchestrator re-flags on the next sync cycle', () => {
+        flagAccountNeedsReauth('user-a');
+        acknowledgeAccountReauthDialog('user-a');
+        flagAccountNeedsReauth('user-a');
+
+        expect(getReauthDialogUserIds()).toEqual([]);
+    });
+
+    it('dismissing the banner also acknowledges the dialog (stronger action silences both)', () => {
+        flagAccountNeedsReauth('user-a');
+        dismissAccountReauth('user-a');
+        flagAccountNeedsReauth('user-a');
+
+        expect(getReauthDialogUserIds()).toEqual([]);
+        expect(getReauthFlaggedUserIds()).toEqual([]);
+    });
+
+    it('only acknowledges the targeted account on the dialog tier, not its siblings', () => {
+        flagAccountNeedsReauth('user-a');
+        flagAccountNeedsReauth('user-b');
+        acknowledgeAccountReauthDialog('user-a');
+
+        expect(getReauthDialogUserIds()).toEqual(['user-b']);
+        expect(getReauthFlaggedUserIds()).toEqual(['user-a', 'user-b']);
+    });
+
+    it('returns a referentially stable dialog snapshot when membership is unchanged', () => {
+        flagAccountNeedsReauth('user-a');
+        const first = getReauthDialogUserIds();
+        flagAccountNeedsReauth('user-a'); // no-op — already flagged
+        expect(getReauthDialogUserIds()).toBe(first);
+    });
+
+    it('does not notify subscribers on a repeated dialog acknowledge', () => {
+        flagAccountNeedsReauth('user-a');
+        acknowledgeAccountReauthDialog('user-a');
+        const onChange = vi.fn();
+        subscribeAccountReauth(onChange);
+        acknowledgeAccountReauthDialog('user-a');
+        expect(onChange).not.toHaveBeenCalled();
     });
 
     it('dispatchAccountNeedsReauth fires a CustomEvent carrying the userId', () => {
