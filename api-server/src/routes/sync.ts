@@ -389,7 +389,8 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         return new Response(stream, {
             headers: {
                 'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
+                // Cache-Control is set globally to `no-store` by noStoreCache() (index.ts) — stronger
+                // than the `no-cache` this endpoint used to set, so it is intentionally omitted here.
                 // Disable proxy/CDN buffering so events reach the client immediately
                 'X-Accel-Buffering': 'no',
             },

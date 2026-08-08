@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { assistCors, publicCors, strictCors } from './auth/corsProfiles.js';
+import { noStoreCache } from './lib/noStoreCache.js';
 import { v1RequestLogger } from './lib/v1Logger.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
@@ -31,6 +32,8 @@ const COMMIT_HASH = process.env.COMMIT_HASH ?? resolveCommitHash();
 // the strict profile (origin = clientUrl in prod), and the bearer-authed /v1 router gets the
 // public profile (origin = '*'). See `auth/corsProfiles.ts` for the rationale.
 const app = new Hono()
+    // Global: forbid browser HTTP caching of any API response (see lib/noStoreCache.ts).
+    .use('*', noStoreCache())
     // auth is a live ESM binding — assigned in loadDataAccess() before serve() is called, so it's safe to reference lazily here.
     // CORS for /auth/* must come before the handler so OPTIONS preflight is answered correctly.
     .use('/auth/*', strictCors())
