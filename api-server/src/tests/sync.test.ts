@@ -203,6 +203,53 @@ describe('POST /sync/push', () => {
         expect(op?.snapshot).toBeNull();
     });
 
+    it('stale item update for a superseded routine instance: 200, skipped, no resurrection (E11000 regression, 2026-08-03 incident)', async () => {
+        // Reproduces the stuck-sync incident: a client queued "mark instance done" offline, the
+        // routine's items were regenerated server-side (old item deleted, a NEW item claimed the
+        // same unique (user, calendarInstanceEventId) key), and every retry of the queued op then
+        // 500'd on E11000 — permanently wedging the client's sync. The push must now succeed and
+        // simply skip the unappliable op.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const staleId = crypto.randomUUID(); // deleted by regeneration; the client doesn't know
+        const successorId = crypto.randomUUID();
+        const instanceKey = 'gcal-evt-abc_20260803T071500Z';
+
+        await db.collection('items').insertOne({
+            _id: successorId,
+            user: userId,
+            status: 'done',
+            title: 'Daily standup',
+            timeStart: '2026-08-03T10:15:00',
+            timeEnd: '2026-08-03T10:30:00',
+            calendarInstanceEventId: instanceKey,
+            createdTs: '2026-08-02T11:18:16.231Z',
+            updatedTs: '2026-08-03T14:43:05.562Z',
+        });
+
+        const res = await push(cookie, 'dev-1', [
+            makeClientOp(
+                'item',
+                staleId,
+                'update',
+                makeItemSnapshot(staleId, '2026-08-03T19:08:11.722Z', {
+                    status: 'done',
+                    title: 'Daily standup',
+                    timeStart: '2026-08-03T10:15:00',
+                    timeEnd: '2026-08-03T10:30:00',
+                    calendarInstanceEventId: instanceKey,
+                }),
+            ),
+        ]);
+
+        expect(res.status).toBe(200);
+        // Not resurrected, and the successor still solely owns the unique key.
+        expect(await db.collection('items').countDocuments({ _id: staleId })).toBe(0);
+        expect(await db.collection('items').countDocuments({ user: userId, calendarInstanceEventId: instanceKey })).toBe(1);
+        // The op is still recorded for audit.
+        expect(await db.collection('operations').countDocuments({ entityId: staleId })).toBe(1);
+    });
+
     it('routine delete: pre-delete snapshot is captured on the recorded op', async () => {
         // The client sends `snapshot: null` for delete ops. The server hydrates the snapshot
         // from the current routine doc so the calendar push-back cascade can read calendarEventId.

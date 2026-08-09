@@ -7,6 +7,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { isDuplicateKeyError } from '../lib/applyEntityOp.js';
 import { applyAndPublishOperations, OperationValidationError, type RawOperation } from '../lib/applyOperation.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { computePurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
@@ -245,6 +246,14 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
                     },
                     400,
                 );
+            }
+            // A unique-index violation is a permanent property of THIS batch, not a transient
+            // server fault. Returning 500 makes the client retry the identical batch forever
+            // (the 2026-08-03 stuck-sync incident: sync dead until the op was hand-deleted).
+            // 400 routes it into the client's sync-recovery flow (push-vs-discard) instead.
+            if (isDuplicateKeyError(err)) {
+                console.warn('[sync-push] duplicate-key rejection mapped to 400', err);
+                return c.json({ error: 'A snapshot in this batch claims a unique key owned by another entity.', code: 'duplicate_key' }, 400);
             }
             throw err;
         }

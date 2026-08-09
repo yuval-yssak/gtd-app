@@ -37,9 +37,35 @@ async function applyEntitySnapshotOp<T extends EntitySnapshot>(
         return;
     }
     const existing = await dao.findByOwnerAndId(entityId, userId);
-    if (!existing || existing.updatedTs <= snapshot.updatedTs) {
-        await dao.replaceById(entityId, snapshot);
+    // An update whose target row is gone means the entity was deleted (or superseded — e.g. a
+    // routine regeneration replaced its items) after the client queued the op. Letting
+    // `replaceById`'s upsert resurrect it reintroduces a row the server intentionally removed,
+    // and when a successor row holds the same unique key (user + calendarInstanceEventId) the
+    // upsert-insert throws E11000 — permanently jamming the client's push queue (the 2026-08-03
+    // stuck-sync incident). Deletion wins: skip the op; it remains in the op log for audit.
+    if (!existing && opType === 'update') {
+        console.warn(`[apply-op] skipped update for missing ${entityId}: deleted or superseded; not resurrecting`);
+        return;
     }
+    if (!existing || existing.updatedTs <= snapshot.updatedTs) {
+        try {
+            await dao.replaceById(entityId, snapshot);
+        } catch (err) {
+            // Duplicate unique key: the snapshot claims a key (e.g. user+calendarInstanceEventId)
+            // that a DIFFERENT row now owns, so this op can never apply — treat it as superseded
+            // instead of failing the whole batch and wedging the client's retry loop.
+            if (isDuplicateKeyError(err)) {
+                console.warn(`[apply-op] skipped unappliable ${opType} for ${entityId}: unique key owned by another row`, err);
+                return;
+            }
+            throw err;
+        }
+    }
+}
+
+/** MongoServerError E11000 — unique index violation. */
+export function isDuplicateKeyError(err: unknown): boolean {
+    return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
 }
 
 export function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {

@@ -324,3 +324,63 @@ describe('applyAndPublishOperation — notifyChange wiring', () => {
         expect(count).toBeGreaterThanOrEqual(1);
     });
 });
+
+describe('applyAndPublishOperation — stale ops against superseded entities (2026-08-03 stuck-sync incident)', () => {
+    const doneInstanceSnapshot = (id: string, instanceKey: string, updatedTs: string): ItemInterface =>
+        ({
+            _id: id,
+            user: userId,
+            status: 'done',
+            title: 'Daily standup',
+            createdTs: '2026-07-27T07:45:41.659Z',
+            updatedTs,
+            timeStart: '2026-08-03T10:15:00',
+            timeEnd: '2026-08-03T10:30:00',
+            calendarInstanceEventId: instanceKey,
+        }) as ItemInterface;
+
+    it('update op for a missing item is skipped — not resurrected via upsert', async () => {
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'update', entityId: 'gone-item', snapshot: baseInboxItem({ _id: 'gone-item' }) },
+            { deviceId: 'dev-1' },
+        );
+
+        expect(op._id).toBeTruthy(); // op is still logged for audit
+        expect(await itemsDAO.findByOwnerAndId('gone-item', userId)).toBeFalsy();
+    });
+
+    it('create op for a missing item still inserts (skip applies to updates only)', async () => {
+        await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'create', entityId: 'new-item', snapshot: baseInboxItem({ _id: 'new-item' }) },
+            { deviceId: 'dev-1' },
+        );
+        expect(await itemsDAO.findByOwnerAndId('new-item', userId)).toBeTruthy();
+    });
+
+    it('update claiming a calendarInstanceEventId owned by another row is skipped, not thrown', async () => {
+        // Successor row (routine regeneration) owns the unique (user, calendarInstanceEventId) key.
+        await itemsDAO.insertOne(doneInstanceSnapshot('successor-item', 'evt_abc_20260803T071500Z', '2026-08-03T14:43:05.562Z'));
+        // Stale target still exists but without the key (e.g. trashed/reworked row).
+        await itemsDAO.insertOne(baseInboxItem({ _id: 'stale-item', updatedTs: '2026-08-01T00:00:00Z' }));
+
+        await expect(
+            applyAndPublishOperation(
+                userId,
+                {
+                    entityType: 'item',
+                    opType: 'update',
+                    entityId: 'stale-item',
+                    snapshot: doneInstanceSnapshot('stale-item', 'evt_abc_20260803T071500Z', '2026-08-03T19:08:11.722Z'),
+                },
+                { deviceId: 'dev-1' },
+            ),
+        ).resolves.toBeTruthy();
+
+        // Target row untouched; the successor keeps sole ownership of the key.
+        const stale = await itemsDAO.findByOwnerAndId('stale-item', userId);
+        expect(stale?.status).toBe('inbox');
+        expect(await db.collection('items').countDocuments({ user: userId, calendarInstanceEventId: 'evt_abc_20260803T071500Z' })).toBe(1);
+    });
+});
