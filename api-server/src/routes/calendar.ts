@@ -28,6 +28,7 @@ import {
     pushItemToGCalWithContext,
     pushRoutineDeletion,
     pushRoutineToGCalWithContext,
+    runMissedPushSweep,
 } from '../lib/calendarPushback.js';
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
@@ -1364,6 +1365,19 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
             });
         }
 
+        // Missed-push sweep: re-push linked entities whose local edits never reached Google —
+        // pushback drops ops while the integration is suspended/revoked, and until this sweep
+        // nothing ever retried them, leaving GCal permanently stale (the moved-while-revoked
+        // routine-instance bug). Runs after the inbound pass so the sync anchors are fresh, and
+        // after the notify fan-out so a repair-path failure can never suppress notifications for
+        // an inbound sync that already succeeded. `before: now` (stamped before the inbound pass)
+        // fences the sweep off from rows the sync itself just wrote — inbound applies, relinks,
+        // and heals all carry updatedTs >= now. Best-effort: a sweep failure must not 502 the sync.
+        const missedPushes = await runMissedPushSweep({ userId, integrationId, before: now }, buildProvider).catch((err) => {
+            console.error(`[calendar] missed-push sweep failed for integration ${integrationId}:`, err);
+            return { repushedItems: 0 };
+        });
+
         return c.json({
             ok: true,
             syncedRoutines: syncResults,
@@ -1371,6 +1385,7 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
             pushedItems: backfill.pushedItems,
             pushedRoutines: backfill.pushedRoutines,
             relinkedRoutines: backfill.relinkedRoutines,
+            repushedItems: missedPushes.repushedItems,
         });
     } catch (err) {
         console.error(`[calendar] sync failed for integration ${integrationId}:`, err);
@@ -4487,7 +4502,8 @@ function isItemUpdateNoop(item: ItemInterface, setFields: Record<string, unknown
         // so any pending unset is by definition a real change.
         return false;
     }
-    const { updatedTs: _ignored, ...meaningfulSetFields } = setFields;
+    // lastSyncedFromGCalTs is bookkeeping like updatedTs — a fresh stamp alone is not a change.
+    const { updatedTs: _ignored, lastSyncedFromGCalTs: _ignoredAnchor, ...meaningfulSetFields } = setFields;
     return Object.entries(meaningfulSetFields).every(([key, value]) => stableStringify(item[key as keyof ItemInterface]) === stableStringify(value));
 }
 
@@ -4500,7 +4516,11 @@ async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalExceptio
     // item is already done (e.g. our own pushback echo). Otherwise a routine-instance round-trip
     // would corrupt the stored title with the marker we ourselves applied.
     const title = ex.title !== undefined && item.status === 'done' ? stripDoneMarker(ex.title) : (ex.title ?? item.title);
-    const setFields = { ...patch.sharedFields, title } as Record<string, unknown>;
+    // lastSyncedFromGCalTs is the item-level inbound anchor: with updatedTs and this stamped to the
+    // same instant, the missed-push sweep can tell a Google-originated write (anchor == updatedTs,
+    // skip) from a genuine local edit (updatedTs newer, re-push). Without it, every inbound instance
+    // move left the item permanently "locally newer" and the sweep pushed Google's own edit back.
+    const setFields = { ...patch.sharedFields, title, lastSyncedFromGCalTs: ctx.now } as Record<string, unknown>;
     // GCal-owned keys carried by neither the exception nor the master (pre-computed by the caller)
     // are cleared so a "GCal removed all attendees" edit propagates. Keys absent on the exception
     // but present on the master are NOT here — they arrive via `sharedFields` with the master value,
@@ -4580,6 +4600,9 @@ async function createItemForOrphanedException(routine: RoutineInterface, ex: GCa
         ...mergedGCalOwned,
         createdTs: ctx.now,
         updatedTs: ctx.now,
+        // Inbound anchor == updatedTs marks this row as Google-originated, so the missed-push
+        // sweep never mirrors Google's own creation back out (see applyModifiedExceptionToOne).
+        lastSyncedFromGCalTs: ctx.now,
     };
     try {
         await itemsDAO.insertOne(item);

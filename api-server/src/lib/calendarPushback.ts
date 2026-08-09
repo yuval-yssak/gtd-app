@@ -19,8 +19,9 @@ import { integrationStatus } from './calendarIntegrationStatus.js';
 import { propagateRoutineNotesToItems } from './calendarItemNotes.js';
 import { applyDoneMarker, DONE_COLOR_ID } from './doneMarker.js';
 import { markdownToHtml } from './markdownHtml.js';
+import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
-import { regenerateFutureRoutineItems } from './routineItemRegeneration.js';
+import { buildCalendarInstanceEventId, regenerateFutureRoutineItems } from './routineItemRegeneration.js';
 
 type ProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
 
@@ -1106,4 +1107,180 @@ async function stampRoutineLastPushed(userId: string, routineId: string, lastSyn
         { _id: routineId, user: userId },
         { $set: { lastPushedToGCalTs: now, ...(lastSyncedNotes !== undefined ? { lastSyncedNotes } : {}) } },
     );
+}
+
+// ── Missed-push sweep ────────────────────────────────────────────────────────
+
+/** Inter-call pacing for the missed-push sweep — mirrors the outbound backfill's ~7 req/s. */
+const MISSED_PUSH_PACE_MS = 150;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Latest of the given ISO timestamps, or undefined when none are present (ISO-8601 compares lexicographically). */
+function latestTs(...timestamps: Array<string | undefined>): string | undefined {
+    const present = timestamps.filter((ts): ts is string => Boolean(ts));
+    return present.length > 0 ? present.reduce((a, b) => (a > b ? a : b)) : undefined;
+}
+
+/**
+ * True when the item's local state post-dates every sync anchor — a local edit whose outbound push
+ * never reached Google (typically made while the integration was suspended/revoked). Requires at
+ * least one anchor: an anchor-less linked item gives no evidence of which side is newer, and
+ * re-pushing it could clobber a Google-side edit that predates incremental sync history.
+ * Exported for unit tests.
+ */
+export function isMissedPush(item: Pick<ItemInterface, 'updatedTs' | 'lastPushedToGCalTs' | 'lastSyncedFromGCalTs'>, fallbackAnchor?: string): boolean {
+    const anchor = latestTs(item.lastPushedToGCalTs, item.lastSyncedFromGCalTs, fallbackAnchor);
+    return anchor !== undefined && item.updatedTs > anchor;
+}
+
+/** A routine-instance re-push candidate: the item plus the exception that proves it diverged. */
+interface RoutineInstanceRef {
+    routine: RoutineInterface;
+    exceptionItemId: string;
+    exceptionDate: string;
+}
+
+/**
+ * Scope of one missed-push sweep. `before` is the moment the enclosing sync run started: a missed
+ * push is by definition an edit made BEFORE this sync — anything with a later `updatedTs` was just
+ * written by the sync itself (inbound apply, relink sweep, heal) and must not be pushed back out.
+ */
+export interface MissedPushSweepScope {
+    userId: string;
+    integrationId: string;
+    before: string;
+}
+
+/**
+ * Re-pushes locally-newer linked calendar items whose outbound push never reached Google —
+ * edits made while the integration was suspended/revoked are dropped by the per-op pushback and
+ * were previously never retried, leaving GCal permanently stale. Runs inside "Sync now" after the
+ * inbound pass (so the anchors are fresh and any Google-side change has already been applied
+ * locally) and pushes via the same per-op handler, inheriting all its guards. Returns the number
+ * of items re-pushed for the route's summary payload.
+ */
+export async function runMissedPushSweep(scope: MissedPushSweepScope, buildProvider: ProviderFactory): Promise<{ repushedItems: number }> {
+    const { userId } = scope;
+    const [routineInstances, standaloneItems] = await Promise.all([collectRoutineInstanceMissedPushes(scope), collectStandaloneMissedPushes(scope)]);
+    const candidates = [...routineInstances, ...standaloneItems];
+    if (candidates.length === 0) {
+        return { repushedItems: 0 };
+    }
+    console.log(`[gcal-pushback] missed-push sweep | userId=${userId} integrationId=${scope.integrationId} candidates=${candidates.length}`);
+    // Sequential + paced like the outbound backfill; one failing push must not abort the sweep.
+    const outcomes = await candidates.reduce(async (prevPromise: Promise<number>, item) => {
+        const repushed = await prevPromise;
+        try {
+            await handleItemPush(item, userId, buildProvider, 'none');
+            await sleep(MISSED_PUSH_PACE_MS);
+            return repushed + 1;
+        } catch (err) {
+            console.error(`[gcal-pushback] missed-push re-push failed | itemId=${item._id}:`, err);
+            return repushed;
+        }
+    }, Promise.resolve(0));
+    return { repushedItems: outcomes };
+}
+
+/**
+ * Routine-generated items proven diverged by a `modified` routineException that references them.
+ * The exception is required: an unmodified generated item mirrors the master, and re-pushing it
+ * would mint a needless per-instance override on the GCal series.
+ */
+async function collectRoutineInstanceMissedPushes(scope: MissedPushSweepScope): Promise<ItemInterface[]> {
+    const routines = await routinesDAO.findArray({
+        user: scope.userId,
+        calendarIntegrationId: scope.integrationId,
+        calendarEventId: { $exists: true },
+        'routineExceptions.type': 'modified',
+    });
+    const refs = routines.flatMap((routine) =>
+        (routine.routineExceptions ?? []).flatMap((exception) =>
+            exception.type === 'modified' && exception.itemId ? [{ routine, exceptionItemId: exception.itemId, exceptionDate: exception.date }] : [],
+        ),
+    );
+    const loaded = await Promise.all(refs.map((ref) => loadRoutineInstanceCandidate(ref, scope)));
+    return loaded.filter((item): item is ItemInterface => item !== null);
+}
+
+/** Loads one exception-referenced item and applies the missed-push eligibility filters. */
+async function loadRoutineInstanceCandidate(ref: RoutineInstanceRef, scope: MissedPushSweepScope): Promise<ItemInterface | null> {
+    const { userId } = scope;
+    const item = await itemsDAO.findByOwnerAndId(ref.exceptionItemId, userId);
+    if (!item || item.lastKnownCalendarEventId) {
+        return null;
+    }
+    if (item.status !== 'calendar' && item.status !== 'done') {
+        return null;
+    }
+    // Written during this very sync run (inbound apply / relink / heal) — not a missed push.
+    if (item.updatedTs >= scope.before) {
+        return null;
+    }
+    // Item-level anchors are authoritative; the routine's inbound-sync anchor is the fallback for
+    // legacy rows that predate per-item stamping (they had no lastPushed/lastSynced fields).
+    if (!isMissedPush(item, ref.routine.lastSyncedFromGCalTs)) {
+        return null;
+    }
+    return await withInstanceEventId(item, ref, userId);
+}
+
+/**
+ * Backfills `calendarInstanceEventId` on a routine item that predates instance-id stamping.
+ * Without it the push falls back to a date-window `events.instances` lookup, which silently
+ * misses instances already moved on Google — exactly the rows this sweep re-pushes. Leaves the
+ * item unchanged when the timezone can't be resolved or another item already claims the computed
+ * id (the presence-partial `(user, calendarInstanceEventId)` unique index).
+ */
+async function withInstanceEventId(item: ItemInterface, ref: RoutineInstanceRef, userId: string): Promise<ItemInterface> {
+    if (item.calendarInstanceEventId || !ref.routine.calendarEventId || !item._id) {
+        return item;
+    }
+    const itemId = item._id;
+    const timeZone = await resolveRoutineTimeZone(ref.routine, userId);
+    if (!timeZone) {
+        return item;
+    }
+    // utc() pins the occurrence date: a local-TZ Date east of UTC would render the previous day.
+    const occurrenceDate = dayjs.utc(ref.exceptionDate).toDate();
+    const instanceEventId = buildCalendarInstanceEventId(ref.routine.calendarEventId, occurrenceDate, ref.routine.calendarItemTemplate?.timeOfDay, timeZone);
+    const conflicting = await itemsDAO.findOne({ user: userId, calendarInstanceEventId: instanceEventId });
+    if (conflicting) {
+        return item;
+    }
+    try {
+        // Silent server-side stamp (no op recorded) — push bookkeeping, same as stampItemLastPushed.
+        await itemsDAO.updateOne({ _id: itemId, user: userId }, { $set: { calendarInstanceEventId: instanceEventId } });
+    } catch (err) {
+        // Lost the (user, calendarInstanceEventId) unique-index race to a concurrent inbound
+        // orphan-create — fall back to the date-window push path rather than failing the sweep.
+        if (isDuplicateKeyError(err)) {
+            return item;
+        }
+        throw err;
+    }
+    return { ...item, calendarInstanceEventId: instanceEventId };
+}
+
+/** Timezone of the routine's sync config — needed to reconstruct the instance-id suffix. */
+async function resolveRoutineTimeZone(routine: RoutineInterface, userId: string): Promise<string | undefined> {
+    if (!routine.calendarSyncConfigId) {
+        return undefined;
+    }
+    const config = await calendarSyncConfigsDAO.findByOwnerAndId(routine.calendarSyncConfigId, userId);
+    return config?.timeZone;
+}
+
+/** Standalone linked items (own calendarEventId) whose local edits post-date both sync anchors. */
+async function collectStandaloneMissedPushes(scope: MissedPushSweepScope): Promise<ItemInterface[]> {
+    const linked = await itemsDAO.findArray({
+        user: scope.userId,
+        status: { $in: ['calendar', 'done'] },
+        calendarEventId: { $exists: true },
+        calendarIntegrationId: scope.integrationId,
+        lastKnownCalendarEventId: { $exists: false },
+        // Rows written during this very sync run (inbound apply / relink / heal) are not missed pushes.
+        updatedTs: { $lt: scope.before },
+    });
+    return linked.filter((item) => isMissedPush(item));
 }

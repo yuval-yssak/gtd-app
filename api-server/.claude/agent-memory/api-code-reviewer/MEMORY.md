@@ -1,3 +1,6 @@
+- [Routine items have NO GCal-side anchor](project_routine_items_have_no_gcal_side_anchor.md) — inbound exception-apply stamps only updatedTs, so "local newer than Google" is permanently true for them. Unsound sweeps.
+- [Mutate a new fence before trusting it](feedback_run_fence_mutation_before_trusting_it.md) — "the fence fixed the other suite" = red flag; flip it to `false` per code path and re-run.
+- [Fake providers must expose every reachable method](feedback_fake_provider_must_expose_every_reachable_method.md) — a skip test asserting not.toHaveBeenCalled() is vacuous if the guard reroutes to an unmocked method.
 - [GCal re-split reanchor + guarded reactivation E11000 fix](project_gcal_resplit_reanchor_e11000_fix.md) — reanchorResplitSuccessor + guarded reactivation heal the re-split sync jam. Checklist inside.
 - [One-off remediation script review checklist](project_remediation_scripts_review_checklist.md) — loadDataAccess() migrations make "dry run" a lie; bare-id scripts skip user scoping; DAO+recordOperation-sans-notifyChange verified GCal-safe.
 - [Scripts bypassing loadDataAccess lose guards](project_script_bypassing_loaddataaccess_loses_guards.md) — direct-connect scripts also drop env validation (empty dbName silently picks default DB) + unique-index builds. Assert, don't build.
