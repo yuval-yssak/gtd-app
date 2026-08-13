@@ -84,8 +84,11 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
      * old `$gt ts` that skipped it.
      */
     async findOpsAfter(userId: string, since: string, sinceId: string): Promise<OperationInterface[]> {
+        // `notApplied` quarantine: ops whose apply was skipped (target row gone — deleted or
+        // reassigned away) are never delivered; replaying them would resurrect the entity
+        // client-side. They stay in the collection for audit + the SyncIssuesPanel.
         return await this.findArray(
-            { user: userId, $or: [{ ts: { $gt: since } }, { ts: since, _id: { $gt: sinceId } } as never] },
+            { user: userId, notApplied: { $exists: false }, $or: [{ ts: { $gt: since } }, { ts: since, _id: { $gt: sinceId } } as never] },
             { sort: { ts: 1, _id: 1 } },
         );
     }
@@ -95,7 +98,13 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
      * ops. Backs the connected-devices list's per-device "operations behind" figure.
      */
     async countOpsAfter(userId: string, since: string, sinceId: string): Promise<number> {
-        return await this.countDocuments({ user: userId, $or: [{ ts: { $gt: since } }, { ts: since, _id: { $gt: sinceId } } as never] });
+        // Mirrors findOpsAfter's notApplied quarantine so the "operations behind" figure counts
+        // only ops the device will actually receive.
+        return await this.countDocuments({
+            user: userId,
+            notApplied: { $exists: false },
+            $or: [{ ts: { $gt: since } }, { ts: since, _id: { $gt: sinceId } } as never],
+        });
     }
 
     async deleteOlderThan(userId: string, minTs: string, minId: string): Promise<number> {
@@ -103,6 +112,9 @@ class OperationsDAO extends AbstractDAO<OperationInterface> {
         // slowest device has provably received. The same-ms clause MUST be `_id: { $lte: minId }`,
         // NOT `ts: { $lte: minTs }`: a bare `$lte ts` would delete same-ms ops *past* the slowest
         // device's acked position that it hasn't pulled yet, the purge-side dual of the pull bug.
+        // Deliberately does NOT exclude `notApplied`/`syncFailed` rows: once the floor passes a
+        // quarantined op it is purged and drops off /sync/issues — matching the pre-existing
+        // lifecycle for all failed ops (the panel is a recent-failures surface, not an archive).
         const result = await this._collection.deleteMany({
             user: userId,
             $or: [{ ts: { $lt: minTs } }, { ts: minTs, _id: { $lte: minId } }],

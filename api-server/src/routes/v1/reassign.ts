@@ -3,7 +3,6 @@ import { resolveBearerToken } from '../../auth/apiTokens.js';
 import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddleware.js';
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
-import { buildCalendarProvider } from '../../lib/buildCalendarProvider.js';
 import { type ReassignParams, reassignEntity } from '../../lib/reassignEntity.js';
 import type { ApiTokenInterface, EntityType } from '../../types/entities.js';
 
@@ -140,12 +139,12 @@ export const v1ReassignRoutes = new Hono<{ Variables: BearerVariables }>()
         }
         // Stamp `api:<tokenId>` on the recorded ops so audits can attribute the move to this
         // token (vs. the in-app gesture which records `deviceId='server'`).
-        const result = await reassignEntity({ ...parsed.value, deviceId: `api:${tokenId}` }, buildCalendarProvider);
+        const result = await reassignEntity({ ...parsed.value, deviceId: `api:${tokenId}` });
         if (!result.ok) {
             // `code` is set by the orchestrator only for validation_failed today — fall back to
-            // the generic reassign_failed shape for the legacy 400/404/502 cases so the contract
-            // pinned in tests stays stable.
+            // the generic reassign_failed shape for the 400/404 cases so the contract pinned in
+            // tests stays stable.
             return c.json({ error: result.error, code: result.code ?? 'reassign_failed' }, result.status);
         }
-        return c.json({ ok: true, ...(result.crossUserReferences ? { crossUserReferences: result.crossUserReferences } : {}) });
+        return c.json({ ok: true, ...(result.alreadyMoved ? { alreadyMoved: true } : {}) });
     });

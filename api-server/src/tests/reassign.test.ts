@@ -6,6 +6,7 @@ import utc from 'dayjs/plugin/utc.js';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SESSION_COOKIE_NAME } from '../auth/constants.js';
+import { buildDeterministicGCalId } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
@@ -41,6 +42,7 @@ beforeEach(async () => {
         db.collection('operations').deleteMany({}),
         db.collection('calendarIntegrations').deleteMany({}),
         db.collection('calendarSyncConfigs').deleteMany({}),
+        db.collection('entityMoves').deleteMany({}),
     ]);
     vi.restoreAllMocks();
 });
@@ -303,15 +305,10 @@ describe('POST /sync/reassign', () => {
             expect(movedRoutine).not.toBeNull();
             expect(movedRoutine?.calendarEventId).toBeUndefined();
             expect(movedRoutine?.calendarIntegrationId).toBeUndefined();
-            // Cascade fired: GCal master hard-deleted, source calendar items trashed (poll briefly because notifyChange's
-            // pushback leg is fire-and-forget on the calendarPushback path).
-            const deadline = Date.now() + 1500;
-            while (Date.now() < deadline && deleteRecurringEvent.mock.calls.length === 0) {
-                await new Promise<void>((r) => setTimeout(r, 20));
-            }
-            expect(deleteRecurringEvent).toHaveBeenCalledWith('gcal-master-routine', 'primary');
-            const sourceItem = await itemsDAO.findByOwnerAndId(generated._id!, alice.userId);
-            expect(sourceItem?.status).toBe('trash');
+            // Cascade fired: GCal master hard-deleted, source calendar items trashed. waitFor because
+            // notifyChange's pushback leg (which drives the cascade) is fire-and-forget.
+            await vi.waitFor(() => expect(deleteRecurringEvent).toHaveBeenCalledWith('gcal-master-routine', 'primary'));
+            await vi.waitFor(async () => expect((await itemsDAO.findByOwnerAndId(generated._id!, alice.userId))?.status).toBe('trash'));
             buildSpy.mockRestore();
         });
 
@@ -339,9 +336,10 @@ describe('POST /sync/reassign', () => {
             expect(await routinesDAO.findByOwnerAndId(routine._id, bob.userId)).not.toBeNull();
             // Cascade: open calendar items under Alice flip to 'trash' (recoverable, not 'done').
             // The historical 'done' item is left as-is — `trashGeneratedCalendarItems` only touches
-            // status='calendar' rows, by design (matrix A8).
+            // status='calendar' rows, by design (matrix A8). waitFor because the cascade rides the
+            // fire-and-forget pushback leg of the delete-leg op's notifyChange.
+            await vi.waitFor(async () => expect((await itemsDAO.findByOwnerAndId(item1._id!, alice.userId))?.status).toBe('trash'));
             const aliceItem1 = await itemsDAO.findByOwnerAndId(item1._id!, alice.userId);
-            expect(aliceItem1?.status).toBe('trash');
             // The trashed item releases its instance id so a re-import can't be E11000-blocked by it.
             expect(aliceItem1?.calendarInstanceEventId).toBeUndefined();
             const aliceItem2 = await itemsDAO.findByOwnerAndId(item2._id!, alice.userId);
@@ -866,12 +864,12 @@ describe('POST /sync/reassign', () => {
         });
     });
 
-    describe('calendar-linked item with GCal', () => {
-        it('creates on target then deletes on source via the provider, then persists DB move', async () => {
+    describe('calendar-linked item with GCal (op-driven)', () => {
+        /** Seeds alice + bob sessions, one integration + default sync config each, and the shared cookie. */
+        async function seedTwoCalendarUsers() {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
-
-            // Seed encrypted integration + sync configs for both users so resolveDecrypted works.
+            const now = dayjs().toISOString();
             await calendarIntegrationsDAO.upsertEncrypted({
                 _id: 'int-a',
                 user: alice.userId,
@@ -879,8 +877,8 @@ describe('POST /sync/reassign', () => {
                 accessToken: 'at-a',
                 refreshToken: 'rt-a',
                 tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
             await calendarIntegrationsDAO.upsertEncrypted({
                 _id: 'int-b',
@@ -889,52 +887,62 @@ describe('POST /sync/reassign', () => {
                 accessToken: 'at-b',
                 refreshToken: 'rt-b',
                 tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
             await calendarSyncConfigsDAO.insertOne({
                 _id: 'cfg-a',
                 integrationId: 'int-a',
                 user: alice.userId,
-                calendarId: 'primary',
+                calendarId: 'alice-primary',
                 isDefault: true,
                 enabled: true,
                 timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
             await calendarSyncConfigsDAO.insertOne({
                 _id: 'cfg-b',
                 integrationId: 'int-b',
                 user: bob.userId,
-                calendarId: 'primary',
+                calendarId: 'bob-primary',
                 isDefault: true,
                 enabled: true,
                 timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
+            return { alice, bob, cookie: buildMultiSessionCookieHeader(alice, [alice, bob]) };
+        }
 
-            const item = makeItem(alice.userId, {
+        /** Stubs buildCalendarProvider with spies for the calls the op-driven pushback makes. */
+        function stubGCalProvider() {
+            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new', htmlLink: 'https://calendar.google.com/calendar/event?eid=target-new' });
+            const deleteEvent = vi.fn().mockResolvedValue(undefined);
+            const updateEvent = vi.fn().mockResolvedValue(undefined);
+            const stub = { createEvent, deleteEvent, updateEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
+            vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stub as never);
+            return { createEvent, deleteEvent, updateEvent };
+        }
+
+        function makeLinkedItem(userId: string) {
+            return makeItem(userId, {
                 status: 'calendar',
                 calendarEventId: 'gcal-evt-original',
                 calendarIntegrationId: 'int-a',
                 calendarSyncConfigId: 'cfg-a',
-                // Stale GCal-owned deep link pointing at the source event — the move deletes that
-                // event, so the moved item must carry the NEW event's htmlLink instead.
                 htmlLink: 'https://calendar.google.com/calendar/event?eid=source-stale',
                 timeStart: '2030-01-01T10:00:00Z',
                 timeEnd: '2030-01-01T11:00:00Z',
             });
+        }
+
+        it('flips ownership atomically; GCal side effects are op-driven — create on target calendar (deterministic id) + delete on source, both after the flip', async () => {
+            const { alice, bob, cookie } = await seedTwoCalendarUsers();
+            const item = makeLinkedItem(alice.userId);
             await itemsDAO.insertOne(item);
+            const { createEvent, deleteEvent } = stubGCalProvider();
 
-            // Mock the provider so create returns a new event id and delete is a no-op.
-            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new', htmlLink: 'https://calendar.google.com/calendar/event?eid=target-new' });
-            const deleteEvent = vi.fn().mockResolvedValue(undefined);
-            const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
-            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
-
-            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
             const res = await postReassign(cookie, {
                 entityType: 'item',
                 entityId: item._id,
@@ -944,211 +952,192 @@ describe('POST /sync/reassign', () => {
             });
 
             expect(res.status).toBe(200);
-            // Provider was called in the right order — create on target first, then delete on source.
-            expect(createEvent).toHaveBeenCalledTimes(1);
-            expect(deleteEvent).toHaveBeenCalledTimes(1);
-            const createOrder = createEvent.mock.invocationCallOrder[0];
-            const deleteOrder = deleteEvent.mock.invocationCallOrder[0];
-            expect(createOrder).toBeDefined();
-            expect(deleteOrder).toBeDefined();
-            expect(createOrder!).toBeLessThan(deleteOrder!);
-            // Item now under bob with the new event id, and the stale source htmlLink replaced by
-            // the target event's link.
-            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
-            expect(moved?.calendarEventId).toBe('gcal-evt-new');
-            expect(moved?.calendarIntegrationId).toBe('int-b');
-            expect(moved?.htmlLink).toBe('https://calendar.google.com/calendar/event?eid=target-new');
-            buildSpy.mockRestore();
+            expect(((await res.json()) as { alreadyMoved?: boolean }).alreadyMoved).toBeUndefined();
+            // The flip is synchronous with the response: the row already belongs to bob even if
+            // the (async) GCal pushes haven't fired yet.
+            expect(await itemsDAO.findByOwnerAndId(item._id!, bob.userId)).not.toBeNull();
+            expect(await itemsDAO.findByOwnerAndId(item._id!, alice.userId)).toBeNull();
+
+            // Both op-log legs exist: delete under alice carrying the PRE-move snapshot (drives the
+            // async source-event deletion), create under bob with the source link stripped and the
+            // target calendar stamped (drives the async target-event creation).
+            const [deleteOp] = await operationsDAO.findArray({ user: alice.userId, entityId: item._id, opType: 'delete' });
+            expect((deleteOp?.snapshot as ItemInterface | null)?.calendarEventId).toBe('gcal-evt-original');
+            const [createOp] = await operationsDAO.findArray({ user: bob.userId, entityId: item._id, opType: 'create' });
+            const createSnapshot = createOp?.snapshot as ItemInterface | null;
+            expect(createSnapshot?.calendarEventId).toBeUndefined();
+            expect(createSnapshot?.calendarIntegrationId).toBe('int-b');
+            expect(createSnapshot?.calendarSyncConfigId).toBe('cfg-b');
+
+            // Async pushback: create on bob's chosen calendar with the deterministic id (retries
+            // idempotent via 409-relink), delete of the original event on alice's calendar.
+            await vi.waitFor(() => expect(createEvent).toHaveBeenCalledTimes(1));
+            const [createCalendarId, , , createOpts] = createEvent.mock.calls[0]!;
+            expect(createCalendarId).toBe('bob-primary');
+            expect(createOpts).toMatchObject({ id: buildDeterministicGCalId(item._id!, 'int-b') });
+            await vi.waitFor(() => expect(deleteEvent).toHaveBeenCalledWith('alice-primary', 'gcal-evt-original'));
+
+            // The pushback linked the moved item to the fresh target event.
+            await vi.waitFor(async () => {
+                const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
+                expect(moved?.calendarEventId).toBe('gcal-evt-new');
+                expect(moved?.calendarIntegrationId).toBe('int-b');
+                expect(moved?.htmlLink).toBe('https://calendar.google.com/calendar/event?eid=target-new');
+            });
         });
 
-        // Regression: notifyChange's GCal pushback leg must NOT fire on either reassign leg —
-        // the create-on-target was already pushed inline (via createEvent above), and the source
-        // delete already nuked the event (via deleteEvent). Without the suppressGCalPushback knob
-        // threaded by persistItemMove, the create-leg fan-out would re-push the moved item to
-        // Bob's GCal via maybePushToGCal → pushExistingItemToGCal → provider.updateEvent —
-        // producing a duplicate write per cross-account move.
-        it('does NOT call provider.updateEvent during reassign — suppressGCalPushback prevents the redundant fan-out push', async () => {
-            const alice = await seedUserSession('alice@example.com');
-            const bob = await seedUserSession('bob@example.com');
-            await calendarIntegrationsDAO.upsertEncrypted({
-                _id: 'int-a',
-                user: alice.userId,
-                provider: 'google',
-                accessToken: 'at-a',
-                refreshToken: 'rt-a',
-                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarIntegrationsDAO.upsertEncrypted({
-                _id: 'int-b',
-                user: bob.userId,
-                provider: 'google',
-                accessToken: 'at-b',
-                refreshToken: 'rt-b',
-                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarSyncConfigsDAO.insertOne({
-                _id: 'cfg-a',
-                integrationId: 'int-a',
-                user: alice.userId,
-                calendarId: 'primary',
-                isDefault: true,
-                enabled: true,
-                timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarSyncConfigsDAO.insertOne({
-                _id: 'cfg-b',
-                integrationId: 'int-b',
-                user: bob.userId,
-                calendarId: 'primary',
-                isDefault: true,
-                enabled: true,
-                timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            const item = makeItem(alice.userId, {
-                status: 'calendar',
-                calendarEventId: 'gcal-evt-suppress',
-                calendarIntegrationId: 'int-a',
-                calendarSyncConfigId: 'cfg-a',
-                timeStart: '2030-01-01T10:00:00Z',
-                timeEnd: '2030-01-01T11:00:00Z',
-            });
+        it('retry of a completed move returns alreadyMoved and never creates a second GCal event', async () => {
+            const { alice, bob, cookie } = await seedTwoCalendarUsers();
+            const item = makeLinkedItem(alice.userId);
             await itemsDAO.insertOne(item);
-
-            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
-            const deleteEvent = vi.fn().mockResolvedValue(undefined);
-            const updateEvent = vi.fn().mockResolvedValue(undefined);
-            const stubProvider = { createEvent, deleteEvent, updateEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
-            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
-
-            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
-            const res = await postReassign(cookie, {
+            const { createEvent, updateEvent } = stubGCalProvider();
+            const body = {
                 entityType: 'item',
                 entityId: item._id,
                 fromUserId: alice.userId,
                 toUserId: bob.userId,
                 targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
-            });
+            };
 
-            expect(res.status).toBe(200);
-            // Inline GCal moves still fired (create on target, delete on source). The fan-out's
-            // would-be redundant updateEvent must NOT fire — that's the load-bearing assertion.
+            const first = await postReassign(cookie, body);
+            expect(first.status).toBe(200);
+            await vi.waitFor(() => expect(createEvent).toHaveBeenCalledTimes(1));
+            await vi.waitFor(async () => expect((await itemsDAO.findByOwnerAndId(item._id!, bob.userId))?.calendarEventId).toBe('gcal-evt-new'));
+
+            const retry = await postReassign(cookie, body);
+            expect(retry.status).toBe(200);
+            expect(((await retry.json()) as { alreadyMoved?: boolean }).alreadyMoved).toBe(true);
+            // The re-emitted create leg carries the CURRENT (already-linked) row, so pushback takes
+            // the update path — never a second create.
+            await vi.waitFor(() => expect(updateEvent).toHaveBeenCalled());
             expect(createEvent).toHaveBeenCalledTimes(1);
-            expect(deleteEvent).toHaveBeenCalledTimes(1);
-            expect(updateEvent).not.toHaveBeenCalled();
-            buildSpy.mockRestore();
+            expect(await itemsDAO.findByOwnerAndId(item._id!, bob.userId)).not.toBeNull();
+            expect(await itemsDAO.findByOwnerAndId(item._id!, alice.userId)).toBeNull();
         });
 
-        it('returns 502 with no DB writes when create-on-target fails', async () => {
-            const alice = await seedUserSession('alice@example.com');
-            const bob = await seedUserSession('bob@example.com');
-            await calendarIntegrationsDAO.upsertEncrypted({
-                _id: 'int-a',
-                user: alice.userId,
-                provider: 'google',
-                accessToken: 'at-a',
-                refreshToken: 'rt-a',
-                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarIntegrationsDAO.upsertEncrypted({
-                _id: 'int-b',
-                user: bob.userId,
-                provider: 'google',
-                accessToken: 'at-b',
-                refreshToken: 'rt-b',
-                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarSyncConfigsDAO.insertOne({
-                _id: 'cfg-a',
-                integrationId: 'int-a',
-                user: alice.userId,
-                calendarId: 'primary',
-                isDefault: true,
-                enabled: true,
-                timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarSyncConfigsDAO.insertOne({
-                _id: 'cfg-b',
-                integrationId: 'int-b',
-                user: bob.userId,
-                calendarId: 'primary',
-                isDefault: true,
-                enabled: true,
-                timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-
-            const item = makeItem(alice.userId, {
-                status: 'calendar',
-                calendarEventId: 'gcal-evt-orig',
-                calendarIntegrationId: 'int-a',
-                calendarSyncConfigId: 'cfg-a',
-                timeStart: '2030-01-01T10:00:00Z',
-                timeEnd: '2030-01-01T11:00:00Z',
-            });
+        it('rejects with 400 and zero writes when targetCalendar does not resolve under toUserId', async () => {
+            const { alice, bob, cookie } = await seedTwoCalendarUsers();
+            const item = makeLinkedItem(alice.userId);
             await itemsDAO.insertOne(item);
+            const { createEvent, deleteEvent } = stubGCalProvider();
 
-            const createEvent = vi.fn().mockRejectedValue(new Error('Google rejected the create'));
-            const deleteEvent = vi.fn();
-            const buildSpy = vi
-                .spyOn(buildCalendarProviderModule, 'buildCalendarProvider')
-                .mockImplementation(() => ({ createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') }) as never);
-
-            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
             const res = await postReassign(cookie, {
                 entityType: 'item',
                 entityId: item._id,
                 fromUserId: alice.userId,
                 toUserId: bob.userId,
-                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
+                // cfg-a belongs to alice, so it must not validate under bob.
+                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-a' },
             });
 
-            expect(res.status).toBe(502);
-            // No DB changes — item still belongs to alice, no ops recorded.
+            expect(res.status).toBe(400);
             expect(await itemsDAO.findByOwnerAndId(item._id!, alice.userId)).not.toBeNull();
             expect(await itemsDAO.findByOwnerAndId(item._id!, bob.userId)).toBeNull();
             expect(await operationsDAO.findArray({ entityId: item._id })).toHaveLength(0);
-            // delete-on-source must not have been called when create-on-target failed.
+            expect(createEvent).not.toHaveBeenCalled();
             expect(deleteEvent).not.toHaveBeenCalled();
-            buildSpy.mockRestore();
         });
 
-        // Real-world bug: an item carried a stale calendarIntegrationId pointing at an integration
-        // that no longer resolves under fromUserId (e.g. cleanup script removed it, or the id was
-        // never valid). Without the fallback, the GCal event would survive on the source calendar
-        // and the user sees the event "duplicated" across both accounts. The fallback walks every
-        // integration of fromUserId and tries deleteEvent until one succeeds.
-        it('falls back to probing every sync config of fromUserId until one matches when the stored source ids are stale', async () => {
+        it('heals a crash between the flip and the op-log inserts: entity lands under toUser; retry re-derives both log legs', async () => {
+            const { alice, bob, cookie } = await seedTwoCalendarUsers();
+            const item = makeLinkedItem(alice.userId);
+            await itemsDAO.insertOne(item);
+            stubGCalProvider();
+            const body = {
+                entityType: 'item',
+                entityId: item._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
+            };
+
+            // Simulate a crash right after the atomic flip: the first op-log insert throws.
+            const insertSpy = vi.spyOn(operationsDAO, 'insertOne').mockRejectedValueOnce(new Error('simulated crash'));
+            const crashed = await postReassign(cookie, body);
+            expect(crashed.status).toBe(500);
+            // Flip-first ordering: the server's ground truth is already correct …
+            expect(await itemsDAO.findByOwnerAndId(item._id!, bob.userId)).not.toBeNull();
+            expect(await itemsDAO.findByOwnerAndId(item._id!, alice.userId)).toBeNull();
+            // … but no op-log legs were written.
+            expect(await operationsDAO.findArray({ entityId: item._id })).toHaveLength(0);
+
+            // Retry heals: alreadyMoved + both legs re-derived (delete leg snapshot:null, create leg = current row).
+            const retry = await postReassign(cookie, body);
+            expect(retry.status).toBe(200);
+            expect(((await retry.json()) as { alreadyMoved?: boolean }).alreadyMoved).toBe(true);
+            const [healedDelete] = await operationsDAO.findArray({ user: alice.userId, entityId: item._id, opType: 'delete' });
+            if (!healedDelete) throw new Error('expected a healed delete op');
+            expect(healedDelete.snapshot).toBeNull();
+            const [healedCreate] = await operationsDAO.findArray({ user: bob.userId, entityId: item._id, opType: 'create' });
+            expect((healedCreate?.snapshot as ItemInterface | null)?.user).toBe(bob.userId);
+            insertSpy.mockRestore();
+        });
+
+        it('two concurrent reassigns of the same entity resolve as one move + one alreadyMoved', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
-            // Alice owns one Google integration ((user, provider) is unique) but two sync configs
-            // — a "wrong" calendar (the event isn't there → 404) and the "real" one. The fallback
-            // must iterate past the failing config and find the right one.
-            await calendarIntegrationsDAO.upsertEncrypted({
-                _id: 'int-a',
-                user: alice.userId,
-                provider: 'google',
-                accessToken: 'at-a',
-                refreshToken: 'rt-a',
-                status: 'active',
-                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const item = makeItem(alice.userId, { title: 'Race me' });
+            await itemsDAO.insertOne(item);
+            const body = { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId };
+
+            const [res1, res2] = await Promise.all([postReassign(cookie, body), postReassign(cookie, body)]);
+            expect(res1.status).toBe(200);
+            expect(res2.status).toBe(200);
+            const bodies = [(await res1.json()) as { alreadyMoved?: boolean }, (await res2.json()) as { alreadyMoved?: boolean }];
+            expect(bodies.filter((b) => b.alreadyMoved).length).toBe(1);
+            expect(await itemsDAO.findByOwnerAndId(item._id!, bob.userId)).not.toBeNull();
+            expect(await itemsDAO.findByOwnerAndId(item._id!, alice.userId)).toBeNull();
+            // Pin the accepted op-log shape: the winner writes one delete + one create leg, the
+            // alreadyMoved loser re-emits both — four legs total, two per user. Re-emission is an
+            // accepted property (snapshot ops are LWW-idempotent on clients); this assertion is
+            // here so a future change that turns 4 into N is a deliberate decision, not drift.
+            const legs = await operationsDAO.findArray({ entityId: item._id });
+            const shape = legs.map((op) => `${op.user === alice.userId ? 'alice' : 'bob'}:${op.opType}`).sort();
+            expect(shape).toEqual(['alice:delete', 'alice:delete', 'bob:create', 'bob:create']);
+        });
+    });
+
+    describe('already-moved provenance gate (tenant isolation)', () => {
+        // Without the move receipt, "not under fromUserId but present under toUserId" is equally
+        // true of an entity toUserId has ALWAYS owned — and answering alreadyMoved there would
+        // forge op-log legs on both users and republish the target's private snapshot.
+        it('item that has always belonged to toUserId → 404, zero ops written for either user', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const item = makeItem(bob.userId, { title: "bob's private item" });
+            await itemsDAO.insertOne(item);
+
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(404);
+            expect(await operationsDAO.findArray({ entityId: item._id })).toHaveLength(0);
+            expect((await itemsDAO.findByOwnerAndId(item._id!, bob.userId))?.title).toBe("bob's private item");
+        });
+
+        it('routine that has always belonged to toUserId → 404, zero ops written for either user', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const routine = makeRoutine(bob.userId, { title: "bob's private routine" });
+            await routinesDAO.insertOne(routine);
+
+            const res = await postReassign(cookie, { entityType: 'routine', entityId: routine._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(404);
+            expect(await operationsDAO.findArray({ entityId: routine._id })).toHaveLength(0);
+            expect((await routinesDAO.findByOwnerAndId(routine._id, bob.userId))?.title).toBe("bob's private routine");
+        });
+    });
+
+    describe('push-failure surfacing (surfacePushFailure)', () => {
+        // The op-driven create's failure is categorized so the SyncIssuesPanel offers the RIGHT
+        // remediation — a dead credential must say "Reconnect", never an endless Retry.
+        async function moveWithFailingCreate(createError: Error) {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const now = dayjs().toISOString();
             await calendarIntegrationsDAO.upsertEncrypted({
                 _id: 'int-b',
                 user: bob.userId,
@@ -1156,30 +1145,8 @@ describe('POST /sync/reassign', () => {
                 accessToken: 'at-b',
                 refreshToken: 'rt-b',
                 tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarSyncConfigsDAO.insertOne({
-                _id: 'cfg-a-wrong',
-                integrationId: 'int-a',
-                user: alice.userId,
-                calendarId: 'alice-other',
-                isDefault: false,
-                enabled: true,
-                timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarSyncConfigsDAO.insertOne({
-                _id: 'cfg-a-real',
-                integrationId: 'int-a',
-                user: alice.userId,
-                calendarId: 'alice-primary',
-                isDefault: true,
-                enabled: true,
-                timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
             await calendarSyncConfigsDAO.insertOne({
                 _id: 'cfg-b',
@@ -1189,35 +1156,18 @@ describe('POST /sync/reassign', () => {
                 isDefault: true,
                 enabled: true,
                 timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
-
-            // Item carries STALE source ids that don't resolve under alice — primary lookup fails.
-            // It also carries a stale htmlLink; the target create below reports none, so the moved
-            // item must NOT keep pointing at the (deleted) source event.
             const item = makeItem(alice.userId, {
                 status: 'calendar',
-                calendarEventId: 'gcal-evt-orig',
-                calendarIntegrationId: 'int-a-stale',
-                calendarSyncConfigId: 'cfg-a-stale',
-                htmlLink: 'https://calendar.google.com/calendar/event?eid=source-stale',
                 timeStart: '2030-01-01T10:00:00Z',
                 timeEnd: '2030-01-01T11:00:00Z',
             });
             await itemsDAO.insertOne(item);
-
-            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
-            // Reject deletes against the wrong calendar (mimics GCal 404), succeed on the real one.
-            // This makes the test concretely exercise the per-attempt try/catch — the fallback must
-            // skip past the failing wrong-calendar attempt and continue to the matching one.
-            const deleteEvent = vi.fn().mockImplementation(async (calendarId: string) => {
-                if (calendarId === 'alice-other') {
-                    throw Object.assign(new Error('Not Found'), { code: 404 });
-                }
-            });
-            const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
-            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
+            const createEvent = vi.fn().mockRejectedValue(createError);
+            const stub = { createEvent, deleteEvent: vi.fn(), updateEvent: vi.fn(), getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
+            vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stub as never);
 
             const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
             const res = await postReassign(cookie, {
@@ -1227,86 +1177,103 @@ describe('POST /sync/reassign', () => {
                 toUserId: bob.userId,
                 targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
             });
-
             expect(res.status).toBe(200);
-            expect(createEvent).toHaveBeenCalledTimes(1);
-            expect(createEvent.mock.calls[0]?.[0]).toBe('bob-primary');
-            // The fallback hit BOTH alice calendars — the wrong one threw, the real one succeeded.
-            const deleteCalls = deleteEvent.mock.calls.map((c) => c[0]);
-            expect(deleteCalls).toContain('alice-other');
-            expect(deleteCalls).toContain('alice-primary');
-            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
-            expect(moved?.calendarEventId).toBe('gcal-evt-new');
-            // Create reported no htmlLink → the stale source link is dropped, not carried over.
-            expect(moved?.htmlLink).toBeUndefined();
-            buildSpy.mockRestore();
+            return { itemId: item._id, bobUserId: bob.userId };
+        }
+
+        it('invalid_grant on the target create marks the create-leg op syncFailed with scope_missing (Reconnect, not Retry)', async () => {
+            const { itemId, bobUserId } = await moveWithFailingCreate(new Error('invalid_grant'));
+            await vi.waitFor(async () => {
+                const [createOp] = await operationsDAO.findArray({ user: bobUserId, entityId: itemId, opType: 'create' });
+                expect(createOp?.syncFailed).toBe(true);
+                expect(createOp?.failureReason).toBe('scope_missing');
+            });
         });
 
-        // Bail branch: fromUserId has no integrations at all. The move on target still succeeds —
-        // the source GCal event is left as a stub and the warning is logged. No exception escapes.
-        it('logs a stub-event warning and completes the move when fromUserId has no integrations', async () => {
+        it('an unknown/network error on the target create marks the create-leg op transient_exhausted (retryable)', async () => {
+            const { itemId, bobUserId } = await moveWithFailingCreate(new Error('socket hang up'));
+            await vi.waitFor(async () => {
+                const [createOp] = await operationsDAO.findArray({ user: bobUserId, entityId: itemId, opType: 'create' });
+                expect(createOp?.syncFailed).toBe(true);
+                expect(createOp?.failureReason).toBe('transient_exhausted');
+            });
+        });
+    });
+
+    describe('post-move source-user ops are quarantined (entity_missing)', () => {
+        it('a queued source-user update replayed after the move is recorded but not applied, excluded from /sync/pull, and non-retryable in /sync/issues', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
-            // Only bob has an integration — alice has none.
-            await calendarIntegrationsDAO.upsertEncrypted({
-                _id: 'int-b',
-                user: bob.userId,
-                provider: 'google',
-                accessToken: 'at-b',
-                refreshToken: 'rt-b',
-                tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-            await calendarSyncConfigsDAO.insertOne({
-                _id: 'cfg-b',
-                integrationId: 'int-b',
-                user: bob.userId,
-                calendarId: 'bob-primary',
-                isDefault: true,
-                enabled: true,
-                timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
-            });
-
-            const item = makeItem(alice.userId, {
-                status: 'calendar',
-                calendarEventId: 'gcal-evt-orig',
-                calendarIntegrationId: 'int-a-stale',
-                calendarSyncConfigId: 'cfg-a-stale',
-                timeStart: '2030-01-01T10:00:00Z',
-                timeEnd: '2030-01-01T11:00:00Z',
-            });
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const item = makeItem(alice.userId, { title: 'Moves away' });
             await itemsDAO.insertOne(item);
 
-            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
-            const deleteEvent = vi.fn();
-            const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
-            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
+            const moveRes = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+            expect(moveRes.status).toBe(200);
 
-            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
-            const res = await postReassign(cookie, {
-                entityType: 'item',
-                entityId: item._id,
-                fromUserId: alice.userId,
-                toUserId: bob.userId,
-                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
-            });
+            // An alice device replays a stale offline edit for the (now-moved) item.
+            const aliceCookie = buildMultiSessionCookieHeader(alice, [alice]);
+            const staleTs = dayjs().add(1, 'second').toISOString();
+            const pushRes = await app.fetch(
+                new Request('http://localhost:4000/sync/push', {
+                    method: 'POST',
+                    headers: { Cookie: aliceCookie, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        deviceId: 'dev-alice',
+                        ops: [
+                            {
+                                entityType: 'item',
+                                entityId: item._id,
+                                opType: 'update',
+                                queuedAt: staleTs,
+                                snapshot: {
+                                    _id: item._id,
+                                    userId: alice.userId,
+                                    status: 'inbox',
+                                    title: 'stale offline edit',
+                                    createdTs: item.createdTs,
+                                    updatedTs: staleTs,
+                                },
+                            },
+                        ],
+                    }),
+                }),
+            );
+            expect(pushRes.status).toBe(200);
 
-            expect(res.status).toBe(200);
-            expect(createEvent).toHaveBeenCalledTimes(1);
-            expect(deleteEvent).not.toHaveBeenCalled();
-            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
-            expect(moved?.calendarEventId).toBe('gcal-evt-new');
-            buildSpy.mockRestore();
+            // Not applied: the entity is NOT resurrected under alice and bob's copy is untouched.
+            expect(await itemsDAO.findByOwnerAndId(item._id!, alice.userId)).toBeNull();
+            expect((await itemsDAO.findByOwnerAndId(item._id!, bob.userId))?.title).toBe('Moves away');
+
+            // Recorded + quarantined.
+            const [quarantined] = await operationsDAO.findArray({ user: alice.userId, entityId: item._id, opType: 'update' });
+            if (!quarantined) throw new Error('expected the quarantined op to be recorded');
+            expect(quarantined.notApplied).toBe(true);
+            expect(quarantined.syncFailed).toBe(true);
+            expect(quarantined.failureReason).toBe('entity_missing');
+
+            // Excluded from pull — other alice devices never replay it (no client-side resurrection).
+            const pullRes = await app.fetch(
+                new Request(`http://localhost:4000/sync/pull?since=${encodeURIComponent(dayjs(0).toISOString())}`, { headers: { Cookie: aliceCookie } }),
+            );
+            const pulled = (await pullRes.json()) as { ops: Array<{ _id: string }> };
+            expect(pulled.ops.some((op) => op._id === quarantined._id)).toBe(false);
+
+            // Surfaced in /sync/issues as non-retryable (Dismiss-only).
+            const issuesRes = await app.fetch(new Request('http://localhost:4000/sync/issues', { headers: { Cookie: aliceCookie } }));
+            const { issues } = (await issuesRes.json()) as { issues: Array<{ _id: string; failureReason: string; retryable: boolean }> };
+            const issue = issues.find((i) => i._id === quarantined._id);
+            if (!issue) throw new Error('expected the quarantined op in /sync/issues');
+            expect(issue.failureReason).toBe('entity_missing');
+            expect(issue.retryable).toBe(false);
         });
+    });
 
-        // Bail branch: every probe attempt throws. The move still succeeds, the warn includes the
-        // last error, and no exception escapes the reassign call.
-        it('logs the last error and completes the move when every fallback probe throws', async () => {
+    describe('routine with targetCalendar (op-driven series create)', () => {
+        it('stamps the target link on the moved routine, retries idempotently, and creates the series asynchronously while the source master is deleted', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
+            const now = dayjs().toISOString();
             await calendarIntegrationsDAO.upsertEncrypted({
                 _id: 'int-a',
                 user: alice.userId,
@@ -1314,8 +1281,8 @@ describe('POST /sync/reassign', () => {
                 accessToken: 'at-a',
                 refreshToken: 'rt-a',
                 tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
             await calendarIntegrationsDAO.upsertEncrypted({
                 _id: 'int-b',
@@ -1324,8 +1291,8 @@ describe('POST /sync/reassign', () => {
                 accessToken: 'at-b',
                 refreshToken: 'rt-b',
                 tokenExpiry: dayjs().add(1, 'hour').toISOString(),
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
             await calendarSyncConfigsDAO.insertOne({
                 _id: 'cfg-a',
@@ -1335,8 +1302,8 @@ describe('POST /sync/reassign', () => {
                 isDefault: true,
                 enabled: true,
                 timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
             await calendarSyncConfigsDAO.insertOne({
                 _id: 'cfg-b',
@@ -1346,48 +1313,66 @@ describe('POST /sync/reassign', () => {
                 isDefault: true,
                 enabled: true,
                 timeZone: 'UTC',
-                createdTs: dayjs().toISOString(),
-                updatedTs: dayjs().toISOString(),
+                createdTs: now,
+                updatedTs: now,
             });
+            const routine = makeRoutine(alice.userId, {
+                routineType: 'calendar',
+                calendarEventId: 'gcal-master-orig',
+                calendarIntegrationId: 'int-a',
+                calendarSyncConfigId: 'cfg-a',
+                calendarItemTemplate: { timeOfDay: '10:00', duration: 30 },
+            });
+            await routinesDAO.insertOne(routine);
 
-            const item = makeItem(alice.userId, {
-                status: 'calendar',
-                calendarEventId: 'gcal-evt-orig',
-                calendarIntegrationId: 'int-a-stale',
-                calendarSyncConfigId: 'cfg-a-stale',
-                timeStart: '2030-01-01T10:00:00Z',
-                timeEnd: '2030-01-01T11:00:00Z',
-            });
-            await itemsDAO.insertOne(item);
-
-            const createEvent = vi.fn().mockResolvedValue({ eventId: 'gcal-evt-new' });
-            const deleteEvent = vi.fn().mockImplementation(async (calendarId: string) => {
-                if (calendarId === 'alice-primary') {
-                    throw new Error('invalid_grant');
-                }
-            });
-            const stubProvider = { createEvent, deleteEvent, getCalendarTimeZone: vi.fn().mockResolvedValue('UTC') };
-            const buildSpy = vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stubProvider as never);
-            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            const createRecurringEvent = vi.fn().mockResolvedValue('gcal-master-new');
+            const deleteRecurringEvent = vi.fn().mockResolvedValue(undefined);
+            const stub = {
+                createRecurringEvent,
+                deleteRecurringEvent,
+                createEvent: vi.fn(),
+                deleteEvent: vi.fn(),
+                updateEvent: vi.fn(),
+                getCalendarTimeZone: vi.fn().mockResolvedValue('UTC'),
+            };
+            vi.spyOn(buildCalendarProviderModule, 'buildCalendarProvider').mockImplementation(() => stub as never);
 
             const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
             const res = await postReassign(cookie, {
-                entityType: 'item',
-                entityId: item._id,
+                entityType: 'routine',
+                entityId: routine._id,
                 fromUserId: alice.userId,
                 toUserId: bob.userId,
                 targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
             });
 
             expect(res.status).toBe(200);
-            // Probe was attempted on alice's calendar; it threw. No success log; aggregate warn includes the error.
-            expect(deleteEvent).toHaveBeenCalledWith('alice-primary', 'gcal-evt-orig');
-            const aggregateWarn = warnSpy.mock.calls.find((args) => typeof args[0] === 'string' && args[0].includes('fallback probes did not find event'));
-            expect(aggregateWarn?.[0]).toContain('invalid_grant');
-            const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
-            expect(moved?.calendarEventId).toBe('gcal-evt-new');
-            buildSpy.mockRestore();
-            warnSpy.mockRestore();
+            // Stamped link (no calendarEventId yet) — the create-leg op drives the series create.
+            const moved = await routinesDAO.findByOwnerAndId(routine._id, bob.userId);
+            expect(moved?.calendarIntegrationId).toBe('int-b');
+            expect(moved?.calendarSyncConfigId).toBe('cfg-b');
+
+            // Async legs: fresh series on bob's calendar (deterministic id), source master deleted.
+            await vi.waitFor(() => expect(createRecurringEvent).toHaveBeenCalledTimes(1));
+            const [, createCalendarId, , createOpts] = createRecurringEvent.mock.calls[0]!;
+            expect(createCalendarId).toBe('bob-primary');
+            expect(createOpts).toMatchObject({ id: buildDeterministicGCalId(routine._id, 'int-b') });
+            await vi.waitFor(() => expect(deleteRecurringEvent).toHaveBeenCalledWith('gcal-master-orig', 'alice-primary'));
+            await vi.waitFor(async () => expect((await routinesDAO.findByOwnerAndId(routine._id, bob.userId))?.calendarEventId).toBe('gcal-master-new'));
+
+            // Retry: alreadyMoved, and no second series create for the (now-linked) routine.
+            const retry = await postReassign(cookie, {
+                entityType: 'routine',
+                entityId: routine._id,
+                fromUserId: alice.userId,
+                toUserId: bob.userId,
+                targetCalendar: { integrationId: 'int-b', syncConfigId: 'cfg-b' },
+            });
+            expect(retry.status).toBe(200);
+            expect(((await retry.json()) as { alreadyMoved?: boolean }).alreadyMoved).toBe(true);
+            // Give the retry's fan-out a chance to (incorrectly) fire a second create.
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            expect(createRecurringEvent).toHaveBeenCalledTimes(1);
         });
     });
 
@@ -1628,19 +1613,20 @@ describe('POST /sync/reassign', () => {
             });
 
             expect(res.status).toBe(200);
-            // createEvent receives the patched title + times so the new GCal event reflects user edits.
-            expect(createEvent).toHaveBeenCalledTimes(1);
-            const [, evt] = createEvent.mock.calls[0]!;
-            expect(evt).toMatchObject({ title: 'New title', timeStart: '2030-01-01T12:00:00Z', timeEnd: '2030-01-01T13:30:00Z' });
-            // Persisted snapshot also reflects the edits + new event id + target calendar refs.
+            // Persisted snapshot reflects the edits + target calendar refs synchronously with the flip.
             const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
             expect(moved).toMatchObject({
                 title: 'New title',
                 notes: 'new notes',
-                calendarEventId: 'gcal-evt-new',
                 calendarIntegrationId: 'int-b',
                 calendarSyncConfigId: 'cfg-b',
             });
+            // The async op-driven createEvent receives the patched title + times so the new GCal
+            // event reflects user edits.
+            await vi.waitFor(() => expect(createEvent).toHaveBeenCalledTimes(1));
+            const [, evt] = createEvent.mock.calls[0]!;
+            expect(evt).toMatchObject({ title: 'New title', timeStart: '2030-01-01T12:00:00Z', timeEnd: '2030-01-01T13:30:00Z' });
+            await vi.waitFor(async () => expect((await itemsDAO.findByOwnerAndId(item._id!, bob.userId))?.calendarEventId).toBe('gcal-evt-new'));
             buildSpy.mockRestore();
         });
 

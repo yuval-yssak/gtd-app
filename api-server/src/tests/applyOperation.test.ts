@@ -1,4 +1,5 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts result before using ! */
+import dayjs from 'dayjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
@@ -339,7 +340,7 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
             calendarInstanceEventId: instanceKey,
         }) as ItemInterface;
 
-    it('update op for a missing item is skipped — not resurrected via upsert', async () => {
+    it('update op for a missing item is skipped — not resurrected via upsert — and quarantined (notApplied + entity_missing)', async () => {
         const op = await applyAndPublishOperation(
             userId,
             { entityType: 'item', opType: 'update', entityId: 'gone-item', snapshot: baseInboxItem({ _id: 'gone-item' }) },
@@ -348,6 +349,42 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
 
         expect(op._id).toBeTruthy(); // op is still logged for audit
         expect(await itemsDAO.findByOwnerAndId('gone-item', userId)).toBeFalsy();
+        // Quarantine markers on the returned op AND the persisted row: `/sync/pull` must never
+        // deliver this op (replaying it on another device would resurrect the deleted entity).
+        expect(op.notApplied).toBe(true);
+        expect(op.failureReason).toBe('entity_missing');
+        const persisted = await operationsDAO.findOne({ _id: op._id });
+        expect(persisted?.notApplied).toBe(true);
+        expect(persisted?.syncFailed).toBe(true);
+        expect(await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).not.toContainEqual(expect.objectContaining({ _id: op._id }));
+    });
+
+    it('batch path quarantines a missing-row update while applying the rest of the batch', async () => {
+        await itemsDAO.insertOne(baseInboxItem({ _id: 'still-here', title: 'kept', updatedTs: '2026-01-01T00:00:00Z' }));
+        const ops = await applyAndPublishOperations(
+            userId,
+            [
+                { entityType: 'item', opType: 'update', entityId: 'gone-item', snapshot: baseInboxItem({ _id: 'gone-item' }) },
+                { entityType: 'item', opType: 'update', entityId: 'still-here', snapshot: baseInboxItem({ _id: 'still-here', title: 'edited' }) },
+            ],
+            { deviceId: 'dev-1' },
+        );
+
+        const goneOp = ops.find((op) => op.entityId === 'gone-item');
+        const liveOp = ops.find((op) => op.entityId === 'still-here');
+        expect(goneOp?.notApplied).toBe(true);
+        expect(goneOp?.failureReason).toBe('entity_missing');
+        expect(liveOp?.notApplied).toBeUndefined();
+        // The live edit applied; the missing-row edit did not resurrect anything.
+        expect((await itemsDAO.findByOwnerAndId('still-here', userId))?.title).toBe('edited');
+        expect(await itemsDAO.findByOwnerAndId('gone-item', userId)).toBeFalsy();
+        // Persisted quarantine markers (batch inserts first, then stamps the row back).
+        const persisted = await operationsDAO.findOne({ _id: goneOp?._id ?? '' });
+        expect(persisted?.notApplied).toBe(true);
+        // Pull delivers only the applied op.
+        const delivered = await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '');
+        expect(delivered.some((op) => op._id === liveOp?._id)).toBe(true);
+        expect(delivered.some((op) => op._id === goneOp?._id)).toBe(false);
     });
 
     it('create op for a missing item still inserts (skip applies to updates only)', async () => {
@@ -357,6 +394,22 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
             { deviceId: 'dev-1' },
         );
         expect(await itemsDAO.findByOwnerAndId('new-item', userId)).toBeTruthy();
+    });
+
+    it('delete op for an already-missing row applies (idempotent no-op) — never quarantined', async () => {
+        // Quarantine is deliberately narrow: only updates against a gone row are dangerous to
+        // replay. A delete for a row that is already gone is convergent on every device.
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'already-gone', snapshot: null },
+            { deviceId: 'dev-1' },
+        );
+
+        expect(op.notApplied).toBeUndefined();
+        expect(op.syncFailed).toBeUndefined();
+        // Still delivered to other devices via pull.
+        const delivered = await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '');
+        expect(delivered.some((delivered0) => delivered0._id === op._id)).toBe(true);
     });
 
     it('update claiming a calendarInstanceEventId owned by another row is skipped, not thrown', async () => {

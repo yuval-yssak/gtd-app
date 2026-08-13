@@ -105,6 +105,19 @@ class AbstractDAO<S extends Document> {
         await this._collection.replaceOne({ _id: entityId } as never, doc, { upsert: true });
     }
 
+    /**
+     * Owner-guarded full-document replace with NO upsert — the atomic primitive behind
+     * cross-account entity moves. Matching on `{ _id, user: ownerId }` makes "the entity is still
+     * owned by ownerId" and "flip it to the new owner in `doc`" one Mongo operation, so a
+     * concurrent move (or a crash between two separate delete/create writes) can never leave the
+     * entity missing from both accounts. Returns `matchedCount` (0 ⇒ the source owner no longer
+     * holds the row).
+     */
+    async replaceByOwner(entityId: string, ownerId: string, doc: S): Promise<number> {
+        const result = await this._collection.replaceOne({ _id: entityId, user: ownerId } as never, doc, { upsert: false });
+        return result.matchedCount;
+    }
+
     // protected so subclasses can still access the raw collection for operations not covered
     // by the generic helpers above (e.g. custom indexes, upsert by non-_id key)
     protected get collection() {

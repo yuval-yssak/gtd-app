@@ -16,6 +16,21 @@ import {
 } from '../types/entities.js';
 
 /**
+ * What happened to an op inside `applyEntityOp`. Callers use this to decide the fan-out:
+ *   - 'applied' — the collection changed (or the op had no collection-side effect by design,
+ *     e.g. rsvp ops with snapshot:null); notify + cascades proceed as usual.
+ *   - 'skipped_missing' — an update whose target row is gone (deleted or superseded). The op must
+ *     be QUARANTINED (marked notApplied + excluded from pull/notify) — replaying it to other
+ *     devices would resurrect an entity the server intentionally removed (e.g. an offline edit
+ *     racing a cross-account reassign that already moved the entity away).
+ *   - 'skipped_stale' — lost last-write-wins to a newer row; harmless to replay (other devices'
+ *     LWW will skip it too).
+ *   - 'skipped_duplicate_key' — the snapshot claims a unique key owned by another row; can never
+ *     apply, treated as superseded.
+ */
+export type ApplyEntityOpOutcome = 'applied' | 'skipped_missing' | 'skipped_stale' | 'skipped_duplicate_key';
+
+/**
  * Persists a single op to its target collection. Last-write-wins on (updatedTs); deletes are
  * scoped by user to ensure a crafted op can't reach across users.
  *
@@ -28,24 +43,26 @@ async function applyEntitySnapshotOp<T extends EntitySnapshot>(
     entityId: string,
     opType: OpType,
     snapshot: T | null,
-): Promise<void> {
+): Promise<ApplyEntityOpOutcome> {
     if (opType === 'delete') {
         await dao.deleteByOwner(entityId, userId);
-        return;
+        return 'applied';
     }
     if (!snapshot) {
-        return;
+        return 'applied';
     }
     const existing = await dao.findByOwnerAndId(entityId, userId);
     // An update whose target row is gone means the entity was deleted (or superseded — e.g. a
-    // routine regeneration replaced its items) after the client queued the op. Letting
-    // `replaceById`'s upsert resurrect it reintroduces a row the server intentionally removed,
-    // and when a successor row holds the same unique key (user + calendarInstanceEventId) the
-    // upsert-insert throws E11000 — permanently jamming the client's push queue (the 2026-08-03
-    // stuck-sync incident). Deletion wins: skip the op; it remains in the op log for audit.
+    // routine regeneration replaced its items, or a cross-account reassign moved it away) after
+    // the client queued the op. Letting `replaceById`'s upsert resurrect it reintroduces a row
+    // the server intentionally removed, and when a successor row holds the same unique key
+    // (user + calendarInstanceEventId) the upsert-insert throws E11000 — permanently jamming the
+    // client's push queue (the 2026-08-03 stuck-sync incident). Deletion wins: skip the op and
+    // report 'skipped_missing' so the pipeline quarantines it from the pull/notify fan-out
+    // (other source-user devices replaying it would resurrect the entity client-side).
     if (!existing && opType === 'update') {
         console.warn(`[apply-op] skipped update for missing ${entityId}: deleted or superseded; not resurrecting`);
-        return;
+        return 'skipped_missing';
     }
     if (!existing || existing.updatedTs <= snapshot.updatedTs) {
         try {
@@ -56,11 +73,13 @@ async function applyEntitySnapshotOp<T extends EntitySnapshot>(
             // instead of failing the whole batch and wedging the client's retry loop.
             if (isDuplicateKeyError(err)) {
                 console.warn(`[apply-op] skipped unappliable ${opType} for ${entityId}: unique key owned by another row`, err);
-                return;
+                return 'skipped_duplicate_key';
             }
             throw err;
         }
+        return 'applied';
     }
+    return 'skipped_stale';
 }
 
 /** MongoServerError E11000 — unique index violation. */
@@ -68,7 +87,7 @@ export function isDuplicateKeyError(err: unknown): boolean {
     return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 11000;
 }
 
-export function applyEntityOp(userId: string, op: OperationInterface): Promise<void> {
+export function applyEntityOp(userId: string, op: OperationInterface): Promise<ApplyEntityOpOutcome> {
     const { entityType, entityId, opType, snapshot } = op;
     switch (entityType) {
         case 'item':

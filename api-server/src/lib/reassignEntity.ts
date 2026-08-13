@@ -1,15 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
-import type { CalendarProvider } from '../calendarProviders/CalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
+import entityMovesDAO, { entityMoveReceiptId } from '../dataAccess/entityMovesDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
-import { validateOperation } from '../schemas/operations/index.js';
 import {
-    type CalendarIntegrationInterface,
+    type EntitySnapshot,
     type EntityType,
     GCAL_OWNED_ROUTINE_KEYS,
     type ItemInterface,
@@ -18,9 +17,9 @@ import {
     type WorkContextInterface,
 } from '../types/entities.js';
 import { applyAndPublishOperation, OperationValidationError } from './applyOperation.js';
-import { ensureTimeZone } from './calendarPushback.js';
-import { markdownToHtml } from './markdownHtml.js';
+import { KeyedMutex } from './keyedMutex.js';
 import { notifyChanges } from './notifyChange.js';
+import { applyAndPublishOwnerMove, republishOwnerMoveOps } from './ownerMove.js';
 import { ensureFirstRoutineItem } from './routineItemGeneration.js';
 import { regenerateFutureRoutineItems } from './routineItemRegeneration.js';
 
@@ -87,12 +86,16 @@ export interface ReassignParams {
     deviceId?: string;
 }
 
-export type ReassignProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
-
 /** Discriminated outcome — keeps callers narrowly typed without throwing for control flow. */
-export type ReassignResult =
-    | { ok: true; crossUserReferences?: { peopleIds?: string[]; workContextIds?: string[] } }
-    | { ok: false; status: 400 | 404 | 502; error: string; code?: 'validation_failed' };
+export type ReassignResult = { ok: true; alreadyMoved?: true } | { ok: false; status: 400 | 404; error: string; code?: 'validation_failed' };
+
+/**
+ * Serializes reassigns per entity so two concurrent moves of the same entity (double-click, two
+ * tabs, a client retry racing the original) resolve as one 'moved' + one 'alreadyMoved' instead
+ * of interleaving their read-validate-flip sequences. In-process lock — Cloud Run runs a single
+ * instance (existing codebase assumption).
+ */
+const reassignMutex = new KeyedMutex();
 
 /**
  * Top-level entry point. Branches by entityType so each case stays at one level of abstraction.
@@ -100,9 +103,9 @@ export type ReassignResult =
  * 400 `validation_failed` so callers (the v1/reassign route, the in-app /sync/reassign route)
  * can render a structured error without each having to re-implement the same try/catch.
  */
-export async function reassignEntity(params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<ReassignResult> {
+export async function reassignEntity(params: ReassignParams): Promise<ReassignResult> {
     try {
-        return await dispatchByEntityType(params, buildProvider);
+        return await reassignMutex.withLock(`reassign:${params.entityId}`, () => dispatchByEntityType(params));
     } catch (err) {
         if (err instanceof OperationValidationError) {
             return { ok: false, status: 400, error: err.failure.message, code: 'validation_failed' };
@@ -122,12 +125,12 @@ export async function reassignEntity(params: ReassignParams, buildProvider: Reas
  * item lands with valid local references and the source user keeps an unchanged copy of the person
  * or workContext they originally owned.
  */
-async function dispatchByEntityType(params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<ReassignResult> {
+async function dispatchByEntityType(params: ReassignParams): Promise<ReassignResult> {
     switch (params.entityType) {
         case 'item':
-            return reassignItem(params, buildProvider);
+            return reassignItem(params);
         case 'routine':
-            return reassignRoutine(params, buildProvider);
+            return reassignRoutine(params);
         case 'person':
         case 'workContext':
             return {
@@ -141,16 +144,19 @@ async function dispatchByEntityType(params: ReassignParams, buildProvider: Reass
 
 // ── Item ─────────────────────────────────────────────────────────────────────
 
-async function reassignItem(params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<ReassignResult> {
+async function reassignItem(params: ReassignParams): Promise<ReassignResult> {
     const item = await itemsDAO.findByOwnerAndId(params.entityId, params.fromUserId);
     if (!item) {
-        return { ok: false, status: 404, error: 'Item not found under fromUserId' };
+        // Already-moved idempotency: a retry of a completed move (or the heal path for a crash
+        // between the atomic flip and the op-log inserts) finds the entity under toUserId.
+        const alreadyMoved = await resolveAlreadyMoved((id, uid) => itemsDAO.findByOwnerAndId(id, uid), 'item', params);
+        return alreadyMoved ?? { ok: false, status: 404, error: 'Item not found under fromUserId' };
     }
     if (item.routineId) {
         return { ok: false, status: 400, error: 'Routine-generated items cannot be reassigned — edit the routine itself' };
     }
-    // Apply the user's edits to the in-memory item before any GCal call so create-on-target
-    // reflects the updated title/time, and persistItemMove writes the patched snapshot.
+    // Apply the user's edits to the in-memory item first so the target snapshot (which drives the
+    // async GCal create-on-target) reflects the updated title/time.
     const patchedItem = applyItemEditPatch(item, params.editPatch);
     // Run all early-rejection preconditions BEFORE relinking — once we commit mirror people /
     // workContexts under the target user there's no rollback path, so a 400 returned after the
@@ -159,23 +165,118 @@ async function reassignItem(params: ReassignParams, buildProvider: ReassignProvi
     if (isCalendarLinked && !params.targetCalendar) {
         return { ok: false, status: 400, error: 'targetCalendar is required for calendar-linked items' };
     }
-    // Reference relinking runs after the edit patch so values the user explicitly typed in the
-    // dialog still flow through find-or-create against the target user's people / workContext space.
-    // Calendar-linked failures past this point can still orphan mirrors (GCal create-on-target,
-    // for example) — that's an accepted limitation since the recipient simply gains an extra
-    // contact/context they can keep or delete; the alternative would be a multi-step rollback
-    // dance that doesn't pay for itself given how rare those failures are.
-    const relinkedItem = await relinkItemReferences(patchedItem, buildRelinkContext(params));
-    if (isCalendarLinked && params.targetCalendar) {
-        const moved = await moveItemAcrossCalendars(relinkedItem, params, buildProvider);
-        if (!moved.ok) {
-            return moved;
+    // DAO-only existence check — deliberately no provider/network call before the DB write. The
+    // GCal side effects are op-driven after the flip: the delete-leg op (pre-move snapshot)
+    // drives async source-event deletion, the create-leg op (unlinked snapshot stamped with the
+    // target ids) drives async target-event creation.
+    if (params.targetCalendar) {
+        const targetError = await validateTargetCalendar(params.targetCalendar, params.toUserId);
+        if (targetError) {
+            return targetError;
         }
-        await persistItemMove(moved.item, params);
-        return { ok: true };
     }
-    await persistItemMove(relinkedItem, params);
+    // Reference relinking runs after the edit patch so values the user explicitly typed in the
+    // dialog still flow through find-or-create against the target user's people / workContext
+    // space. A validation failure past this point can still orphan mirrors — accepted limitation:
+    // the recipient simply gains an extra contact/context they can keep or delete.
+    const relinkedItem = await relinkItemReferences(patchedItem, buildRelinkContext(params));
+    const now = dayjs().toISOString();
+    const outcome = await applyAndPublishOwnerMove(itemsDAO, {
+        entityType: 'item',
+        entityId: params.entityId,
+        fromUserId: params.fromUserId,
+        toUserId: params.toUserId,
+        preMoveSnapshot: item,
+        newSnapshot: buildTargetItemSnapshot(relinkedItem, params, now),
+        deviceId: params.deviceId ?? 'server',
+        now,
+    });
+    if (outcome === 'not-owned') {
+        // Lost a race after the initial read: another mover flipped the row first. Resolve through
+        // the same idempotency branch as the up-front miss.
+        const alreadyMoved = await resolveAlreadyMoved((id, uid) => itemsDAO.findByOwnerAndId(id, uid), 'item', params);
+        return alreadyMoved ?? { ok: false, status: 404, error: 'Item not found under fromUserId' };
+    }
     return { ok: true };
+}
+
+/**
+ * GCal linkage fields that never survive an owner move: they describe the SOURCE account's event,
+ * which the delete-leg op is about to remove. The target-side event is created asynchronously by
+ * pushback from the create-leg op and stamps fresh values.
+ */
+const ITEM_GCAL_FIELDS_TO_STRIP = [
+    'calendarEventId',
+    'htmlLink',
+    'calendarInstanceEventId',
+    'lastPushedToGCalTs',
+    'lastSyncedFromGCalTs',
+    'lastSyncedNotes',
+    'eventType',
+    'calendarIntegrationId',
+    'calendarSyncConfigId',
+] as const satisfies readonly (keyof ItemInterface)[];
+
+/** Target-owner snapshot: GCal source linkage stripped, target calendar ids stamped when provided. */
+function buildTargetItemSnapshot(item: ItemInterface, params: ReassignParams, now: string): ItemInterface {
+    const next: ItemInterface = { ...item, user: params.toUserId, updatedTs: now };
+    for (const key of ITEM_GCAL_FIELDS_TO_STRIP) {
+        delete next[key];
+    }
+    if (params.targetCalendar) {
+        // The stamped link makes the async pushback (`pushNewItemToGCal`) resolve the TARGET
+        // calendar's push context instead of the target user's default calendar.
+        next.calendarIntegrationId = params.targetCalendar.integrationId;
+        next.calendarSyncConfigId = params.targetCalendar.syncConfigId;
+    }
+    return next;
+}
+
+/** DAO-only targetCalendar validation: integration + syncConfig must exist under toUserId. */
+async function validateTargetCalendar(target: TargetCalendar, toUserId: string): Promise<ReassignResult | null> {
+    const integration = await calendarIntegrationsDAO.findByOwnerAndId(target.integrationId, toUserId);
+    if (!integration) {
+        return { ok: false, status: 400, error: 'targetCalendar.integrationId not found under toUserId' };
+    }
+    const config = await calendarSyncConfigsDAO.findByOwnerAndId(target.syncConfigId, toUserId);
+    if (!config || config.integrationId !== target.integrationId) {
+        return { ok: false, status: 400, error: 'targetCalendar.syncConfigId not found under toUserId (or belongs to a different integration)' };
+    }
+    return null;
+}
+
+/**
+ * Idempotency + crash-heal branch. When the entity is not under fromUserId but IS under toUserId
+ * AND a move receipt proves this (entity, from, to) move was actually initiated, the move already
+ * happened — report success with `alreadyMoved` AND re-emit both op-log legs so a crash between
+ * the A1 flip and its log inserts self-heals on retry (flip-first ordering: the receipt is
+ * written before the flip, so it always exists in that crash window).
+ *
+ * The receipt gate is load-bearing, not defensive: "present under toUserId" alone is equally
+ * true of an entity toUserId has ALWAYS owned. Answering `alreadyMoved` there would forge op-log
+ * legs on both users and republish the target's private snapshot to a caller who never held the
+ * row. Returns null for both the receipt-less case and the entity-nowhere case — a genuine 404.
+ */
+async function resolveAlreadyMoved(
+    // Narrowed lookup instead of the DAO itself — AbstractDAO<T> is invariant in T, so passing
+    // concrete DAOs generically would force an unsound cast (same pattern as pickHydrationLookup).
+    lookup: (entityId: string, userId: string) => Promise<EntitySnapshot | null>,
+    entityType: EntityType,
+    params: ReassignParams,
+): Promise<ReassignResult | null> {
+    const current = await lookup(params.entityId, params.toUserId);
+    if (!current) {
+        return null;
+    }
+    const receipt = await entityMovesDAO.findOne({ _id: entityMoveReceiptId(params.entityId, params.fromUserId, params.toUserId) });
+    if (!receipt) {
+        return null;
+    }
+    await republishOwnerMoveOps({ entityType, entityId: params.entityId, fromUserId: params.fromUserId, toUserId: params.toUserId }, current, {
+        deviceId: params.deviceId ?? 'server',
+        now: dayjs().toISOString(),
+    });
+    return { ok: true, alreadyMoved: true };
 }
 
 /**
@@ -259,261 +360,51 @@ function assignOptionalArray<T extends object, K extends keyof T>(target: T, key
     target[key] = value as T[K];
 }
 
-interface MovedItemResult {
-    ok: true;
-    item: ItemInterface;
-}
-
-/** Performs the GCal create-on-target then best-effort delete-on-source dance for a calendar-linked item. */
-async function moveItemAcrossCalendars(
-    item: ItemInterface,
-    params: ReassignParams,
-    buildProvider: ReassignProviderFactory,
-): Promise<MovedItemResult | { ok: false; status: 502; error: string }> {
-    if (!params.targetCalendar) {
-        return { ok: false, status: 502, error: 'unreachable' };
-    }
-    const targetCtx = await loadPushContext(params.targetCalendar.integrationId, params.targetCalendar.syncConfigId, params.toUserId, buildProvider);
-    if (!targetCtx) {
-        return { ok: false, status: 502, error: 'Target calendar not found' };
-    }
-    const createdEvent = await createOnTargetCalendar(targetCtx, item);
-    if (createdEvent === null) {
-        return { ok: false, status: 502, error: 'Failed to create event on target calendar' };
-    }
-    await bestEffortDeleteOnSource(item, params, buildProvider);
-    // The source event is deleted above, so its htmlLink would dangle — replace it with the new
-    // event's link, or drop it entirely when the create didn't report one.
-    const { htmlLink: _staleSourceLink, ...itemWithoutStaleLink } = item;
-    return {
-        ok: true,
-        item: {
-            ...itemWithoutStaleLink,
-            calendarEventId: createdEvent.eventId,
-            calendarIntegrationId: targetCtx.integration._id,
-            calendarSyncConfigId: targetCtx.config._id,
-            ...(createdEvent.htmlLink ? { htmlLink: createdEvent.htmlLink } : {}),
-        },
-    };
-}
-
-interface PushCtx {
-    integration: CalendarIntegrationInterface;
-    config: { _id: string; calendarId: string; timeZone?: string };
-    provider: CalendarProvider;
-    timeZone: string;
-}
-
-async function loadPushContext(integrationId: string, configId: string, userId: string, buildProvider: ReassignProviderFactory): Promise<PushCtx | null> {
-    const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(integrationId, userId);
-    if (!integration) {
-        console.warn(`[reassign] loadPushContext: integration not found | integrationId=${integrationId} userId=${userId}`);
-        return null;
-    }
-    const config = await calendarSyncConfigsDAO.findByOwnerAndId(configId, userId);
-    if (!config) {
-        console.warn(`[reassign] loadPushContext: syncConfig not found | configId=${configId} userId=${userId}`);
-        return null;
-    }
-    const provider = buildProvider(integration, userId);
-    const timeZone = await ensureTimeZone(config, provider);
-    return { integration, config, provider, timeZone };
-}
-
-async function createOnTargetCalendar(ctx: PushCtx, item: ItemInterface) {
-    if (!item.timeStart || !item.timeEnd) {
-        return null;
-    }
-    try {
-        return await ctx.provider.createEvent(
-            ctx.config.calendarId,
-            {
-                title: item.title,
-                timeStart: item.timeStart,
-                timeEnd: item.timeEnd,
-                ...(item.notes !== undefined ? { description: markdownToHtml(item.notes) } : {}),
-            },
-            ctx.timeZone,
-        );
-    } catch (err) {
-        console.error('[reassign] createEvent on target calendar failed', err);
-        return null;
-    }
-}
-
-/** Best-effort delete of the GCal event on the source calendar. Logs failures but never blocks the move. */
-async function bestEffortDeleteOnSource(item: ItemInterface, params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<void> {
-    if (!item.calendarEventId || !item.calendarIntegrationId || !item.calendarSyncConfigId) {
-        return;
-    }
-    const sourceCtx = await loadPushContext(item.calendarIntegrationId, item.calendarSyncConfigId, params.fromUserId, buildProvider);
-    if (!sourceCtx) {
-        // Fallback: if the item's integrationId/configId doesn't resolve under fromUserId (e.g.
-        // because a stale id from a prior account move was carried in the row), look for any active
-        // integration owned by fromUserId that has a syncConfig pointing at the same calendarId we
-        // care about. We don't know that calendarId without the original config, so just try every
-        // active integration of fromUserId — this is best-effort only and runs once per move.
-        await fallbackDeleteAcrossUserCalendars(item, params, buildProvider);
-        return;
-    }
-    try {
-        await sourceCtx.provider.deleteEvent(sourceCtx.config.calendarId, item.calendarEventId);
-    } catch (err) {
-        console.error(`[reassign] failed to delete source GCal event ${item.calendarEventId} — leaving stub on source`, err);
-    }
-}
-
-/**
- * Last-ditch attempt to delete the source-side GCal event when the item's stored integration/config
- * ids are stale or otherwise unresolvable under fromUserId. Walks every integration owned by
- * fromUserId (no status filter — matches the primary path's loadPushContext, which also accepts
- * suspended integrations during the 24h grace), and probes each integration's sync configs.
- * Logs an aggregate warning if every attempt fails — but never throws, since the move has already
- * succeeded on the target side and we don't want to roll that back.
- */
-async function fallbackDeleteAcrossUserCalendars(item: ItemInterface, params: ReassignParams, buildProvider: ReassignProviderFactory): Promise<void> {
-    if (!item.calendarEventId) {
-        return;
-    }
-    const integrations = await calendarIntegrationsDAO.findByUserDecrypted(params.fromUserId);
-    if (integrations.length === 0) {
-        console.warn(
-            `[reassign] source push context missing and no integrations for fromUserId — leaving stub event ${item.calendarEventId} on source GCal | staleIntegrationId=${item.calendarIntegrationId} staleSyncConfigId=${item.calendarSyncConfigId}`,
-        );
-        return;
-    }
-    let lastError: unknown;
-    for (const integration of integrations) {
-        const result = await probeDeleteOnIntegration(integration, item.calendarEventId, params.fromUserId, buildProvider);
-        if (result.ok) {
-            console.warn(
-                `[reassign] fallback deleted source GCal event ${item.calendarEventId} via integration=${integration._id} config=${result.configId} | staleIntegrationId=${item.calendarIntegrationId} staleSyncConfigId=${item.calendarSyncConfigId}`,
-            );
-            return;
-        }
-        if (result.lastError !== undefined) {
-            lastError = result.lastError;
-        }
-    }
-    const errSummary = lastError instanceof Error ? `${lastError.name}: ${lastError.message}` : String(lastError ?? 'no attempts made');
-    console.warn(
-        `[reassign] source push context missing and fallback probes did not find event — leaving stub event ${item.calendarEventId} on source GCal (last error: ${errSummary})`,
-    );
-}
-
-/**
- * Probes a single integration's sync configs for the given eventId. Resolves on the first config
- * whose deleteEvent succeeds, otherwise records the last per-attempt error so the caller can
- * surface it in the aggregate warn. Per-attempt errors include 404 (event not on this calendar —
- * the dominant case during a sweep) and 401/403/transport — all swallowed here to keep the sweep
- * best-effort, but tracked so the caller can summarise the failure mode.
- */
-async function probeDeleteOnIntegration(
-    integration: CalendarIntegrationInterface,
-    eventId: string,
-    fromUserId: string,
-    buildProvider: ReassignProviderFactory,
-): Promise<{ ok: true; configId: string } | { ok: false; lastError?: unknown }> {
-    const configs = await calendarSyncConfigsDAO.findArray({ integrationId: integration._id, user: fromUserId });
-    if (configs.length === 0) {
-        return { ok: false };
-    }
-    const provider = buildProvider(integration, fromUserId);
-    let lastError: unknown;
-    for (const config of configs) {
-        try {
-            await provider.deleteEvent(config.calendarId, eventId);
-            return { ok: true, configId: config._id };
-        } catch (err) {
-            lastError = err;
-        }
-    }
-    return { ok: false, lastError };
-}
-
-/**
- * Pre-validates the create-leg snapshot BEFORE the source delete fires. Without this guard a
- * malformed (or matrix-violating) snapshot would land us in a torn state — source deleted,
- * target failed to create. We replay the same Zod check `applyAndPublishOperation` runs in
- * strict mode and throw the same `OperationValidationError` the apply pipeline would, so the
- * top-level catch in `reassignEntity` produces the same `validation_failed` 400 either way.
- */
-function preValidateTargetSnapshot(raw: {
-    entityType: EntityType;
-    entityId: string;
-    snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface;
-}): void {
-    const validation = validateOperation({ ...raw, opType: 'create' });
-    if (!validation.ok) {
-        throw new OperationValidationError(validation);
-    }
-}
-
-/**
- * Common path for both calendar-linked and plain items. Drives both the source delete and the
- * target create through `applyAndPublishOperation` so SSE / web push / GCal pushback / webhook
- * fan-out fire on BOTH user channels. Delete on fromUserId completes before the create on
- * toUserId so a webhook subscriber on the target never observes a duplicate before the source
- * has been cleared. `applyAndPublishOperation` handles the per-collection delete + replaceById
- * via `applyEntityOp` — we no longer call the DAOs directly here.
- *
- * `suppressGCalPushback: true` on both legs because the calendar-linked path already drove the
- * GCal create-on-target + delete-on-source inline via `moveItemAcrossCalendars`. Without this,
- * `notifyChange` would re-push the create-leg snapshot to the target's GCal, producing a duplicate
- * event. For non-calendar items the flag is a no-op (`maybePushToGCal` returns early when
- * `calendarEventId` is absent and the matrix-allowed status forbids it). The routine path does NOT
- * pass this flag — the routine cascade in `pushRoutineDeletion` is the desired source-side cleanup.
- */
-async function persistItemMove(item: ItemInterface, params: ReassignParams): Promise<void> {
-    const now = dayjs().toISOString();
-    const deviceId = params.deviceId ?? 'server';
-    const newSnapshot: ItemInterface = { ...item, user: params.toUserId, updatedTs: now };
-    // Pre-validate before the source delete so a torn move (deleted on source, failed on target)
-    // is impossible. Throws OperationValidationError → top-level catch maps to a 400.
-    preValidateTargetSnapshot({ entityType: 'item', entityId: params.entityId, snapshot: newSnapshot });
-    await applyAndPublishOperation(
-        params.fromUserId,
-        { entityType: 'item', entityId: params.entityId, snapshot: null, opType: 'delete' },
-        { deviceId, now, strict: true, suppressGCalPushback: true },
-    );
-    await applyAndPublishOperation(
-        params.toUserId,
-        { entityType: 'item', entityId: params.entityId, snapshot: newSnapshot, opType: 'create' },
-        { deviceId, now, strict: true, suppressGCalPushback: true },
-    );
-}
-
 // ── Routine ──────────────────────────────────────────────────────────────────
 
 /**
  * Reassigns a routine across users.
  *
  * Source-side cleanup is performed by the cascade in `pushRoutineDeletion` (fired by the
- * source-leg delete inside `persistRoutineMove`):
+ * delete-leg op published from `persistRoutineMove`, whose snapshot is the pre-move routine):
  *   - every routine-generated calendar item under `fromUserId` is moved to `status: 'trash'`
  *     (recoverable, not falsely marked done) — see `trashGeneratedCalendarItems`.
  *   - the routine's GCal recurring master event is hard-deleted from the source account.
- * Target-side: Bob receives the routine itself with calendar-link fields stripped (so he doesn't
- * push to Alice's GCal) and his item stream is seeded immediately by `seedTargetRoutineItems`
- * (first nextAction item / calendar horizon fill). He does NOT inherit Alice's historical
- * generated items — those are intentionally left as trash on the source side.
- *
- * `_buildProvider` is reserved for a future GCal master-series re-link.
+ * Target-side: Bob receives the routine itself with the source calendar link stripped. When the
+ * caller supplies `targetCalendar`, the target snapshot is stamped with Bob's
+ * integration/syncConfig ids (no `calendarEventId`), so the create-leg op drives
+ * `pushNewRoutineToGCal` to create a fresh series on Bob's calendar asynchronously. Without
+ * `targetCalendar` the routine lands unlinked (today's behavior — Bob can link manually). His
+ * item stream is seeded immediately by `seedTargetRoutineItems` (first nextAction item /
+ * calendar horizon fill). He does NOT inherit Alice's historical generated items — those are
+ * intentionally left as trash on the source side.
  */
-async function reassignRoutine(params: ReassignParams, _buildProvider: ReassignProviderFactory): Promise<ReassignResult> {
+async function reassignRoutine(params: ReassignParams): Promise<ReassignResult> {
     const routine = await routinesDAO.findByOwnerAndId(params.entityId, params.fromUserId);
     if (!routine) {
-        return { ok: false, status: 404, error: 'Routine not found under fromUserId' };
+        // Same idempotency / crash-heal branch as items — see resolveAlreadyMoved.
+        const alreadyMoved = await resolveAlreadyMoved((id, uid) => routinesDAO.findByOwnerAndId(id, uid), 'routine', params);
+        return alreadyMoved ?? { ok: false, status: 404, error: 'Routine not found under fromUserId' };
+    }
+    if (params.targetCalendar) {
+        const targetError = await validateTargetCalendar(params.targetCalendar, params.toUserId);
+        if (targetError) {
+            return targetError;
+        }
     }
     // Count source-side calendar-status generated items BEFORE the cascade so the audit log
     // reflects what was actually trashed (`trashGeneratedCalendarItems` only touches
     // status='calendar' rows — done/trash rows are left as-is, by matrix design).
     const cascadedCount = (await itemsDAO.findArray({ user: params.fromUserId, routineId: params.entityId, status: 'calendar' })).length;
-    const movedRoutine = await persistRoutineMove(routine, params);
+    const moved = await persistRoutineMove(routine, params);
+    if (moved === 'not-owned') {
+        const alreadyMoved = await resolveAlreadyMoved((id, uid) => routinesDAO.findByOwnerAndId(id, uid), 'routine', params);
+        return alreadyMoved ?? { ok: false, status: 404, error: 'Routine not found under fromUserId' };
+    }
     // Seed the new owner's item stream immediately — no client tick covers this: the SSE-driven
     // per-user pull never runs the nextAction materialize backstop, and calendar routines have no
     // backstop at all, so without this the moved routine sits itemless on the target indefinitely.
-    await seedTargetRoutineItems(movedRoutine, params);
+    await seedTargetRoutineItems(moved, params);
     console.log(
         `[reassign] cascaded routine source-cleanup | routineId=${params.entityId} fromUserId=${params.fromUserId} toUserId=${params.toUserId} cascadedItems=${cascadedCount} gcalEventId=${routine.calendarEventId ?? '(none)'}`,
     );
@@ -521,41 +412,72 @@ async function reassignRoutine(params: ReassignParams, _buildProvider: ReassignP
 }
 
 /**
- * Routine itself: strip GCal link on the new owner so the new owner doesn't push to the
- * original account's GCal. The master series stays under the original account; the user can
- * re-link manually if desired. Step 5's GCal move only covers single calendar items;
- * recurring-event re-linking is deferred.
+ * GCal linkage + sync anchors that never survive a routine owner move — they all describe the
+ * SOURCE account's series (which the delete-leg cascade removes) or its sync history. A fresh
+ * target-side series (when `targetCalendar` is given) stamps fresh values via pushback.
+ * `lastKnown*` disconnect-keep markers are shed too: a later reconnect on the target must not
+ * strong-key relink the SOURCE account's series onto the moved routine.
  */
-async function persistRoutineMove(routine: RoutineInterface, params: ReassignParams): Promise<RoutineInterface> {
-    // Destructure to drop the keys entirely (rather than assigning undefined) to keep
-    // exactOptionalPropertyTypes happy.
-    const { calendarEventId: _ce, calendarIntegrationId: _ci, calendarSyncConfigId: _cs, ...routineWithoutCalLinks } = routine;
+const ROUTINE_GCAL_FIELDS_TO_STRIP = [
+    'calendarEventId',
+    'calendarIntegrationId',
+    'calendarSyncConfigId',
+    'calendarRebasedEventId',
+    'lastPushedToGCalTs',
+    'lastSyncedFromGCalTs',
+    'lastSyncedNotes',
+    'lastKnownCalendarEventId',
+    'lastKnownCalendarIntegrationId',
+    'lastKnownCalendarSyncConfigId',
+    'lastKnownCalendarAccountEmail',
+    // GCal-owned master mirrors (organizer, location, meetingLink, …) describe the source series;
+    // carrying them over would stamp stale metadata onto the target's fresh series and items.
+    ...GCAL_OWNED_ROUTINE_KEYS,
+] as const satisfies readonly (keyof RoutineInterface)[];
+
+/**
+ * Atomic routine owner flip via `applyAndPublishOwnerMove`. The target snapshot sheds every
+ * source-calendar field; with `targetCalendar` it is stamped with the new owner's
+ * integration/syncConfig ids so the create-leg op asynchronously creates the series on the
+ * target's GCal. Returns 'not-owned' when the flip matched nothing (concurrent move won).
+ */
+async function persistRoutineMove(routine: RoutineInterface, params: ReassignParams): Promise<RoutineInterface | 'not-owned'> {
+    const strippedRoutine: RoutineInterface = { ...routine };
+    for (const key of ROUTINE_GCAL_FIELDS_TO_STRIP) {
+        delete strippedRoutine[key];
+    }
     // No open-item propagation (routineEditPropagation.ts) is needed here, by architecture:
     // generated items never accompany the routine across accounts — source-side ones are trashed
     // by the delete cascade, and every target-side item is generated FROM this patched snapshot,
     // so the edit patch is already the single source of truth for the new owner's items.
-    const patched = applyRoutineEditPatch(routineWithoutCalLinks as RoutineInterface, params.editRoutinePatch);
+    const patched = applyRoutineEditPatch(strippedRoutine, params.editRoutinePatch);
     // Relink template.workContextIds / peopleIds AFTER the edit patch — same rationale as the item
     // path: explicit dialog edits flow through the same find-or-create as snapshot-inherited refs.
     // buildRelinkContext also provides the per-batch dedup caches that keep two ids sharing an
     // email/name from racing duplicate mirror creates.
     const ctx = buildRelinkContext(params);
     const relinked = await relinkRoutineReferences(patched, ctx);
-    const newSnapshot: RoutineInterface = { ...relinked, user: params.toUserId, updatedTs: ctx.now };
-    preValidateTargetSnapshot({ entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot });
-    // Same source-delete-then-target-create discipline as persistItemMove — see that helper for
-    // the rationale on why each leg flows through applyAndPublishOperation rather than the DAO.
-    await applyAndPublishOperation(
-        params.fromUserId,
-        { entityType: 'routine', entityId: params.entityId, snapshot: null, opType: 'delete' },
-        { deviceId: ctx.deviceId, now: ctx.now, strict: true },
-    );
-    await applyAndPublishOperation(
-        params.toUserId,
-        { entityType: 'routine', entityId: params.entityId, snapshot: newSnapshot, opType: 'create' },
-        { deviceId: ctx.deviceId, now: ctx.now, strict: true },
-    );
-    return newSnapshot;
+    const newSnapshot: RoutineInterface = {
+        ...relinked,
+        user: params.toUserId,
+        updatedTs: ctx.now,
+        // Stamping only the integration link (never calendarEventId) makes `pushNewRoutineToGCal`
+        // treat the routine as link-pending and create a fresh series with a deterministic id.
+        ...(params.targetCalendar
+            ? { calendarIntegrationId: params.targetCalendar.integrationId, calendarSyncConfigId: params.targetCalendar.syncConfigId }
+            : {}),
+    };
+    const outcome = await applyAndPublishOwnerMove(routinesDAO, {
+        entityType: 'routine',
+        entityId: params.entityId,
+        fromUserId: params.fromUserId,
+        toUserId: params.toUserId,
+        preMoveSnapshot: routine,
+        newSnapshot,
+        deviceId: ctx.deviceId,
+        now: ctx.now,
+    });
+    return outcome === 'not-owned' ? 'not-owned' : newSnapshot;
 }
 
 /**
@@ -564,10 +486,11 @@ async function persistRoutineMove(routine: RoutineInterface, params: ReassignPar
  * errors, and the calendar leg is wrapped here to match that contract.
  *
  * nextAction: same first-item bootstrap as POST /v1/routines.
- * calendar: idempotent horizon fill via `regenerateFutureRoutineItems`. The moved routine is never
- * GCal-linked (persistRoutineMove strips the link fields), so no timeZone is needed and the regen
- * ops carry no instance ids; `suppressGCalPushback` mirrors the edit-propagation path — the fresh
- * items must not push events onto the target's GCal.
+ * calendar: idempotent horizon fill via `regenerateFutureRoutineItems`. The moved routine never
+ * carries a `calendarEventId` at this point (persistRoutineMove strips it; a target series is
+ * created asynchronously by pushback when `targetCalendar` was given), so no timeZone is needed
+ * and the regen ops carry no instance ids; `suppressGCalPushback` mirrors the edit-propagation
+ * path — the fresh items must not push events onto the target's GCal.
  */
 async function seedTargetRoutineItems(routine: RoutineInterface, params: ReassignParams): Promise<void> {
     const ctx = { userId: params.toUserId, deviceId: params.deviceId ?? 'server' };

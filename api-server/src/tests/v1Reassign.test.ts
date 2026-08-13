@@ -96,6 +96,70 @@ describe('POST /v1/reassign', () => {
         expect(stale).toBeNull();
     });
 
+    it('retry of a completed item move returns 200 with alreadyMoved instead of a 404', async () => {
+        const aliceId = await login();
+        const token = await tokenWith(aliceId, ['reassign']);
+        const recipient = await recipientTokenFor('bob-id');
+        await itemsDAO.insertOne({
+            _id: 'it-retry',
+            user: aliceId,
+            status: 'inbox',
+            title: 'transfer me twice',
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        const request = () =>
+            app.fetch(
+                new Request('http://localhost:4000/v1/reassign', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}`, 'X-Reassign-Recipient-Token': recipient, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ entityType: 'item', entityId: 'it-retry', toUserId: 'bob-id' }),
+                }),
+            );
+        const first = await request();
+        expect(first.status).toBe(200);
+        expect(((await first.json()) as { alreadyMoved?: boolean }).alreadyMoved).toBeUndefined();
+
+        const retry = await request();
+        expect(retry.status).toBe(200);
+        expect(((await retry.json()) as { ok: boolean; alreadyMoved?: boolean }).alreadyMoved).toBe(true);
+        expect(await itemsDAO.findByOwnerAndId('it-retry', 'bob-id')).not.toBeNull();
+        expect(await itemsDAO.findByOwnerAndId('it-retry', aliceId)).toBeNull();
+    });
+
+    it('retry of a completed routine move returns 200 with alreadyMoved instead of a 404', async () => {
+        const aliceId = await login();
+        const token = await tokenWith(aliceId, ['reassign']);
+        const recipient = await recipientTokenFor('bob-id');
+        await routinesDAO.insertOne({
+            _id: 'rt-retry',
+            user: aliceId,
+            title: 'weekly transfer',
+            routineType: 'nextAction',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            template: {},
+            active: true,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        const request = () =>
+            app.fetch(
+                new Request('http://localhost:4000/v1/reassign', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}`, 'X-Reassign-Recipient-Token': recipient, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ entityType: 'routine', entityId: 'rt-retry', toUserId: 'bob-id' }),
+                }),
+            );
+        const first = await request();
+        expect(first.status).toBe(200);
+
+        const retry = await request();
+        expect(retry.status).toBe(200);
+        expect(((await retry.json()) as { ok: boolean; alreadyMoved?: boolean }).alreadyMoved).toBe(true);
+        expect(await routinesDAO.findByOwnerAndId('rt-retry', 'bob-id')).not.toBeNull();
+        expect(await routinesDAO.findByOwnerAndId('rt-retry', aliceId)).toBeNull();
+    });
+
     // Step 4 of the fan-out fix series: callers copy-pasting from Authorization examples often
     // prefix the recipient header with "Bearer ". The route strips a leading "Bearer " before
     // resolveBearerToken so both shapes resolve to the same row.

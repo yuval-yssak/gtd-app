@@ -87,7 +87,7 @@ function clampUpdatedTs(snapshot: EntitySnapshot, now: string): EntitySnapshot {
 }
 
 /** Server-side provenance stamped onto every persisted op: which device wrote it, and when. */
-interface OpStamp {
+export interface OpStamp {
     deviceId: string;
     now: string;
 }
@@ -96,8 +96,10 @@ interface OpStamp {
  * Builds the server-authoritative op from a raw client op: server-assigned `_id` and `ts`, the
  * caller-supplied `user` stripped and re-stamped (the misroute guard in `/sync/push` rejects
  * mismatches up-front; this is defense in depth), and `updatedTs` clamped to server time.
+ * Exported for `lib/ownerMove.ts`, which persists its ops directly (no `applyEntityOp` leg —
+ * the atomic owner flip already wrote the collection) but must stamp them identically.
  */
-function toServerOperation(userId: string, raw: RawOperation, stamp: OpStamp): OperationInterface {
+export function toServerOperation(userId: string, raw: RawOperation, stamp: OpStamp): OperationInterface {
     const { deviceId, now } = stamp;
     return {
         _id: randomUUID(),
@@ -169,8 +171,17 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     // the log; otherwise other devices would replay an op the server's collections never saw.
     // (The batch path below runs these in parallel as an accepted compromise inherited from the
     // `/sync/push` throughput target — single-batch ops should never target the same entityId.)
-    await applyEntityOp(userId, op);
+    const outcome = await applyEntityOp(userId, op);
+    // Quarantine: an update whose row is gone was NOT applied. The op is still inserted (audit
+    // trail + SyncIssuesPanel surface) but marked so `/sync/pull` never delivers it — other
+    // devices replaying it would resurrect an entity the server deleted or reassigned away.
+    if (outcome === 'skipped_missing') {
+        markOpNotApplied(op, now);
+    }
     await operationsDAO.insertOne(op);
+    if (op.notApplied) {
+        return op;
+    }
 
     // Step 5b — RSVP replay (offline-first). For `opType: 'rsvp'` ops the GCal push is part of
     // the contract: we await it so the persisted op row can carry `syncFailed` / `failureReason`
@@ -194,6 +205,26 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     }
 
     return op;
+}
+
+/**
+ * Stamps the quarantine + failure markers onto an op whose apply was skipped because the target
+ * row no longer exists. Mutates in place BEFORE insert so the persisted row and the in-memory op
+ * (used for notify filtering) agree. `entity_missing` is deliberately NOT retryable — the entity
+ * is not coming back; the SyncIssuesPanel offers Dismiss only.
+ */
+function buildNotAppliedMarkers(now: string) {
+    return {
+        syncFailed: true as const,
+        failureReason: 'entity_missing' as const,
+        failureDetail: 'target entity no longer exists (deleted or reassigned away) — change not applied',
+        failedTs: now,
+        notApplied: true as const,
+    };
+}
+
+function markOpNotApplied(op: OperationInterface, now: string): void {
+    Object.assign(op, buildNotAppliedMarkers(now));
 }
 
 /**
@@ -269,13 +300,23 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     // the pre-update row must be captured before the Promise.all below overwrites it.
     await hydrateCalendarDetachSnapshots(userId, ops);
 
-    await Promise.all([operationsDAO.insertMany(ops), ...ops.map((op) => applyEntityOp(userId, op))]);
+    const [, ...outcomes] = await Promise.all([operationsDAO.insertMany(ops), ...ops.map((op) => applyEntityOp(userId, op))]);
+
+    // Quarantine skipped-missing ops (see the single-op path). Rows were already inserted by the
+    // parallel insertMany above, so the markers are written back with an update; the in-memory op
+    // is stamped too so the notify/cascade filters below see the same state.
+    const quarantined = ops.filter((_, idx) => outcomes[idx] === 'skipped_missing');
+    for (const op of quarantined) {
+        markOpNotApplied(op, now);
+        await operationsDAO.updateOne({ _id: op._id }, { $set: buildNotAppliedMarkers(now) });
+    }
+    const appliedOps = ops.filter((op) => !op.notApplied);
 
     // RSVP replay (offline-first). Awaited in queue order — every RSVP replays so the organizer
     // sees the full history, per plan ("do NOT coalesce queued RSVPs"). Sequential await (not
     // Promise.all) keeps the per-entity ordering deterministic when multiple RSVPs land on the
     // same item from a single flush batch.
-    for (const op of ops) {
+    for (const op of appliedOps) {
         if (op.opType === 'rsvp') {
             await replayRsvpOp(userId, op, buildCalendarProvider);
         }
@@ -285,10 +326,10 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
         ...(opts.deviceId.startsWith('api:') ? {} : { excludeDeviceId: opts.deviceId }),
         ...(opts.suppressGCalPushback ? { suppressGCalPushback: true } : {}),
     };
-    await notifyChanges(ops, notifyOpts);
+    await notifyChanges(appliedOps, notifyOpts);
 
     if (!opts.suppressReferenceCascade) {
-        await runReferenceCascades(ops);
+        await runReferenceCascades(appliedOps);
     }
 
     return ops;

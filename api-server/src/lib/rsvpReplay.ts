@@ -2,16 +2,13 @@ import dayjs from 'dayjs';
 import type { CalendarProvider } from '../calendarProviders/CalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
-import operationsDAO from '../dataAccess/operationsDAO.js';
-import type { CalendarIntegrationInterface, GCalResponseStatus, ItemInterface, OperationInterface, OpFailureReason, RsvpOpPayload } from '../types/entities.js';
+import type { CalendarIntegrationInterface, GCalResponseStatus, ItemInterface, OperationInterface, RsvpOpPayload } from '../types/entities.js';
 import { categorizeGCalError } from './gcalErrorCategorization.js';
 import { retryWithBackoff } from './gcalRetry.js';
+import { FAILURE_DETAIL_MAX_LEN, markOpFailed } from './opFailure.js';
 import { applyRsvpToAttendees, resolveSyncConfigForItem } from './rsvpHelpers.js';
 
 type ProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
-
-/** failureDetail is shown in the SyncIssuesPanel — cap so a giant stack trace doesn't blow up the row. */
-const FAILURE_DETAIL_MAX_LEN = 200;
 
 /**
  * Replays an `opType: 'rsvp'` operation: pushes the user's responseStatus to GCal and updates the
@@ -167,20 +164,4 @@ async function revertLocalResponseStatus(
         return;
     }
     await itemsDAO.updateOne({ _id: itemId, user: userId }, { $set: { responseStatus: priorResponseStatus, updatedTs: now } });
-}
-
-/** Marks a persisted op row failed in place. Used by all failure paths in `replayRsvpOp`. */
-async function markOpFailed(opId: string, reason: OpFailureReason, detail: string): Promise<void> {
-    const now = dayjs().toISOString();
-    await operationsDAO.updateOne(
-        { _id: opId },
-        {
-            $set: {
-                syncFailed: true,
-                failureReason: reason,
-                failureDetail: detail.slice(0, FAILURE_DETAIL_MAX_LEN),
-                failedTs: now,
-            },
-        },
-    );
 }

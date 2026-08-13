@@ -431,8 +431,12 @@ export interface RsvpOpPayload {
     responseStatus: GCalResponseStatus;
 }
 
-/** Reason an op's GCal-side effect could not be applied. UI maps each to a remediation action. */
-export type OpFailureReason = 'transient_exhausted' | 'scope_missing' | 'calendar_missing' | 'edit_conflict' | 'terminal';
+/**
+ * Reason an op's side effect could not be applied. UI maps each to a remediation action.
+ * `entity_missing`: an update op whose target row was gone at apply time (deleted or moved to
+ * another account) — quarantined via `notApplied`, never retryable (the entity is not coming back).
+ */
+export type OpFailureReason = 'transient_exhausted' | 'scope_missing' | 'calendar_missing' | 'edit_conflict' | 'terminal' | 'entity_missing';
 
 export interface OperationInterface {
     _id: string; // server-generated UUID
@@ -477,6 +481,13 @@ export interface OperationInterface {
     failureReason?: OpFailureReason;
     failureDetail?: string;
     failedTs?: string;
+    /**
+     * Set true when `applyEntityOp` skipped this op because its target row no longer exists
+     * (deleted or reassigned away). Quarantine marker: `/sync/pull` excludes `notApplied` ops so
+     * other devices never replay a change the server's collections never saw — replaying an
+     * update for a moved entity would resurrect it client-side under the old owner.
+     */
+    notApplied?: boolean;
 }
 
 /**
@@ -489,6 +500,22 @@ export interface OperationInterface {
  * compound `(ts, _id)` cursor exists to prevent); use `''` (lowest id) there to re-check the ms.
  */
 export const MAX_OP_ID = '￿';
+
+/**
+ * Durable receipt that a cross-account move of `entityId` from `fromUserId` to `toUserId` was
+ * initiated. Written by `applyAndPublishOwnerMove` BEFORE the atomic owner flip; consumed by the
+ * reassign already-moved idempotency branch as positive provenance (see entityMovesDAO). Never
+ * pulled by devices and never purged — one small row per completed move.
+ */
+export interface EntityMoveReceiptInterface {
+    /** `${entityId}::${fromUserId}::${toUserId}` — idempotent upsert key for retries. */
+    _id: string;
+    entityId: string;
+    entityType: EntityType;
+    fromUserId: string;
+    toUserId: string;
+    ts: string; // ISO datetime of the (first) move attempt
+}
 
 export interface DeviceSyncStateInterface {
     /**

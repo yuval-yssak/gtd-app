@@ -9,7 +9,6 @@ import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { isDuplicateKeyError } from '../lib/applyEntityOp.js';
 import { applyAndPublishOperations, OperationValidationError, type RawOperation } from '../lib/applyOperation.js';
-import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { computePurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
@@ -29,6 +28,12 @@ interface ClientOp {
     entityId: string;
     opType: OpType;
     queuedAt: string;
+    /**
+     * Owner tag from the client's IDB sync queue. The misroute guard falls back to it for
+     * `snapshot: null` (delete) ops, which carry no `snapshot.userId` — without this fallback a
+     * background flush under a drifted cookie session could delete another user's entity silently.
+     */
+    userId?: string;
     snapshot: (Record<string, unknown> & { userId?: string }) | null;
     /**
      * Sidecar populated by the client's SendUpdatesDialog choice on calendar-item edits. Carried
@@ -188,18 +193,23 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         // Misroute guard: the contract is "ops in this batch belong to the active session".
         // Cross-account flushes must use syncAllLoggedInUsers/syncOneUser, which pivots the
-        // active session before flushing. If a snapshot still carries a userId tag and it
-        // disagrees with the session, the previous flow would silently overwrite and corrupt
-        // data (the bug that put item ebd197ea-… under the wrong user). Fail loudly instead.
-        // We check `snapshot.userId` (IndexedDB field name) — server entities use `user`, but
-        // the client's remapUser stamps the IDB-style `userId` onto outbound op snapshots.
-        // `snapshot: null` (delete ops) flows through unchecked — the active session is the only
-        // signal we have for ownership and the deleteByOwner path scopes by session.user.id anyway.
-        const mismatched = ops.find((op) => op.snapshot?.userId !== undefined && op.snapshot.userId !== user.id);
+        // active session before flushing. If an op carries a userId tag that disagrees with the
+        // session, the previous flow would silently overwrite and corrupt data (the bug that put
+        // item ebd197ea-… under the wrong user). Fail loudly instead.
+        // We check `snapshot.userId` (IndexedDB field name) first — server entities use `user`,
+        // but the client's remapUser stamps the IDB-style `userId` onto outbound op snapshots —
+        // and fall back to the op-level `userId` tag from the client's sync queue. The fallback
+        // is what catches `snapshot: null` (delete) ops: they have no snapshot tag, and with the
+        // local-first account switch the cookie session can legitimately lag IDB, so "trust the
+        // session" is no longer a safe default for deletes.
+        const mismatched = ops.find((op) => {
+            const taggedUserId = op.snapshot?.userId ?? op.userId;
+            return taggedUserId !== undefined && taggedUserId !== user.id;
+        });
         if (mismatched) {
             return c.json(
                 {
-                    error: `Op userId mismatch: ${mismatched.opType}:${mismatched.entityType}:${mismatched.entityId} tagged userId=${mismatched.snapshot?.userId} but session user.id=${user.id}. Use syncAllLoggedInUsers/syncOneUser for cross-account flushes.`,
+                    error: `Op userId mismatch: ${mismatched.opType}:${mismatched.entityType}:${mismatched.entityId} tagged userId=${mismatched.snapshot?.userId ?? mismatched.userId} but session user.id=${user.id}. Use syncAllLoggedInUsers/syncOneUser for cross-account flushes.`,
                 },
                 400,
             );
@@ -415,15 +425,16 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
     // Both fromUserId and toUserId must be sessions on this device (we read the device-multi-session
     // cookie so a single tab can drive cross-account moves). The handler validates membership before
     // touching the DB so a forged userId in the body can't be used to delete another user's data.
-    // For calendar-linked items, the helper does the GCal create-on-target → delete-on-source dance
-    // and rolls back to a 502 with no DB writes if the create fails.
+    // The move itself is an atomic owner flip; GCal side effects are op-driven and asynchronous
+    // (the target event appears seconds after the move). Retries of a completed move succeed with
+    // `alreadyMoved: true` instead of a 404.
     .post('/reassign', authenticateRequest, async (c) => {
         const params = await c.req.json<ReassignParams>();
         const guard = await validateReassignSessions(c.req.raw.headers, params);
         if (!guard.ok) {
             return c.json({ error: guard.error }, guard.status);
         }
-        const result = await reassignEntity(params, buildCalendarProvider);
+        const result = await reassignEntity(params);
         if (!result.ok) {
             // Surface the orchestrator's structured `code` (today: only set for `validation_failed`,
             // which now includes person/workContext entityType rejections) so the in-app caller can
@@ -436,7 +447,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         const now = dayjs().toISOString();
         notifyUserViaSse(params.fromUserId, { type: 'update', ts: now });
         notifyUserViaSse(params.toUserId, { type: 'update', ts: now });
-        return c.json({ ok: true, ...(result.crossUserReferences ? { crossUserReferences: result.crossUserReferences } : {}) }, 200);
+        return c.json({ ok: true, ...(result.alreadyMoved ? { alreadyMoved: true } : {}) }, 200);
     })
 
     // ---------------------------------------------------------------------------

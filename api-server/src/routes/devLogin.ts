@@ -413,10 +413,11 @@ export const devLoginRoutes = new Hono()
     })
 
     // POST /dev/calendar/simulate-event-move — exercises the full /sync/reassign DB-side semantics
-    // without calling Google Calendar. Used by e2e specs that need a calendar-linked item to move
-    // across accounts (real GCal can't be driven from headless Chromium). Mirrors the production
-    // endpoint's payload shape: accepts the same body and runs the same `reassignEntity` helper,
-    // but stubs `buildCalendarProvider` so create/delete on the provider become no-ops.
+    // for e2e specs that need a calendar-linked item to move across accounts, without the
+    // session-membership guard the production endpoint enforces. GCal side effects are op-driven
+    // and asynchronous now (the orchestrator makes no provider calls of its own), so no provider
+    // stub is needed: in the e2e environment the async pushback resolves against the seeded fake
+    // integration and fails harmlessly (fire-and-forget, surfaced on the op row).
     .post('/calendar/simulate-event-move', async (c) => {
         const { reassignEntity } = await import('../lib/reassignEntity.js');
         const body = await c.req.json<{
@@ -425,62 +426,12 @@ export const devLoginRoutes = new Hono()
             fromUserId: string;
             toUserId: string;
             targetCalendar?: { integrationId: string; syncConfigId: string };
-            simulatedEventId?: string;
         }>();
-        const fakeEventId = body.simulatedEventId ?? `sim-${generateId(16)}`;
-        // Stub provider mirrors only the methods reassignEntity actually invokes — createEvent
-        // returns the simulated event id (plus a fake htmlLink, mirroring production where the
-        // insert response carries the GCal deep link) and deleteEvent is a no-op. The unused
-        // interface methods throw so an unexpected call surfaces immediately rather than silently
-        // succeeding.
-        const stubProvider = {
-            createEvent: async () => ({ eventId: fakeEventId, htmlLink: `https://calendar.google.com/calendar/event?eid=${fakeEventId}` }),
-            deleteEvent: async () => {},
-            getCalendarTimeZone: async () => 'UTC',
-            // Methods that aren't expected to be called in this dev path — surface programming errors loudly.
-            updateEvent: () => {
-                throw new Error('stub: updateEvent not implemented');
-            },
-            updateRecurringInstance: () => {
-                throw new Error('stub: updateRecurringInstance not implemented');
-            },
-            cancelRecurringInstance: () => {
-                throw new Error('stub: cancelRecurringInstance not implemented');
-            },
-            createRecurringEvent: () => {
-                throw new Error('stub: createRecurringEvent not implemented');
-            },
-            updateRecurringEvent: () => {
-                throw new Error('stub: updateRecurringEvent not implemented');
-            },
-            deleteRecurringEvent: () => {
-                throw new Error('stub: deleteRecurringEvent not implemented');
-            },
-            capRecurringEvent: () => {
-                throw new Error('stub: capRecurringEvent not implemented');
-            },
-            listEventsIncremental: () => {
-                throw new Error('stub: listEventsIncremental not implemented');
-            },
-            listCalendars: () => {
-                throw new Error('stub: listCalendars not implemented');
-            },
-            renewWebhook: () => {
-                throw new Error('stub: renewWebhook not implemented');
-            },
-            stopWebhook: () => {
-                throw new Error('stub: stopWebhook not implemented');
-            },
-        };
-        // Cast through unknown is safe here — `reassignEntity` only calls the three methods stubbed
-        // above (createEvent / deleteEvent / getCalendarTimeZone) on this dev-only code path.
-        type ProviderFactoryType = Parameters<typeof reassignEntity>[1];
-        const factory: ProviderFactoryType = () => stubProvider as unknown as ReturnType<ProviderFactoryType>;
-        const result = await reassignEntity(body, factory);
+        const result = await reassignEntity(body);
         if (!result.ok) {
             return c.json({ error: result.error }, result.status);
         }
-        return c.json({ ok: true, simulatedEventId: fakeEventId, ...(result.crossUserReferences ? { crossUserReferences: result.crossUserReferences } : {}) });
+        return c.json({ ok: true, ...(result.alreadyMoved ? { alreadyMoved: true } : {}) });
     })
 
     // POST /dev/calendar/simulate-webhook-event — drives one inbound GCal event through the

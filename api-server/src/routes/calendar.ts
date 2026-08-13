@@ -31,6 +31,7 @@ import {
     runMissedPushSweep,
 } from '../lib/calendarPushback.js';
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
+import { KeyedMutex } from '../lib/keyedMutex.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { isDuplicateKeyError } from '../lib/mongoErrors.js';
 import { recordOperation } from '../lib/operationHelpers.js';
@@ -1424,6 +1425,12 @@ async function runOutboundBackfill(ctx: PushContext, userId: string): Promise<Ba
             // relink to. The per-entity pushback guard already skips these; excluding them here makes the
             // backfill structurally incapable of pushing them even if that guard regresses.
             lastKnownCalendarEventId: { $exists: false },
+            // An unlinked item stamped with a DIFFERENT integration id is claimed by that calendar's
+            // op-driven push (e.g. the create leg of a cross-account reassign, which stamps the
+            // user's chosen target calendar). Backfilling it here would override the stamped target
+            // with THIS calendar. Items stamped with this very integration are still eligible —
+            // that lets Sync-now retry a failed reassign push.
+            $or: [{ calendarIntegrationId: { $exists: false } }, { calendarIntegrationId: ctx.integration._id }],
         }),
         routinesDAO.findArray({
             user: userId,
@@ -5302,10 +5309,8 @@ export { buildProvider, renewWebhookAndCatchUp };
 // manual `POST /integrations/:id/sync` cannot run concurrently and both create-on-miss for the same
 // inbound event (the unique indexes make duplicates impossible, but serializing avoids the wasted
 // insert→E11000→merge churn on every race). Keyed by `webhookChannelId` when present, else
-// `${user}:${calendarId}` so configs without a live channel still serialize. The chain is a single
-// in-process promise per key; callers `await` it, so this is a fair FIFO mutex within one process
-// (Cloud Run runs --max-instances=1, so one process is the whole story).
-const syncChains = new Map<string, Promise<unknown>>();
+// `${user}:${calendarId}` so configs without a live channel still serialize.
+const syncMutex = new KeyedMutex();
 
 /** A stable per-calendar key for the sync mutex. */
 function syncKeyFor(config: CalendarSyncConfigInterface): string {
@@ -5313,24 +5318,8 @@ function syncKeyFor(config: CalendarSyncConfigInterface): string {
 }
 
 /** Runs `task` after any in-flight sync for the same calendar completes, chaining so concurrent callers serialize. */
-async function withSyncLock<T>(config: CalendarSyncConfigInterface, task: () => Promise<T>): Promise<T> {
-    const key = syncKeyFor(config);
-    const prior = syncChains.get(key) ?? Promise.resolve();
-    // Swallow the predecessor's rejection here so one failed sync doesn't reject every queued caller;
-    // each task's own result/rejection still propagates to its own awaiter below.
-    const run = prior.then(
-        () => task(),
-        () => task(),
-    );
-    // Keep the chain pointer current; clear it once this run settles IF no later caller has extended it.
-    syncChains.set(key, run);
-    try {
-        return await run;
-    } finally {
-        if (syncChains.get(key) === run) {
-            syncChains.delete(key);
-        }
-    }
+function withSyncLock<T>(config: CalendarSyncConfigInterface, task: () => Promise<T>): Promise<T> {
+    return syncMutex.withLock(syncKeyFor(config), task);
 }
 
 // ── Webhook receiver ─────────────────────────────────────────────────────────

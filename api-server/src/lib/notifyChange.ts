@@ -13,11 +13,11 @@ export interface NotifyChangeOptions {
      */
     excludeDeviceId?: string | null;
     /**
-     * Skip the GCal pushback leg. Set by callers that already managed the GCal side-effect inline —
-     * today only the cross-account calendar-item reassign, which calls `provider.createEvent` on
-     * the target and `provider.deleteEvent` on the source directly. Without this, `notifyChange`
-     * would re-push the moved item to GCal and produce a duplicate. SSE / web push / webhook
-     * fan-out still fire so external subscribers see the move on both user channels.
+     * Skip the GCal pushback leg. Set by callers whose ops must not create/patch GCal events —
+     * today the routine item-seeding paths (`seedTargetRoutineItems` after a reassign, and the
+     * routine edit-propagation regen), where the freshly generated items are represented by the
+     * routine's master series and a per-item push would mint duplicates. SSE / web push / webhook
+     * fan-out still fire so subscribers see the change.
      */
     suppressGCalPushback?: boolean;
 }

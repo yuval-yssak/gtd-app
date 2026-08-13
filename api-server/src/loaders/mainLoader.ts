@@ -7,6 +7,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
+import entityMovesDAO from '../dataAccess/entityMovesDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import oauthAuthCodesDAO from '../dataAccess/oauthAuthCodesDAO.js';
 import oauthClientsDAO from '../dataAccess/oauthClientsDAO.js';
@@ -79,6 +80,7 @@ async function loadDataAccess(customDBName?: string) {
         operationsDAO.init(dbClient, resolvedDBName),
         deviceSyncStateDAO.init(dbClient, resolvedDBName),
         deviceUsersDAO.init(dbClient, resolvedDBName),
+        entityMovesDAO.init(dbClient, resolvedDBName),
         pushSubscriptionsDAO.init(dbClient, resolvedDBName),
         routinesDAO.init(dbClient, resolvedDBName),
         peopleDAO.init(dbClient, resolvedDBName),
