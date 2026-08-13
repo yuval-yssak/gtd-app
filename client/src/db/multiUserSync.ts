@@ -131,6 +131,54 @@ export async function withAccountSession<T>(db: IDBPDatabase<MyDB>, userId: stri
 }
 
 /**
+ * Converges the server-side Better Auth active-session cookie onto IDB's `activeAccount` — IDB is
+ * the user's intent (the offline-capable account switch writes ONLY IDB and reloads; see
+ * `useAccounts.switchToAccount`). Called from AppDataProvider's boot path (before the first
+ * `syncAndRefresh`) and from the online-transition path BEFORE the unscoped `flushSyncQueue` —
+ * that ordering closes two windows where the drifted cookie caused misattribution: a Service
+ * Worker push-driven flush authenticating as the previous account, and the online flush 400-ing
+ * on the misroute guard.
+ *
+ * Alignment already correct → no-op (one cheap getSession call). Misaligned → pivot the cookie
+ * via `multiSession.setActive` to match IDB. No session for the IDB-active account at all →
+ * dispatch the reauth signal so the user gets the dialog/banner instead of silent stale data.
+ * Network errors are swallowed: offline means the cookie can't drift further anyway, and the
+ * next online pass re-runs this. The sync orchestrator's `restorePreviouslyActiveSession`
+ * already converges the cookie on every pass — this is a deterministic front-runner.
+ */
+export async function reconcileActiveSessionCookie(db: IDBPDatabase<MyDB>): Promise<void> {
+    return withSessionGate(async () => {
+        const active = await getActiveAccount(db);
+        if (!active) {
+            return;
+        }
+        try {
+            await pivotCookieToAccount(active.id);
+        } catch (err) {
+            // Offline or server unreachable — reconcile is deferred to the next online transition.
+            console.warn('[multi-sync] reconcileActiveSessionCookie skipped (network unreachable)', err);
+        }
+    });
+}
+
+/** The probe-compare-pivot chain of the cookie reconcile. Caller holds the session gate. */
+async function pivotCookieToAccount(activeUserId: string): Promise<void> {
+    const { data: session } = await authClient.getSession();
+    if (session?.user.id === activeUserId) {
+        return;
+    }
+    const sessions = await loadDeviceSessionsByUserId();
+    const target = sessions.get(activeUserId);
+    if (!target) {
+        // The IDB-active account has no live Better Auth session on this device (expired or
+        // revoked). Cached data still renders; surface the non-silent reauth affordance.
+        dispatchAccountNeedsReauth(activeUserId);
+        return;
+    }
+    await authClient.multiSession.setActive({ sessionToken: target.sessionToken });
+}
+
+/**
  * Defensive single re-fetch of the device session list to re-resolve a user that was missing from
  * the boot-time snapshot. Covers the stale-snapshot sub-case where a login completed in another tab
  * after `syncAllLoggedInUsers` captured `sessions`. Best-effort — a failed refresh returns undefined

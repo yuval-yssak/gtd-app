@@ -12,3 +12,9 @@
     font-size: 0.75rem;
     margin-top: 4px;
 }
+
+.offlineNote {
+    color: var(--mui-palette-text-secondary);
+    font-size: 0.75rem;
+    margin-top: 4px;
+}

@@ -7,7 +7,7 @@ import TextField from '@mui/material/TextField';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { reassignEntity } from '../../db/reassignMutations';
+import { attemptReassign, reassignEntity } from '../../db/reassignMutations';
 import { updateWorkContext } from '../../db/workContextMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { offerUndo } from '../../lib/undoStore';
@@ -34,6 +34,16 @@ export function WorkContextEditDialog({ db, workContext, onClose }: WorkContextE
     const liveContextRef = useRef(liveContext);
     liveContextRef.current = liveContext;
 
+    const [ownerError, setOwnerError] = useState<string | null>(null);
+    const [isOwnerMoveInFlight, setIsOwnerMoveInFlight] = useState(false);
+    // Skip setState after unmount — the reassign await can outlive the dialog if the user closes
+    // it mid-flight (same guard PendingReassignProvider uses for its revert snackbar).
+    const unmountedRef = useRef(false);
+    useEffect(() => {
+        return () => {
+            unmountedRef.current = true;
+        };
+    }, []);
     const [name, setName] = useState(workContext.name);
     const nameRef = useRef(name);
     nameRef.current = name;
@@ -79,9 +89,22 @@ export function WorkContextEditDialog({ db, workContext, onClose }: WorkContextE
         if (nextOwnerUserId === liveContextRef.current.userId) {
             return;
         }
+        setOwnerError(null);
+        setIsOwnerMoveInFlight(true);
         await autosave.flush(); // the move must carry any rename still in the debounce window
         const fromUserId = liveContextRef.current.userId;
-        await reassignEntity(db, { entityType: 'workContext', entityId: workContext._id, fromUserId, toUserId: nextOwnerUserId });
+        const label = liveContextRef.current.name;
+        const outcome = await attemptReassign(db, { entityType: 'workContext', entityId: workContext._id, fromUserId, toUserId: nextOwnerUserId }, label);
+        if (unmountedRef.current) {
+            return;
+        }
+        setIsOwnerMoveInFlight(false);
+        if (!outcome.ok) {
+            // Keep the dialog open with the failure inline — closing with a false "Moved to …"
+            // snackbar would tell the user the move happened when it didn't.
+            setOwnerError(outcome.message);
+            return;
+        }
         offerUndo({
             key: `workContext:${workContext._id}:owner`,
             message: `Moved to ${loggedInAccounts.find((a) => a.id === nextOwnerUserId)?.email ?? 'the other account'}`,
@@ -119,7 +142,14 @@ export function WorkContextEditDialog({ db, workContext, onClose }: WorkContextE
                     sx={{ mt: 1 }}
                     data-testid="workContextEditName"
                 />
-                {loggedInAccounts.length > 1 && <AccountPicker value={liveContext.userId} onChange={(v) => void onOwnerPicked(v)} />}
+                {loggedInAccounts.length > 1 && (
+                    <AccountPicker
+                        value={liveContext.userId}
+                        onChange={(v) => void onOwnerPicked(v)}
+                        disabled={isOwnerMoveInFlight}
+                        {...(ownerError ? { error: ownerError } : {})}
+                    />
+                )}
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose} data-testid="workContextEditClose">

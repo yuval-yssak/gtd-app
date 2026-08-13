@@ -314,7 +314,7 @@ const gtdImpl = {
             params,
         ),
 
-    /** Calls /dev/calendar/simulate-event-move so an e2e can move a calendar-linked item without driving real GCal. */
+    /** Calls /dev/calendar/simulate-event-move so an e2e can move a calendar-linked item without the session-membership guard. */
     simulateCalendarMove: (
         page: Page,
         body: {
@@ -326,12 +326,12 @@ const gtdImpl = {
             // Cross-account "edit + move" patch — mirrors ReassignItemEditPatch on the client.
             editPatch?: Record<string, unknown>;
         },
-    ): Promise<{ ok: boolean; simulatedEventId?: string; error?: string }> =>
+    ): Promise<{ ok: boolean; alreadyMoved?: boolean; error?: string }> =>
         page.evaluate(
             (b) =>
                 (
                     window as unknown as {
-                        __gtd: { simulateCalendarMove(b: unknown): Promise<{ ok: boolean; simulatedEventId?: string; error?: string }> };
+                        __gtd: { simulateCalendarMove(b: unknown): Promise<{ ok: boolean; alreadyMoved?: boolean; error?: string }> };
                     }
                 ).__gtd.simulateCalendarMove(b),
             body,

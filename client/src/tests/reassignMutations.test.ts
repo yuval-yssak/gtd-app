@@ -11,9 +11,15 @@ vi.mock('../db/multiUserSync', () => ({
     syncAllLoggedInUsers: vi.fn(async () => undefined),
 }));
 
+// Mock the offline probe so tests can flip connectivity without a browser navigator.
+vi.mock('../lib/onlineStatus', () => ({
+    isBrowserOffline: vi.fn(() => false),
+}));
+
 import { reassignEntityOnServer } from '#api/syncApi';
 import { syncAllLoggedInUsers } from '../db/multiUserSync';
-import { reassignEntity } from '../db/reassignMutations';
+import { attemptReassign, offlineReassignMessage, reassignEntity } from '../db/reassignMutations';
+import { isBrowserOffline } from '../lib/onlineStatus';
 import type { MyDB } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -100,5 +106,39 @@ describe('reassignEntity (client mutation helper)', () => {
                 editRoutinePatch: { title: 'Renamed', rrule: 'FREQ=DAILY' },
             }),
         );
+    });
+});
+
+describe('attemptReassign (outcome mapping)', () => {
+    const PARAMS = { entityType: 'person', entityId: 'p-1', fromUserId: 'a', toUserId: 'b' } as const;
+
+    it('returns ok on server success', async () => {
+        vi.mocked(reassignEntityOnServer).mockResolvedValueOnce({ ok: true });
+        const outcome = await attemptReassign(db, PARAMS, 'Dana');
+        expect(outcome).toEqual({ ok: true });
+    });
+
+    it('blocks up front while offline — no network call is fired', async () => {
+        vi.mocked(isBrowserOffline).mockReturnValueOnce(true);
+        const outcome = await attemptReassign(db, PARAMS, 'Dana');
+        expect(outcome).toEqual({ ok: false, message: offlineReassignMessage('Dana') });
+        expect(reassignEntityOnServer).not.toHaveBeenCalled();
+    });
+
+    it('maps a server rejection to a labeled message instead of a false success', async () => {
+        vi.mocked(reassignEntityOnServer).mockResolvedValueOnce({ ok: false, status: 403, error: 'not a device session' });
+        const outcome = await attemptReassign(db, PARAMS, 'Dana');
+        expect(outcome).toEqual({ ok: false, message: 'Couldn\'t move "Dana" — not a device session' });
+    });
+
+    it('maps a network throw (fetch rejection) to a connection message instead of an unhandled rejection', async () => {
+        vi.mocked(reassignEntityOnServer).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+        const outcome = await attemptReassign(db, PARAMS, 'Dana');
+        expect(outcome.ok).toBe(false);
+        if (outcome.ok) {
+            throw new Error('expected failure outcome');
+        }
+        expect(outcome.message).toBe('Couldn\'t move "Dana" — check your connection and try again.');
+        expect(syncAllLoggedInUsers).not.toHaveBeenCalled();
     });
 });

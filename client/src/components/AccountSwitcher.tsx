@@ -8,6 +8,7 @@ import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
+import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Snackbar from '@mui/material/Snackbar';
@@ -35,7 +36,7 @@ export function AccountSwitcher({ db }: Props) {
     const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
     const { activeAccount, allAccounts, addAnotherAccount, switchToAccount, signOutCurrent, signOutAll, pendingAction, actionError, dismissActionError } =
         useAccounts(db);
-    const online = useOnline();
+    const isOnline = useOnline();
     const isPending = pendingAction !== null;
 
     function openMenu(e: React.MouseEvent<HTMLElement>) {
@@ -55,6 +56,17 @@ export function AccountSwitcher({ db }: Props) {
             </IconButton>
 
             <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu} onClick={closeMenu}>
+                {/* Switching accounts is local-first (IDB write + reload — see useAccounts) so it
+                    stays enabled offline. Add-account and sign-out genuinely need the network
+                    (OAuth redirect / Better Auth teardown), so those stay blocked below — this
+                    note explains why. Rendered as a ListSubheader, not a disabled MenuItem:
+                    disabled items are skipped by screen-reader menu navigation, hiding the
+                    explanation from AT. */}
+                {!isOnline && (
+                    <ListSubheader component="div" data-testid="accountSwitcherOfflineNote">
+                        <Typography variant="caption">Offline — adding accounts and signing out need a connection</Typography>
+                    </ListSubheader>
+                )}
                 {allAccounts.map((account) => (
                     <MenuItem
                         key={account.id}
@@ -81,14 +93,14 @@ export function AccountSwitcher({ db }: Props) {
 
                 <Divider />
 
-                <MenuItem disabled={!online || isPending} onClick={() => addAnotherAccount('google')}>
+                <MenuItem disabled={!isOnline || isPending} onClick={() => addAnotherAccount('google')}>
                     <ListItemIcon>
                         <AddIcon fontSize="small" />
                     </ListItemIcon>
                     <ListItemText primary={<Typography variant="body2">Add Google account</Typography>} />
                 </MenuItem>
 
-                <MenuItem disabled={!online || isPending} onClick={() => addAnotherAccount('github')}>
+                <MenuItem disabled={!isOnline || isPending} onClick={() => addAnotherAccount('github')}>
                     <ListItemIcon>
                         <AddIcon fontSize="small" />
                     </ListItemIcon>
@@ -97,14 +109,14 @@ export function AccountSwitcher({ db }: Props) {
 
                 <Divider />
 
-                <MenuItem disabled={!online || isPending} onClick={() => void signOutCurrent()}>
+                <MenuItem disabled={!isOnline || isPending} onClick={() => void signOutCurrent()}>
                     <ListItemIcon>
                         <LogoutIcon fontSize="small" />
                     </ListItemIcon>
                     <ListItemText primary={<Typography variant="body2">Sign out</Typography>} />
                 </MenuItem>
 
-                <MenuItem disabled={!online || isPending} onClick={() => void signOutAll()}>
+                <MenuItem disabled={!isOnline || isPending} onClick={() => void signOutAll()}>
                     <ListItemIcon>
                         <LogoutIcon fontSize="small" />
                     </ListItemIcon>

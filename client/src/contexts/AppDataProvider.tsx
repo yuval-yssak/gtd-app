@@ -20,7 +20,7 @@ import { triggerAppResourceRefresh } from '../data/appResource';
 import { getInitialAuthBundle } from '../data/initialAuthBundle';
 import { getActiveAccount, getLoggedInAccounts, upsertAccount } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
-import { syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
+import { reconcileActiveSessionCookie, syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { closeSseConnections, openSseConnections } from '../db/sseClient';
@@ -364,6 +364,10 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         if (!navigator.onLine) {
             return;
         }
+        // Converge the Better Auth cookie onto IDB's activeAccount BEFORE any sync work — an
+        // offline account switch leaves the cookie pointing at the previous account until this
+        // runs, and every session-scoped request until then would resolve as the wrong user.
+        await reconcileActiveSessionCookie(db);
         // No cursor for the active account ⇒ this is a first-time bootstrap (the ~20s empty window).
         // Raise the skeleton flag before kicking off the sync; syncAndRefresh's finally clears it.
         // Mirrors pullOrBootstrap's cursor check so the flag tracks the same bootstrap decision.
@@ -481,21 +485,33 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             return;
         }
         if (isOnline) {
-            // Flush unconditionally — isSyncingRef may block syncAndRefresh if an SSE-triggered
-            // sync was in flight when the device went offline; a blocked syncAndRefresh would
-            // silently drop the flush and leave queued ops stranded. flushSyncQueue has its own
-            // concurrency guard (flushInFlight) so calling it here alongside syncAndRefresh is safe.
-            // This flush is unscoped (no userIdFilter), so a 401 can't be attributed to a single
-            // account — best-effort flag the currently active one; syncAndRefresh's per-user pass
-            // (via syncOneUser) is the authoritative place that flags the right account regardless.
-            flushSyncQueue(db).catch(async (err) => {
-                console.error('[online] flush failed:', err);
-                if (err instanceof SyncAuthError) {
-                    const activeAcct = await getActiveAccount(db);
-                    if (activeAcct) {
-                        dispatchAccountNeedsReauth(activeAcct.id);
+            // Cookie reconcile FIRST, then the unscoped flush chained behind it — after an offline
+            // account switch the cookie still points at the previous account, and flushing before
+            // realignment would either 400 on the misroute guard or attribute the push to the
+            // wrong user. Ordering guarantees: (a) relative to syncAndRefresh below, both funnel
+            // through withSessionGate, and because this line runs first synchronously it acquires
+            // the gate first — the reconcile is the deterministic front-runner ONLY by virtue of
+            // this position, so don't reorder or insert an await above it; (b) the chain is
+            // intentionally unmount-tolerant (no unmountedRef guard, unlike the other async paths
+            // here): flushSyncQueue is module-level with its own cross-context lock, IDB writes
+            // survive unmount, and a reconcile cut short by navigation re-runs on the next boot.
+            void reconcileActiveSessionCookie(db).then(() => {
+                // Flush unconditionally — isSyncingRef may block syncAndRefresh if an SSE-triggered
+                // sync was in flight when the device went offline; a blocked syncAndRefresh would
+                // silently drop the flush and leave queued ops stranded. flushSyncQueue has its own
+                // concurrency guard (flushInFlight) so calling it here alongside syncAndRefresh is safe.
+                // This flush is unscoped (no userIdFilter), so a 401 can't be attributed to a single
+                // account — best-effort flag the currently active one; syncAndRefresh's per-user pass
+                // (via syncOneUser) is the authoritative place that flags the right account regardless.
+                flushSyncQueue(db).catch(async (err) => {
+                    console.error('[online] flush failed:', err);
+                    if (err instanceof SyncAuthError) {
+                        const activeAcct = await getActiveAccount(db);
+                        if (activeAcct) {
+                            dispatchAccountNeedsReauth(activeAcct.id);
+                        }
                     }
-                }
+                });
             });
             syncAndRefresh().catch((err) => console.error('[online] sync failed:', err));
             getOrCreateDeviceId(db).then((deviceId) => {

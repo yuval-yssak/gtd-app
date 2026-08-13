@@ -13,8 +13,11 @@ vi.mock('../lib/authClient', () => {
             { user: { id: 'user-c' }, session: { token: 'token-c' } },
         ],
     }));
+    // Cookie-session probe used by reconcileActiveSessionCookie; defaults to user-a active.
+    const getSession = vi.fn(async () => ({ data: { user: { id: 'user-a' } } }));
     return {
         authClient: {
+            getSession,
             multiSession: { setActive, listDeviceSessions },
         },
     };
@@ -23,7 +26,7 @@ vi.mock('../lib/authClient', () => {
 import dayjs from 'dayjs';
 import { fetchSyncOps, pushSyncOps, SyncAuthError } from '#api/syncClient';
 import { ACCOUNT_NEEDS_REAUTH_EVENT } from '../contexts/accountReauthEvents';
-import { syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
+import { reconcileActiveSessionCookie, syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { setSessionGateTimeoutMs } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
@@ -485,5 +488,92 @@ describe('withAccountSession', () => {
         // Serialized: [pivot-b, restore-a, pivot-b, restore-a] — never [pivot-b, pivot-b, …].
         expect(setActiveCalls).toEqual(['token-b', 'token-a', 'token-b', 'token-a']);
         setSessionGateTimeoutMs(10_000);
+    });
+});
+
+describe('reconcileActiveSessionCookie', () => {
+    it('no-ops when the cookie session already matches the IDB-active account', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        // Default getSession mock reports user-a — already aligned.
+
+        await reconcileActiveSessionCookie(db);
+
+        expect(authClient.multiSession.setActive).not.toHaveBeenCalled();
+        expect(authClient.multiSession.listDeviceSessions).not.toHaveBeenCalled();
+    });
+
+    it('pivots the cookie to the IDB-active account when misaligned (IDB is the user intent)', async () => {
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-b' }, 'active');
+        // Cookie still points at user-a (e.g. after an offline switch to user-b + reload).
+        vi.mocked(authClient.getSession).mockResolvedValueOnce({ data: { user: { id: 'user-a' } } });
+
+        await reconcileActiveSessionCookie(db);
+
+        const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
+        expect(setActiveCalls).toEqual(['token-b']);
+    });
+
+    it('dispatches a reauth signal (no pivot) when the IDB-active account has no live session', async () => {
+        await seedAccount(db, 'user-orphan', 'orphan@example.com');
+        await db.put('activeAccount', { userId: 'user-orphan' }, 'active');
+        vi.mocked(authClient.getSession).mockResolvedValueOnce({ data: { user: { id: 'user-a' } } });
+        const dispatchSpy = vi.fn();
+        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
+
+        await reconcileActiveSessionCookie(db);
+
+        expect(authClient.multiSession.setActive).not.toHaveBeenCalled();
+        const reauthEvents = dispatchSpy.mock.calls.map(([e]) => e as CustomEvent).filter((e) => e.type === ACCOUNT_NEEDS_REAUTH_EVENT);
+        expect(reauthEvents).toHaveLength(1);
+        const [reauthEvent] = reauthEvents;
+        if (!reauthEvent) throw new Error('expected one reauth event');
+        expect(reauthEvent.detail).toEqual({ userId: 'user-orphan' });
+        vi.unstubAllGlobals();
+    });
+
+    it('swallows network errors — offline reconcile defers to the next online pass', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        vi.mocked(authClient.getSession).mockRejectedValueOnce(new Error('Failed to fetch'));
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const dispatchSpy = vi.fn();
+        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
+
+        await expect(reconcileActiveSessionCookie(db)).resolves.toBeUndefined();
+
+        expect(authClient.multiSession.setActive).not.toHaveBeenCalled();
+        expect(dispatchSpy.mock.calls.filter(([e]) => (e as CustomEvent).type === ACCOUNT_NEEDS_REAUTH_EVENT)).toHaveLength(0);
+        vi.unstubAllGlobals();
+        warnSpy.mockRestore();
+    });
+
+    it('no-ops when there is no IDB-active account', async () => {
+        await reconcileActiveSessionCookie(db);
+        expect(authClient.getSession).not.toHaveBeenCalled();
+        expect(authClient.multiSession.setActive).not.toHaveBeenCalled();
+    });
+});
+
+describe('reconcileActiveSessionCookie × syncAllLoggedInUsers — gate serialization', () => {
+    it('serializes with the orchestrator via the session gate — the reconcile pivot never interleaves a sync pass', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-b' }, 'active');
+        // Cookie points at user-a while IDB says user-b — the reconcile must pivot to token-b.
+        vi.mocked(authClient.getSession).mockResolvedValue({ data: { user: { id: 'user-a' } } });
+
+        // Fire both without awaiting the first: the reconcile acquires the gate synchronously at
+        // call time, so it must fully complete (its single pivot) BEFORE the orchestrator's
+        // per-user pivots begin — never interleaved with them.
+        const reconcile = reconcileActiveSessionCookie(db);
+        const orchestrate = syncAllLoggedInUsers(db);
+        await Promise.all([reconcile, orchestrate]);
+
+        const setActiveCalls = vi.mocked(authClient.multiSession.setActive).mock.calls.map((c) => c[0]?.sessionToken);
+        // [reconcile pivot-b] then the orchestrator's [pivot-a, pivot-b, restore-b] — the leading
+        // token-b is the reconcile's, proving it ran to completion first under the gate.
+        expect(setActiveCalls).toEqual(['token-b', 'token-a', 'token-b', 'token-b']);
     });
 });

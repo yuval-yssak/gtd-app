@@ -3,9 +3,8 @@ import { clientsClaim } from 'workbox-core';
 import { createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { BootstrapRequiredError, SyncAuthError } from './api/syncClient';
-import { getActiveAccount } from './db/accountHelpers';
+import { fetchSessionUserId, flushQueueForSessionUser, pullForSessionUser } from './db/backgroundSync';
 import { openAppDB } from './db/indexedDB';
-import { flushSyncQueue, pullFromServer } from './db/syncHelpers';
 import { hasAtLeastOne } from './lib/typeUtils';
 
 /** Posted to open tabs so they can call `dispatchAccountNeedsReauth` — the SW has no `window` to dispatch on directly. */
@@ -51,14 +50,22 @@ self.addEventListener('sync', (event) => {
     if (syncEvent.tag !== 'gtd-sync-queue') return;
     syncEvent.waitUntil(
         openAppDB().then(async (db) => {
+            // Session-scoped, NOT IDB-scoped: after an offline account switch the cookie can still
+            // point at the previous account until a foreground tab runs the cookie reconcile. An
+            // unscoped flush here would push the new account's queued ops under the old session —
+            // and `snapshot: null` delete ops bypass /sync/push's misroute guard, so that would be
+            // silent cross-account misattribution, not just a rejected batch. Scoping to whoever
+            // the cookie authenticates as makes this flush correct regardless of IDB drift; the
+            // other account's ops flush on the next foreground pass after the reconcile.
+            const sessionUserId = await fetchSessionUserId();
+            if (!sessionUserId) {
+                return; // no reachable/valid session — defer to the next foreground pass
+            }
             try {
-                await flushSyncQueue(db);
+                await flushQueueForSessionUser(db, async () => sessionUserId);
             } catch (err) {
                 if (err instanceof SyncAuthError) {
-                    const acct = await getActiveAccount(db);
-                    if (acct) {
-                        await notifyClientsAccountNeedsReauth(acct.id);
-                    }
+                    await notifyClientsAccountNeedsReauth(sessionUserId);
                     return;
                 }
                 throw err;
@@ -109,21 +116,20 @@ self.addEventListener('push', (event) => {
 
     event.waitUntil(
         openAppDB()
-            // Per-user cursors require a userId on every pull. The SW can't easily pivot Better
-            // Auth sessions (the auth client is React-only), so we pull under whichever session
-            // the cookies currently point at — that's the active account. Other logged-in accounts
-            // on this device catch up at the next foreground sync (see syncAllLoggedInUsers in
-            // _authenticated.tsx). Documented limitation: a push that targets a non-active
-            // account will queue under that user's channel on the server but won't land in the
-            // SW's IDB until the user opens the app.
+            // Per-user cursors require a userId on every pull. The SW can't pivot Better Auth
+            // sessions (the auth client is React-only), so the pull is scoped to whoever the
+            // cookie authenticates as — and ONLY when that agrees with IDB's activeAccount
+            // (pullForSessionUser skips on drift, e.g. an offline account switch not yet
+            // reconciled; pulling in that window would land the cookie-user's ops under the
+            // IDB-user's cursor). Other logged-in accounts catch up at the next foreground sync.
             .then(async (db) => {
-                const acct = await getActiveAccount(db);
-                if (!acct) return;
+                const sessionUserId = await fetchSessionUserId();
+                if (!sessionUserId) return;
                 try {
-                    await pullFromServer(db, acct.id);
+                    await pullForSessionUser(db, async () => sessionUserId);
                 } catch (err) {
                     if (err instanceof SyncAuthError) {
-                        await notifyClientsAccountNeedsReauth(acct.id);
+                        await notifyClientsAccountNeedsReauth(sessionUserId);
                         return;
                     }
                     if (err instanceof BootstrapRequiredError) {

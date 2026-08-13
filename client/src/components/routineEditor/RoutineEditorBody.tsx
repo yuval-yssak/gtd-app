@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import type { ReassignRoutineEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
+import { offlineReassignMessage } from '../../db/reassignMutations';
 import {
     createFirstRoutineItem,
     deleteAndRegenerateFutureItems,
@@ -40,6 +41,7 @@ import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendar
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { omitArchived, rankByUsage, type UsageIndex } from '../../lib/entityUsage';
+import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
 import { deriveRecurrenceAnchor, RruleExhaustedError } from '../../lib/rruleUtils';
@@ -810,6 +812,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
     // the guard after all hooks below (rules-of-hooks).
     const reassignInFlight = routine !== undefined && isPending('routine', routine._id);
     const [ownerUserId, setOwnerUserId] = useState<string>(routine?.userId ?? userId);
+    const [reassignError, setReassignError] = useState<string | null>(null);
     const ownerUserIdRef = useRef(ownerUserId);
     ownerUserIdRef.current = ownerUserId;
 
@@ -887,6 +890,16 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         // All-day routines don't require a time-of-day input — the timeOfDay value is hidden
         // and ignored. Only enforce the time-of-day requirement on timed calendar routines.
         if (form.routineType === 'calendar' && !form.allDay && !form.timeOfDay) {
+            return;
+        }
+        setReassignError(null);
+        // Block an owner change BEFORE the save closure runs — the edit patch only lives in this
+        // mount's form state, so closing on a doomed offline reassign would discard every edit.
+        // Read the live ref (not the mount-time prop) so this agrees with the dispatch decision
+        // below even when a remote reassign changed the owner while the editor was open.
+        const liveForGuard = liveRoutineRef.current;
+        if (liveForGuard && ownerUserId !== liveForGuard.userId && isBrowserOffline()) {
+            setReassignError(offlineReassignMessage(trimmedTitle));
             return;
         }
 
@@ -1023,7 +1036,9 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 editRoutinePatch,
             },
         })
-            .then(() => onSaved())
+            // Only fire the success postlude on a confirmed move — a blocked/failed reassign
+            // already showed its snackbar, and onSaved would refresh as if the move landed.
+            .then((didMove) => (didMove ? onSaved() : undefined))
             .catch((err) => console.error('[routine reassign] post-flight refresh failed:', err));
     }
 
@@ -1166,7 +1181,9 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
             />
 
             {/* Account picker — auto-hides on single-account devices */}
-            {loggedInAccounts.length > 1 && <AccountPicker value={ownerUserId} onChange={setOwnerUserId} disabled={isSaving} />}
+            {loggedInAccounts.length > 1 && (
+                <AccountPicker value={ownerUserId} onChange={setOwnerUserId} disabled={isSaving} {...(reassignError ? { error: reassignError } : {})} />
+            )}
 
             {chrome === 'dialog' ? (
                 <DialogActions sx={{ px: 0 }}>

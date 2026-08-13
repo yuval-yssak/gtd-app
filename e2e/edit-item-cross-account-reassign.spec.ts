@@ -126,8 +126,10 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
             });
             expect(result.ok).toBe(true);
 
-            // Server-side: the item is under secondary, with patched fields, target calendar refs,
-            // and a new GCal event id (not the source's). The source row is gone.
+            // Server-side: the item is under secondary, with patched fields and the target calendar
+            // refs stamped. The source event id is stripped by the atomic move; the fresh target
+            // event is created asynchronously by op-driven pushback (which fails harmlessly against
+            // this e2e environment's fake integration), so calendarEventId is absent — never stale.
             await expect.poll(async () => (await fetchServerItem(itemId))?.user, { timeout: 5_000 }).toBe(secondary.userId);
             const moved = await fetchServerItem(itemId);
             expect(moved?.title).toBe('Renamed via reassign');
@@ -136,8 +138,7 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
             expect(moved?.timeEnd).toBe(newEnd);
             expect(moved?.calendarIntegrationId).toBe(seedB.integrationId);
             expect(moved?.calendarSyncConfigId).toBe(cfgB);
-            expect(moved?.calendarEventId).toBeTruthy();
-            expect(moved?.calendarEventId).not.toBe('gcal-evt-original');
+            expect(moved?.calendarEventId).toBeUndefined();
         });
     });
 

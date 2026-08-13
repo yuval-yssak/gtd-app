@@ -32,6 +32,7 @@ const FAILURE_LABELS: Record<SyncIssueFailureReason, string> = {
     calendar_missing: "The target calendar isn't available anymore — pick another or retry.",
     edit_conflict: 'The event changed in Google Calendar — retry to reapply the change.',
     terminal: 'Event was cancelled by the organizer or removed in Google Calendar.',
+    entity_missing: 'This item no longer exists (it was deleted or moved to another account), so the change was not applied.',
 };
 
 /** Prefix for the issue title — keeps the panel scannable when several entries share a label. */

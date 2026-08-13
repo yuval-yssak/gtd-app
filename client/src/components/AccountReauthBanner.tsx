@@ -5,6 +5,7 @@ import type { IDBPDatabase } from 'idb';
 import { useSyncExternalStore } from 'react';
 import { dismissAccountReauth, ensureAccountReauthBridge, getReauthFlaggedUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
 import { useAccounts } from '../hooks/useAccounts';
+import { useOnline } from '../hooks/useOnline';
 import type { MyDB } from '../types/MyDB';
 import { staleAccountRows } from './AccountReauthDialog';
 
@@ -32,6 +33,8 @@ ensureAccountReauthBridge();
 export function AccountReauthBanner({ db }: { db: IDBPDatabase<MyDB> }) {
     const { allAccounts, reauthForUserId } = useAccounts(db);
     const flaggedUserIds = useSyncExternalStore(subscribeAccountReauth, getReauthFlaggedUserIds);
+    // Mirrors the dialog: Re-login is an OAuth redirect and can't work offline.
+    const isOnline = useOnline();
 
     // Includes flagged ids with no locally-known account row (generic label) — hiding those would
     // remove every trace of the broken-sync warning. See staleAccountRows.
@@ -48,12 +51,13 @@ export function AccountReauthBanner({ db }: { db: IDBPDatabase<MyDB> }) {
                     severity="warning"
                     onClose={() => dismissAccountReauth(account.id)}
                     action={
-                        <Button color="inherit" size="small" onClick={() => reauthForUserId(account.id)}>
+                        <Button color="inherit" size="small" disabled={!isOnline} onClick={() => reauthForUserId(account.id)}>
                             Re-login
                         </Button>
                     }
                 >
                     {account.email === null ? 'An account needs re-login to sync.' : `Your account ${account.email} needs re-login to sync.`}
+                    {!isOnline ? " You're offline — re-login needs a connection." : ''}
                 </Alert>
             ))}
         </Box>

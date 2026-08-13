@@ -34,6 +34,18 @@ export interface AccountsState {
 }
 
 /**
+ * Pure core of the local-first account switch, extracted so its failure contract is testable
+ * without a DOM (same precedent as `startReauthForAccount`). Persists the choice to IDB and
+ * returns the URL to hard-reload to. A rejecting IDB write MUST propagate — `withPending`'s catch
+ * is what clears the blocking backdrop and surfaces the "Couldn't switch" error; swallowing here
+ * would strand the user behind the backdrop.
+ */
+export async function performLocalAccountSwitch(db: IDBPDatabase<MyDB>, userId: string, currentUrl: { pathname: string; search: string }): Promise<string> {
+    await setActiveAccount(userId, db);
+    return currentUrl.pathname + currentUrl.search;
+}
+
+/**
  * Pure core of `reauthForUserId`, extracted so it's testable without a DOM. Looks up the account by
  * id and, if found, invokes `startSignIn` with its provider — returning whether a re-auth was kicked
  * off. The `startSignIn` callback is injected so tests can assert the provider without driving a real
@@ -129,12 +141,6 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
             });
     }, []);
 
-    const refreshAccountState = useCallback(async () => {
-        const [all, active] = await Promise.all([getAllAccounts(db), getActiveAccount(db)]);
-        setAllAccounts(all);
-        setActiveAccountState(active);
-    }, [db]);
-
     const reauthForUserId = useCallback(
         (userId: string): boolean =>
             // Session expired — trigger OAuth re-authentication for the target account. Returns true
@@ -151,33 +157,22 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
     const switchToAccount = useCallback(
         async (userId: string) => {
             await withPending('switching', async () => {
-                const { data: sessions } = await authClient.multiSession.listDeviceSessions();
-                const target = sessions?.find((s) => s.user.id === userId);
-
-                if (!target) {
-                    // Session expired — fall back to OAuth re-authentication. If the account
-                    // isn't locally known, no navigation fires and we must clear the backdrop
-                    // ourselves so the user isn't stranded behind it.
-                    const navigated = reauthForUserId(userId);
-                    if (!navigated) {
-                        setPendingAction(null);
-                    }
-                    return;
-                }
-
-                // Switch the active session cookie server-side — no OAuth redirect needed
-                await authClient.multiSession.setActive({ sessionToken: target.session.token });
-                await setActiveAccount(userId, db);
-                await refreshAccountState();
-                // Hard reload back to the current route so AppDataProvider re-runs its boot effect
-                // and every component reads the new active account. Without this, useAppData().account
-                // stays stuck on the previous account — Settings shows stale name/email, and worse,
-                // mutations on Inbox/Routines/People/Work Contexts get written under the wrong userId.
-                // Matches the reload pattern already used by signOutCurrent and switchToNextAndRevoke.
-                window.location.href = window.location.pathname + window.location.search;
+                // Local-first is the ONLY path: switching the app's active account is an IDB write
+                // plus a hard reload — no network round-trip, so it works fully offline (the app
+                // renders the target account's cached data from IDB). The server-side Better Auth
+                // active-session cookie is reconciled to IDB asynchronously by
+                // `reconcileActiveSessionCookie` (AppDataProvider's boot + online paths); if the
+                // target's session turns out to be expired, that reconcile dispatches the reauth
+                // dialog — an informative surface, instead of blocking the switch here.
+                // The hard reload back to the current route makes AppDataProvider re-run its boot
+                // effect so every component reads the new active account. Without it,
+                // useAppData().account stays stuck on the previous account — Settings shows stale
+                // name/email, and worse, mutations get written under the wrong userId. Matches the
+                // reload pattern already used by signOutCurrent and switchToNextAndRevoke.
+                window.location.href = await performLocalAccountSwitch(db, userId, window.location);
             });
         },
-        [db, reauthForUserId, refreshAccountState, withPending],
+        [db, withPending],
     );
 
     const switchToNextAndRevoke = useCallback(

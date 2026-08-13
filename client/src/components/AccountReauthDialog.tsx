@@ -10,6 +10,7 @@ import type { IDBPDatabase } from 'idb';
 import { useSyncExternalStore } from 'react';
 import { acknowledgeAccountReauthDialog, ensureAccountReauthBridge, getReauthDialogUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
 import { useAccounts } from '../hooks/useAccounts';
+import { useOnline } from '../hooks/useOnline';
 import type { MyDB } from '../types/MyDB';
 
 // Install the window→store bridge at import time so a reauth flag dispatched before first render is
@@ -42,6 +43,9 @@ export function staleAccountRows(flaggedUserIds: readonly string[], knownAccount
 export function AccountReauthDialog({ db }: { db: IDBPDatabase<MyDB> }) {
     const { allAccounts, reauthForUserId } = useAccounts(db);
     const dialogUserIds = useSyncExternalStore(subscribeAccountReauth, getReauthDialogUserIds);
+    // Re-login is an OAuth redirect — impossible offline. An offline switch to an expired-session
+    // account should show cached data + this informative (but non-actionable-while-offline) dialog.
+    const isOnline = useOnline();
 
     const staleAccounts = staleAccountRows(dialogUserIds, allAccounts);
     if (staleAccounts.length === 0) {
@@ -67,13 +71,24 @@ export function AccountReauthDialog({ db }: { db: IDBPDatabase<MyDB> }) {
                     The data shown for {staleAccounts.length === 1 ? 'this account' : 'these accounts'} may be stale or incomplete until you log in again —
                     changes are not syncing.
                 </DialogContentText>
+                {!isOnline && (
+                    <DialogContentText sx={{ mb: 2 }} data-testid="accountReauthDialogOfflineHint">
+                        You're offline — re-login needs a connection. You can keep working with the cached data shown.
+                    </DialogContentText>
+                )}
                 <Stack spacing={1}>
                     {staleAccounts.map((account) => (
                         <Alert
                             key={account.id}
                             severity="warning"
                             action={
-                                <Button color="inherit" size="small" onClick={() => reauthForUserId(account.id)} data-testid="accountReauthDialogRelogin">
+                                <Button
+                                    color="inherit"
+                                    size="small"
+                                    disabled={!isOnline}
+                                    onClick={() => reauthForUserId(account.id)}
+                                    data-testid="accountReauthDialogRelogin"
+                                >
                                     Re-login
                                 </Button>
                             }

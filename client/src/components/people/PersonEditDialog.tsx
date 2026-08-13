@@ -9,7 +9,7 @@ import type { IDBPDatabase } from 'idb';
 import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updatePerson } from '../../db/personMutations';
-import { reassignEntity } from '../../db/reassignMutations';
+import { attemptReassign, reassignEntity } from '../../db/reassignMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { mergeCleanStringFields, stringFieldsEqual } from '../../lib/liveMerge';
 import { offerUndo } from '../../lib/undoStore';
@@ -69,6 +69,16 @@ export function PersonEditDialog({ db, person, showAccountPicker = false, onClos
     const livePersonRef = useRef(livePerson);
     livePersonRef.current = livePerson;
 
+    const [ownerError, setOwnerError] = useState<string | null>(null);
+    const [isOwnerMoveInFlight, setIsOwnerMoveInFlight] = useState(false);
+    // Skip setState after unmount — the reassign await can outlive the dialog if the user closes
+    // it mid-flight (same guard PendingReassignProvider uses for its revert snackbar).
+    const unmountedRef = useRef(false);
+    useEffect(() => {
+        return () => {
+            unmountedRef.current = true;
+        };
+    }, []);
     const [form, setForm] = useState<PersonTextFields>(textFieldsOf(person));
     const formRef = useRef(form);
     formRef.current = form;
@@ -129,9 +139,22 @@ export function PersonEditDialog({ db, person, showAccountPicker = false, onClos
         if (nextOwnerUserId === livePersonRef.current.userId) {
             return;
         }
+        setOwnerError(null);
+        setIsOwnerMoveInFlight(true);
         await autosave.flush(); // the move must carry any text still in the debounce window
         const fromUserId = livePersonRef.current.userId;
-        await reassignEntity(db, { entityType: 'person', entityId: person._id, fromUserId, toUserId: nextOwnerUserId });
+        const label = livePersonRef.current.name;
+        const outcome = await attemptReassign(db, { entityType: 'person', entityId: person._id, fromUserId, toUserId: nextOwnerUserId }, label);
+        if (unmountedRef.current) {
+            return;
+        }
+        setIsOwnerMoveInFlight(false);
+        if (!outcome.ok) {
+            // Keep the dialog open with the failure inline — closing with a false "Moved to …"
+            // snackbar would tell the user the move happened when it didn't.
+            setOwnerError(outcome.message);
+            return;
+        }
         offerUndo({
             key: `person:${person._id}:owner`,
             message: `Moved to ${loggedInAccounts.find((a) => a.id === nextOwnerUserId)?.email ?? 'the other account'}`,
@@ -191,7 +214,14 @@ export function PersonEditDialog({ db, person, showAccountPicker = false, onClos
                         helperText="Markdown supported"
                         data-testid="personEditNotes"
                     />
-                    {showPicker && <AccountPicker value={livePerson.userId} onChange={(v) => void onOwnerPicked(v)} />}
+                    {showPicker && (
+                        <AccountPicker
+                            value={livePerson.userId}
+                            onChange={(v) => void onOwnerPicked(v)}
+                            disabled={isOwnerMoveInFlight}
+                            {...(ownerError ? { error: ownerError } : {})}
+                        />
+                    )}
                 </Box>
             </DialogContent>
             <DialogActions>

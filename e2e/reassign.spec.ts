@@ -223,15 +223,17 @@ test.describe('reassign — Step 5', () => {
             });
             expect(result.ok).toBe(true);
 
-            // Server-side check: item moved to secondary, with the new integration id and a fresh GCal event id.
+            // Server-side check: the atomic flip moved the item to secondary with the TARGET
+            // calendar link stamped and every source-GCal field stripped. The target event itself
+            // is created asynchronously by op-driven pushback (and in this e2e environment that
+            // push fails against the fake seeded integration) — so calendarEventId/htmlLink are
+            // absent here by design, never the stale source values.
             await expect.poll(async () => (await fetchServerEntity('items', itemId))?.user, { timeout: 5_000 }).toBe(secondary.userId);
             const moved = await fetchServerEntity('items', itemId);
             expect(moved?.calendarIntegrationId).toBe(seedB.integrationId);
-            expect(moved?.calendarEventId).toBeTruthy();
-            expect(moved?.calendarEventId).not.toBe('gcal-evt-original');
-            // htmlLink re-stamped from the (stubbed) create response — mirrors production, where
-            // the moved item must not keep the deleted source event's deep link.
-            expect(moved?.htmlLink).toBe(`https://calendar.google.com/calendar/event?eid=${moved?.calendarEventId}`);
+            expect(moved?.calendarSyncConfigId).toBe(cfgB);
+            expect(moved?.calendarEventId).toBeUndefined();
+            expect(moved?.htmlLink).toBeUndefined();
         });
     });
 

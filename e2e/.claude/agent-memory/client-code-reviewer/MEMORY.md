@@ -7,3 +7,4 @@
 - [Dismiss-button e2e tests can pass by timeout](feedback_dismiss_button_tests_pass_by_timeout.md) — Auto-hiding UI (Snackbar/Alert) hides on its own; assert still-visible-then-fast-disappear or the test greens with a dead handler.
 - [Merged multi-account entity labels + stranded URL ids](feedback_merged_entity_display_name_and_stranded_url_id.md) — Collapsing same-named entities: check which twin's name renders, and the hidden-account shrinking-group path.
 - [Two-tier dismissal stores (dialog over banner)](feedback_two_tier_dismissal_stores.md) — Acknowledge must key off flagged ids not the filtered render list; flagged-but-unknown account renders no warning at all.
+- [Graceful blocks drop bundled edits](feedback_graceful_block_drops_bundled_edits.md) — A new early-return guard inside a fire-and-forget mutation silently discards the editPatch riding along, when the caller already closed the editor.

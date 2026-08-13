@@ -35,12 +35,14 @@ import {
     updateItemAttendees,
     updateItemWithGcalMeta,
 } from '../../db/itemMutations';
+import { offlineReassignMessage } from '../../db/reassignMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { omitArchived } from '../../lib/entityUsage';
+import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { offerUndo } from '../../lib/undoStore';
 import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -462,6 +464,12 @@ export function ItemEditorBody({
             return;
         }
         if (path.kind === 'reassign') {
+            // Block BEFORE closeEditor — the edit patch only lives in this mount's form state, so
+            // closing on a doomed offline reassign would silently discard every pending edit.
+            if (isBrowserOffline()) {
+                setReassignError(offlineReassignMessage(trimmedTitle));
+                return;
+            }
             startReassignInBackground(buildEditPatch(live, trimmedTitle, trimmedNotes, status, forms), trimmedTitle);
             closeEditor();
             return;
@@ -594,7 +602,9 @@ export function ItemEditorBody({
                 ...(hasEdits ? { editPatch } : {}),
             },
         })
-            .then(() => onSaved())
+            // Only fire the success postlude on a confirmed move — a blocked/failed reassign
+            // already showed its snackbar, and onSaved would advance wizard flows as if it worked.
+            .then((didMove) => (didMove ? onSaved() : undefined))
             .catch((err) => console.error('[reassign] post-flight refresh failed:', err));
     }
 

@@ -86,6 +86,10 @@ test.describe('unsaved-changes guard — item editor', () => {
         const emailA = `guard-owner-a-${ts}@example.com`;
         const emailB = `guard-owner-b-${ts}@example.com`;
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active }) => {
+            // Wait for the multi-account boot to settle (one cursor row per user) before writing —
+            // an op queued mid-boot can race the orchestrator's pull into the blocking Case-2
+            // sync-recovery dialog (same guard as offline-reassign.spec.ts).
+            await expect.poll(async () => new Set((await gtd.syncState(page)).syncCursors.map((c) => c.userId)).size, { timeout: 15_000 }).toBe(2);
             const item = await gtd.collect(page, 'Owner guard target');
             await page.goto(`/item/${item._id}`);
             await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();

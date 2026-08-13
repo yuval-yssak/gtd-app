@@ -2,7 +2,8 @@ import Snackbar from '@mui/material/Snackbar';
 import type { IDBPDatabase } from 'idb';
 import { createContext, type PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReassignParams } from '../api/syncApi';
-import { reassignEntity } from '../db/reassignMutations';
+import { attemptReassign, offlineReassignMessage } from '../db/reassignMutations';
+import { isBrowserOffline } from '../lib/onlineStatus';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 
 /**
@@ -40,12 +41,13 @@ interface PendingReassignAPI {
     /** True while a reassign for this entity is in flight. Used by dialogs to refuse re-edit. */
     isPending: (kind: EntityKind, entityId: string) => boolean;
     /**
-     * Fire-and-forget reassign. Registers the overlay synchronously, returns a promise that
-     * resolves once the server call completes (success or failure). On failure the overlay is
-     * cleared and a revert snackbar shown — callers don't need to handle the rejection. Calling
-     * this for an entity that already has a pending overlay is a no-op (returns immediately).
+     * Fire-and-forget reassign. Registers the overlay synchronously and resolves `true` once the
+     * server confirms the move. Resolves `false` — with the failure snackbar already shown — when
+     * the move was blocked up front (offline) or the request failed; callers use the boolean to
+     * skip their success postlude (e.g. `onSaved`). Calling this for an entity that already has a
+     * pending overlay is a no-op resolving `false`.
      */
-    runReassignWithOverlay: (req: ReassignWithOverlayRequest) => Promise<void>;
+    runReassignWithOverlay: (req: ReassignWithOverlayRequest) => Promise<boolean>;
 }
 
 const PendingReassignContext = createContext<PendingReassignAPI | undefined>(undefined);
@@ -182,7 +184,15 @@ export function PendingReassignProvider({ db, children }: PropsWithChildren<Prov
             // second's overlay before its network call returns.
             const key = `${req.kind}:${req.entityId}`;
             if (inFlightKeysRef.current.has(key)) {
-                return;
+                return false;
+            }
+            // Reassign can't join the offline sync queue (server-orchestrated cross-account
+            // delete+create), so block gracefully up front — no overlay flash, no fake attempt.
+            // Defence-in-depth: the editors also check before closing, so hitting this branch
+            // means the network dropped between their check and this call.
+            if (isBrowserOffline()) {
+                showRevert(offlineReassignMessage(req.label));
+                return false;
             }
             inFlightKeysRef.current.add(key);
             // Register the overlay before firing the network call. The order matters —
@@ -190,17 +200,15 @@ export function PendingReassignProvider({ db, children }: PropsWithChildren<Prov
             // no overlay is in place, briefly showing the entity under the source account.
             setOverride(req.kind, req.entityId, req.override);
             try {
-                const result = await reassignEntity(db, req.params);
-                if (!result.ok) {
-                    showRevert(`Couldn't move "${req.label}" — reverted (${result.error})`);
+                const outcome = await attemptReassign(db, req.params, req.label);
+                if (!outcome.ok) {
+                    showRevert(outcome.message);
                 }
                 // On success the SSE pull (inside reassignEntity → syncAllLoggedInUsers) has
                 // already updated IDB. Clearing the overlay here lets the real row take over;
                 // the post-pull userId equals override.toUserId so the rendered entity is
                 // identical and the user sees no flicker.
-            } catch (err) {
-                console.error('[reassign] unexpected failure:', err);
-                showRevert(`Couldn't move "${req.label}" — reverted`);
+                return outcome.ok;
             } finally {
                 inFlightKeysRef.current.delete(key);
                 if (!unmountedRef.current) {

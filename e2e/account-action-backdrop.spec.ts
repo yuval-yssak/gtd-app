@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
+import { gtd } from './helpers/gtd';
 
 const CLIENT_URL = 'http://localhost:4173';
 
@@ -88,33 +89,35 @@ test.describe('account action backdrop', () => {
         });
     });
 
-    test('switching account renders the blocking backdrop with a "Switching account…" label', async ({ browser }) => {
+    // The account switch is local-first now (an IDB write + hard reload — no auth round-trip), so
+    // its backdrop window collapsed to sub-frame duration: navigation starts before React can even
+    // paint the "Switching account…" label, and there is no network call left to stall. The old
+    // backdrop-visibility assertion is unobservable by design; what's worth pinning instead is the
+    // local-first contract itself: the switch must succeed even when Better Auth's set-active
+    // endpoint is completely unreachable (the cookie is reconciled after the reload by
+    // reconcileActiveSessionCookie, which swallows the failure and defers to the next online pass).
+    test('switching account succeeds even when the auth set-active endpoint is unreachable (local-first contract)', async ({ browser }) => {
         const ts = dayjs().valueOf();
         const emailA = `switch-backdrop-a-${ts}@example.com`;
         const emailB = `switch-backdrop-b-${ts}@example.com`;
 
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, accounts) => {
             await page.goto(`${CLIENT_URL}/inbox`);
-            // Stall the multi-session set-active call so the backdrop has a guaranteed visible window.
-            // Better Auth is mounted at basePath '/auth' (see client/src/lib/authClient.ts), so the
-            // multi-session endpoint lives at /auth/multi-session/set-active. Glob to allow query strings.
-            await page.route('**/auth/multi-session/set-active*', async (route) => {
-                await new Promise((r) => setTimeout(r, 1500));
-                await route.continue();
-            });
-            await openAccountMenu(page);
+            // Kill the endpoint the pre-fix switch depended on. The background sync orchestrator
+            // also uses it (session pivots), so failures land in its logged catch paths — but the
+            // switch gesture itself must be unaffected.
+            await page.route('**/auth/multi-session/set-active*', (route) => route.abort('failed'));
 
+            await openAccountMenu(page);
             const switchTarget = page.getByTestId(`accountSwitcherItem-${accounts.secondary.userId}`);
             await switchTarget.waitFor({ state: 'visible' });
-            await switchTarget.click();
+            await Promise.all([page.waitForLoadState('load'), switchTarget.click()]);
 
-            // Backdrop label proves the in-flight UX. The post-switch correctness contract
-            // (Settings shows the new account) is already covered by account-switch-refresh.spec.ts;
-            // re-asserting it here would just race the reload that happens after the stall completes.
-            const backdrop = visibleBackdrop(page);
-            await expect(backdrop).toBeVisible();
-            await expect(backdrop).toContainText('Switching account…');
-            await expect(backdrop).toHaveAttribute('aria-busy', 'true');
+            // The switch landed on the target account without any error surface (post-switch
+            // rendering correctness is covered by account-switch-refresh.spec.ts).
+            await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
+            await expect.poll(() => gtd.getActiveAccountId(page), { timeout: 10_000 }).toBe(accounts.secondary.userId);
+            await expect(visibleActionError(page)).toBeHidden();
         });
     });
 
