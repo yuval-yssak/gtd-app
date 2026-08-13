@@ -25,7 +25,7 @@ vi.mock('../lib/authClient', () => {
 
 import dayjs from 'dayjs';
 import { fetchSyncOps, pushSyncOps, SyncAuthError } from '#api/syncClient';
-import { ACCOUNT_NEEDS_REAUTH_EVENT } from '../contexts/accountReauthEvents';
+import { ACCOUNT_NEEDS_REAUTH_EVENT, flagAccountNeedsReauth, getReauthFlaggedUserIds, resetAccountReauthStore } from '../contexts/accountReauthEvents';
 import { reconcileActiveSessionCookie, syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { setSessionGateTimeoutMs } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
@@ -58,6 +58,7 @@ beforeEach(async () => {
 
 afterEach(() => {
     vi.clearAllMocks();
+    resetAccountReauthStore(); // reauth-flag tests must not leak flags into later cases
     db.close();
 });
 
@@ -107,6 +108,37 @@ describe('syncAllLoggedInUsers', () => {
         const cursorB = await db.get('syncCursors', 'user-b');
         expect(cursorA?.lastSyncedTs).toBe(tA);
         expect(cursorB?.lastSyncedTs).toBe(tB);
+    });
+
+    it('a successful pass clears a stale reauth flag (re-login happened in another tab)', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await seedAccount(db, 'user-b', 'b@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        resetAccountReauthStore();
+        flagAccountNeedsReauth('user-a');
+
+        await syncAllLoggedInUsers(db);
+
+        // user-a's flush+pull succeeded, proving its session works again — the flag must clear
+        // so the "Sync is broken" dialog/banner stop showing without a page reload.
+        expect(getReauthFlaggedUserIds()).toEqual([]);
+    });
+
+    it('a flag raised MID-pass survives the pass succeeding (it reports a new failure, not a stale one)', async () => {
+        await seedAccount(db, 'user-a', 'a@example.com');
+        await db.put('activeAccount', { userId: 'user-a' }, 'active');
+        resetAccountReauthStore();
+
+        // Simulate the Service Worker relay flagging user-a while its pull is in flight — the
+        // pre-pass snapshot in syncOneUser must prevent the success from erasing this fresh flag.
+        vi.mocked(fetchSyncOps).mockImplementationOnce(async () => {
+            flagAccountNeedsReauth('user-a');
+            return { ops: [], serverTs: '2025-01-02T00:00:00.000Z', serverId: '' };
+        });
+
+        await syncAllLoggedInUsers(db);
+
+        expect(getReauthFlaggedUserIds()).toEqual(['user-a']);
     });
 
     it('bootstraps a user with no syncCursors row instead of pulling', async () => {

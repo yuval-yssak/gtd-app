@@ -47,16 +47,16 @@ export async function performLocalAccountSwitch(db: IDBPDatabase<MyDB>, userId: 
 
 /**
  * Pure core of `reauthForUserId`, extracted so it's testable without a DOM. Looks up the account by
- * id and, if found, invokes `startSignIn` with its provider — returning whether a re-auth was kicked
- * off. The `startSignIn` callback is injected so tests can assert the provider without driving a real
+ * id and, if found, invokes `startSignIn` with it — returning whether a re-auth was kicked off. The
+ * `startSignIn` callback is injected so tests can assert the target account without driving a real
  * OAuth redirect.
  */
-export function startReauthForAccount(accounts: StoredAccount[], userId: string, startSignIn: (provider: OAuthProvider) => void): boolean {
+export function startReauthForAccount(accounts: StoredAccount[], userId: string, startSignIn: (account: StoredAccount) => void): boolean {
     const account = accounts.find((a) => a.id === userId);
     if (!account) {
         return false;
     }
-    startSignIn(account.provider);
+    startSignIn(account);
     return true;
 }
 
@@ -146,11 +146,27 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
             // Session expired — trigger OAuth re-authentication for the target account. Returns true
             // when navigation was kicked off, false when the account isn't known locally (caller is
             // responsible for clearing any pending UI state). Core logic lives in startReauthForAccount.
-            startReauthForAccount(
-                allAccounts,
-                userId,
-                (provider) => void authClient.signIn.social({ provider, callbackURL: `${window.location.origin}/auth/callback` }),
-            ),
+            startReauthForAccount(allAccounts, userId, (account) => {
+                void authClient.signIn
+                    .social({
+                        provider: account.provider,
+                        callbackURL: `${window.location.origin}/auth/callback`,
+                        disableRedirect: true,
+                    })
+                    .then(({ data }) => {
+                        if (!data?.url) return;
+                        const url = new URL(data.url);
+                        if (account.provider === 'google') {
+                            // Re-login must land on the SAME account that broke. Without these,
+                            // Google silently completes as whichever account is currently signed in
+                            // to the browser — leaving the broken account still broken while the
+                            // callback announces a resolution for the wrong one.
+                            url.searchParams.set('prompt', 'select_account');
+                            url.searchParams.set('login_hint', account.email);
+                        }
+                        window.location.href = url.toString();
+                    });
+            }),
         [allAccounts],
     );
 

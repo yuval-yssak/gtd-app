@@ -8,3 +8,5 @@
 - [Merged multi-account entity labels + stranded URL ids](feedback_merged_entity_display_name_and_stranded_url_id.md) — Collapsing same-named entities: check which twin's name renders, and the hidden-account shrinking-group path.
 - [Two-tier dismissal stores (dialog over banner)](feedback_two_tier_dismissal_stores.md) — Acknowledge must key off flagged ids not the filtered render list; flagged-but-unknown account renders no warning at all.
 - [Graceful blocks drop bundled edits](feedback_graceful_block_drops_bundled_edits.md) — A new early-return guard inside a fire-and-forget mutation silently discards the editPatch riding along, when the caller already closed the editor.
+- [Self-heal "clear on success" races other flag setters](feedback_self_heal_clear_races_flag_setters.md) — Reauth flags are raised from 4+ paths; a clear added to one erases live failures from the others and re-opens dismissed dialogs.
+- [OAuth re-login can land on the wrong account](feedback_oauth_reauth_lands_on_wrong_account.md) — `reauthForUserId` omits `prompt=select_account`; callback side effects keyed on `session.user.id` then target the wrong account.

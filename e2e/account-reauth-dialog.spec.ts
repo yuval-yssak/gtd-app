@@ -69,4 +69,38 @@ test.describe('account reauth dialog', () => {
             await expect(dialog).not.toBeVisible();
         });
     });
+
+    test('re-login resolution in one tab closes the stale dialog in every other tab', async ({ browser }) => {
+        const email = `reauth-cross-tab-${dayjs().valueOf()}@example.com`;
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            await page.goto(`${CLIENT_URL}/inbox`);
+            await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+            const userId = await activeAccountId(page);
+
+            // Second tab in the same browser context — same device, its own module-level store.
+            const secondTab = await page.context().newPage();
+            await secondTab.goto(`${CLIENT_URL}/inbox`);
+            await expect(secondTab.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+
+            // The orchestrator flags the broken account in each open tab independently.
+            await flagAccountNeedsReauth(page, userId);
+            await flagAccountNeedsReauth(secondTab, userId);
+            await expect(page.getByTestId('accountReauthDialog')).toBeVisible();
+            await expect(secondTab.getByTestId('accountReauthDialog')).toBeVisible();
+
+            // Drive the SAME call auth.callback makes after a successful OAuth re-login in the
+            // first tab. The cross-tab storage broadcast must clear the second tab's dialog AND
+            // banner without a reload — and the first tab's own dialog clears synchronously.
+            await page.evaluate((id) => {
+                (window as unknown as { __gtd: { announceReauthResolved(userId: string): void } }).__gtd.announceReauthResolved(id);
+            }, userId);
+
+            await expect(page.getByTestId('accountReauthDialog')).not.toBeVisible();
+            await expect(secondTab.getByTestId('accountReauthDialog')).not.toBeVisible();
+            await expect(secondTab.getByText(`Your account ${email} needs re-login to sync.`)).toHaveCount(0);
+
+            await secondTab.close();
+        });
+    });
 });

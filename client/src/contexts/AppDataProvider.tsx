@@ -31,7 +31,7 @@ import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
-import { dispatchAccountNeedsReauth } from './accountReauthEvents';
+import { clearAccountReauthAfterSuccessfulSync, dispatchAccountNeedsReauth, isAccountFlaggedForReauth } from './accountReauthEvents';
 import { filterOutHiddenAccounts, getHiddenAccountIds, subscribeHiddenAccounts } from './hiddenAccounts';
 import { applyOverrideToItem, applyOverrideToRoutine, usePendingReassignMaps } from './PendingReassignProvider';
 import { dispatchSyncIssuesRefresh } from './syncIssuesEvents';
@@ -307,8 +307,16 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                 try {
                     const activeAcct = await getActiveAccount(db);
                     if (activeAcct?.id === userId) {
+                        // Snapshot BEFORE the pass — a success may only clear a reauth flag that
+                        // predates it; a flag raised mid-pass reports a new failure and must survive.
+                        const wasFlaggedBeforePass = isAccountFlaggedForReauth(userId);
                         await flushSyncQueue(db, { userIdFilter: userId });
                         await pullFromServer(db, userId);
+                        // This branch bypasses syncOneUser, so it must clear a stale reauth flag
+                        // itself when the pass proves the session works again.
+                        if (wasFlaggedBeforePass) {
+                            clearAccountReauthAfterSuccessfulSync(userId);
+                        }
                     } else {
                         await syncSingleUser(db, userId);
                     }

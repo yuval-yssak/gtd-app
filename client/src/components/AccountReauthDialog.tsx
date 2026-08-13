@@ -8,14 +8,10 @@ import DialogTitle from '@mui/material/DialogTitle';
 import Stack from '@mui/material/Stack';
 import type { IDBPDatabase } from 'idb';
 import { useSyncExternalStore } from 'react';
-import { acknowledgeAccountReauthDialog, ensureAccountReauthBridge, getReauthDialogUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
+import { acknowledgeAccountReauthDialog, getReauthDialogUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
 import { useAccounts } from '../hooks/useAccounts';
 import { useOnline } from '../hooks/useOnline';
 import type { MyDB } from '../types/MyDB';
-
-// Install the window→store bridge at import time so a reauth flag dispatched before first render is
-// not lost (idempotent — the banner module installs the same bridge).
-ensureAccountReauthBridge();
 
 export const UNKNOWN_ACCOUNT_LABEL = 'Unknown account';
 

@@ -8,7 +8,7 @@ function account(id: string, provider: StoredAccount['provider']): StoredAccount
 }
 
 describe('startReauthForAccount', () => {
-    it('starts sign-in with the account provider and returns true when the account is known', () => {
+    it('starts sign-in with the matching account and returns true when the account is known', () => {
         const accounts = [account('user-a', 'google'), account('user-b', 'github')];
         const startSignIn = vi.fn();
 
@@ -16,7 +16,9 @@ describe('startReauthForAccount', () => {
 
         expect(result).toBe(true);
         expect(startSignIn).toHaveBeenCalledTimes(1);
-        expect(startSignIn).toHaveBeenCalledWith('github');
+        // The whole account is handed over — the caller needs provider AND email (login_hint) so
+        // the OAuth re-login lands on the broken account, not whichever one Google has signed in.
+        expect(startSignIn).toHaveBeenCalledWith(accounts[1]);
     });
 
     it('returns false and does not sign in when the account is not known locally', () => {

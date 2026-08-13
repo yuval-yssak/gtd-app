@@ -3,15 +3,11 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import type { IDBPDatabase } from 'idb';
 import { useSyncExternalStore } from 'react';
-import { dismissAccountReauth, ensureAccountReauthBridge, getReauthFlaggedUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
+import { dismissAccountReauth, getReauthFlaggedUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
 import { useAccounts } from '../hooks/useAccounts';
 import { useOnline } from '../hooks/useOnline';
 import type { MyDB } from '../types/MyDB';
 import { staleAccountRows } from './AccountReauthDialog';
-
-// Install the window→store bridge at import time so the shared store is fed even before any banner
-// mounts (and exactly once, regardless of how many banner instances AppNav double-mounts).
-ensureAccountReauthBridge();
 
 /**
  * Surfaces accounts the sync orchestrator had to skip because they have no Better Auth multi-session

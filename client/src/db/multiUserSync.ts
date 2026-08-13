@@ -1,6 +1,6 @@
 import type { IDBPDatabase } from 'idb';
 import { BootstrapRequiredError, SyncAuthError } from '../api/syncClient';
-import { dispatchAccountNeedsReauth } from '../contexts/accountReauthEvents';
+import { clearAccountReauthAfterSuccessfulSync, dispatchAccountNeedsReauth, isAccountFlaggedForReauth } from '../contexts/accountReauthEvents';
 import { enterCase2Recovery } from '../contexts/syncRecoveryStore';
 import { authClient } from '../lib/authClient';
 import type { MyDB } from '../types/MyDB';
@@ -244,6 +244,9 @@ async function syncOneUser(
         // session-match guard passes (it reads IDB's activeAccount).
         await setActiveAccount(userId, db);
     }
+    // Snapshot BEFORE the pass: a success may only clear a reauth flag that predates it. A flag
+    // raised mid-pass (SW relay, a concurrent failing path) reports a new failure and must survive.
+    const wasFlaggedBeforePass = isAccountFlaggedForReauth(userId);
     try {
         // Probe-before-flush: a reaped device (server dropped its deviceSyncState row) with queued
         // offline ops must NOT auto-flush — the recovery dialog's push-vs-discard choice would be
@@ -257,6 +260,11 @@ async function syncOneUser(
         }
         await flushSyncQueue(db, { userIdFilter: userId });
         await pullOrBootstrap(db, userId);
+        // Sync worked, so a pre-existing reauth flag for this user is stale (e.g. the re-login
+        // happened in another tab and this tab missed the resolved broadcast) — clear it everywhere.
+        if (wasFlaggedBeforePass) {
+            clearAccountReauthAfterSuccessfulSync(userId);
+        }
     } catch (err) {
         if (err instanceof SyncAuthError) {
             console.warn(`[multi-sync] session for ${userId} expired mid-sync — flagging for reauth`);

@@ -5,6 +5,7 @@
 import type { IDBPDatabase } from 'idb';
 import { getAllSyncConfigs } from '../api/calendarApi';
 import { getPushStatus } from '../api/pushApi';
+import { announceAccountReauthResolved } from '../contexts/accountReauthEvents';
 import type { MyDB, StoredItem } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import { getOrCreateDeviceId } from './deviceId';
@@ -129,6 +130,10 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // pivots the active session before its pull — without that, only the active account gets
         // fresh data and other accounts' channels are silently missed.
         pull: () => syncAllLoggedInUsers(db),
+        // The production resolved-broadcast (same call auth.callback makes after an OAuth
+        // re-login) — exposed so e2e can drive the real cross-tab clear path, not a hand-rolled
+        // localStorage payload that could drift from the implementation.
+        announceReauthResolved: (userId: string) => announceAccountReauthResolved(userId),
 
         // ── Device + notifications introspection (used by e2e specs) ─────────
         // Stable per-device UUID — exposed so e2e tests can correlate the deviceUsers join
