@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { mergeFilterOptionsByName, resolveSelectedFilterOption } from '../lib/mergedFilterOptions';
+import {
+    filterOptionsToReferenced,
+    type MergedFilterOption,
+    mergeFilterOptionsByName,
+    resolveSelectedFilterOption,
+    sameNameIds,
+} from '../lib/mergedFilterOptions';
 
 const ctx = (_id: string, name: string) => ({ _id, name });
 
@@ -92,5 +98,42 @@ describe('resolveSelectedFilterOption', () => {
         const selected = resolveSelectedFilterOption('gone', merged, all);
         expect(selected?.option).toBeUndefined();
         expect(selected?.ids).toEqual(new Set(['gone']));
+    });
+});
+
+describe('sameNameIds', () => {
+    const all = [
+        { _id: 'a1', name: 'agenda' },
+        { _id: 'a2', name: 'Agenda ' },
+        { _id: 'b1', name: 'office' },
+    ];
+
+    it('returns the whole case/whitespace-insensitive twin group of the given id', () => {
+        expect([...sameNameIds('a1', all)].sort()).toEqual(['a1', 'a2']);
+    });
+
+    it('falls back to a singleton for an unknown id and empty for none', () => {
+        expect([...sameNameIds('ghost', all)]).toEqual(['ghost']);
+        expect(sameNameIds(undefined, all).size).toBe(0);
+    });
+});
+
+describe('filterOptionsToReferenced', () => {
+    const options: MergedFilterOption[] = [
+        { canonicalId: 'a1', name: 'agenda', ids: ['a1', 'a2'] },
+        { canonicalId: 'b1', name: 'office', ids: ['b1'] },
+        { canonicalId: 'c1', name: 'phone', ids: ['c1'] },
+    ];
+
+    it('keeps only options with at least one referenced id', () => {
+        const live = filterOptionsToReferenced(options, new Set(['a2']), undefined);
+        expect(live.map((o) => o.name)).toEqual(['agenda']);
+    });
+
+    it('always keeps the selected option, even with zero references', () => {
+        const selected = options[2];
+        if (!selected) throw new Error('expected the phone option');
+        const live = filterOptionsToReferenced(options, new Set(['b1']), selected);
+        expect(live.map((o) => o.name)).toEqual(['office', 'phone']);
     });
 });

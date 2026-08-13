@@ -32,14 +32,24 @@ import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { CollapsibleChipGroup } from '../../components/pickers/CollapsibleChipGroup';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
-import { filterItemsByQuery, itemContextTags, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
-import { type MergedFilterOption, mergeFilterOptionsByName, resolveSelectedFilterOption, type SelectedFilterOption } from '../../lib/mergedFilterOptions';
+import { omitArchived, rankMergedOptionsByUsage } from '../../lib/entityUsage';
+import { filterItemsByQuery, itemContextTags, itemPersonRefIds, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
+import {
+    filterOptionsToReferenced,
+    type MergedFilterOption,
+    mergeFilterOptionsByName,
+    resolveSelectedFilterOption,
+    type SelectedFilterOption,
+    sameNameIds,
+} from '../../lib/mergedFilterOptions';
 import { missingClarifications } from '../../lib/missingClarifications';
 import { type NextActionsUrlState, parseNextActionsSearch, TIME_FILTER_OPTIONS } from '../../lib/nextActionsUrlParams';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
@@ -85,7 +95,10 @@ export function matchesFilters(item: StoredItem, filters: NextActionsUrlState, g
     }
     if (filters.person) {
         const { personIds } = groups;
-        const matched = personIds ? item.peopleIds?.some((id) => personIds.has(id)) : item.peopleIds?.includes(filters.person);
+        // itemPersonRefIds (peopleIds + waitingForPersonId) keeps this in lockstep with the tag
+        // chips, usage ranking, and the facet pools — a chip must never appear that matches nothing.
+        const refIds = itemPersonRefIds(item);
+        const matched = personIds ? refIds.some((id) => personIds.has(id)) : refIds.includes(filters.person);
         if (!matched) {
             return false;
         }
@@ -94,7 +107,10 @@ export function matchesFilters(item: StoredItem, filters: NextActionsUrlState, g
 }
 
 interface MergedFilterChipRowProps {
+    /** Live options A→Z — the expanded view's order. */
     options: MergedFilterOption[];
+    /** The same options usage-ranked — the collapsed view's order. */
+    rankedOptions: MergedFilterOption[];
     /** The resolved active selection for this row — undefined when the row's filter is unset. */
     selected: SelectedFilterOption | undefined;
     onToggle: (option: MergedFilterOption) => void;
@@ -105,25 +121,25 @@ interface MergedFilterChipRowProps {
 
 // One row of merged filter chips (contexts or people). Active state comes from the resolved
 // selection — the same source matchesFilters uses — so an applied filter always lights its chip,
-// even when the URL holds a hidden account's twin id.
-function MergedFilterChipRow({ options, selected, onToggle, activeColor, icon, testId }: MergedFilterChipRowProps) {
+// even when the URL holds a hidden account's twin id. Long rows collapse to the most-used chips
+// behind a "+N more" expander (see CollapsibleChipGroup).
+function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activeColor, icon, testId }: MergedFilterChipRowProps) {
     if (options.length === 0) {
         return null;
     }
+    const selectedIds = selected?.option ? new Set([selected.option.canonicalId]) : new Set<string>();
     return (
-        <Stack
-            direction="row"
-            sx={{
-                flexWrap: 'wrap',
-                gap: 0.75,
-                mb: 1,
-            }}
-        >
-            {options.map((option) => {
+        <CollapsibleChipGroup
+            ranked={rankedOptions}
+            alphabetical={options}
+            selectedIds={selectedIds}
+            keyOf={(option) => option.canonicalId}
+            testId={testId}
+            sx={{ mb: 1 }}
+            renderChip={(option) => {
                 const isActive = option.canonicalId === selected?.option?.canonicalId;
                 return (
                     <Chip
-                        key={option.canonicalId}
                         {...(icon ? { icon } : {})}
                         label={option.name}
                         size="small"
@@ -133,8 +149,8 @@ function MergedFilterChipRow({ options, selected, onToggle, activeColor, icon, t
                         data-testid={testId}
                     />
                 );
-            })}
-        </Stack>
+            }}
+        />
     );
 }
 
@@ -195,10 +211,25 @@ export function RowTags({ contextTags, personTags, dueLabel }: RowTagsProps) {
     return (
         <Box component="span" className={styles.tagRow} data-testid="nextActionRowTags">
             {contextTags.map((tag) => (
-                <Chip key={`ctx-${tag.id}`} icon={<SellOutlinedIcon />} label={tag.name} size="small" variant="outlined" />
+                <Chip
+                    key={`ctx-${tag.id}`}
+                    icon={<SellOutlinedIcon />}
+                    label={tag.name}
+                    size="small"
+                    variant="outlined"
+                    className={tag.archived ? styles.archivedTag : undefined}
+                />
             ))}
             {personTags.map((tag) => (
-                <Chip key={`person-${tag.id}`} icon={<PersonOutlineIcon />} label={tag.name} size="small" color="info" variant="outlined" />
+                <Chip
+                    key={`person-${tag.id}`}
+                    icon={<PersonOutlineIcon />}
+                    label={tag.name}
+                    size="small"
+                    color="info"
+                    variant="outlined"
+                    className={tag.archived ? styles.archivedTag : undefined}
+                />
             ))}
             {dueLabel && (
                 <Typography component="span" variant="caption" color="text.secondary" className={styles.dueText}>
@@ -272,9 +303,16 @@ function NextActionsPage() {
 
     // Filter chips: same-named contexts/people across signed-in accounts collapse into one chip
     // (each account owns its own "agenda"/"computer" — duplicates are UX noise). Sorted A→Z by the
-    // merge helper; AppDataProvider keeps stored order for other pages.
-    const mergedContextOptions = useMemo(() => mergeFilterOptionsByName(workContexts), [workContexts]);
-    const mergedPersonOptions = useMemo(() => mergeFilterOptionsByName(people), [people]);
+    // merge helper; AppDataProvider keeps stored order for other pages. Archived entities are cut
+    // first — except the URL-selected id's whole same-name twin group, so the selection stays
+    // clickable AND keeps matching items tagged with an archived twin.
+    const activeContexts = useMemo(
+        () => omitArchived(workContexts, sameNameIds(urlFilters.context, allWorkContexts)),
+        [workContexts, urlFilters.context, allWorkContexts],
+    );
+    const activePeople = useMemo(() => omitArchived(people, sameNameIds(urlFilters.person, allPeople)), [people, urlFilters.person, allPeople]);
+    const mergedContextOptions = useMemo(() => mergeFilterOptionsByName(activeContexts), [activeContexts]);
+    const mergedPersonOptions = useMemo(() => mergeFilterOptionsByName(activePeople), [activePeople]);
     // The URL stores one id; the resolver expands it to the whole same-name group (via the
     // unfiltered all* sets, so a hidden account's twin id still re-attaches to the visible chip)
     // and names the active chip. Chips and matchesFilters share this — they can never disagree.
@@ -293,10 +331,35 @@ function NextActionsPage() {
 
     // Deferred query: typing re-filters in an interruptible background render (see useListSearch).
     const { deferredQuery } = search;
+    const visibleNextActions = useMemo(() => itemsWithGhosts.filter((item) => item.status === 'nextAction'), [itemsWithGhosts]);
     const nextActions = useMemo(() => {
-        const visible = itemsWithGhosts.filter((item) => item.status === 'nextAction').filter((item) => matchesFilters(item, urlFilters, filterGroups));
+        const visible = visibleNextActions.filter((item) => matchesFilters(item, urlFilters, filterGroups));
         return [...filterItemsByQuery(visible, deferredQuery)].sort(compareNextActions);
-    }, [itemsWithGhosts, urlFilters, filterGroups, deferredQuery]);
+    }, [visibleNextActions, urlFilters, filterGroups, deferredQuery]);
+
+    // Facet-style live options: each row offers only chips that still match at least one row under
+    // all the OTHER filters (a zero-result chip is noise; its own filter is excluded so switching
+    // between sibling values stays possible). The selected option is exempt inside
+    // filterOptionsToReferenced. Rows are collapsed to the most-used chips by MergedFilterChipRow.
+    const usage = useEntityUsage();
+    const referencedContextIds = useMemo(() => {
+        const pool = visibleNextActions.filter((item) => matchesFilters(item, { ...urlFilters, context: undefined }, { personIds: selectedPerson?.ids }));
+        return new Set(filterItemsByQuery(pool, deferredQuery).flatMap((item) => item.workContextIds ?? []));
+    }, [visibleNextActions, urlFilters, selectedPerson, deferredQuery]);
+    const referencedPersonIds = useMemo(() => {
+        const pool = visibleNextActions.filter((item) => matchesFilters(item, { ...urlFilters, person: undefined }, { contextIds: selectedContext?.ids }));
+        return new Set(filterItemsByQuery(pool, deferredQuery).flatMap(itemPersonRefIds));
+    }, [visibleNextActions, urlFilters, selectedContext, deferredQuery]);
+    const liveContextOptions = useMemo(
+        () => filterOptionsToReferenced(mergedContextOptions, referencedContextIds, selectedContext?.option),
+        [mergedContextOptions, referencedContextIds, selectedContext],
+    );
+    const livePersonOptions = useMemo(
+        () => filterOptionsToReferenced(mergedPersonOptions, referencedPersonIds, selectedPerson?.option),
+        [mergedPersonOptions, referencedPersonIds, selectedPerson],
+    );
+    const rankedContextOptions = useMemo(() => rankMergedOptionsByUsage(liveContextOptions, usage.contexts), [liveContextOptions, usage.contexts]);
+    const rankedPersonOptions = useMemo(() => rankMergedOptionsByUsage(livePersonOptions, usage.people), [livePersonOptions, usage.people]);
 
     async function onDone(item: StoredItem) {
         await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
@@ -339,14 +402,16 @@ function NextActionsPage() {
                 }}
             >
                 <MergedFilterChipRow
-                    options={mergedContextOptions}
+                    options={liveContextOptions}
+                    rankedOptions={rankedContextOptions}
                     selected={selectedContext}
                     onToggle={(option) => toggleMergedFilter('context', option)}
                     activeColor="primary"
                     testId="nextActionsContextFilterChip"
                 />
                 <MergedFilterChipRow
-                    options={mergedPersonOptions}
+                    options={livePersonOptions}
+                    rankedOptions={rankedPersonOptions}
                     selected={selectedPerson}
                     onToggle={(option) => toggleMergedFilter('person', option)}
                     activeColor="info"

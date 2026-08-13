@@ -6,6 +6,7 @@ export const WorkContextSnapshotSchema = z
         _id: nonEmptyString,
         user: nonEmptyString,
         name: z.string(),
+        archived: z.boolean().optional(),
         createdTs: isoDateTime,
         updatedTs: isoDateTime,
     })

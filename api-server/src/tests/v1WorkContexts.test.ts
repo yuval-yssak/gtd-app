@@ -273,3 +273,75 @@ describe('tenant isolation', () => {
         expect(((await res.json()) as { code: string }).code).toBe('forbidden_field');
     });
 });
+
+// `archived` (soft retire) is writable via POST/PATCH, returned only when set on the stored row,
+// and must survive a name-only PATCH (the `{ ...existing }` spread is load-bearing).
+describe('archived flag on /v1/work-contexts', () => {
+    async function createContext(token: string, body: Record<string, unknown>) {
+        return app.fetch(
+            new Request('http://localhost:4000/v1/work-contexts', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }),
+        );
+    }
+
+    async function patchContext(token: string, id: string, body: Record<string, unknown>) {
+        return app.fetch(
+            new Request(`http://localhost:4000/v1/work-contexts/${id}`, {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }),
+        );
+    }
+
+    it('POST accepts archived and the projection returns it; unset rows omit the key', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['contexts.write', 'contexts.read']);
+        const archivedRes = await createContext(token, { name: '@fax', archived: true });
+        expect(archivedRes.status).toBe(201);
+        expect(((await archivedRes.json()) as { archived?: boolean }).archived).toBe(true);
+
+        const plainRes = await createContext(token, { name: '@phone' });
+        expect(plainRes.status).toBe(201);
+        const plainBody = (await plainRes.json()) as { _id: string; archived?: boolean };
+        expect('archived' in plainBody).toBe(false);
+
+        const getRes = await app.fetch(
+            new Request(`http://localhost:4000/v1/work-contexts/${plainBody._id}`, { headers: { Authorization: `Bearer ${token}` } }),
+        );
+        expect('archived' in ((await getRes.json()) as Record<string, unknown>)).toBe(false);
+    });
+
+    it('an explicit archived: false round-trips as false (distinct from absent)', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['contexts.write']);
+        const res = await createContext(token, { name: '@office', archived: false });
+        expect(res.status).toBe(201);
+        expect(((await res.json()) as { archived?: boolean }).archived).toBe(false);
+    });
+
+    it('rejects a non-boolean archived with invalid_archived', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['contexts.write']);
+        const res = await createContext(token, { name: '@x', archived: 'true' });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('invalid_archived');
+    });
+
+    it('a name-only PATCH preserves archived; an archived-only PATCH preserves name', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['contexts.write']);
+        const created = (await (await createContext(token, { name: '@errands', archived: true })).json()) as { _id: string };
+
+        const renamed = await patchContext(token, created._id, { name: '@errands-by-car' });
+        expect(renamed.status).toBe(200);
+        expect((await renamed.json()) as object).toMatchObject({ name: '@errands-by-car', archived: true });
+
+        const unarchived = await patchContext(token, created._id, { archived: false });
+        expect(unarchived.status).toBe(200);
+        expect((await unarchived.json()) as object).toMatchObject({ name: '@errands-by-car', archived: false });
+    });
+});

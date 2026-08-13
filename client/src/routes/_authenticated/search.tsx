@@ -14,9 +14,12 @@ import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
+import { omitArchived } from '../../lib/entityUsage';
 import { filterItems, sortItems } from '../../lib/itemSearch';
+import { mergeFilterOptionsByName, resolveSelectedFilterOption, sameNameIds } from '../../lib/mergedFilterOptions';
 import { loadVisibleColumns, type SearchTableColumnId, saveVisibleColumns } from '../../lib/searchTableColumns';
 import { DEFAULT_URL_STATE, parseSearchParams, type SearchUrlState, type SearchView, urlStateToFilters } from '../../lib/searchUrlParams';
 import styles from './-search.module.css';
@@ -38,6 +41,7 @@ function SearchPage() {
     const navigate = useNavigate();
     useListScrollRestoration();
     const { items, people, workContexts, allPeople, allWorkContexts } = useAppData();
+    const usage = useEntityUsage();
 
     // Input mirroring, deferred filtering, and the debounced URL write all live in useListSearch —
     // the same pipeline the virtualized list pages use for their in-page search fields.
@@ -64,8 +68,37 @@ function SearchPage() {
         saveVisibleColumns(next);
     }, []);
 
+    // Same-named contexts/people across signed-in accounts collapse into one chip (mirrors the
+    // next-actions filter rows); archived entities are cut, keeping the selected id's whole twin
+    // group so the active chip stays clickable and its match set intact.
+    const mergedContextOptions = useMemo(
+        () => mergeFilterOptionsByName(omitArchived(workContexts, sameNameIds(urlState.contextId ?? undefined, allWorkContexts))),
+        [workContexts, urlState.contextId, allWorkContexts],
+    );
+    const mergedPersonOptions = useMemo(
+        () => mergeFilterOptionsByName(omitArchived(people, sameNameIds(urlState.personId ?? undefined, allPeople))),
+        [people, urlState.personId, allPeople],
+    );
+    const selectedContext = useMemo(
+        () => resolveSelectedFilterOption(urlState.contextId ?? undefined, mergedContextOptions, allWorkContexts),
+        [urlState.contextId, mergedContextOptions, allWorkContexts],
+    );
+    const selectedPerson = useMemo(
+        () => resolveSelectedFilterOption(urlState.personId ?? undefined, mergedPersonOptions, allPeople),
+        [urlState.personId, mergedPersonOptions, allPeople],
+    );
+
     // Query comes from the deferred input (see above) — the other filters still read the URL.
-    const filters = useMemo(() => ({ ...urlStateToFilters(urlState), query: deferredQuery }), [urlState, deferredQuery]);
+    // The selected chip's twin-group id sets ride along so filterItems matches either account's twin.
+    const filters = useMemo(
+        () => ({
+            ...urlStateToFilters(urlState),
+            query: deferredQuery,
+            ...(selectedContext ? { contextIds: selectedContext.ids } : {}),
+            ...(selectedPerson ? { personIds: selectedPerson.ids } : {}),
+        }),
+        [urlState, deferredQuery, selectedContext, selectedPerson],
+    );
     const activeStatuses = filters.statuses;
     const filtered = useMemo(() => sortItems(filterItems(items, filters), 'updatedTs', 'desc'), [items, filters]);
 
@@ -97,8 +130,11 @@ function SearchPage() {
                 onQueryInputChange={setQueryInput}
                 onUrlStateChange={updateUrlState}
                 onReset={resetFilters}
-                people={people}
-                workContexts={workContexts}
+                contextOptions={mergedContextOptions}
+                personOptions={mergedPersonOptions}
+                selectedContext={selectedContext}
+                selectedPerson={selectedPerson}
+                usage={usage}
                 activeStatuses={activeStatuses}
             />
             <Box className={styles.viewRow}>

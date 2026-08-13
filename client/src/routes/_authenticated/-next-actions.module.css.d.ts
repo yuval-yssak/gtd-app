@@ -1,5 +1,6 @@
 declare const styles: {
     readonly actionButtons: string;
+    readonly archivedTag: string;
     readonly countChip: string;
     readonly dueText: string;
     readonly item: string;

@@ -184,6 +184,8 @@ export interface StoredPerson {
     phone?: string;
     externalCalendarId?: string;
     notes?: string;
+    /** Retired from active use: hidden from pickers/filter rows; existing references stay intact. Absent ⇒ active. */
+    archived?: boolean;
     createdTs: string;
     updatedTs: string;
 }
@@ -192,6 +194,8 @@ export interface StoredWorkContext {
     _id: string;
     userId: string;
     name: string; // e.g. "near a phone", "at work", "with family"
+    /** Retired from active use: hidden from pickers/filter rows; existing references stay intact. Absent ⇒ active. */
+    archived?: boolean;
     createdTs: string;
     updatedTs: string;
 }

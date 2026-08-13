@@ -33,21 +33,23 @@ type PersonTextFields = {
     name: string;
     email: string;
     phone: string;
+    notes: string;
 };
 
 function textFieldsOf(person: StoredPerson): PersonTextFields {
-    return { name: person.name, email: person.email ?? '', phone: person.phone ?? '' };
+    return { name: person.name, email: person.email ?? '', phone: person.phone ?? '', notes: person.notes ?? '' };
 }
 
-/** Overlays the edited text fields on the live person row. Blank email/phone omit the key —
+/** Overlays the edited text fields on the live person row. Blank email/phone/notes omit the key —
  *  exactOptionalPropertyTypes + the op validator's NonEmptyString rule both forbid ''. */
 function applyTextFields(base: StoredPerson, fields: PersonTextFields): StoredPerson {
-    const { email: _e, phone: _p, ...rest } = base;
+    const { email: _e, phone: _p, notes: _n, ...rest } = base;
     return {
         ...rest,
         name: fields.name.trim(),
         ...(fields.email.trim() ? { email: fields.email.trim() } : {}),
         ...(fields.phone.trim() ? { phone: fields.phone.trim() } : {}),
+        ...(fields.notes.trim() ? { notes: fields.notes.trim() } : {}),
     };
 }
 
@@ -177,6 +179,17 @@ export function PersonEditDialog({ db, person, showAccountPicker = false, onClos
                         onBlur={() => void autosave.flush()}
                         fullWidth
                         data-testid="personEditPhone"
+                    />
+                    <TextField
+                        label="Notes"
+                        value={form.notes}
+                        onChange={(e) => onFieldChange('notes', e.target.value)}
+                        onBlur={() => void autosave.flush()}
+                        fullWidth
+                        multiline
+                        minRows={3}
+                        helperText="Markdown supported"
+                        data-testid="personEditNotes"
                     />
                     {showPicker && <AccountPicker value={livePerson.userId} onChange={(v) => void onOwnerPicked(v)} />}
                 </Box>

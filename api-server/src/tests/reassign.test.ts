@@ -491,6 +491,28 @@ describe('POST /sync/reassign', () => {
             expect(movedItem?.peopleIds).toEqual([bobSam._id]);
         });
 
+        it('mirrors the archived flag — an archived person/context must not resurrect as active under toUserId', async () => {
+            const alice = await seedUserSession('alice@example.com');
+            const bob = await seedUserSession('bob@example.com');
+            const parkedPerson = makePerson(alice.userId, { name: 'Retired Rita', archived: true });
+            await peopleDAO.insertOne(parkedPerson);
+            const parkedContext = makeWorkContext(alice.userId, { name: '@fax machine', archived: true });
+            await workContextsDAO.insertOne(parkedContext);
+            const item = makeItem(alice.userId, { status: 'nextAction', peopleIds: [parkedPerson._id], workContextIds: [parkedContext._id] });
+            await itemsDAO.insertOne(item);
+
+            const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const res = await postReassign(cookie, { entityType: 'item', entityId: item._id, fromUserId: alice.userId, toUserId: bob.userId });
+
+            expect(res.status).toBe(200);
+            const [bobRita] = await peopleDAO.findArray({ user: bob.userId });
+            if (!bobRita) throw new Error('expected one mirror person under bob');
+            expect(bobRita.archived).toBe(true);
+            const [bobFax] = await workContextsDAO.findArray({ user: bob.userId });
+            if (!bobFax) throw new Error('expected one mirror context under bob');
+            expect(bobFax.archived).toBe(true);
+        });
+
         it('reuses an existing person under toUserId when emails match exactly, no mirror created', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');

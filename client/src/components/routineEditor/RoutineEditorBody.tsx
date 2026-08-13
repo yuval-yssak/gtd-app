@@ -37,7 +37,9 @@ import { createRoutine, updateRoutine } from '../../db/routineMutations';
 import { splitRoutine } from '../../db/routineSplit';
 import { useAutosave } from '../../hooks/useAutosave';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
+import { omitArchived, rankByUsage, type UsageIndex } from '../../lib/entityUsage';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { computeSplitDate, routineHasPastItems, stripEndClauses } from '../../lib/routineSplitUtils';
 import { deriveRecurrenceAnchor, RruleExhaustedError } from '../../lib/rruleUtils';
@@ -50,6 +52,7 @@ import type { ItemEditorChrome } from '../editItemDialogLogic';
 import { mergeFormGroup } from '../itemEditor/itemEditorLiveMerge';
 import { NotesSection } from '../itemEditor/NotesSection';
 import { ReassignInFlightInline } from '../itemEditor/ReassignInFlightInline';
+import { CollapsibleChipGroup } from '../pickers/CollapsibleChipGroup';
 import { FrequencyPicker } from '../routines/FrequencyPicker';
 import { isCalendarScheduleChanged, isNextActionScheduleChanged, isStartDateChanged } from '../routines/routineEditDecision';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
@@ -812,13 +815,19 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
 
     // Picker options scoped to the owner account: the merged multi-account sets would otherwise
     // offer another account's identically-named contexts/people — duplicate "anywhere" chips —
-    // and allow cross-account tagging on the routine template.
+    // and allow cross-account tagging on the routine template. Archived entities are hidden,
+    // except ids the template already carries (they must stay removable).
+    const entityUsage = useEntityUsage();
     const pickerWorkContexts = useMemo(
-        () => scopeOptionsToOwner(workContexts, { ownerUserId, assignedIds: form.workContextIds, allOptions: allWorkContexts }),
+        () =>
+            omitArchived(
+                scopeOptionsToOwner(workContexts, { ownerUserId, assignedIds: form.workContextIds, allOptions: allWorkContexts }),
+                new Set(form.workContextIds),
+            ),
         [workContexts, ownerUserId, form.workContextIds, allWorkContexts],
     );
     const pickerPeople = useMemo(
-        () => scopeOptionsToOwner(people, { ownerUserId, assignedIds: form.peopleIds, allOptions: allPeople }),
+        () => omitArchived(scopeOptionsToOwner(people, { ownerUserId, assignedIds: form.peopleIds, allOptions: allPeople }), new Set(form.peopleIds)),
         [people, ownerUserId, form.peopleIds, allPeople],
     );
 
@@ -1140,6 +1149,7 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                     form={form}
                     workContexts={pickerWorkContexts}
                     people={pickerPeople}
+                    usage={entityUsage}
                     onPatch={patch}
                     onToggleWorkContext={toggleWorkContext}
                     onTogglePerson={togglePerson}
@@ -1357,12 +1367,22 @@ interface TemplateFieldsProps {
     form: FormState;
     workContexts: StoredWorkContext[];
     people: StoredPerson[];
+    /** Ranks the chip clouds most-used-first and drives their collapse (see CollapsibleChipGroup). */
+    usage: UsageIndex;
     onPatch: (patch: Partial<FormState>) => void;
     onToggleWorkContext: (id: string) => void;
     onTogglePerson: (id: string) => void;
 }
 
-function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkContext, onTogglePerson }: TemplateFieldsProps) {
+function TemplateFields({ form, workContexts, people, usage, onPatch, onToggleWorkContext, onTogglePerson }: TemplateFieldsProps) {
+    // Memoized like NextActionFields — without these every keystroke in the surrounding form
+    // re-sorts both chip clouds.
+    const rankedContexts = useMemo(() => rankByUsage(workContexts, usage.contexts), [workContexts, usage.contexts]);
+    const alphabeticalContexts = useMemo(() => sortByName(workContexts), [workContexts]);
+    const rankedPeople = useMemo(() => rankByUsage(people, usage.people), [people, usage.people]);
+    const alphabeticalPeople = useMemo(() => sortByName(people), [people]);
+    const selectedContextIds = useMemo(() => new Set(form.workContextIds), [form.workContextIds]);
+    const selectedPeopleIds = useMemo(() => new Set(form.peopleIds), [form.peopleIds]);
     return (
         <Stack
             sx={{
@@ -1390,17 +1410,15 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                             Work contexts
                         </Typography>
                     </FormLabel>
-                    <Stack
-                        direction="row"
-                        sx={{
-                            flexWrap: 'wrap',
-                            gap: 0.75,
-                            mt: 0.5,
-                        }}
-                    >
-                        {sortByName(workContexts).map((ctx) => (
+                    <CollapsibleChipGroup
+                        ranked={rankedContexts}
+                        alphabetical={alphabeticalContexts}
+                        selectedIds={selectedContextIds}
+                        keyOf={(ctx) => ctx._id}
+                        testId="routineTemplateWorkContextChip"
+                        sx={{ mt: 0.5 }}
+                        renderChip={(ctx) => (
                             <Chip
-                                key={ctx._id}
                                 label={ctx.name}
                                 data-testid="routineTemplateWorkContextChip"
                                 size="small"
@@ -1408,8 +1426,8 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                                 color={form.workContextIds.includes(ctx._id) ? 'primary' : 'default'}
                                 onClick={() => onToggleWorkContext(ctx._id)}
                             />
-                        ))}
-                    </Stack>
+                        )}
+                    />
                 </Box>
             )}
             {people.length > 0 && (
@@ -1424,17 +1442,15 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                             People
                         </Typography>
                     </FormLabel>
-                    <Stack
-                        direction="row"
-                        sx={{
-                            flexWrap: 'wrap',
-                            gap: 0.75,
-                            mt: 0.5,
-                        }}
-                    >
-                        {sortByName(people).map((p) => (
+                    <CollapsibleChipGroup
+                        ranked={rankedPeople}
+                        alphabetical={alphabeticalPeople}
+                        selectedIds={selectedPeopleIds}
+                        keyOf={(p) => p._id}
+                        testId="routineTemplatePersonChip"
+                        sx={{ mt: 0.5 }}
+                        renderChip={(p) => (
                             <Chip
-                                key={p._id}
                                 label={p.name}
                                 data-testid="routineTemplatePersonChip"
                                 size="small"
@@ -1442,8 +1458,8 @@ function TemplateFields({ form, workContexts, people, onPatch, onToggleWorkConte
                                 color={form.peopleIds.includes(p._id) ? 'primary' : 'default'}
                                 onClick={() => onTogglePerson(p._id)}
                             />
-                        ))}
-                    </Stack>
+                        )}
+                    />
                 </Box>
             )}
             <Box>

@@ -748,10 +748,13 @@ async function createPersonForUser(source: PersonInterface, ctx: RelinkContext):
         user: ctx.toUserId,
         name: source.name,
         // Mirror only display fields — never copy `_id`, `user`, or timestamps from the source row.
+        // `archived` carries over deliberately: mirroring an archived person as active would
+        // resurrect them into the recipient's pickers.
         ...(source.email !== undefined ? { email: source.email } : {}),
         ...(source.phone !== undefined ? { phone: source.phone } : {}),
         ...(source.externalCalendarId !== undefined ? { externalCalendarId: source.externalCalendarId } : {}),
         ...(source.notes !== undefined ? { notes: source.notes } : {}),
+        ...(source.archived !== undefined ? { archived: source.archived } : {}),
         createdTs: ctx.now,
         updatedTs: ctx.now,
     };
@@ -800,6 +803,9 @@ async function createWorkContextForUser(source: WorkContextInterface, ctx: Relin
         _id: newId,
         user: ctx.toUserId,
         name: source.name,
+        // Mirror the archive state — an archived context must not resurrect as active in the
+        // recipient's pickers.
+        ...(source.archived !== undefined ? { archived: source.archived } : {}),
         createdTs: ctx.now,
         updatedTs: ctx.now,
     };

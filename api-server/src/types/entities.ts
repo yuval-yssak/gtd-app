@@ -390,6 +390,13 @@ export interface PersonInterface {
      */
     externalCalendarId?: string;
     notes?: string;
+    /**
+     * Retired from active use: hidden from pickers and filter rows in the client, but existing
+     * item references stay intact and render. Absent ⇒ active. Full-snapshot LWW: a client that
+     * omits this field on an update clears it, so pre-`archived` client builds unarchive on any
+     * edit — acceptable because the flag is purely a display filter.
+     */
+    archived?: boolean;
     createdTs: string;
     updatedTs: string;
 }
@@ -401,6 +408,13 @@ export interface WorkContextInterface {
      * Human-readable label, e.g. "near a phone", "at work", "with family", "focused at laptop".
      */
     name: string;
+    /**
+     * Retired from active use: hidden from pickers and filter rows in the client, but existing
+     * item references stay intact and render. Absent ⇒ active. Full-snapshot LWW: a client that
+     * omits this field on an update clears it, so pre-`archived` client builds unarchive on any
+     * edit — acceptable because the flag is purely a display filter.
+     */
+    archived?: boolean;
     createdTs: string;
     updatedTs: string;
 }

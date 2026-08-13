@@ -323,14 +323,16 @@ Status transitions are no longer restricted to `inbox` as the source — any mat
 
 Catalogues of the user's contacts and work-context tags. Pagination and `since` semantics mirror `GET /v1/items`. All endpoints scrub the internal `user` field from responses.
 
+Both entity types carry an optional `archived: boolean` (soft retire: the app hides archived entries from pickers and filter rows while existing item references keep rendering). It is writable here and via the batch endpoint, and returned in responses only when set on the stored row.
+
 | Method | Path | Scope | Notes |
 |---|---|---|---|
-| `POST` | `/v1/people` | `people.write` | Body: `{ name, email?, phone?, externalCalendarId?, notes? }`. Returns 201. Server-managed fields (`_id`, `user`, `createdTs`, `updatedTs`) rejected with `forbidden_field`. |
+| `POST` | `/v1/people` | `people.write` | Body: `{ name, email?, phone?, externalCalendarId?, notes?, archived? }`. Returns 201. Server-managed fields (`_id`, `user`, `createdTs`, `updatedTs`) rejected with `forbidden_field`. |
 | `GET` | `/v1/people` | `people.read` | `?limit=` (default 100, max 500), `?cursor=`, `?since=ISODateTime`. |
 | `GET` | `/v1/people/:id` | `people.read` | 404 if missing or not yours. |
 | `PATCH` | `/v1/people/:id` | `people.write` | Same allowlist as POST. Empty body → `400 empty_body`. |
 | `DELETE` | `/v1/people/:id` | `people.write` | Idempotent: missing row returns 200 with `alreadyDeleted: true`. **Does not cascade** — references from items (`peopleIds`, `waitingForPersonId`) are left dangling and the client renders them as missing. |
-| `POST` | `/v1/work-contexts` | `contexts.write` | Body: `{ name }`. Otherwise mirrors `/v1/people`. |
+| `POST` | `/v1/work-contexts` | `contexts.write` | Body: `{ name, archived? }`. Otherwise mirrors `/v1/people`. |
 | `GET` | `/v1/work-contexts` | `contexts.read` | Same pagination shape. |
 | `GET` | `/v1/work-contexts/:id` | `contexts.read` | |
 | `PATCH` | `/v1/work-contexts/:id` | `contexts.write` | |
@@ -372,7 +374,7 @@ This is the bearer-token analog of `/sync/reassign`'s device-multi-session check
 **People and workContexts are not reassignable.** When the moved item/routine carries `peopleIds`, `workContextIds`, or `waitingForPersonId`, the server resolves each ref into the recipient's account:
 
 1. Reuse an existing record where it can — person matched email-first then name (both exact, case-sensitive); workContext matched by exact, case-sensitive name.
-2. Otherwise, create a new mirror record under the recipient with the source row's display fields (`name`, plus `email`/`phone`/`notes`/`externalCalendarId` for people).
+2. Otherwise, create a new mirror record under the recipient with the source row's display fields (`name` and `archived`, plus `email`/`phone`/`notes`/`externalCalendarId` for people).
 
 The source user's people and workContexts are never modified or deleted by a reassign — they keep their address book and context list intact. Stale ids (refs pointing at records the source user no longer owns) are passed through unchanged.
 

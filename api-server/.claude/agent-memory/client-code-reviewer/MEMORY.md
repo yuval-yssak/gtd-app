@@ -2,3 +2,6 @@
 - [ItemEditorBody page-mode parity gap](feedback_item_editor_page_mode_parity.md) — Page route mounts ItemEditorBody directly (bypasses useItemEditor) — new optional props/Snackbars are easy to forget on /item/$itemId.
 - [Snackbar host vs teardown lifecycle](feedback_snackbar_host_lifecycle.md) — Per-route Snackbars vanish when the save success path unmounts the host (page route navigate, wizard last-step done). useItemEditor surfaces are immune; route/wizard surfaces are not.
 - [Status-field strip scattered across paths](feedback_status_field_strip_scattered.md) — clarifyTo*/apply*Form each hand-roll a strip list; fixes hit one path & miss siblings, leaking matrix-disallowed fields that jam /sync/push.
+- [Person ref expansion forgotten](feedback_person_ref_expansion_forgotten.md) — New "ids referenced by an item" code ships with peopleIds only, silently dropping waitingForPersonId.
+- [Collapse state vs shrinking lists](feedback_collapse_state_vs_shrinking_lists.md) — Local expanded state + a newly-dynamic option list leaves a nonsense "show fewer" control; invariant comments go stale.
+- [Stale row snapshot write-back](feedback_stale_row_snapshot_write_back.md) — Row quick-actions spread the rendered entity into a full-snapshot LWW update, reverting concurrent remote edits; dialogs use a live ref.

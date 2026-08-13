@@ -1,3 +1,4 @@
+- ["Read-only on /v1" fields still need a write-path audit](project_read_only_field_write_path_gaps.md) — snapshot replace means reassign mirror-create + /v1/operations/batch silently drop/expose the field regardless of PATCH allowlists.
 - [Routine items have NO GCal-side anchor](project_routine_items_have_no_gcal_side_anchor.md) — inbound exception-apply stamps only updatedTs, so "local newer than Google" is permanently true for them. Unsound sweeps.
 - [Mutate a new fence before trusting it](feedback_run_fence_mutation_before_trusting_it.md) — "the fence fixed the other suite" = red flag; flip it to `false` per code path and re-run.
 - [Fake providers must expose every reachable method](feedback_fake_provider_must_expose_every_reachable_method.md) — a skip test asserting not.toHaveBeenCalled() is vacuous if the guard reroutes to an unmocked method.

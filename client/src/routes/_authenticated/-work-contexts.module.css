@@ -24,12 +24,17 @@
     vertical-align: middle;
 }
 
-/* pr: 10 — widened to accommodate two icon buttons in secondaryAction */
+/* widened to accommodate three icon buttons in secondaryAction (edit / archive / delete) */
 .listItemText {
-    padding-right: 5rem;
+    padding-right: 7rem;
 }
 
 /* mt: 1 — adds breathing room below the dialog title */
 .nameField {
     margin-top: 0.5rem;
+}
+
+/* Archived rows read as parked, not active */
+.archivedName {
+    opacity: 0.55;
 }

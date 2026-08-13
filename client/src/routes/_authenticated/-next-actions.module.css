@@ -46,3 +46,8 @@
 .dueText {
     margin-left: 0.25rem;
 }
+
+/* Tag chip whose referenced context/person is archived — present but visually parked */
+.archivedTag {
+    opacity: 0.55;
+}

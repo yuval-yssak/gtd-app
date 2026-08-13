@@ -51,6 +51,36 @@ export function mergeFilterOptionsByName<T extends { _id: string; name: string }
 }
 
 /**
+ * Ids of every entity sharing the given id's (case-insensitive, trimmed) name — the twin group a
+ * single stored filter id stands for. Used as the keep-set when cutting archived entities from a
+ * filter row: dropping an archived twin from the pool would silently narrow the merged option's
+ * match set. Unknown ids fall back to a singleton set; no id ⇒ empty set.
+ */
+export function sameNameIds(selectedId: string | undefined, allOptions: { _id: string; name: string }[]): ReadonlySet<string> {
+    if (!selectedId) {
+        return new Set();
+    }
+    const selectedName = allOptions.find((option) => option._id === selectedId)?.name;
+    if (selectedName === undefined) {
+        return new Set([selectedId]);
+    }
+    return new Set(allOptions.filter((option) => nameKey(option.name) === nameKey(selectedName)).map((option) => option._id));
+}
+
+/**
+ * Live-facet cut of a filter row: only options actually referenced by the given ids survive —
+ * a chip matching zero currently-visible items is pure noise. The active selection is exempt
+ * (it must stay clickable to clear the filter even when it just filtered itself to zero rows).
+ */
+export function filterOptionsToReferenced(
+    options: MergedFilterOption[],
+    referencedIds: ReadonlySet<string>,
+    selected: MergedFilterOption | undefined,
+): MergedFilterOption[] {
+    return options.filter((option) => option.canonicalId === selected?.canonicalId || option.ids.some((id) => referencedIds.has(id)));
+}
+
+/**
  * Resolves the URL's single stored id to the active merged chip and its matching id set. A deep
  * link may carry any twin's id, and the id's owner account may since have been visibility-hidden
  * (its entities absent from `merged`) — in that case the id's name, resolved via the unfiltered

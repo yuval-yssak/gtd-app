@@ -10,6 +10,7 @@ export const PersonSnapshotSchema = z
         phone: z.string().optional(),
         externalCalendarId: nonEmptyString.optional(),
         notes: z.string().optional(),
+        archived: z.boolean().optional(),
         createdTs: isoDateTime,
         updatedTs: isoDateTime,
     })

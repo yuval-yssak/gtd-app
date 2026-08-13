@@ -7,15 +7,21 @@ export interface PublicPersonView {
     phone?: string;
     externalCalendarId?: string;
     notes?: string;
+    archived?: boolean;
     createdTs: string;
     updatedTs: string;
 }
 
 export function presentPerson(p: PersonInterface): PublicPersonView {
-    const view: PublicPersonView = { _id: p._id, name: p.name, createdTs: p.createdTs, updatedTs: p.updatedTs };
-    if (p.email !== undefined) view.email = p.email;
-    if (p.phone !== undefined) view.phone = p.phone;
-    if (p.externalCalendarId !== undefined) view.externalCalendarId = p.externalCalendarId;
-    if (p.notes !== undefined) view.notes = p.notes;
-    return view;
+    return {
+        _id: p._id,
+        name: p.name,
+        ...(p.email !== undefined ? { email: p.email } : {}),
+        ...(p.phone !== undefined ? { phone: p.phone } : {}),
+        ...(p.externalCalendarId !== undefined ? { externalCalendarId: p.externalCalendarId } : {}),
+        ...(p.notes !== undefined ? { notes: p.notes } : {}),
+        ...(p.archived !== undefined ? { archived: p.archived } : {}),
+        createdTs: p.createdTs,
+        updatedTs: p.updatedTs,
+    };
 }

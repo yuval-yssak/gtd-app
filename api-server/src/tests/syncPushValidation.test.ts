@@ -26,6 +26,8 @@ beforeEach(async () => {
         db.collection('account').deleteMany({}),
         db.collection('items').deleteMany({}),
         db.collection('routines').deleteMany({}),
+        db.collection('people').deleteMany({}),
+        db.collection('workContexts').deleteMany({}),
         db.collection('operations').deleteMany({}),
         db.collection('webhookSubscriptions').deleteMany({}),
         db.collection('webhookDeliveries').deleteMany({}),
@@ -416,5 +418,102 @@ describe('POST /sync/push — webhook fan-out', () => {
         }
         const count = await db.collection('webhookDeliveries').countDocuments({ subscriptionId: 'sub-sync-push' });
         expect(count).toBeGreaterThanOrEqual(1);
+    });
+});
+
+// `archived` is the client-driven retire flag on catalogue entities (contexts/people). The strict
+// snapshot schemas must accept it or every flush from an updated client 400-jams the device queue
+// (same failure mode as the routine-schema jam) — this is the superset guarantee under test.
+describe('POST /sync/push — archived flag on workContext and person snapshots', () => {
+    it('accepts and persists archived: true on both entity types', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const contextId = crypto.randomUUID();
+        const personId = crypto.randomUUID();
+        const ts = '2026-08-10T10:00:00.000Z';
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('workContext', contextId, 'create', {
+                _id: contextId,
+                user: userId,
+                name: '@fax machine',
+                archived: true,
+                createdTs: ts,
+                updatedTs: ts,
+            }),
+            makeClientOp('person', personId, 'create', {
+                _id: personId,
+                user: userId,
+                name: 'Former Colleague',
+                notes: 'left the company',
+                archived: true,
+                createdTs: ts,
+                updatedTs: ts,
+            }),
+        ]);
+
+        expect(res.status).toBe(200);
+        const storedContext = await db.collection<{ archived?: boolean }>('workContexts').findOne({ _id: contextId } as never);
+        expect(storedContext?.archived).toBe(true);
+        const storedPerson = await db.collection<{ archived?: boolean; notes?: string }>('people').findOne({ _id: personId } as never);
+        expect(storedPerson?.archived).toBe(true);
+        expect(storedPerson?.notes).toBe('left the company');
+    });
+
+    it('round-trips an unarchive (archived flag dropped on update)', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const contextId = crypto.randomUUID();
+        const ts = '2026-08-10T10:00:00.000Z';
+
+        const created = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('workContext', contextId, 'create', { _id: contextId, user: userId, name: '@office', archived: true, createdTs: ts, updatedTs: ts }),
+        ]);
+        expect(created.status).toBe(200);
+
+        const updated = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('workContext', contextId, 'update', {
+                _id: contextId,
+                user: userId,
+                name: '@office',
+                createdTs: ts,
+                updatedTs: '2026-08-10T11:00:00.000Z',
+            }),
+        ]);
+        expect(updated.status).toBe(200);
+        const stored = await db.collection<{ archived?: boolean }>('workContexts').findOne({ _id: contextId } as never);
+        expect(stored?.archived).toBeUndefined();
+    });
+});
+
+// archived edge shapes: explicit `false` is a distinct stored state from "absent", and a
+// non-boolean must 400 (a truthy string would read as archived-forever to every client check).
+describe('POST /sync/push — archived value validation', () => {
+    it('persists an explicit archived: false', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const contextId = crypto.randomUUID();
+        const ts = '2026-08-13T10:00:00.000Z';
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('workContext', contextId, 'create', { _id: contextId, user: userId, name: '@office', archived: false, createdTs: ts, updatedTs: ts }),
+        ]);
+        expect(res.status).toBe(200);
+        const stored = await db.collection<{ archived?: boolean }>('workContexts').findOne({ _id: contextId } as never);
+        expect(stored?.archived).toBe(false);
+    });
+
+    it('rejects a non-boolean archived with a 400', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const contextId = crypto.randomUUID();
+        const ts = '2026-08-13T10:00:00.000Z';
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('workContext', contextId, 'create', { _id: contextId, user: userId, name: '@office', archived: 'true', createdTs: ts, updatedTs: ts }),
+        ]);
+        expect(res.status).toBe(400);
+        const stored = await db.collection('workContexts').findOne({ _id: contextId } as never);
+        expect(stored).toBeNull();
     });
 });

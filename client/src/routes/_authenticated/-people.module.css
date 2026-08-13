@@ -24,9 +24,9 @@
     vertical-align: middle;
 }
 
-/* pr: 10 — widened to accommodate two icon buttons in secondaryAction */
+/* widened to accommodate three icon buttons in secondaryAction (edit / archive / delete) */
 .listItemText {
-    padding-right: 5rem;
+    padding-right: 7rem;
 }
 
 .personForm {
@@ -34,4 +34,18 @@
     flex-direction: column;
     gap: 1rem;
     padding-top: 0.5rem;
+}
+
+/* Archived rows read as parked, not active */
+.archivedName {
+    opacity: 0.55;
+}
+
+/* Single-line notes snippet under the contact line */
+.notesSnippet {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 40rem;
 }

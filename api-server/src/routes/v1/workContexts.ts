@@ -86,14 +86,20 @@ function buildFilter(userId: string, query: ListQuery): CursorFilter {
 
 // Same allowlist for POST and PATCH — `_id`, `user`, `createdTs`, `updatedTs` are server-managed
 // and rejected with `forbidden_field` rather than silently dropped.
-const ALLOWED_FIELDS = new Set(['name']);
+const ALLOWED_FIELDS = new Set(['name', 'archived']);
 
 interface CreateBody {
     name?: unknown;
+    archived?: unknown;
     [key: string]: unknown;
 }
 
-type CreateError = { status: 400; code: 'invalid_body' | 'invalid_name' | 'forbidden_field'; message: string };
+type ParseError = { status: 400; code: 'invalid_body' | 'empty_body' | 'invalid_name' | 'invalid_archived' | 'forbidden_field'; message: string };
+
+interface ParsedContextFields {
+    name?: string;
+    archived?: boolean;
+}
 
 function assertAllowedKeys(raw: object): { ok: true } | { ok: false; offending: string } {
     for (const key of Object.keys(raw)) {
@@ -104,29 +110,26 @@ function assertAllowedKeys(raw: object): { ok: true } | { ok: false; offending: 
     return { ok: true };
 }
 
+/** Validates the optional fields shared by POST and PATCH. Pure. */
+function parseContextFields(raw: CreateBody): { ok: true; value: ParsedContextFields } | { ok: false; error: ParseError } {
+    const value: ParsedContextFields = {};
+    if (raw.name !== undefined) {
+        if (typeof raw.name !== 'string' || raw.name.trim() === '') {
+            return { ok: false, error: { status: 400, code: 'invalid_name', message: 'name must be a non-empty string' } };
+        }
+        value.name = raw.name.trim();
+    }
+    if (raw.archived !== undefined) {
+        if (typeof raw.archived !== 'boolean') {
+            return { ok: false, error: { status: 400, code: 'invalid_archived', message: 'archived must be a boolean' } };
+        }
+        value.archived = raw.archived;
+    }
+    return { ok: true, value };
+}
+
 /** Validates the create body. Pure. */
-function parseCreateBody(raw: CreateBody | null): { ok: true; name: string } | { ok: false; error: CreateError } {
-    if (!raw || typeof raw !== 'object') {
-        return { ok: false, error: { status: 400, code: 'invalid_body', message: 'request body must be a JSON object' } };
-    }
-    const allowed = assertAllowedKeys(raw);
-    if (!allowed.ok) {
-        return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${allowed.offending}" cannot be set via the public API` } };
-    }
-    if (typeof raw.name !== 'string' || raw.name.trim() === '') {
-        return { ok: false, error: { status: 400, code: 'invalid_name', message: 'name must be a non-empty string' } };
-    }
-    return { ok: true, name: raw.name.trim() };
-}
-
-interface PatchBody {
-    name?: unknown;
-    [key: string]: unknown;
-}
-
-type PatchError = { status: 400; code: 'invalid_body' | 'empty_body' | 'invalid_name' | 'forbidden_field'; message: string };
-
-function parsePatchBody(raw: PatchBody | null): { ok: true; name: string } | { ok: false; error: PatchError } {
+function parseCreateBody(raw: CreateBody | null): { ok: true; value: ParsedContextFields & { name: string } } | { ok: false; error: ParseError } {
     if (!raw || typeof raw !== 'object') {
         return { ok: false, error: { status: 400, code: 'invalid_body', message: 'request body must be a JSON object' } };
     }
@@ -135,12 +138,31 @@ function parsePatchBody(raw: PatchBody | null): { ok: true; name: string } | { o
         return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${allowed.offending}" cannot be set via the public API` } };
     }
     if (raw.name === undefined) {
-        return { ok: false, error: { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' } };
-    }
-    if (typeof raw.name !== 'string' || raw.name.trim() === '') {
         return { ok: false, error: { status: 400, code: 'invalid_name', message: 'name must be a non-empty string' } };
     }
-    return { ok: true, name: raw.name.trim() };
+    const parsed = parseContextFields(raw);
+    if (!parsed.ok) {
+        return parsed;
+    }
+    // parseContextFields validated raw.name (present per the precondition above) as non-empty.
+    if (parsed.value.name === undefined) {
+        throw new Error('parseContextFields invariant: name should be set after the precondition check');
+    }
+    return { ok: true, value: { ...parsed.value, name: parsed.value.name } };
+}
+
+function parsePatchBody(raw: CreateBody | null): { ok: true; value: ParsedContextFields } | { ok: false; error: ParseError } {
+    if (!raw || typeof raw !== 'object') {
+        return { ok: false, error: { status: 400, code: 'invalid_body', message: 'request body must be a JSON object' } };
+    }
+    const allowed = assertAllowedKeys(raw);
+    if (!allowed.ok) {
+        return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${allowed.offending}" cannot be set via the public API` } };
+    }
+    if (Object.keys(raw).length === 0) {
+        return { ok: false, error: { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' } };
+    }
+    return parseContextFields(raw);
 }
 
 export const v1WorkContextsRoutes = new Hono<{ Variables: BearerVariables }>()
@@ -156,7 +178,14 @@ export const v1WorkContextsRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json({ error: parsed.error.message, code: parsed.error.code }, parsed.error.status);
         }
         const now = dayjs().toISOString();
-        const snapshot: WorkContextInterface = { _id: randomUUID(), user: userId, name: parsed.name, createdTs: now, updatedTs: now };
+        const snapshot: WorkContextInterface = {
+            _id: randomUUID(),
+            user: userId,
+            name: parsed.value.name,
+            ...(parsed.value.archived !== undefined ? { archived: parsed.value.archived } : {}),
+            createdTs: now,
+            updatedTs: now,
+        };
         await applyAndPublishOperation(
             userId,
             { entityType: 'workContext', opType: 'create', entityId: snapshot._id, snapshot },
@@ -196,7 +225,7 @@ export const v1WorkContextsRoutes = new Hono<{ Variables: BearerVariables }>()
     .patch('/work-contexts/:id', requireScope('contexts.write'), async (c) => {
         const { userId, tokenId } = c.var.apiAuth;
         const id = c.req.param('id');
-        const raw = (await c.req.json().catch(() => null)) as PatchBody | null;
+        const raw = (await c.req.json().catch(() => null)) as CreateBody | null;
         const parsed = parsePatchBody(raw);
         if (!parsed.ok) {
             return c.json({ error: parsed.error.message, code: parsed.error.code }, parsed.error.status);
@@ -206,7 +235,7 @@ export const v1WorkContextsRoutes = new Hono<{ Variables: BearerVariables }>()
             return c.json({ error: 'work context not found', code: 'not_found' }, 404);
         }
         const now = dayjs().toISOString();
-        const snapshot: WorkContextInterface = { ...existing, name: parsed.name, updatedTs: now };
+        const snapshot: WorkContextInterface = { ...existing, ...parsed.value, updatedTs: now };
         try {
             await applyAndPublishOperation(
                 userId,

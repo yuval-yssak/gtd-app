@@ -291,3 +291,56 @@ describe('tenant isolation', () => {
         expect(ops).toHaveLength(0);
     });
 });
+
+// `archived` (soft retire) mirrors the /v1/work-contexts contract: writable via POST/PATCH,
+// projected only when set, preserved by unrelated PATCHes.
+describe('archived flag on /v1/people', () => {
+    async function createPerson(token: string, body: Record<string, unknown>) {
+        return app.fetch(
+            new Request('http://localhost:4000/v1/people', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }),
+        );
+    }
+
+    async function patchPerson(token: string, id: string, body: Record<string, unknown>) {
+        return app.fetch(
+            new Request(`http://localhost:4000/v1/people/${id}`, {
+                method: 'PATCH',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            }),
+        );
+    }
+
+    it('POST accepts archived and the projection returns it; unset rows omit the key', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['people.write']);
+        const archivedRes = await createPerson(token, { name: 'Former Colleague', archived: true });
+        expect(archivedRes.status).toBe(201);
+        expect(((await archivedRes.json()) as { archived?: boolean }).archived).toBe(true);
+
+        const plainRes = await createPerson(token, { name: 'Active Colleague' });
+        expect(plainRes.status).toBe(201);
+        expect('archived' in ((await plainRes.json()) as Record<string, unknown>)).toBe(false);
+    });
+
+    it('rejects a non-boolean archived with invalid_archived', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['people.write']);
+        const res = await createPerson(token, { name: 'X', archived: 1 });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('invalid_archived');
+    });
+
+    it('a notes-only PATCH preserves archived', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['people.write']);
+        const created = (await (await createPerson(token, { name: 'Parked', archived: true })).json()) as { _id: string };
+        const patched = await patchPerson(token, created._id, { notes: 'left the org' });
+        expect(patched.status).toBe(200);
+        expect((await patched.json()) as object).toMatchObject({ name: 'Parked', notes: 'left the org', archived: true });
+    });
+});

@@ -1,6 +1,8 @@
 import AddIcon from '@mui/icons-material/Add';
+import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
+import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
@@ -17,14 +19,15 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { WorkContextEditDialog } from '../../components/workContexts/WorkContextEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { createWorkContext, removeWorkContext } from '../../db/workContextMutations';
+import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
+import { useEntityUsage } from '../../hooks/useEntityUsage';
 import type { StoredWorkContext } from '../../types/MyDB';
 import styles from './-work-contexts.module.css';
 
@@ -61,6 +64,22 @@ function WorkContextsPage() {
         await removeWorkContext(db, ctx._id);
         await refreshWorkContexts();
     }
+
+    // Archive = soft retire: hidden from pickers/filter rows, existing item references stay intact.
+    // Unarchive drops the key entirely (exactOptionalPropertyTypes/op-schema style: absent ⇒ active).
+    // Re-read from IDB before writing — the render-time row can be stale against a concurrent
+    // remote update, and the full LWW snapshot would revert it (e.g. undo a remote rename).
+    async function onToggleArchived(ctx: StoredWorkContext) {
+        const current = (await db.get('workContexts', ctx._id)) ?? ctx;
+        const { archived: _archived, ...active } = current;
+        await updateWorkContext(db, current.archived ? active : { ...current, archived: true });
+        await refreshWorkContexts();
+    }
+
+    // Active contexts first, archived parked at the bottom. The "Unused" hint marks archive
+    // candidates: nothing outside the trash references them.
+    const usage = useEntityUsage();
+    const orderedContexts = useMemo(() => [...workContexts.filter((c) => !c.archived), ...workContexts.filter((c) => c.archived)], [workContexts]);
 
     return (
         <Box>
@@ -99,7 +118,7 @@ function WorkContextsPage() {
                 )
             ) : (
                 <List disablePadding className={styles.list}>
-                    {workContexts.map((ctx, idx) => (
+                    {orderedContexts.map((ctx, idx) => (
                         <Box key={ctx._id}>
                             <ListItem
                                 disablePadding
@@ -109,6 +128,11 @@ function WorkContextsPage() {
                                         <Tooltip title="Rename">
                                             <IconButton size="small" onClick={() => setEditing(ctx)} data-testid="workContextRowEditButton">
                                                 <EditIcon fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                        <Tooltip title={ctx.archived ? 'Unarchive' : 'Archive — hide from pickers, keep on items'}>
+                                            <IconButton size="small" onClick={() => void onToggleArchived(ctx)} data-testid="workContextRowArchiveButton">
+                                                {ctx.archived ? <UnarchiveOutlinedIcon fontSize="small" /> : <ArchiveOutlinedIcon fontSize="small" />}
                                             </IconButton>
                                         </Tooltip>
                                         <Tooltip title="Delete">
@@ -121,15 +145,24 @@ function WorkContextsPage() {
                             >
                                 <ListItemText
                                     primary={
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                        <Box
+                                            sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
+                                            className={ctx.archived ? styles.archivedName : undefined}
+                                        >
                                             <span>{ctx.name}</span>
                                             <AccountChip userId={ctx.userId} />
+                                            {ctx.archived && <Chip label="Archived" size="small" variant="outlined" data-testid="workContextArchivedChip" />}
+                                            {!ctx.archived && !usage.contexts.has(ctx._id) && (
+                                                <Tooltip title="No item references this context — consider archiving it">
+                                                    <Chip label="Unused" size="small" variant="outlined" color="warning" data-testid="workContextUnusedChip" />
+                                                </Tooltip>
+                                            )}
                                         </Box>
                                     }
                                     className={styles.listItemText}
                                 />
                             </ListItem>
-                            {idx < workContexts.length - 1 && <Divider />}
+                            {idx < orderedContexts.length - 1 && <Divider />}
                         </Box>
                     ))}
                 </List>

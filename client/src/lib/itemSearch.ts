@@ -42,6 +42,11 @@ export interface SearchFilters {
     statuses: ReadonlySet<StoredItem['status']>;
     personId: string | null;
     contextId: string | null;
+    /** Same-name twin group `personId` expands to in the merged multi-account view; when present
+     *  it supersedes the single-id match so items tagged with either account's twin stay matched. */
+    personIds?: ReadonlySet<string>;
+    /** Same as `personIds`, for `contextId`. */
+    contextIds?: ReadonlySet<string>;
     dateField: SearchDateField;
     dateFrom: string | null; // ISO date YYYY-MM-DD inclusive
     dateTo: string | null; // ISO date YYYY-MM-DD inclusive
@@ -60,7 +65,14 @@ export const DEFAULT_SEARCH_FILTERS: SearchFilters = {
     dateTo: null,
 };
 
-const matchesPerson = (item: StoredItem, personId: string) => item.peopleIds?.includes(personId) === true || item.waitingForPersonId === personId;
+/** All person ids an item references: `peopleIds` plus the waiting-for target. The single source
+ *  of truth for "this item involves this person" — filters, usage ranking, and tag chips must all
+ *  agree, or a chip can appear that matches nothing (and vice versa). */
+export function itemPersonRefIds(item: StoredItem): string[] {
+    return [...(item.peopleIds ?? []), ...(item.waitingForPersonId ? [item.waitingForPersonId] : [])];
+}
+
+const matchesPerson = (item: StoredItem, personId: string) => itemPersonRefIds(item).includes(personId);
 
 const matchesContext = (item: StoredItem, contextId: string) => item.workContextIds?.includes(contextId) === true;
 
@@ -86,8 +98,16 @@ export function filterItems(items: readonly StoredItem[], filters: SearchFilters
     const normalizedQuery = filters.query.trim().toLowerCase();
     return items.filter((item) => {
         if (!filters.statuses.has(item.status)) return false;
-        if (filters.personId && !matchesPerson(item, filters.personId)) return false;
-        if (filters.contextId && !matchesContext(item, filters.contextId)) return false;
+        if (filters.personId) {
+            const personIds = filters.personIds;
+            const matched = personIds ? itemPersonRefIds(item).some((id) => personIds.has(id)) : matchesPerson(item, filters.personId);
+            if (!matched) return false;
+        }
+        if (filters.contextId) {
+            const contextIds = filters.contextIds;
+            const matched = contextIds ? item.workContextIds?.some((id) => contextIds.has(id)) === true : matchesContext(item, filters.contextId);
+            if (!matched) return false;
+        }
         if (!matchesDateRange(item, filters.dateField, filters.dateFrom, filters.dateTo)) return false;
         if (!matchesQuery(item, normalizedQuery)) return false;
         return true;
@@ -127,8 +147,7 @@ export function groupByStatus(items: readonly StoredItem[]): Array<{ status: Sto
 // Returns names of all people referenced by the item — used by the "people names" filter
 // and (in future) for surfacing related contacts in result rows.
 export function itemPersonNames(item: StoredItem, peopleById: Map<string, StoredPerson>): string[] {
-    const ids = [...(item.peopleIds ?? []), ...(item.waitingForPersonId ? [item.waitingForPersonId] : [])];
-    return ids.flatMap((id) => {
+    return itemPersonRefIds(item).flatMap((id) => {
         const p = peopleById.get(id);
         return p ? [p.name] : [];
     });
@@ -146,19 +165,20 @@ export function itemContextNames(item: StoredItem, contextsById: Map<string, Sto
 export interface ResolvedTag {
     id: string;
     name: string;
+    /** The referenced entity is archived — rows render the chip dimmed. */
+    archived?: boolean;
 }
 
 export function itemContextTags(item: StoredItem, contextsById: Map<string, StoredWorkContext>): ResolvedTag[] {
     return (item.workContextIds ?? []).flatMap((id) => {
         const c = contextsById.get(id);
-        return c ? [{ id: c._id, name: c.name }] : [];
+        return c ? [{ id: c._id, name: c.name, ...(c.archived ? { archived: true } : {}) }] : [];
     });
 }
 
 export function itemPersonTags(item: StoredItem, peopleById: Map<string, StoredPerson>): ResolvedTag[] {
-    const ids = [...(item.peopleIds ?? []), ...(item.waitingForPersonId ? [item.waitingForPersonId] : [])];
-    return ids.flatMap((id) => {
+    return itemPersonRefIds(item).flatMap((id) => {
         const p = peopleById.get(id);
-        return p ? [{ id: p._id, name: p.name }] : [];
+        return p ? [{ id: p._id, name: p.name, ...(p.archived ? { archived: true } : {}) }] : [];
     });
 }

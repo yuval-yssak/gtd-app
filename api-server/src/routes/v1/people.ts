@@ -89,6 +89,7 @@ interface CreateBody {
     phone?: unknown;
     externalCalendarId?: unknown;
     notes?: unknown;
+    archived?: unknown;
 }
 
 interface PatchBody {
@@ -97,13 +98,14 @@ interface PatchBody {
     phone?: unknown;
     externalCalendarId?: unknown;
     notes?: unknown;
+    archived?: unknown;
     /** Catch-all so we can detect forbidden_field. */
     [key: string]: unknown;
 }
 
 // Same allowlist for POST and PATCH. `_id`, `user`, `createdTs`, `updatedTs` are server-managed
 // and rejected with `forbidden_field` rather than silently dropped.
-const ALLOWED_FIELDS = new Set(['name', 'email', 'phone', 'externalCalendarId', 'notes']);
+const ALLOWED_FIELDS = new Set(['name', 'email', 'phone', 'externalCalendarId', 'notes', 'archived']);
 
 function assertAllowedKeys(raw: object): { ok: true } | { ok: false; offending: string } {
     for (const key of Object.keys(raw)) {
@@ -120,6 +122,7 @@ interface ParsedPersonFields {
     phone?: string;
     externalCalendarId?: string;
     notes?: string;
+    archived?: boolean;
 }
 
 type ParseError = { status: 400; code: string; message: string };
@@ -130,6 +133,7 @@ interface PersonFieldsBag {
     phone?: unknown;
     externalCalendarId?: unknown;
     notes?: unknown;
+    archived?: unknown;
 }
 
 /** Parses optional string fields against a small schema. Pure. */
@@ -167,6 +171,12 @@ function parsePersonFields(raw: PersonFieldsBag): { ok: true; value: ParsedPerso
             return { ok: false, error: { status: 400, code: 'invalid_notes', message: 'notes must be a string' } };
         }
         value.notes = raw.notes;
+    }
+    if (raw.archived !== undefined) {
+        if (typeof raw.archived !== 'boolean') {
+            return { ok: false, error: { status: 400, code: 'invalid_archived', message: 'archived must be a boolean' } };
+        }
+        value.archived = raw.archived;
     }
     return { ok: true, value };
 }
@@ -232,6 +242,7 @@ export const v1PeopleRoutes = new Hono<{ Variables: BearerVariables }>()
             ...(parsed.value.phone !== undefined ? { phone: parsed.value.phone } : {}),
             ...(parsed.value.externalCalendarId !== undefined ? { externalCalendarId: parsed.value.externalCalendarId } : {}),
             ...(parsed.value.notes !== undefined ? { notes: parsed.value.notes } : {}),
+            ...(parsed.value.archived !== undefined ? { archived: parsed.value.archived } : {}),
         };
         await applyAndPublishOperation(
             userId,

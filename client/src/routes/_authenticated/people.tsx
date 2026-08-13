@@ -1,6 +1,8 @@
 import AddIcon from '@mui/icons-material/Add';
+import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
+import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
@@ -17,14 +19,15 @@ import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { PersonEditDialog } from '../../components/people/PersonEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { createPerson, removePerson } from '../../db/personMutations';
+import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
+import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './-people.module.css';
@@ -37,9 +40,39 @@ interface CreateFormState {
     name: string;
     email: string;
     phone: string;
+    notes: string;
 }
 
-const emptyForm: CreateFormState = { name: '', email: '', phone: '' };
+const emptyForm: CreateFormState = { name: '', email: '', phone: '', notes: '' };
+
+/** First line of the (markdown) notes, for the row snippet — full notes live in the edit dialog. */
+function notesFirstLine(notes: string | undefined): string | null {
+    const firstLine = notes
+        ?.split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+    return firstLine ?? null;
+}
+
+/** Row second line: "email · phone" plus a one-line notes snippet. undefined when both are empty
+ *  so ListItemText skips the secondary slot entirely (no empty element). */
+function personRowSecondary(person: StoredPerson) {
+    const contact = [person.email, person.phone].filter(Boolean).join(' · ');
+    const snippet = notesFirstLine(person.notes);
+    if (!contact && !snippet) {
+        return undefined;
+    }
+    return (
+        <>
+            {contact || null}
+            {snippet && (
+                <span className={styles.notesSnippet} data-testid="personNotesSnippet">
+                    {snippet}
+                </span>
+            )}
+        </>
+    );
+}
 
 function PeoplePage() {
     const { db } = Route.useRouteContext();
@@ -65,6 +98,7 @@ function PeoplePage() {
             name: createForm.name.trim(),
             ...(createForm.email.trim() ? { email: createForm.email.trim() } : {}),
             ...(createForm.phone.trim() ? { phone: createForm.phone.trim() } : {}),
+            ...(createForm.notes.trim() ? { notes: createForm.notes.trim() } : {}),
         });
         setCreateOpen(false);
         await refreshPeople();
@@ -74,6 +108,22 @@ function PeoplePage() {
         await removePerson(db, person._id);
         await refreshPeople();
     }
+
+    // Archive = soft retire: hidden from pickers/filter rows, existing item references stay intact.
+    // Unarchive drops the key entirely (absent ⇒ active, matching the op-schema convention).
+    // Re-read from IDB before writing — the render-time row can be stale against a concurrent
+    // remote update, and the full LWW snapshot would revert it (e.g. undo a remote rename).
+    async function onToggleArchived(person: StoredPerson) {
+        const current = (await db.get('people', person._id)) ?? person;
+        const { archived: _archived, ...active } = current;
+        await updatePerson(db, current.archived ? active : { ...current, archived: true });
+        await refreshPeople();
+    }
+
+    // Active people first, archived parked at the bottom. The "Unused" hint marks archive
+    // candidates: nothing outside the trash references them.
+    const usage = useEntityUsage();
+    const orderedPeople = useMemo(() => [...people.filter((p) => !p.archived), ...people.filter((p) => p.archived)], [people]);
 
     return (
         <Box>
@@ -112,7 +162,7 @@ function PeoplePage() {
                 )
             ) : (
                 <List disablePadding className={styles.list}>
-                    {people.map((person, idx) => (
+                    {orderedPeople.map((person, idx) => (
                         // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
                         <Box key={person._id} data-list-item-id={person._id}>
                             <ListItem
@@ -125,6 +175,11 @@ function PeoplePage() {
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
+                                        <Tooltip title={person.archived ? 'Unarchive' : 'Archive — hide from pickers, keep on items'}>
+                                            <IconButton size="small" onClick={() => void onToggleArchived(person)} data-testid="personRowArchiveButton">
+                                                {person.archived ? <UnarchiveOutlinedIcon fontSize="small" /> : <ArchiveOutlinedIcon fontSize="small" />}
+                                            </IconButton>
+                                        </Tooltip>
                                         <Tooltip title="Delete">
                                             <IconButton size="small" color="error" onClick={() => void onDelete(person)}>
                                                 <DeleteOutlineIcon fontSize="small" />
@@ -135,16 +190,25 @@ function PeoplePage() {
                             >
                                 <ListItemText
                                     primary={
-                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                        <Box
+                                            sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
+                                            className={person.archived ? styles.archivedName : undefined}
+                                        >
                                             <span>{person.name}</span>
                                             <AccountChip userId={person.userId} />
+                                            {person.archived && <Chip label="Archived" size="small" variant="outlined" data-testid="personArchivedChip" />}
+                                            {!person.archived && !usage.people.has(person._id) && (
+                                                <Tooltip title="No item references this person — consider archiving them">
+                                                    <Chip label="Unused" size="small" variant="outlined" color="warning" data-testid="personUnusedChip" />
+                                                </Tooltip>
+                                            )}
                                         </Box>
                                     }
-                                    secondary={[person.email, person.phone].filter(Boolean).join(' · ') || undefined}
+                                    secondary={personRowSecondary(person)}
                                     className={styles.listItemText}
                                 />
                             </ListItem>
-                            {idx < people.length - 1 && <Divider />}
+                            {idx < orderedPeople.length - 1 && <Divider />}
                         </Box>
                     ))}
                 </List>
@@ -172,6 +236,16 @@ function PeoplePage() {
                             type="email"
                         />
                         <TextField label="Phone" value={createForm.phone} onChange={(e) => setCreateForm((f) => ({ ...f, phone: e.target.value }))} fullWidth />
+                        <TextField
+                            label="Notes"
+                            value={createForm.notes}
+                            onChange={(e) => setCreateForm((f) => ({ ...f, notes: e.target.value }))}
+                            fullWidth
+                            multiline
+                            minRows={2}
+                            helperText="Markdown supported"
+                            data-testid="personCreateNotes"
+                        />
                         {/* AccountPicker auto-hides on single-account devices */}
                         {loggedInAccounts.length > 1 && <AccountPicker value={createOwnerUserId} onChange={setCreateOwnerUserId} />}
                     </Box>

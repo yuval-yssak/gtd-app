@@ -37,8 +37,10 @@ import {
 } from '../../db/itemMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
+import { omitArchived } from '../../lib/entityUsage';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { offerUndo } from '../../lib/undoStore';
 import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -222,9 +224,15 @@ export function ItemEditorBody({
 
     // Picker options scoped to the owner account (mirrors visibleCalendarOptions above): the
     // merged multi-account sets would otherwise offer another account's identically-named
-    // contexts/people — duplicate "anywhere" chips — and allow cross-account tagging.
+    // contexts/people — duplicate "anywhere" chips — and allow cross-account tagging. Archived
+    // entities are hidden too, except ids the item already carries (they must stay removable).
+    const entityUsage = useEntityUsage();
     const pickerWorkContexts = useMemo(
-        () => scopeOptionsToOwner(workContexts, { ownerUserId, assignedIds: naForm.workContextIds, allOptions: allWorkContexts }),
+        () =>
+            omitArchived(
+                scopeOptionsToOwner(workContexts, { ownerUserId, assignedIds: naForm.workContextIds, allOptions: allWorkContexts }),
+                new Set(naForm.workContextIds),
+            ),
         [workContexts, ownerUserId, naForm.workContextIds, allWorkContexts],
     );
     const assignedPeopleIds = useMemo(
@@ -232,7 +240,7 @@ export function ItemEditorBody({
         [naForm.peopleIds, wfForm.waitingForPersonId],
     );
     const pickerPeople = useMemo(
-        () => scopeOptionsToOwner(people, { ownerUserId, assignedIds: assignedPeopleIds, allOptions: allPeople }),
+        () => omitArchived(scopeOptionsToOwner(people, { ownerUserId, assignedIds: assignedPeopleIds, allOptions: allPeople }), new Set(assignedPeopleIds)),
         [people, ownerUserId, assignedPeopleIds, allPeople],
     );
 
@@ -835,6 +843,7 @@ export function ItemEditorBody({
                         onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))}
                         workContexts={pickerWorkContexts}
                         people={pickerPeople}
+                        usage={entityUsage}
                     />
                 </>
             )}
