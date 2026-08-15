@@ -13649,7 +13649,7 @@ describe('pushback skip — fromGmail events are Calendar-API-read-only', () => 
 
 // ─── applyExceptionToItems — instance-id lookup, fallback, and create-on-miss ──────────────
 
-describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
+describe('applyExceptionToItems — tiered lookup + create-on-miss', () => {
     beforeEach(() => {
         // Same default as the upsert-paths block: listEventsFull is called per sync.
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [], nextSyncToken: 'tok-instance' });
@@ -14046,11 +14046,15 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         ]);
         await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
 
-        // Move 2 of the SAME instance: move1Date → move2Date. Date-keyed fallback misses (item's
-        // timeStart is now move1Date). Without `calendarInstanceEventId`, the preferred lookup also
-        // misses — the create-on-miss branch fires and the unique partial index on
-        // calendarInstanceEventId admits it (legacy row has none, no collision). Net behavior:
-        // one item remains via create-on-miss carrying the instance id.
+        // Move 1 resolved via the date-keyed fallback AND backfilled the instance id onto the
+        // legacy row, so move 2 hits the tier-1 id lookup directly — no create-on-miss, no
+        // duplicate. (Historically this scenario left two rows: the shifted legacy row plus a
+        // fresh create-on-miss row.)
+        const afterFirst = await itemsDAO.findByOwnerAndId('item-legacy-moved', userId);
+        expect(afterFirst?.calendarInstanceEventId).toBe(instanceEventId);
+        expect(afterFirst?.timeStart).toBe(`${move1Date}T09:30:00Z`);
+
+        // Move 2 of the SAME instance: move1Date → move2Date.
         getExceptionsSpy.mockResolvedValueOnce([
             {
                 originalDate,
@@ -14062,15 +14066,278 @@ describe('applyExceptionToItems — two-tier lookup + create-on-miss', () => {
         ]);
         await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
 
-        // The legacy row is at May 24 (post-move-1), a freshly-created create-on-miss row is at
-        // May 25 (post-move-2). The bug we're guarding against is move 2 producing a SECOND
-        // create-on-miss + leaving us with three rows. Two is acceptable; three is not. A future
-        // backfill closes the legacy row's gap so move 2 would patch the same row.
         const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
-        expect(allForRoutine.length).toBeLessThanOrEqual(2);
-        // At least one row carries the instance id — proves create-on-miss did fire as expected.
-        const withInstanceId = allForRoutine.filter((i) => i.calendarInstanceEventId === instanceEventId);
-        expect(withInstanceId).toHaveLength(1);
+        expect(allForRoutine).toHaveLength(1);
+        const [survivor] = allForRoutine;
+        if (!survivor) throw new Error('expected exactly one row for the moved instance');
+        expect(survivor._id).toBe('item-legacy-moved');
+        expect(survivor.calendarInstanceEventId).toBe(instanceEventId);
+        expect(survivor.timeStart).toBe(`${move2Date}T11:00:00Z`);
+        expect(survivor.timeEnd).toBe(`${move2Date}T12:00:00Z`);
+    });
+
+    it('re-delivered exception on an already-shifted legacy row (REGRESSION): instant-keyed tier 3 patches it, no duplicate', async () => {
+        // The reported duplicate-item bug: an earlier apply already shifted the legacy row (no
+        // `calendarInstanceEventId`) to the move target, storing the time in a DIFFERENT offset
+        // representation (UTC) than the exception carries (+03:00). GCal re-reports the same
+        // exception (`getExceptions` is a time-range query) → tier 1 misses (no id), tier 2 misses
+        // (row no longer at originalDate). Pre-fix, create-on-miss inserted a duplicate row for
+        // the same instant. Tier 3 must match by instant and backfill the id instead.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const originalDate = dayjs().add(3, 'day').format('YYYY-MM-DD');
+        const moveDate = dayjs().add(10, 'day').format('YYYY-MM-DD');
+        const movedStartOffset = `${moveDate}T07:00:00+03:00`;
+        const movedEndOffset = `${moveDate}T08:00:00+03:00`;
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-master',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            // Pre-merge state: the exception was already applied and recorded on the routine.
+            routineExceptions: [{ date: originalDate, type: 'modified', newTimeStart: movedStartOffset, newTimeEnd: movedEndOffset }],
+        });
+        await routinesDAO.insertOne(routine);
+
+        // The legacy row sits at the SAME instant as the exception's target, but stored in UTC.
+        await itemsDAO.insertOne({
+            _id: 'item-legacy-shifted',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: `${moveDate}T04:00:00.000Z`,
+            timeEnd: `${moveDate}T05:00:00.000Z`,
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        const instanceEventId = `gcal-evt-master_${originalDate.replace(/-/g, '')}T040000Z`;
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate,
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: movedStartOffset,
+                newTimeEnd: movedEndOffset,
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(allForRoutine).toHaveLength(1);
+        const [survivor] = allForRoutine;
+        if (!survivor) throw new Error('expected exactly one row for the re-delivered exception');
+        expect(survivor._id).toBe('item-legacy-shifted');
+        // Tier 3 matched → the id got backfilled so future exceptions hit tier 1.
+        expect(survivor.calendarInstanceEventId).toBe(instanceEventId);
+        expect(survivor.status).toBe('calendar');
+    });
+
+    it('deleted exception on an already-shifted legacy row: instant-keyed tier 3 finds and trashes it (no ghost item)', async () => {
+        // Symmetric variant: the instance was moved earlier (legacy row shifted, no instance id),
+        // then deleted on GCal. Tier 2's date-keyed lookup misses the shifted row, and deletes
+        // have no create-on-miss — pre-fix the row survived forever as a ghost. Tier 3 keys on the
+        // routine's stored prior `newTimeStart` for that date and trashes the row.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const originalDate = dayjs().add(4, 'day').format('YYYY-MM-DD');
+        const moveDate = dayjs().add(9, 'day').format('YYYY-MM-DD');
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-master',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            routineExceptions: [{ date: originalDate, type: 'modified', newTimeStart: `${moveDate}T07:00:00+03:00`, newTimeEnd: `${moveDate}T08:00:00+03:00` }],
+        });
+        await routinesDAO.insertOne(routine);
+
+        await itemsDAO.insertOne({
+            _id: 'item-legacy-deleted',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: `${moveDate}T04:00:00.000Z`,
+            timeEnd: `${moveDate}T05:00:00.000Z`,
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate,
+                type: 'deleted',
+                googleEventId: `gcal-evt-master_${originalDate.replace(/-/g, '')}T040000Z`,
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const ghost = await itemsDAO.findByOwnerAndId('item-legacy-deleted', userId);
+        expect(ghost?.status).toBe('trash');
+    });
+
+    it('tier 3 matches an offset-NAIVE legacy timeStart against an offset-explicit exception (calendar-tz parse, not server-local)', async () => {
+        // Routine-generated rows store wall-clock naive `timeStart` (no Z / offset). The stored
+        // exception carries +03:00. The instants only line up when the naive string is parsed in
+        // the CALENDAR's timezone (Asia/Jerusalem fixture) — a server-local parse (UTC on Cloud
+        // Run) skews by the offset and misses, falling through to a duplicate create.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const originalDate = dayjs().add(5, 'day').format('YYYY-MM-DD');
+        const moveDate = dayjs().add(11, 'day').format('YYYY-MM-DD');
+        const movedStartOffset = `${moveDate}T07:00:00+03:00`;
+        const movedEndOffset = `${moveDate}T08:00:00+03:00`;
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-master',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            routineExceptions: [{ date: originalDate, type: 'modified', newTimeStart: movedStartOffset, newTimeEnd: movedEndOffset }],
+        });
+        await routinesDAO.insertOne(routine);
+
+        // Same wall-clock instant as the exception, stored offset-naive (Jerusalem wall time).
+        await itemsDAO.insertOne({
+            _id: 'item-legacy-naive',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: `${moveDate}T07:00:00`,
+            timeEnd: `${moveDate}T08:00:00`,
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        const instanceEventId = `gcal-evt-master_${originalDate.replace(/-/g, '')}T040000Z`;
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate, type: 'modified', googleEventId: instanceEventId, newTimeStart: movedStartOffset, newTimeEnd: movedEndOffset },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const allForRoutine = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+        expect(allForRoutine).toHaveLength(1);
+        const [survivor] = allForRoutine;
+        if (!survivor) throw new Error('expected one row for the naive-timeStart instance');
+        expect(survivor._id).toBe('item-legacy-naive');
+        expect(survivor.calendarInstanceEventId).toBe(instanceEventId);
+    });
+
+    it('dead-twin squat on the instance id: the move still lands, only the id backfill is skipped', async () => {
+        // The `(user, calendarInstanceEventId)` unique index is NOT status-scoped: a trash row from
+        // an earlier routine generation can squat the id indefinitely. The backfilled update then
+        // E11000s — the exception's time move must still be applied (retry without the backfill),
+        // not silently dropped on every sync.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await setupRoutineAndIntegration(userId);
+
+        const originalDate = dayjs().add(6, 'day').format('YYYY-MM-DD');
+        const moveDate = dayjs().add(8, 'day').format('YYYY-MM-DD');
+        const instanceEventId = `gcal-evt-master_${originalDate.replace(/-/g, '')}T060000Z`;
+
+        // Dead twin on a FOREIGN routine squatting the instance id (tier 1 skips it: not status 'calendar').
+        await itemsDAO.insertOne({
+            _id: 'item-dead-squatter',
+            user: userId,
+            status: 'trash',
+            title: 'Standup (old generation)',
+            routineId: 'routine-prior-generation',
+            calendarInstanceEventId: instanceEventId,
+            timeStart: `${originalDate}T06:00:00Z`,
+            timeEnd: `${originalDate}T06:30:00Z`,
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+        // Live legacy row at the original date — tier 2 resolves it.
+        await itemsDAO.insertOne({
+            _id: 'item-live-legacy',
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: `${originalDate}T06:00:00Z`,
+            timeEnd: `${originalDate}T06:30:00Z`,
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate,
+                type: 'modified',
+                googleEventId: instanceEventId,
+                newTimeStart: `${moveDate}T09:30:00Z`,
+                newTimeEnd: `${moveDate}T10:30:00Z`,
+            },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        // The move landed despite the squat…
+        const moved = await itemsDAO.findByOwnerAndId('item-live-legacy', userId);
+        expect(moved?.timeStart).toBe(`${moveDate}T09:30:00Z`);
+        expect(moved?.timeEnd).toBe(`${moveDate}T10:30:00Z`);
+        // …the backfill was skipped (id still squatted), and the squatter is untouched.
+        expect(moved?.calendarInstanceEventId).toBeUndefined();
+        const squatter = await itemsDAO.findByOwnerAndId('item-dead-squatter', userId);
+        expect(squatter?.status).toBe('trash');
+        expect(squatter?.calendarInstanceEventId).toBe(instanceEventId);
+    });
+
+    it('tier 3 ambiguity (two legacy rows at the same instant): deleted exception trashes NOTHING', async () => {
+        // Two legacy occurrences legitimately at the same instant are indistinguishable — a wrong
+        // guess on a deleted exception would trash a live occurrence the user never cancelled.
+        // Ambiguity must degrade to a miss (both rows survive), never to data loss.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const originalDate = dayjs().add(7, 'day').format('YYYY-MM-DD');
+        const moveDate = dayjs().add(12, 'day').format('YYYY-MM-DD');
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'gcal-evt-master',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            routineExceptions: [{ date: originalDate, type: 'modified', newTimeStart: `${moveDate}T07:00:00+03:00`, newTimeEnd: `${moveDate}T08:00:00+03:00` }],
+        });
+        await routinesDAO.insertOne(routine);
+
+        const sharedRow = {
+            user: userId,
+            status: 'calendar' as const,
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: `${moveDate}T04:00:00.000Z`,
+            timeEnd: `${moveDate}T05:00:00.000Z`,
+            createdTs: dayjs().toISOString(),
+            updatedTs: dayjs().toISOString(),
+        };
+        await itemsDAO.insertOne({ _id: 'item-ambiguous-a', ...sharedRow });
+        await itemsDAO.insertOne({ _id: 'item-ambiguous-b', ...sharedRow });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate, type: 'deleted', googleEventId: `gcal-evt-master_${originalDate.replace(/-/g, '')}T040000Z` },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const rowA = await itemsDAO.findByOwnerAndId('item-ambiguous-a', userId);
+        const rowB = await itemsDAO.findByOwnerAndId('item-ambiguous-b', userId);
+        expect(rowA?.status).toBe('calendar');
+        expect(rowB?.status).toBe('calendar');
     });
 
     it('concurrent updatedTs bump between resolve and apply: modified exception is skipped, not clobbered', async () => {

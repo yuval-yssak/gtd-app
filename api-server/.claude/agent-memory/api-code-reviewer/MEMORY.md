@@ -1,3 +1,6 @@
+- [(user, calendarInstanceEventId) index is NOT status-scoped](project_instance_id_unique_index_not_status_scoped.md) — but tier-1 resolve IS; trash/done dead twins E11000 invisibly. Narrow every absorb.
+- [Naive vs offset timeStart instant compare](project_naive_vs_offset_timestart_instant_compare.md) — generated rows are offset-naive, GCal rows carry offsets; dayjs().valueOf() misses by 3h on UTC servers.
+- [Broadened finders must bound cardinality](feedback_broadened_finder_must_bound_cardinality.md) — delete/trash branches write by filter; a widened resolver turns a recoverable duplicate into a silent wrong-delete.
 - ["Read-only on /v1" fields still need a write-path audit](project_read_only_field_write_path_gaps.md) — snapshot replace means reassign mirror-create + /v1/operations/batch silently drop/expose the field regardless of PATCH allowlists.
 - [Routine items have NO GCal-side anchor](project_routine_items_have_no_gcal_side_anchor.md) — inbound exception-apply stamps only updatedTs, so "local newer than Google" is permanently true for them. Unsound sweeps.
 - [Mutate a new fence before trusting it](feedback_run_fence_mutation_before_trusting_it.md) — "the fence fixed the other suite" = red flag; flip it to `false` per code path and re-run.

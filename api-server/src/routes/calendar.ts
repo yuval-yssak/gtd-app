@@ -4350,7 +4350,7 @@ export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalE
     if (!ISO_DATE_RE.test(ex.originalDate)) {
         return;
     }
-    const target = await resolveExceptionTarget(routine, ex, ctx.userId);
+    const target = await resolveExceptionTarget(routine, ex, ctx);
 
     if (ex.type === 'deleted') {
         // No create-on-miss for deletes — there's nothing to delete if no item matches. Free the
@@ -4376,9 +4376,9 @@ export async function applyExceptionToItems(routine: RoutineInterface, ex: GCalE
             console.log(`[gcal-sync] applyExceptionToItems: skipped past-cutoff exception | routineId=${routine._id} date=${ex.originalDate}`);
             return;
         }
-        // Create-on-miss closes the gap where applyExceptionToItems silently dropped moves —
-        // typically a second move of the same instance, where the prior move's exception had already
-        // shifted the item's `timeStart` so the date-keyed lookup misses.
+        // Create-on-miss covers exceptions whose row is genuinely absent (e.g. generated horizon
+        // not reached, or trashed remotely). Already-shifted legacy rows are no longer a miss —
+        // tier 3 (`resolveByMovedInstant`) claims them — so this no longer duplicates them.
         await createItemForOrphanedException(routine, ex, ctx);
     }
 }
@@ -4390,7 +4390,7 @@ interface ExceptionTarget {
 }
 
 /**
- * Two-tier lookup for the item(s) an inbound exception should target:
+ * Three-tier lookup for the item(s) an inbound exception should target:
  *
  *  1. Preferred — match by `calendarInstanceEventId`. Works even after a prior exception has
  *     shifted the item's `timeStart`, because the instance id is anchored to the *original*
@@ -4398,11 +4398,15 @@ interface ExceptionTarget {
  *  2. Fallback (transitional) — match by `routineId + originalDate` for routine-generated rows
  *     that pre-date the `calendarInstanceEventId` rollout. Remove once the backfill is fully
  *     applied across all production users.
+ *  3. Last resort — instant-keyed match against the move target for legacy rows a *prior*
+ *     exception already shifted off their `originalDate` (see `resolveByMovedInstant`). Without
+ *     it, tier 2 misses those rows and the create-on-miss path inserts a duplicate.
  *
  * Pre-fetches the matching rows so the apply path doesn't re-query (avoids a TOCTOU window where
  * a concurrent delete between two reads would make the apply silently no-op).
  */
-async function resolveExceptionTarget(routine: RoutineInterface, ex: GCalException, userId: string): Promise<ExceptionTarget> {
+async function resolveExceptionTarget(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): Promise<ExceptionTarget> {
+    const userId = ctx.userId;
     if (ex.googleEventId) {
         // Scope to `status: 'calendar'` for the same reason as the fallback: `done`/`trash` rows
         // legitimately retain `calendarInstanceEventId` for echo matching and history, but they
@@ -4420,7 +4424,67 @@ async function resolveExceptionTarget(routine: RoutineInterface, ex: GCalExcepti
     // happens to share the originalDate with this routine.
     const nextDay = dayjs(ex.originalDate).add(1, 'day').format('YYYY-MM-DD');
     const fallbackFilter = { user: userId, routineId: routine._id, status: 'calendar', timeStart: { $gte: ex.originalDate, $lt: nextDay } } as const;
-    return { filter: fallbackFilter, matches: await itemsDAO.findArray(fallbackFilter) };
+    const fallbackMatches = await itemsDAO.findArray(fallbackFilter);
+    if (fallbackMatches.length > 0) {
+        return { filter: fallbackFilter, matches: fallbackMatches };
+    }
+    return resolveByMovedInstant(routine, ex, ctx);
+}
+
+/**
+ * Tier-3 lookup — rescues legacy rows (no `calendarInstanceEventId`) that a *prior* exception
+ * already shifted off their `originalDate`, so the date-keyed tier 2 misses them. The routine
+ * passed through the sync cycle is pre-merge, so its stored exception for this date still carries
+ * the previously-applied `newTimeStart` — the instant the row currently sits at. The incoming
+ * `ex.newTimeStart` is a candidate too: a re-delivery of the same move (GCal's `getExceptions` is
+ * a time-range query and re-reports every override) targets a row already sitting at the new time.
+ *
+ * Matching is by instant, not string equality — the same moment can be stored as
+ * `2026-08-16T04:00:00.000Z` on the row and `2026-08-16T07:00:00+03:00` on the exception (the
+ * exact mismatch behind the duplicate-item bug). Rows carrying a *different* instance id belong
+ * to a different occurrence and are excluded; a row carrying THIS id would have hit tier 1.
+ *
+ * Ambiguity guard: exactly one row may match. Two legacy occurrences legitimately sitting at the
+ * same instant can't be told apart, and guessing wrong is destructive (a `deleted` exception
+ * would trash a live occurrence the user never cancelled). On ambiguity we treat it as a miss —
+ * worst case is the pre-fix behavior (recoverable duplicate / lingering row), never data loss.
+ */
+async function resolveByMovedInstant(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): Promise<ExceptionTarget> {
+    const priorMove = routine.routineExceptions?.find((entry) => entry.date === ex.originalDate && entry.type === 'modified')?.newTimeStart;
+    const candidateInstants = [priorMove, ex.newTimeStart].filter((time): time is string => Boolean(time)).map((time) => toInstant(time, ctx.timeZone));
+    const matches = hasAtLeastOne(candidateInstants) ? await findLegacyRowsAtInstants(routine._id, candidateInstants, ctx) : [];
+    if (matches.length > 1) {
+        console.warn(
+            `[gcal-sync] resolveByMovedInstant: ${matches.length} rows at the same instant, ambiguous — treating as miss | routineId=${routine._id} date=${ex.originalDate}`,
+        );
+        return { filter: { _id: { $in: [] }, user: ctx.userId }, matches: [] };
+    }
+    const ids = matches.map((row) => row._id).filter((id): id is string => Boolean(id));
+    return { filter: { _id: { $in: ids }, user: ctx.userId }, matches };
+}
+
+/** Matches an explicit UTC (`Z`) or numeric-offset suffix on an ISO datetime string. */
+const EXPLICIT_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/**
+ * Millisecond instant of an ISO time string. Offset-naive strings (routine-generated rows store
+ * wall-clock `timeStart` like `2026-08-16T07:00:00`) are interpreted in the calendar's timezone —
+ * plain `dayjs()` would use the server's local zone (UTC on Cloud Run), skewing the comparison by
+ * the zone offset and making every naive-vs-offset match silently miss.
+ */
+function toInstant(time: string, timeZone: string | undefined): number {
+    if (EXPLICIT_OFFSET_RE.test(time)) {
+        return dayjs(time).valueOf();
+    }
+    return dayjs.tz(time, timeZone ?? 'UTC').valueOf();
+}
+
+/** Fetches the routine's live calendar rows and keeps legacy ones (no instance id) sitting exactly at one of the candidate instants. */
+async function findLegacyRowsAtInstants(routineId: string, candidateInstants: number[], ctx: SyncContext): Promise<ItemInterface[]> {
+    const liveRows = await itemsDAO.findArray({ user: ctx.userId, routineId, status: 'calendar' });
+    return liveRows.filter(
+        (row) => row.calendarInstanceEventId === undefined && row.timeStart !== undefined && candidateInstants.includes(toInstant(row.timeStart, ctx.timeZone)),
+    );
 }
 
 /**
@@ -4527,7 +4591,16 @@ async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalExceptio
     // same instant, the missed-push sweep can tell a Google-originated write (anchor == updatedTs,
     // skip) from a genuine local edit (updatedTs newer, re-push). Without it, every inbound instance
     // move left the item permanently "locally newer" and the sweep pushed Google's own edit back.
-    const setFields = { ...patch.sharedFields, title, lastSyncedFromGCalTs: ctx.now } as Record<string, unknown>;
+    // Backfilling `calendarInstanceEventId` onto legacy rows resolved via tier 2/3 makes the next
+    // exception for this occurrence hit the tier-1 id lookup instead of re-missing (the
+    // duplicate-on-reapply bug: a date/instant fallback can't survive further moves; the id can).
+    const backfillInstanceId = ex.googleEventId !== undefined && item.calendarInstanceEventId === undefined;
+    const setFields = {
+        ...patch.sharedFields,
+        title,
+        lastSyncedFromGCalTs: ctx.now,
+        ...(backfillInstanceId ? { calendarInstanceEventId: ex.googleEventId } : {}),
+    } as Record<string, unknown>;
     // GCal-owned keys carried by neither the exception nor the master (pre-computed by the caller)
     // are cleared so a "GCal removed all attendees" edit propagates. Keys absent on the exception
     // but present on the master are NOT here — they arrive via `sharedFields` with the master value,
@@ -4549,7 +4622,7 @@ async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalExceptio
     const update = Object.keys(unsetFields).length > 0 ? { $set: setFields, $unset: unsetFields } : { $set: setFields };
     // Conditional on `updatedTs` — a concurrent /sync/push edit landing between resolve and apply
     // would change `updatedTs`; matchedCount === 0 means we lost the race and must not clobber.
-    const result = await itemsDAO.updateOne({ _id: itemId, user: ctx.userId, updatedTs: item.updatedTs } as never, update);
+    const result = await updateItemRetryingWithoutBackfill({ _id: itemId, user: ctx.userId, updatedTs: item.updatedTs }, update, backfillInstanceId);
     if (result.matchedCount === 0) {
         console.log(`[gcal-sync] applyModifiedExceptionToOne: skipped due to concurrent updatedTs bump | itemId=${itemId}`);
         return;
@@ -4561,6 +4634,31 @@ async function applyModifiedExceptionToOne(item: ItemInterface, ex: GCalExceptio
         return;
     }
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: refreshed, opType: 'update', now: ctx.now }));
+}
+
+/**
+ * Conditional-update wrapper for the instance-id backfill: E11000 from the `(user,
+ * calendarInstanceEventId)` unique partial index means ANOTHER row already holds the id — the index
+ * is not status-scoped, so a `trash`/`done` dead twin squatting the id triggers this on every sync,
+ * not just a rare concurrent-orphan-create race. Retry WITHOUT the backfill so the exception's real
+ * payload (the time move) still lands; only the id adoption is skipped until the squat is resolved
+ * (dead-twin demote in `handleOrphanInsertDuplicate`, or the squatter's eventual purge).
+ */
+async function updateItemRetryingWithoutBackfill(
+    guardFilter: { _id: string; user: string; updatedTs: string },
+    update: { $set: Record<string, unknown>; $unset?: Record<string, ''> },
+    backfilledInstanceId: boolean,
+) {
+    try {
+        return await itemsDAO.updateOne(guardFilter as never, update);
+    } catch (err) {
+        if (!isDuplicateKeyError(err) || !backfilledInstanceId) {
+            throw err;
+        }
+        console.warn(`[gcal-sync] applyModifiedExceptionToOne: instance id already taken, applying move without backfill | itemId=${guardFilter._id}`);
+        const { calendarInstanceEventId: _dropped, ...setWithoutBackfill } = update.$set;
+        return await itemsDAO.updateOne(guardFilter as never, { ...update, $set: setWithoutBackfill });
+    }
 }
 
 /**
@@ -4696,7 +4794,7 @@ async function demoteDeadTwinAndRetryInsert(conflicting: ItemInterface, pending:
  * the post-write state of the row consistent regardless of which caller actually inserted it.
  */
 async function applyExceptionAfterDuplicate(routine: RoutineInterface, ex: GCalException, ctx: SyncContext): Promise<void> {
-    const target = await resolveExceptionTarget(routine, ex, ctx.userId);
+    const target = await resolveExceptionTarget(routine, ex, ctx);
     if (!hasAtLeastOne(target.matches)) {
         // Index says a row exists with our instance id, but resolve missed — log + bail rather than retry forever.
         console.warn(`[gcal-sync] applyExceptionAfterDuplicate: index hit but re-resolve missed | routineId=${routine._id} eventId=${ex.googleEventId}`);
@@ -4742,7 +4840,7 @@ async function revertItemToMasterTime(routine: RoutineInterface, date: string, c
         console.warn(`[gcal-sync] reconcileRemovedExceptions: cannot derive master time to revert | routineId=${routine._id} date=${date}`);
         return;
     }
-    const { matches } = await resolveExceptionTarget(routine, bareException, ctx.userId);
+    const { matches } = await resolveExceptionTarget(routine, bareException, ctx);
     if (!hasAtLeastOne(matches)) {
         return;
     }
