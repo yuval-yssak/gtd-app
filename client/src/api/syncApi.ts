@@ -100,8 +100,13 @@ export interface SyncIssue {
     _id: string;
     ts: string;
     opType: string;
-    entityType: string;
+    entityType: EntityType;
     entityId: string;
+    /** Human-readable name of the affected entity (item/routine title, person/context name).
+     *  Absent when the server could not resolve one (snapshot-less op on a deleted entity). */
+    entityTitle?: string;
+    /** When the op was marked failed — the display timestamp (`ts` mutates on retry). Absent on legacy rows. */
+    failedTs?: string;
     failureReason: SyncIssueFailureReason;
     failureDetail?: string;
     /** False for `terminal` reasons; true for retryable buckets surfaced as Retry button. */

@@ -12,39 +12,14 @@ import ListItem from '@mui/material/ListItem';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useCallback, useEffect, useState, useTransition } from 'react';
-import { dismissSyncIssue, fetchSyncIssues, retrySyncIssue, type SyncIssue, type SyncIssueFailureReason } from '../api/syncApi';
+import { dismissSyncIssue, fetchSyncIssues, retrySyncIssue, type SyncIssue } from '../api/syncApi';
 import { SYNC_ISSUES_REFRESH_EVENT } from '../contexts/syncIssuesEvents';
 import { useOnline } from '../hooks/useOnline';
 import styles from './SyncIssuesPanel.module.css';
+import { syncIssueRowText } from './syncIssueRowLogic';
 
 /** Polling fallback (ms) — covers the case where no sync activity has fired in a while. */
 const POLL_INTERVAL_MS = 30_000;
-
-/**
- * Maps a `failureReason` to a single user-friendly line. The label captures both the action that
- * failed and the *why* — terminal reasons read as a finality ("Event was cancelled…"), retryable
- * ones leave the door open ("could not reach Google Calendar…"). Source-of-truth note: this map
- * mirrors the server's `OpFailureReason` enum; adding a new reason there requires a label here too.
- */
-const FAILURE_LABELS: Record<SyncIssueFailureReason, string> = {
-    transient_exhausted: "Couldn't reach Google Calendar — please retry.",
-    scope_missing: 'Google needs additional permissions to complete this change.',
-    calendar_missing: "The target calendar isn't available anymore — pick another or retry.",
-    edit_conflict: 'The event changed in Google Calendar — retry to reapply the change.',
-    terminal: 'Event was cancelled by the organizer or removed in Google Calendar.',
-    entity_missing: 'This item no longer exists (it was deleted or moved to another account), so the change was not applied.',
-};
-
-/** Prefix for the issue title — keeps the panel scannable when several entries share a label. */
-function titleForOp(op: SyncIssue): string {
-    if (op.opType === 'rsvp') {
-        return 'RSVP failed';
-    }
-    if (op.opType === 'update') {
-        return 'Update failed';
-    }
-    return `${op.opType} failed`;
-}
 
 /**
  * Sync Issues panel — a single dialog surfacing every persisted op with `syncFailed: true`. The
@@ -132,6 +107,7 @@ function SyncIssueRow({ issue, onChanged }: SyncIssueRowProps) {
     // useTransition gives a pending flag without a hand-rolled boolean state. The Retry/Dismiss
     // buttons both route through `startAction` so concurrent clicks de-dupe automatically.
     const [isPending, startAction] = useTransition();
+    const rowText = syncIssueRowText(issue);
 
     function onRetry() {
         startAction(async () => {
@@ -150,10 +126,16 @@ function SyncIssueRow({ issue, onChanged }: SyncIssueRowProps) {
     return (
         <ListItem disableGutters className={styles.row} data-testid="syncIssueEntry">
             <Box className={styles.rowBody}>
-                <Typography variant="body2" className={styles.rowTitle}>
-                    {titleForOp(issue)} — {FAILURE_LABELS[issue.failureReason]}
+                <Typography variant="body2" className={styles.rowTitle} data-testid="syncIssueTitle">
+                    {rowText.title}
                 </Typography>
-                {issue.failureDetail && (
+                <Typography variant="body2" color="text.secondary">
+                    {rowText.reason}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" data-testid="syncIssueMeta">
+                    {rowText.meta}
+                </Typography>
+                {rowText.showDetail && (
                     <Typography variant="caption" color="text.secondary" data-testid="syncIssueDetail">
                         {issue.failureDetail}
                     </Typography>

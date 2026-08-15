@@ -39,6 +39,7 @@ describe('fetchSyncIssues', () => {
             opType: 'rsvp',
             entityType: 'item',
             entityId: 'item-1',
+            entityTitle: 'Linked meeting',
             failureReason: 'scope_missing',
             retryable: true,
         };

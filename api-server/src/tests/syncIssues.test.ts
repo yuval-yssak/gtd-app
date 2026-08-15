@@ -153,6 +153,60 @@ describe('GET /sync/issues', () => {
         expect(byReason.get('terminal')).toBe(false);
     });
 
+    it('includes entityTitle from the op snapshot, with a live-item fallback for snapshot-less rsvp ops', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const liveItemId = `item-${crypto.randomUUID()}`;
+        await itemsDAO.insertOne(makeCalendarItem(userId, liveItemId));
+
+        const snapshotOp = makeFailedOp(userId, {
+            failureReason: 'entity_missing',
+            opType: 'update',
+            snapshot: { ...makeCalendarItem(userId, `item-${crypto.randomUUID()}`), title: 'Ghost item title' },
+        });
+        // rsvp ops carry no snapshot — the title must come from the live item.
+        const rsvpOp = makeFailedOp(userId, { failureReason: 'scope_missing', entityId: liveItemId });
+        // delete op on a gone entity: no snapshot AND no live item → row stays untitled.
+        const untitledOp = makeFailedOp(userId, { failureReason: 'entity_missing', opType: 'delete' });
+        // Non-item snapshots carry `name`, not `title` — the projection must read either.
+        const now = dayjs().toISOString();
+        const personOp = makeFailedOp(userId, {
+            failureReason: 'entity_missing',
+            opType: 'update',
+            entityType: 'person',
+            snapshot: { _id: `person-${crypto.randomUUID()}`, user: userId, name: 'Dana Cohen', createdTs: now, updatedTs: now },
+        });
+        await operationsDAO.insertMany([snapshotOp, rsvpOp, untitledOp, personOp]);
+
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/issues', sessionCookie: cookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { issues: Array<{ _id: string; entityTitle?: string; failedTs?: string }> };
+        const rowById = new Map(body.issues.map((i) => [i._id, i]));
+        expect(rowById.get(snapshotOp._id)?.entityTitle).toBe('Ghost item title');
+        expect(rowById.get(rsvpOp._id)?.entityTitle).toBe('Linked meeting');
+        expect(rowById.get(untitledOp._id)?.entityTitle).toBeUndefined();
+        expect(rowById.get(personOp._id)?.entityTitle).toBe('Dana Cohen');
+        // failedTs rides along so the panel can display when the failure happened (ts mutates on retry).
+        expect(rowById.get(snapshotOp._id)?.failedTs).toBe(snapshotOp.failedTs);
+    });
+
+    it("does not leak another user's item title into the live-title fallback (tenant isolation)", async () => {
+        const aliceCookie = await loginAsAlice();
+        const bobCookie = await loginAsBob();
+        const aliceId = await getUserId(aliceCookie);
+        const bobItemId = `item-${crypto.randomUUID()}`;
+        // Bob owns the item; Alice has a snapshot-less rsvp op pointing at its id.
+        await itemsDAO.insertOne(makeCalendarItem(await getUserId(bobCookie), bobItemId));
+        await operationsDAO.insertOne(makeFailedOp(aliceId, { failureReason: 'scope_missing', entityId: bobItemId }));
+
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/issues', sessionCookie: aliceCookie });
+        const body = (await res.json()) as { issues: Array<{ entityTitle?: string }> };
+        expect(body.issues).toHaveLength(1);
+        const [row] = body.issues;
+        if (!row) throw new Error('expected one issue row');
+        expect(row.entityTitle).toBeUndefined(); // Bob's title must never surface
+    });
+
     it('omits ops without syncFailed and ops belonging to other users (tenant isolation)', async () => {
         const aliceCookie = await loginAsAlice();
         const bobCookie = await loginAsBob();

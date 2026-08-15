@@ -1,12 +1,14 @@
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
+import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
 import { replayRsvpOp } from '../lib/rsvpReplay.js';
+import { hasAtLeastOne } from '../lib/typeUtils.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import type { OpFailureReason } from '../types/entities.js';
+import type { OperationInterface, OpFailureReason } from '../types/entities.js';
 
 /**
  * Failure reasons that the SyncIssuesPanel can retry. Terminal failures (event deleted, uninvited)
@@ -23,38 +25,72 @@ interface IssueRow {
     opType: string;
     entityType: string;
     entityId: string;
+    /** Human-readable name of the affected entity, so the panel can say WHICH item failed.
+     *  Sourced from the op's snapshot; absent for snapshot-less ops (delete/rsvp) whose entity
+     *  could not be resolved live either. */
+    entityTitle?: string;
+    /** When the op was marked failed. Drives both the panel's sort and its displayed timestamp —
+     *  `ts` is unsuitable for display because retry bumps it. Absent on legacy rows. */
+    failedTs?: string;
     failureReason: OpFailureReason;
     failureDetail: string | undefined;
     retryable: boolean;
+}
+
+/** Items/routines carry `title`; people/workContexts carry `name`. Null snapshot → no title. */
+function snapshotTitle(snapshot: OperationInterface['snapshot']): string | undefined {
+    if (!snapshot) {
+        return undefined;
+    }
+    return 'title' in snapshot ? snapshot.title : snapshot.name;
 }
 
 /**
  * Pure projection of a persisted op into the panel-facing row. Kept tiny so the route handler
  * reads top-to-bottom; the only branching is on the failureReason → retryable lookup.
  */
-function toIssueRow(op: {
-    _id: string;
-    ts: string;
-    opType: string;
-    entityType: string;
-    entityId: string;
-    failureReason?: OpFailureReason;
-    failureDetail?: string;
-}): IssueRow {
+function toIssueRow(op: OperationInterface): IssueRow {
     // findArray's filter (`syncFailed: true`) guarantees the row was marked failed, but
     // `failureReason` is technically optional on the schema — fall back to `terminal` so a
     // malformed row still surfaces with a Dismiss-only affordance instead of crashing the panel.
     const reason: OpFailureReason = op.failureReason ?? 'terminal';
+    const entityTitle = snapshotTitle(op.snapshot);
     return {
         _id: op._id,
         ts: op.ts,
         opType: op.opType,
         entityType: op.entityType,
         entityId: op.entityId,
+        // Conditional spreads keep absent values out of the JSON entirely (no "entityTitle": null),
+        // matching the optional fields on the client's SyncIssue mirror.
+        ...(entityTitle !== undefined ? { entityTitle } : {}),
+        ...(op.failedTs !== undefined ? { failedTs: op.failedTs } : {}),
         failureReason: reason,
         failureDetail: op.failureDetail,
         retryable: RETRYABLE_REASONS.has(reason),
     };
+}
+
+/**
+ * rsvp ops (and delete ops whose hydration missed) carry no snapshot, so their rows come out of
+ * `toIssueRow` untitled. An rsvp always targets a live item, so a single owner-scoped batch fetch
+ * fills those titles in. Rows whose item is genuinely gone stay untitled — nothing to show.
+ * Titles are cosmetic: a failed lookup degrades to untitled rows, never a panel-wide 500.
+ */
+async function withLiveItemTitles(userId: string, rows: IssueRow[]): Promise<IssueRow[]> {
+    const untitledIds = rows.filter((row) => row.entityTitle === undefined && row.entityType === 'item').map((row) => row.entityId);
+    if (!hasAtLeastOne(untitledIds)) {
+        return rows;
+    }
+    const items = await itemsDAO.findArray({ user: userId, _id: { $in: untitledIds } }, { projection: { _id: 1, title: 1 } }).catch((err: unknown) => {
+        console.warn('[sync-issues] live title lookup failed, rows stay untitled', err);
+        return [];
+    });
+    const titleById = new Map(items.map((item) => [item._id, item.title]));
+    return rows.map((row) => {
+        const title = titleById.get(row.entityId);
+        return row.entityTitle === undefined && title !== undefined ? { ...row, entityTitle: title } : row;
+    });
 }
 
 export const syncIssuesRoutes = new Hono<{ Variables: AuthVariables }>()
@@ -68,7 +104,8 @@ export const syncIssuesRoutes = new Hono<{ Variables: AuthVariables }>()
     .get('/', authenticateRequest, async (c) => {
         const { user } = c.get('session');
         const ops = await operationsDAO.findArray({ user: user.id, syncFailed: true }, { sort: { failedTs: -1, ts: -1 } });
-        return c.json({ issues: ops.map(toIssueRow) });
+        const issues = await withLiveItemTitles(user.id, ops.map(toIssueRow));
+        return c.json({ issues });
     })
 
     // ---------------------------------------------------------------------------

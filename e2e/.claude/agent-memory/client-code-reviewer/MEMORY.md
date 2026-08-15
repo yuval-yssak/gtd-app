@@ -10,3 +10,4 @@
 - [Graceful blocks drop bundled edits](feedback_graceful_block_drops_bundled_edits.md) — A new early-return guard inside a fire-and-forget mutation silently discards the editPatch riding along, when the caller already closed the editor.
 - [Self-heal "clear on success" races other flag setters](feedback_self_heal_clear_races_flag_setters.md) — Reauth flags are raised from 4+ paths; a clear added to one erases live failures from the others and re-opens dismissed dialogs.
 - [OAuth re-login can land on the wrong account](feedback_oauth_reauth_lands_on_wrong_account.md) — `reauthForUserId` omits `prompt=select_account`; callback side effects keyed on `session.user.id` then target the wrong account.
+- [New render gates ship with only the negative tested](feedback_conditional_render_gate_loses_coverage.md) — `{gate && <El/>}` diffs assert `toHaveCount(0)` for the hidden branch and leave the still-rendered branch uncovered.
