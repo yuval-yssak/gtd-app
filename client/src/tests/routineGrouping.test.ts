@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { approxIntervalDays, filterRoutinesByTitle, frequencyBucket, groupRoutines } from '../lib/routineGrouping';
+import { approxIntervalDays, filterRoutinesByTitle, frequencyBucket, groupRoutinesByFrequency, splitActivePaused } from '../lib/routineGrouping';
 import type { StoredRoutine } from '../types/MyDB';
 
 function makeRoutine(overrides: Partial<StoredRoutine> & Pick<StoredRoutine, '_id' | 'title' | 'rrule'>): StoredRoutine {
@@ -62,52 +62,48 @@ describe('frequencyBucket', () => {
     });
 });
 
-describe('groupRoutines', () => {
+describe('groupRoutinesByFrequency', () => {
     const dailyNa = makeRoutine({ _id: 'r1', title: 'Water plants', rrule: 'FREQ=DAILY' });
     const annualNa = makeRoutine({ _id: 'r2', title: 'Renew insurance', rrule: 'FREQ=YEARLY' });
     const monthlyNa = makeRoutine({ _id: 'r3', title: 'Pay rent', rrule: 'FREQ=MONTHLY;BYMONTHDAY=1' });
-    const weeklyCal = makeRoutine({ _id: 'r4', title: 'Pool with Elena', rrule: 'FREQ=WEEKLY;BYDAY=TH', routineType: 'calendar' });
-    const dailyCal = makeRoutine({ _id: 'r5', title: 'Morning swim', rrule: 'FREQ=DAILY', routineType: 'calendar' });
 
-    it('puts the Next Action section before the Calendar section', () => {
-        const sections = groupRoutines([weeklyCal, dailyNa]);
-        expect(sections.map((s) => s.routineType)).toEqual(['nextAction', 'calendar']);
+    it('omits empty buckets', () => {
+        const buckets = groupRoutinesByFrequency([dailyNa]);
+        expect(buckets.map((b) => b.bucket)).toEqual(['Daily']);
     });
 
-    it('omits empty sections and empty buckets', () => {
-        const sections = groupRoutines([dailyNa]);
-        expect(sections).toHaveLength(1);
-        const [section] = sections;
-        if (!section) throw new Error('expected one section');
-        expect(section.routineType).toBe('nextAction');
-        expect(section.buckets.map((b) => b.bucket)).toEqual(['Daily']);
-    });
-
-    it('orders buckets daily → annual and sorts within a section by interval', () => {
-        const sections = groupRoutines([annualNa, monthlyNa, dailyNa, weeklyCal, dailyCal]);
-        const [nextActionSection, calendarSection] = sections;
-        if (!nextActionSection || !calendarSection) throw new Error('expected two sections');
-        expect(nextActionSection.buckets.map((b) => b.bucket)).toEqual(['Daily', 'Monthly', 'Annual']);
-        expect(nextActionSection.buckets.flatMap((b) => b.routines.map((r) => r._id))).toEqual(['r1', 'r3', 'r2']);
-        expect(calendarSection.buckets.map((b) => b.bucket)).toEqual(['Daily', 'Weekly']);
-        expect(calendarSection.buckets.flatMap((b) => b.routines.map((r) => r._id))).toEqual(['r5', 'r4']);
-    });
-
-    it('renders a calendar-only list as a single calendar section (empty next-action section dropped)', () => {
-        const sections = groupRoutines([weeklyCal, dailyCal]);
-        expect(sections).toHaveLength(1);
-        const [section] = sections;
-        if (!section) throw new Error('expected one section');
-        expect(section.routineType).toBe('calendar');
+    it('orders buckets daily → annual and sorts within by interval', () => {
+        const buckets = groupRoutinesByFrequency([annualNa, monthlyNa, dailyNa]);
+        expect(buckets.map((b) => b.bucket)).toEqual(['Daily', 'Monthly', 'Annual']);
+        expect(buckets.flatMap((b) => b.routines.map((r) => r._id))).toEqual(['r1', 'r3', 'r2']);
     });
 
     it('breaks interval ties by title', () => {
         const b = makeRoutine({ _id: 'rb', title: 'B daily', rrule: 'FREQ=DAILY' });
         const a = makeRoutine({ _id: 'ra', title: 'A daily', rrule: 'FREQ=DAILY' });
-        const sections = groupRoutines([b, a]);
-        const [section] = sections;
-        if (!section) throw new Error('expected one section');
-        expect(section.buckets.flatMap((g) => g.routines.map((r) => r._id))).toEqual(['ra', 'rb']);
+        const buckets = groupRoutinesByFrequency([b, a]);
+        expect(buckets.flatMap((g) => g.routines.map((r) => r._id))).toEqual(['ra', 'rb']);
+    });
+});
+
+describe('splitActivePaused', () => {
+    it('separates paused routines and keeps them interval-then-title sorted', () => {
+        const activeDaily = makeRoutine({ _id: 'a1', title: 'Water plants', rrule: 'FREQ=DAILY' });
+        const pausedAnnual = makeRoutine({ _id: 'p1', title: 'Old habit', rrule: 'FREQ=YEARLY', active: false });
+        const pausedDaily = makeRoutine({ _id: 'p2', title: 'Dormant daily', rrule: 'FREQ=DAILY', active: false });
+        const { active, paused } = splitActivePaused([pausedAnnual, activeDaily, pausedDaily]);
+        expect(active.map((r) => r._id)).toEqual(['a1']);
+        expect(paused.map((r) => r._id)).toEqual(['p2', 'p1']);
+    });
+
+    it('preserves input order for active routines (bucketing re-sorts downstream)', () => {
+        const annual = makeRoutine({ _id: 'a1', title: 'Renew insurance', rrule: 'FREQ=YEARLY' });
+        const daily = makeRoutine({ _id: 'a2', title: 'Water plants', rrule: 'FREQ=DAILY' });
+        expect(splitActivePaused([annual, daily]).active.map((r) => r._id)).toEqual(['a1', 'a2']);
+    });
+
+    it('returns empty halves for an empty input', () => {
+        expect(splitActivePaused([])).toEqual({ active: [], paused: [] });
     });
 });
 

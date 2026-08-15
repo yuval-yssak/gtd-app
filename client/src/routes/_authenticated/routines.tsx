@@ -1,12 +1,17 @@
 import AddIcon from '@mui/icons-material/Add';
+import CalendarViewWeekIcon from '@mui/icons-material/CalendarViewWeek';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import PauseIcon from '@mui/icons-material/Pause';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import ViewListIcon from '@mui/icons-material/ViewList';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
+import Collapse from '@mui/material/Collapse';
 import Dialog from '@mui/material/Dialog';
 import DialogActions from '@mui/material/DialogActions';
 import DialogContent from '@mui/material/DialogContent';
@@ -19,11 +24,16 @@ import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
 import ListItemText from '@mui/material/ListItemText';
 import { useTheme } from '@mui/material/styles';
+import Tab from '@mui/material/Tab';
+import Tabs from '@mui/material/Tabs';
 import TextField from '@mui/material/TextField';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import dayjs from 'dayjs';
 import { useCallback, useMemo, useState } from 'react';
 import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
@@ -31,30 +41,34 @@ import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { useRoutineEditor } from '../../components/routineEditor/useRoutineEditor';
+import { RoutineWeekGrid } from '../../components/routines/RoutineWeekGrid';
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
-import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
-import { filterRoutinesByTitle, groupRoutines } from '../../lib/routineGrouping';
-import { formatCalendarRrule, formatRrule } from '../../lib/rruleUtils';
+import { filterRoutinesByTitle, groupRoutinesByFrequency, splitActivePaused } from '../../lib/routineGrouping';
+import { buildRoutineNextItemIndex, describeNextItemDate } from '../../lib/routineNextItem';
+import { parseRoutinesSearch, type RoutinesTab, type RoutinesView } from '../../lib/routinesUrlParams';
+import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
 import styles from './-routines.module.css';
 
 export const Route = createFileRoute('/_authenticated/routines')({
     component: RoutinesPage,
-    validateSearch: parseListQuerySearch,
+    validateSearch: parseRoutinesSearch,
 });
 
 function RoutinesPage() {
     const { db } = Route.useRouteContext();
-    const { q } = Route.useSearch();
-    const navigate = useNavigate();
+    const { q, tab, view } = Route.useSearch();
+    // Route-scoped so functional `search` updaters receive (and must return) this route's
+    // typed search state instead of the all-routes union.
+    const navigate = useNavigate({ from: Route.fullPath });
     const searchFieldRef = useAutoFocus();
     useListScrollRestoration();
-    const { account, routines, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh, isInitialSyncing, isCalendarSyncing } = useAppData();
+    const { account, routines, items, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh, isInitialSyncing, isCalendarSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useRoutineEditor({
@@ -68,13 +82,44 @@ function RoutinesPage() {
     });
     const [routineToDelete, setRoutineToDelete] = useState<StoredRoutine | null>(null);
     const [routineToPause, setRoutineToPause] = useState<StoredRoutine | null>(null);
+    const [isPausedSectionOpen, setIsPausedSectionOpen] = useState(false);
 
-    const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/routines', search: { q: query || undefined }, replace: true }), [navigate]);
+    const activeTab: RoutinesTab = tab ?? 'nextAction';
+    const activeView: RoutinesView = view ?? 'list';
+
+    const writeUrlQuery = useCallback(
+        (query: string) => void navigate({ to: '/routines', search: (prev) => ({ ...prev, q: query || undefined }), replace: true }),
+        [navigate],
+    );
     // Deferred query: keystrokes echo urgently while the regroup (rrule parsing per routine)
     // happens in an interruptible background render. The URL write is debounced (see useListSearch).
     const search = useListSearch({ urlQuery: q ?? '', writeUrlQuery });
     const { deferredQuery } = search;
-    const sections = useMemo(() => groupRoutines(filterRoutinesByTitle(routines, deferredQuery)), [routines, deferredQuery]);
+
+    const filtered = useMemo(() => filterRoutinesByTitle(routines, deferredQuery), [routines, deferredQuery]);
+    const nextActionCount = useMemo(() => filtered.filter((routine) => routine.routineType === 'nextAction').length, [filtered]);
+    const calendarCount = filtered.length - nextActionCount;
+    const { active, paused } = useMemo(() => splitActivePaused(filtered.filter((routine) => routine.routineType === activeTab)), [filtered, activeTab]);
+    const buckets = useMemo(() => groupRoutinesByFrequency(active), [active]);
+    // "now" freezes until routines/items change — a tab left open past an occurrence's end keeps
+    // showing it as next until the next sync tick refreshes `items`. Accepted staleness.
+    const nextItemByRoutine = useMemo(() => buildRoutineNextItemIndex(active, items, dayjs()), [active, items]);
+
+    // First-launch bootstrap and truly-empty accounts get no tabs/search/view chrome — just the
+    // skeleton or the "no routines yet" copy.
+    const hasAnyRoutines = routines.length > 0 || Boolean(q);
+    const isBootstrapping = routines.length === 0 && isInitialSyncing;
+
+    function onTabSelected(nextTab: RoutinesTab) {
+        // 'nextAction' (the default) is materialized as undefined so it never appears in the URL.
+        void navigate({ to: '/routines', search: (prev) => ({ ...prev, tab: nextTab === 'calendar' ? 'calendar' : undefined }), replace: true });
+        // Each tab has its own paused set — don't carry an expanded section across.
+        setIsPausedSectionOpen(false);
+    }
+
+    function onViewSelected(nextView: RoutinesView) {
+        void navigate({ to: '/routines', search: (prev) => ({ ...prev, view: nextView === 'week' ? 'week' : undefined }), replace: true });
+    }
 
     async function onConfirmDelete() {
         if (!routineToDelete) {
@@ -107,16 +152,20 @@ function RoutinesPage() {
         await syncAndRefresh();
     }
 
-    function routineLabel(routine: StoredRoutine): string {
-        return routine.routineType === 'calendar' ? formatCalendarRrule(routine) : formatRrule(routine.rrule);
-    }
-
     function onRowClick(routine: StoredRoutine, e: React.MouseEvent<HTMLElement>) {
         editor.openEditor({ routine, anchor: e.currentTarget });
     }
 
     function openRoutinePage(routine: StoredRoutine) {
         void navigate({ to: '/routine/$routineId', params: { routineId: routine._id } });
+    }
+
+    /** Schedule + upcoming date on one line, e.g. "Every Thu at 18:00 for 1h · next Thu, Jul 2 18:00". */
+    function routineSecondaryLabel(routine: StoredRoutine): string {
+        const schedule = formatRoutineSchedule(routine);
+        const next = nextItemByRoutine.get(routine._id);
+        const nextLabel = next ? describeNextItemDate(next) : '';
+        return nextLabel ? `${schedule} · next ${nextLabel}` : schedule;
     }
 
     function renderRoutineRow(routine: StoredRoutine) {
@@ -165,17 +214,10 @@ function RoutinesPage() {
                         primary={
                             <Box className={styles.titleRow}>
                                 {routine.title}
-                                <Chip
-                                    label={routine.routineType === 'calendar' ? 'Calendar' : 'Next Action'}
-                                    size="small"
-                                    variant="outlined"
-                                    color={routine.routineType === 'calendar' ? 'info' : 'default'}
-                                />
-                                <Chip label={routine.active ? 'Active' : 'Paused'} size="small" color={routine.active ? 'success' : 'default'} />
                                 <AccountChip userId={routine.userId} />
                             </Box>
                         }
-                        secondary={routineLabel(routine)}
+                        secondary={routineSecondaryLabel(routine)}
                         className={styles.listItemText}
                     />
                 </ListItemButton>
@@ -183,12 +225,17 @@ function RoutinesPage() {
         );
     }
 
-    function renderEmptyState() {
-        // First-launch bootstrap: skeleton while IDB loads; "no routines" copy only once loaded.
-        if (routines.length === 0 && isInitialSyncing) {
-            return <ListSkeleton />;
+    function emptyStateMessage(): string {
+        if (routines.length === 0) {
+            return 'No routines yet. Routines auto-generate next actions on a schedule.';
         }
-        const message = routines.length === 0 ? 'No routines yet. Routines auto-generate next actions on a schedule.' : 'No routines match your search.';
+        if (deferredQuery.trim()) {
+            return 'No routines match your search.';
+        }
+        return activeTab === 'calendar' ? 'No calendar routines yet.' : 'No next action routines yet.';
+    }
+
+    function renderEmptyState() {
         return (
             <Typography
                 data-testid="routinesEmptyState"
@@ -198,8 +245,91 @@ function RoutinesPage() {
                     mt: 6,
                 }}
             >
-                {message}
+                {emptyStateMessage()}
             </Typography>
+        );
+    }
+
+    function renderPausedSection() {
+        if (paused.length === 0) {
+            return null;
+        }
+        return (
+            <Box className={styles.pausedSection}>
+                <ListItemButton
+                    onClick={() => setIsPausedSectionOpen((open) => !open)}
+                    className={styles.pausedToggle}
+                    data-testid="routinePausedSectionToggle"
+                >
+                    <ListItemText primary={`Paused (${paused.length})`} />
+                    {isPausedSectionOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </ListItemButton>
+                {/* unmountOnExit: collapsed rows would otherwise stay in the DOM with
+                    data-list-item-id anchors that skew scroll restoration. */}
+                <Collapse in={isPausedSectionOpen} unmountOnExit>
+                    <List disablePadding component="div" className={styles.list}>
+                        {paused.map((routine, idx) => (
+                            <Box key={routine._id} className={styles.pausedRow} data-list-item-id={routine._id}>
+                                {renderRoutineRow(routine)}
+                                {editor.renderExpandFor(routine._id)}
+                                {idx < paused.length - 1 && <Divider />}
+                            </Box>
+                        ))}
+                    </List>
+                </Collapse>
+            </Box>
+        );
+    }
+
+    function renderListView() {
+        if (buckets.length === 0 && paused.length === 0) {
+            return renderEmptyState();
+        }
+        return (
+            <>
+                {buckets.length > 0 && (
+                    // Buckets flattened into one windowed sequence (labels and rows are each a
+                    // measured child) — only elements near the viewport mount, so a large routine
+                    // collection doesn't block the main thread on navigation. component="div": the
+                    // WindowVirtualizer measuring wrapper is invalid inside the default <ul>.
+                    <List disablePadding component="div" className={styles.list}>
+                        <WindowVirtualizer>
+                            {buckets.flatMap((group) => [
+                                <Typography
+                                    key={`bucket-${group.bucket}`}
+                                    variant="overline"
+                                    className={styles.bucketLabel}
+                                    data-testid="routineFrequencyBucket"
+                                    sx={{ color: 'text.secondary' }}
+                                >
+                                    {group.bucket}
+                                </Typography>,
+                                ...group.routines.map((routine, idx) => (
+                                    // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
+                                    <Box key={routine._id} data-list-item-id={routine._id}>
+                                        {renderRoutineRow(routine)}
+                                        {editor.renderExpandFor(routine._id)}
+                                        {idx < group.routines.length - 1 && <Divider />}
+                                    </Box>
+                                )),
+                            ])}
+                        </WindowVirtualizer>
+                    </List>
+                )}
+                {renderPausedSection()}
+            </>
+        );
+    }
+
+    function renderWeekView() {
+        if (active.length === 0 && paused.length === 0) {
+            return renderEmptyState();
+        }
+        return (
+            <>
+                <RoutineWeekGrid routines={active} onRoutineSelected={(routine) => editor.openEditor({ routine })} />
+                {renderPausedSection()}
+            </>
         );
     }
 
@@ -228,7 +358,7 @@ function RoutinesPage() {
                     </IconButton>
                 </Tooltip>
             </Box>
-            {(routines.length > 0 || Boolean(q)) && (
+            {hasAnyRoutines && (
                 <TextField
                     size="small"
                     fullWidth
@@ -239,47 +369,30 @@ function RoutinesPage() {
                     slotProps={{ htmlInput: { ref: searchFieldRef, 'data-testid': 'routinesSearchInput' } }}
                 />
             )}
-            {sections.length === 0 ? (
-                renderEmptyState()
-            ) : (
-                // Sections/buckets flattened into one windowed sequence (headings and rows are each
-                // a measured child) — only elements near the viewport mount, so a large routine
-                // collection doesn't block the main thread on navigation. component="div": the
-                // WindowVirtualizer measuring wrapper is invalid inside the default <ul>.
-                <List disablePadding component="div" className={styles.list}>
-                    <WindowVirtualizer>
-                        {sections.flatMap((section) => [
-                            <Typography
-                                key={`section-${section.routineType}`}
-                                variant="h6"
-                                className={styles.sectionTitle}
-                                data-testid="routineTypeSectionTitle"
-                            >
-                                {section.title}
-                            </Typography>,
-                            ...section.buckets.flatMap((group) => [
-                                <Typography
-                                    key={`bucket-${section.routineType}-${group.bucket}`}
-                                    variant="overline"
-                                    className={styles.bucketLabel}
-                                    data-testid="routineFrequencyBucket"
-                                    sx={{ color: 'text.secondary' }}
-                                >
-                                    {group.bucket}
-                                </Typography>,
-                                ...group.routines.map((routine, idx) => (
-                                    // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
-                                    <Box key={routine._id} data-list-item-id={routine._id}>
-                                        {renderRoutineRow(routine)}
-                                        {editor.renderExpandFor(routine._id)}
-                                        {idx < group.routines.length - 1 && <Divider />}
-                                    </Box>
-                                )),
-                            ]),
-                        ])}
-                    </WindowVirtualizer>
-                </List>
+            {hasAnyRoutines && (
+                <Box className={styles.controlsRow}>
+                    <Tabs value={activeTab} onChange={(_e, value: RoutinesTab) => onTabSelected(value)} aria-label="Routine type">
+                        <Tab value="nextAction" label={`Next Action (${nextActionCount})`} data-testid="routinesTabNextAction" />
+                        <Tab value="calendar" label={`Calendar (${calendarCount})`} data-testid="routinesTabCalendar" />
+                    </Tabs>
+                    <ToggleButtonGroup
+                        exclusive
+                        size="small"
+                        value={activeView}
+                        onChange={(_e, value: RoutinesView | null) => {
+                            if (value) onViewSelected(value);
+                        }}
+                    >
+                        <ToggleButton value="list" aria-label="List view" data-testid="routinesViewListButton">
+                            <ViewListIcon fontSize="small" />
+                        </ToggleButton>
+                        <ToggleButton value="week" aria-label="Week view" data-testid="routinesViewWeekButton">
+                            <CalendarViewWeekIcon fontSize="small" />
+                        </ToggleButton>
+                    </ToggleButtonGroup>
+                </Box>
             )}
+            {isBootstrapping ? <ListSkeleton /> : activeView === 'week' ? renderWeekView() : renderListView()}
             {editor.renderGlobal()}
             <Dialog open={routineToDelete !== null} onClose={() => setRoutineToDelete(null)} maxWidth="sm" fullWidth>
                 <DialogTitle>Delete routine?</DialogTitle>

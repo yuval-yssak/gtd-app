@@ -3,8 +3,9 @@
     border-radius: 0.25rem;
 }
 
+/* Compact rows: the page's goal is a whole-collection overview, so density beats breathing room. */
 .item {
-    padding: 0.625rem 1rem;
+    padding: 0.25rem 1rem;
 }
 
 .countChip {
@@ -33,12 +34,29 @@
     margin-bottom: 1rem;
 }
 
-.sectionTitle {
-    margin: 1.5rem 0 0.25rem;
-    font-weight: 600;
-}
-
 .bucketLabel {
     display: block;
     margin: 0.75rem 0 0.25rem;
+}
+
+.controlsRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.pausedSection {
+    margin-top: 1.5rem;
+}
+
+.pausedToggle {
+    border: 0.0625rem solid var(--mui-palette-divider);
+    border-radius: 0.25rem;
+}
+
+/* Paused (archived) routines read as background noise until deliberately expanded. */
+.pausedRow {
+    opacity: 0.6;
 }

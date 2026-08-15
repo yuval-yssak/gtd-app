@@ -39,6 +39,7 @@ import { splitRoutine } from '../../db/routineSplit';
 import { useAutosave } from '../../hooks/useAutosave';
 import { type CalendarOption, useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
+import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { omitArchived, rankByUsage, type UsageIndex } from '../../lib/entityUsage';
 import { isBrowserOffline } from '../../lib/onlineStatus';
@@ -867,6 +868,11 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
         // that covers in-app navigation never runs on reload/close.
         hasUnsavedChangesOnUnload: () => hasStructuralEdits() || textAutosave.isDirty(),
     });
+
+    // Page chrome only — the other chromes get ESC from MUI Modal. Deliberately the raw `onClose`
+    // (not closeEditor): the resulting router navigation must stay behind the guard above, exactly
+    // like the header's back arrow. Mirrors ItemEditorBody.
+    usePageEscapeToClose({ enabled: chrome === 'page', onEscape: onClose });
 
     function patch(update: Partial<FormState>) {
         setForm((f) => ({ ...f, ...update }));

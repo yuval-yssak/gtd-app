@@ -62,6 +62,18 @@ export function deriveRecurrenceAnchor(rruleStr: string): 'floating' | 'fixed' {
 
 const WEEKDAY_NAMES: Record<number, string> = { 0: 'Mon', 1: 'Tue', 2: 'Wed', 3: 'Thu', 4: 'Fri', 5: 'Sat', 6: 'Sun' };
 
+type ByWeekdayEntry = number | Weekday | null;
+
+/**
+ * Flatten rrule's parsed byweekday (bare numbers 0–6 or Weekday objects, single or array) into
+ * plain weekday numbers. Monday (0) is falsy, hence the explicit != null check.
+ */
+export function normalizeByWeekday(byweekday: ByWeekdayEntry | ByWeekdayEntry[]): number[] {
+    return (Array.isArray(byweekday) ? byweekday : [byweekday])
+        .filter((day): day is number | Weekday => day != null)
+        .map((day) => (typeof day === 'number' ? day : day.weekday));
+}
+
 /** Convert an rrule string into a short human-readable label, e.g. "Every 3 days" or "Every Mon & Thu". */
 export function formatRrule(rruleStr: string): string {
     try {
@@ -87,14 +99,8 @@ export function formatRrule(rruleStr: string): string {
         }
 
         if (freq === RRule.WEEKLY) {
-            const days = (Array.isArray(byweekday) ? byweekday : [byweekday])
-                // Weekday 0 (Monday) is falsy — check != null instead of Boolean() to avoid filtering it out
-                .filter((d) => d != null)
-                .map((d) => {
-                    // rrule byweekday entries are bare numbers (0–6) or Weekday objects with a .weekday property
-                    const weekdayNum = typeof d === 'number' ? d : (d as Weekday).weekday;
-                    return WEEKDAY_NAMES[weekdayNum] ?? '';
-                })
+            const days = normalizeByWeekday(byweekday)
+                .map((weekdayNum) => WEEKDAY_NAMES[weekdayNum] ?? '')
                 .join(' & ');
             if (interval > 1) {
                 return days ? `Every ${days}, every ${interval} weeks` : `Every ${interval} weeks`;
@@ -148,6 +154,11 @@ export function formatCalendarRrule(routine: StoredRoutine): string {
     const timePart = `at ${timeOfDay}`;
     const durationPart = `for ${formatDuration(duration)}`;
     return `${freqPart} ${timePart} ${durationPart}${rangePart}`;
+}
+
+/** Human-readable schedule for any routine — calendar routines include time/duration/range. */
+export function formatRoutineSchedule(routine: StoredRoutine): string {
+    return routine.routineType === 'calendar' ? formatCalendarRrule(routine) : formatRrule(routine.rrule);
 }
 
 /** Extracts date range context for split routines (UNTIL for the head, start date for the tail). */

@@ -1,5 +1,6 @@
 import { createRouter, RouterProvider } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
+import { initNavigateBackTracking } from './hooks/useNavigateBack';
 import { routeTree } from './routeTree.gen';
 import type { MyDB } from './types/MyDB';
 
@@ -12,6 +13,9 @@ const router = createRouter({
         db: null as unknown as IDBPDatabase<MyDB>,
     },
 });
+
+// Must start before any navigation so detail pages can push back to the exact list they came from.
+initNavigateBackTracking(router);
 
 declare module '@tanstack/react-router' {
     interface Register {

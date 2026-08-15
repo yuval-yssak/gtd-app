@@ -205,6 +205,11 @@ test.describe('Item editor — page mode UX', () => {
 
             await page.keyboard.press('Escape');
             await expect(page).toHaveURL(/\/inbox/);
+
+            // Leaving via ESC pushes the list (rather than popping history), so the edited
+            // item stays in the stack — the browser Back button returns to it.
+            await page.goBack();
+            await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
         });
     });
 

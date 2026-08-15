@@ -25,17 +25,43 @@ function nextOpenNextAction(generated: StoredItem[]): StoredItem | undefined {
     return [...generated].sort((a, b) => nextActionSortKey(a).localeCompare(nextActionSortKey(b)))[0];
 }
 
+function nextGeneratedItem(routine: StoredRoutine, generated: StoredItem[], now: Dayjs): StoredItem | undefined {
+    return routine.routineType === 'calendar' ? nextCalendarItem(generated, now) : nextOpenNextAction(generated);
+}
+
 /**
  * Resolve the routine's "immediate next item": the generated item the user would act on next.
  * Returns a human-readable reason when there is none (paused routine / nothing generated yet).
  */
 export function findRoutineNextItem(routine: StoredRoutine, items: StoredItem[], now: Dayjs): RoutineNextItemResult {
     const generated = items.filter((item) => item.routineId === routine._id && isOpen(item));
-    const next = routine.routineType === 'calendar' ? nextCalendarItem(generated, now) : nextOpenNextAction(generated);
+    const next = nextGeneratedItem(routine, generated, now);
     if (next) {
         return { item: next };
     }
     return { item: null, reason: routine.active ? 'No upcoming item yet' : 'No upcoming item — routine is paused' };
+}
+
+/**
+ * Next items for many routines at once (the /routines list): pre-narrows to open routine-generated
+ * items once instead of re-filtering the full item set per routine. Routines with no upcoming
+ * item are simply absent from the map.
+ */
+export function buildRoutineNextItemIndex(routines: StoredRoutine[], items: StoredItem[], now: Dayjs): Map<string, StoredItem> {
+    const generatedByRoutine = items.reduce((byRoutine, item) => {
+        if (item.routineId !== undefined && isOpen(item)) {
+            const generated = byRoutine.get(item.routineId) ?? [];
+            generated.push(item);
+            byRoutine.set(item.routineId, generated);
+        }
+        return byRoutine;
+    }, new Map<string, StoredItem[]>());
+    return new Map(
+        routines.flatMap((routine) => {
+            const next = nextGeneratedItem(routine, generatedByRoutine.get(routine._id) ?? [], now);
+            return next ? [[routine._id, next] as const] : [];
+        }),
+    );
 }
 
 /** Short date label shown next to the next-item link, e.g. "Thu, Jul 2 18:00" or "due Jul 4". */

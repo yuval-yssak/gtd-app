@@ -60,22 +60,15 @@ export interface RoutineBucketGroup {
     routines: StoredRoutine[];
 }
 
-export interface RoutineTypeSection {
-    routineType: StoredRoutine['routineType'];
-    title: string;
-    buckets: RoutineBucketGroup[];
-}
-
-const TYPE_SECTIONS: readonly { routineType: StoredRoutine['routineType']; title: string }[] = [
-    { routineType: 'nextAction', title: 'Next Action Routines' },
-    { routineType: 'calendar', title: 'Calendar Routines' },
-];
-
 function sortByIntervalThenTitle(routines: StoredRoutine[]): StoredRoutine[] {
     return [...routines].sort((a, b) => approxIntervalDays(a.rrule) - approxIntervalDays(b.rrule) || a.title.localeCompare(b.title));
 }
 
-function bucketsFor(routines: StoredRoutine[]): RoutineBucketGroup[] {
+/**
+ * Group routines for one /routines tab into frequency buckets sorted daily → annual.
+ * Empty buckets are omitted.
+ */
+export function groupRoutinesByFrequency(routines: StoredRoutine[]): RoutineBucketGroup[] {
     const sorted = sortByIntervalThenTitle(routines);
     return FREQUENCY_BUCKETS.map((bucket) => ({
         bucket,
@@ -84,15 +77,15 @@ function bucketsFor(routines: StoredRoutine[]): RoutineBucketGroup[] {
 }
 
 /**
- * Group routines for the /routines page: Next Action routines first, then Calendar routines,
- * each divided into frequency buckets sorted daily → annual. Empty sections/buckets are omitted.
+ * Split a tab's routines into the main list (active) and the collapsed "Paused" section.
+ * `active` preserves input order — groupRoutinesByFrequency re-sorts it downstream; `paused`
+ * renders flat, so it is interval-then-title sorted here to match the active buckets' feel.
  */
-export function groupRoutines(routines: StoredRoutine[]): RoutineTypeSection[] {
-    return TYPE_SECTIONS.map(({ routineType, title }) => ({
-        routineType,
-        title,
-        buckets: bucketsFor(routines.filter((routine) => routine.routineType === routineType)),
-    })).filter((section) => hasAtLeastOne(section.buckets));
+export function splitActivePaused(routines: StoredRoutine[]): { active: StoredRoutine[]; paused: StoredRoutine[] } {
+    return {
+        active: routines.filter((routine) => routine.active),
+        paused: sortByIntervalThenTitle(routines.filter((routine) => !routine.active)),
+    };
 }
 
 /** Case-insensitive substring match on the routine title; a blank query matches everything. */

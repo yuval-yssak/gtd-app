@@ -8,9 +8,9 @@ import { gtd } from './helpers/gtd';
 // and fills the calendar horizon; calendar → nextAction trashes only UPCOMING calendar items
 // (past occurrences remain as history) and seeds the first next action.
 
-/** Opens the edit dialog for the routine row containing `title` on /routines. */
-async function openRoutineEditor(page: Parameters<typeof gtd.listItems>[0], title: string) {
-    await page.goto('/routines');
+/** Opens the edit dialog for the routine row containing `title` on /routines (tab-aware). */
+async function openRoutineEditor(page: Parameters<typeof gtd.listItems>[0], title: string, tab?: 'calendar') {
+    await page.goto(tab ? `/routines?tab=${tab}` : '/routines');
     await page.waitForSelector(`text=${title}`);
     await page.getByTestId('routineRow').filter({ hasText: title }).click();
     const dialog = page.getByRole('dialog', { name: 'Edit routine' });
@@ -71,7 +71,7 @@ test.describe('Routine type switch (nextAction ↔ calendar)', () => {
                 timeEnd: `${yesterday}T09:30:00`,
             });
 
-            const dialog = await openRoutineEditor(page, 'Morning swim');
+            const dialog = await openRoutineEditor(page, 'Morning swim', 'calendar');
             await dialog.getByRole('button', { name: 'Next Action' }).click();
             await dialog.getByTestId('routineEditorSaveButton').click();
             await expect(dialog).toBeHidden();

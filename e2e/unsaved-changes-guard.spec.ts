@@ -150,4 +150,42 @@ test.describe('unsaved-changes guard — routine editor', () => {
             expect(after?.rrule).toBe('FREQ=DAILY;INTERVAL=1');
         });
     });
+
+    test('ESC on the routine page: leaves when clean, prompts on a pending schedule edit', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `guard-routine-esc-${dayjs().valueOf()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, { ...DAILY, title: 'Esc routine' });
+
+            // Clean editor: ESC navigates straight back (deep link → /routines fallback).
+            await page.goto(`/routine/${routine._id}`);
+            await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
+            await page.keyboard.press('Escape');
+            await expect(page).toHaveURL(/\/routines/);
+
+            // With a structural edit pending, ESC prompts instead of silently dropping it —
+            // same path as the back arrow.
+            await page.goto(`/routine/${routine._id}`);
+            await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
+            await page.getByRole('button', { name: 'After N' }).click();
+            await page.keyboard.press('Escape');
+            const guardDialog = page.getByTestId('unsavedChangesDialog');
+            await expect(guardDialog).toBeVisible();
+            await page.getByTestId('unsavedChangesStay').click();
+            await expect(guardDialog).toHaveCount(0);
+            await expect(page).toHaveURL(new RegExp(`/routine/${routine._id}`));
+        });
+    });
+
+    test('routine title-only edit passes ESC through — autosave flushes it on the way out', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `guard-routine-title-esc-${dayjs().valueOf()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, { ...DAILY, title: 'Rename me routine' });
+            await page.goto(`/routine/${routine._id}`);
+            await page.getByRole('textbox', { name: 'Title' }).fill('Renamed routine on the way out');
+
+            await page.keyboard.press('Escape');
+            await expect(page).toHaveURL(/\/routines/); // no prompt — text is autosaved, not at risk
+            await expect(page.getByTestId('unsavedChangesDialog')).toHaveCount(0);
+
+            await expect.poll(async () => (await gtd.listRoutines(page)).map((r) => r.title)).toContain('Renamed routine on the way out');
+        });
+    });
 });

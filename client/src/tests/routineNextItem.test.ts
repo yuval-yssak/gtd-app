@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
-import { describeNextItemDate, findRoutineNextItem } from '../lib/routineNextItem';
+import { buildRoutineNextItemIndex, describeNextItemDate, findRoutineNextItem } from '../lib/routineNextItem';
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
 
 const NOW = dayjs('2026-07-02T12:00:00.000Z');
@@ -111,6 +111,45 @@ describe('findRoutineNextItem — calendar routines', () => {
         const result = findRoutineNextItem(calendarRoutine, [past], NOW);
         if (result.item) throw new Error('expected no item');
         expect(result.reason).toBe('No upcoming item yet');
+    });
+});
+
+describe('buildRoutineNextItemIndex', () => {
+    it('maps each routine to its own next item and omits routines with none', () => {
+        const nextActionRoutine = makeRoutine();
+        const calendarRoutine = makeRoutine({ _id: 'routine2', routineType: 'calendar' });
+        const barrenRoutine = makeRoutine({ _id: 'routine3' });
+        const naItem = makeItem({ _id: 'i1', expectedBy: '2026-07-10' });
+        const calItem = makeItem({
+            _id: 'i2',
+            routineId: 'routine2',
+            status: 'calendar',
+            timeStart: '2026-07-03T09:00:00.000Z',
+            timeEnd: '2026-07-03T10:00:00.000Z',
+        });
+        // Built by hand: makeItem always stamps a routineId, and exactOptionalPropertyTypes
+        // forbids overriding it with an explicit undefined.
+        const unrelated: StoredItem = {
+            _id: 'i3',
+            userId: 'user1',
+            status: 'nextAction',
+            title: 'not from a routine',
+            createdTs: '2026-06-01T00:00:00.000Z',
+            updatedTs: '2026-06-01T00:00:00.000Z',
+        };
+        const index = buildRoutineNextItemIndex([nextActionRoutine, calendarRoutine, barrenRoutine], [naItem, calItem, unrelated], NOW);
+        expect(index.get('routine1')?._id).toBe('i1');
+        expect(index.get('routine2')?._id).toBe('i2');
+        expect(index.has('routine3')).toBe(false);
+    });
+
+    it('agrees with findRoutineNextItem per routine', () => {
+        const routine = makeRoutine();
+        const overdue = makeItem({ _id: 'i1', expectedBy: '2026-06-20' });
+        const future = makeItem({ _id: 'i2', expectedBy: '2026-07-10' });
+        const index = buildRoutineNextItemIndex([routine], [future, overdue], NOW);
+        const single = findRoutineNextItem(routine, [future, overdue], NOW);
+        expect(index.get('routine1')?._id).toBe(single.item?._id);
     });
 });
 

@@ -27,17 +27,30 @@ async function seedGroupedRoutines(page: Page) {
     return { dailyNa, weeklyCal };
 }
 
-test.describe('Routines list — grouping and search', () => {
-    test('sections are type-first (next action before calendar) with frequency buckets daily → annual', async ({ browser }) => {
+test.describe('Routines list — tabs, grouping and search', () => {
+    test('tabs split the types with counts, URL-backed selection, and frequency buckets daily → annual', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `routine-groups-${dayjs().valueOf()}@example.com`, async (page) => {
             await seedGroupedRoutines(page);
 
             await page.goto('/routines');
             await page.waitForSelector('text=Water plants');
 
-            await expect(page.getByTestId('routineTypeSectionTitle')).toHaveText(['Next Action Routines', 'Calendar Routines']);
-            await expect(page.getByTestId('routineFrequencyBucket')).toHaveText(['Daily', 'Annual', 'Weekly']);
-            expect(await routineRowTitles(page)).toEqual(['Water plants', 'Renew insurance', 'Pool session']);
+            // Default tab: next-action routines only, bucketed daily → annual, with per-type counts.
+            await expect(page.getByTestId('routinesTabNextAction')).toContainText('(2)');
+            await expect(page.getByTestId('routinesTabCalendar')).toContainText('(1)');
+            await expect(page.getByTestId('routineFrequencyBucket')).toHaveText(['Daily', 'Annual']);
+            expect(await routineRowTitles(page)).toEqual(['Water plants', 'Renew insurance']);
+
+            // Calendar tab: selection lands in the URL, list swaps to calendar routines.
+            await page.getByTestId('routinesTabCalendar').click();
+            await expect(page).toHaveURL(/tab=calendar/);
+            await expect(page.getByTestId('routineFrequencyBucket')).toHaveText(['Weekly']);
+            expect(await routineRowTitles(page)).toEqual(['Pool session']);
+
+            // Deep link restores the tab on load.
+            await page.goto('/routines?tab=calendar');
+            await page.waitForSelector('text=Pool session');
+            expect(await routineRowTitles(page)).toEqual(['Pool session']);
         });
     });
 
@@ -52,23 +65,23 @@ test.describe('Routines list — grouping and search', () => {
             await expect(page).toHaveURL(/q=water/);
             expect(await routineRowTitles(page)).toEqual(['Water plants']);
 
-            // Clearing the input drops the param and restores the full list.
+            // Clearing the input drops the param and restores the tab's full list.
             await page.getByTestId('routinesSearchInput').fill('');
             await expect(page).not.toHaveURL(/q=/);
-            expect(await routineRowTitles(page)).toHaveLength(3);
+            expect(await routineRowTitles(page)).toHaveLength(2);
 
             // No match → dedicated empty state, not the "no routines yet" copy.
             await page.getByTestId('routinesSearchInput').fill('zzz');
             await expect(page.getByTestId('routinesEmptyState')).toHaveText('No routines match your search.');
 
-            // Deep link restores the filter on load.
-            await page.goto('/routines?q=pool');
+            // Deep link restores filter + tab together.
+            await page.goto('/routines?q=pool&tab=calendar');
             await page.waitForSelector('text=Pool session');
             expect(await routineRowTitles(page)).toEqual(['Pool session']);
         });
     });
 
-    test('open-page icon navigates to the routine page', async ({ browser }) => {
+    test('open-page icon navigates to the routine page; ESC returns to the exact list URL with the page kept in history', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `routine-open-page-${dayjs().valueOf()}@example.com`, async (page) => {
             const { dailyNa } = await seedGroupedRoutines(page);
 
@@ -78,6 +91,16 @@ test.describe('Routines list — grouping and search', () => {
             await page.getByTestId('routineRowOpenPageButton').click();
             await expect(page).toHaveURL(new RegExp(`/routine/${dailyNa._id}`));
             await expect(page.getByTestId('routinePageWrapper')).toBeVisible();
+
+            // Gate on the editor being mounted — the ESC listener attaches in an effect.
+            await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
+            await page.keyboard.press('Escape');
+            // Back to the exact previous location, search param included.
+            await expect(page).toHaveURL(/\/routines\?q=water/);
+
+            // The routine page stayed in history — the browser Back button returns to it.
+            await page.goBack();
+            await expect(page).toHaveURL(new RegExp(`/routine/${dailyNa._id}`));
         });
     });
 });
@@ -117,6 +140,37 @@ test.describe('Routine deep links from items', () => {
             await expect(routineChip).toBeVisible();
             await routineChip.getByText('Routine').click();
             await expect(page).toHaveURL(new RegExp(`/routine/${routine._id}`));
+        });
+    });
+
+    test('ESC from an item reached via a routine page returns to the list, not the routine page', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `routine-esc-chain-${dayjs().valueOf()}@example.com`, async (page) => {
+            const today = dayjs().format('YYYY-MM-DD');
+            const routine = await gtd.createRoutine(page, {
+                title: 'Workout',
+                routineType: 'nextAction',
+                rrule: 'FREQ=DAILY',
+                template: {},
+                active: true,
+                startDate: today,
+            });
+            await gtd.materializePendingNextActionRoutines(page);
+            const [item] = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status === 'nextAction');
+            if (!item) throw new Error('expected one materialized routine item');
+
+            // List → routine page → next-item link: two detail pages deep.
+            await page.goto('/routines');
+            await page.waitForSelector('text=Workout');
+            await page.getByTestId('routineRowOpenPageButton').click();
+            await expect(page).toHaveURL(new RegExp(`/routine/${routine._id}`));
+            await page.getByTestId('routineNextItemLink').click();
+            await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
+            await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
+
+            // ESC aims at the last *list* location — never the intermediate detail page, which
+            // would trap the user ping-ponging between the two detail pages.
+            await page.keyboard.press('Escape');
+            await expect(page).toHaveURL(/\/routines$/);
         });
     });
 

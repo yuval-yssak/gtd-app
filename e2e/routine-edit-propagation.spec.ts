@@ -13,9 +13,9 @@ async function openItemOf(page: Parameters<typeof gtd.listItems>[0], routineId: 
     return items.find((i) => i.routineId === routineId && i.status === 'nextAction');
 }
 
-/** Opens the edit dialog for the routine row containing `title` on /routines. */
-async function openRoutineEditor(page: Parameters<typeof gtd.listItems>[0], title: string) {
-    await page.goto('/routines');
+/** Opens the edit dialog for the routine row containing `title` on /routines (tab-aware). */
+async function openRoutineEditor(page: Parameters<typeof gtd.listItems>[0], title: string, tab?: 'calendar') {
+    await page.goto(tab ? `/routines?tab=${tab}` : '/routines');
     await page.waitForSelector(`text=${title}`);
     await page.getByTestId('routineRow').filter({ hasText: title }).click();
     const dialog = page.getByRole('dialog', { name: 'Edit routine' });
@@ -171,7 +171,7 @@ test.describe('Routine edit → open next action propagation', () => {
             const before = (await gtd.listItems(page)).filter((i) => i.routineId === routine._id && i.status === 'calendar');
             expect(before.length).toBeGreaterThan(0);
 
-            const dialog = await openRoutineEditor(page, 'Morning swim');
+            const dialog = await openRoutineEditor(page, 'Morning swim', 'calendar');
             await dialog.getByRole('textbox', { name: 'Notes (Markdown)' }).fill('bring goggles');
             await dialog.getByTestId('routineEditorSaveButton').click();
             await expect(dialog).toBeHidden();

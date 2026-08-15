@@ -12,6 +12,7 @@ import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorB
 import { useAppData } from '../../contexts/AppDataProvider';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
+import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import { describeNextItemDate, findRoutineNextItem } from '../../lib/routineNextItem';
 import type { StoredItem, StoredRoutine } from '../../types/MyDB';
 import styles from './-routine.$routineId.module.css';
@@ -80,6 +81,11 @@ function RoutinePage() {
 
     const routine = allRoutines.find((r) => r._id === routineId) ?? null;
     const goBack = () => historyBackOr('/routines');
+
+    // ESC on the not-found branch, where RoutineEditorBody (which owns the page-chrome ESC
+    // handling) never mounts — mirrors its "Go back" button. Enabled only then, so exactly one
+    // listener is active at a time. Declared before the early return to keep hook order stable.
+    usePageEscapeToClose({ enabled: !routine || !account, onEscape: goBack });
 
     if (!routine || !account) {
         return (
