@@ -23,12 +23,24 @@ test.describe('Routines page — paused section', () => {
         await withOneLoggedInDevice(browser, `routines-paused-${dayjs().valueOf()}@example.com`, async (page) => {
             await gtd.createRoutine(page, { title: 'Water plants', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: true });
             await gtd.createRoutine(page, { title: 'Old habit', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: false });
+            await gtd.createRoutine(page, {
+                title: 'Retired swim',
+                routineType: 'calendar',
+                rrule: 'FREQ=WEEKLY;BYDAY=TH',
+                template: {},
+                active: false,
+                calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            });
 
             await page.goto('/routines');
             await page.waitForSelector('text=Water plants');
 
             // Paused routine is not in the main list — only behind the collapsed section.
             await expect(page.getByText('Old habit')).toBeHidden();
+            // Tab counts cover unpaused routines only; paused ones count in their own section.
+            // The all-paused calendar tab reads (0) — its single routine sits behind Paused (1).
+            await expect(page.getByTestId('routinesTabNextAction')).toContainText('(1)');
+            await expect(page.getByTestId('routinesTabCalendar')).toContainText('(0)');
             const toggle = page.getByTestId('routinePausedSectionToggle');
             await expect(toggle).toContainText('Paused (1)');
 

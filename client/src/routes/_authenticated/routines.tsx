@@ -97,8 +97,11 @@ function RoutinesPage() {
     const { deferredQuery } = search;
 
     const filtered = useMemo(() => filterRoutinesByTitle(routines, deferredQuery), [routines, deferredQuery]);
-    const nextActionCount = useMemo(() => filtered.filter((routine) => routine.routineType === 'nextAction').length, [filtered]);
-    const calendarCount = filtered.length - nextActionCount;
+    // Tab counts cover unpaused routines only — paused ones are archived away in their own
+    // collapsed section, which carries its own count.
+    const unpausedFiltered = useMemo(() => splitActivePaused(filtered).active, [filtered]);
+    const nextActionCount = useMemo(() => unpausedFiltered.filter((routine) => routine.routineType === 'nextAction').length, [unpausedFiltered]);
+    const calendarCount = unpausedFiltered.length - nextActionCount;
     const { active, paused } = useMemo(() => splitActivePaused(filtered.filter((routine) => routine.routineType === activeTab)), [filtered, activeTab]);
     const buckets = useMemo(() => groupRoutinesByFrequency(active), [active]);
     // "now" freezes until routines/items change — a tab left open past an occurrence's end keeps
