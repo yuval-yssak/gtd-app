@@ -13,3 +13,4 @@
 - [New render gates ship with only the negative tested](feedback_conditional_render_gate_loses_coverage.md) — `{gate && <El/>}` diffs assert `toHaveCount(0)` for the hidden branch and leave the still-rendered branch uncovered.
 - [rrule helpers branch on FREQ and ignore BYDAY/UNTIL](feedback_rrule_freq_branch_ignores_byday.md) — Test every new `RRule.fromString` reader against `FREQ=DAILY;BYDAY=MO..FR` and an expired UNTIL; GCal rrules are stored verbatim.
 - [New list chrome skips the empty-state gate](feedback_new_list_chrome_skips_empty_gate.md) — Tabs/view toggles render unconditionally under an already-gated search field; check both gates together.
+- [Narrowing a count label's scope](feedback_count_label_scope_narrowing.md) — Excluding paused/archived from a tab count re-filters inline instead of reusing the splitter; paired count untested, `(0)`-over-content unhandled.
