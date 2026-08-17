@@ -3,7 +3,7 @@ import { type AnyRouter, useNavigate, useRouter } from '@tanstack/react-router';
 // Detail routes never qualify as a back target: recording them would make ESC on one detail
 // page push another (routine page → its next-item link → item page → ESC ping-pongs between
 // the two forever). ESC always aims at the last *list* the user was on.
-const DETAIL_PAGE_PREFIXES = ['/item/', '/routine/'];
+const DETAIL_PAGE_PREFIXES = ['/item/', '/routine/', '/person/'];
 const isDetailPagePathname = (pathname: string) => DETAIL_PAGE_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 
 // Href + pathname of the last list location the user was on — the push target for detail-page

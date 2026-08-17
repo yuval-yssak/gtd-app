@@ -4,8 +4,8 @@
  * local Claude memory. This lives in the MCP server so the behaviour ships with the protocol,
  * not with one operator's config.
  *
- * Only `item` and `routine` get a link: the web app has per-entity routes for them
- * (`/item/<id>`, `/routine/<id>`). People and work contexts have list-only pages, so a
+ * `item`, `routine` and `person` get a link: the web app has per-entity routes for them
+ * (`/item/<id>`, `/routine/<id>`, `/person/<id>`). Work contexts have a list-only page, so a
  * per-entity URL would be misleading — they're intentionally skipped. `gtd_batch` returns
  * `{ ok, count }` with no entity to stamp; the model is told (via server instructions) to build
  * batch links from the `entityId`s it submitted.
@@ -16,7 +16,7 @@
  */
 
 /** Web-app path prefix per linkable entity. Keyed by the tool's entity domain. */
-const PATH_BY_ENTITY = { item: '/item', routine: '/routine' } as const;
+const PATH_BY_ENTITY = { item: '/item', routine: '/routine', person: '/person' } as const;
 type LinkableEntity = keyof typeof PATH_BY_ENTITY;
 
 /**
@@ -39,10 +39,14 @@ const SHAPE_BY_TOOL: Record<string, { entity: LinkableEntity; shape: 'one' | 'li
     // Split returns a { head, tail } composite (two routines), not a bare routine — see stampPair.
     gtd_split_routine: { entity: 'routine', shape: 'pair' },
     gtd_list_routines: { entity: 'routine', shape: 'list' },
+    gtd_create_person: { entity: 'person', shape: 'one' },
+    gtd_get_person: { entity: 'person', shape: 'one' },
+    gtd_update_person: { entity: 'person', shape: 'one' },
+    gtd_list_people: { entity: 'person', shape: 'list' },
 };
 
 /** The array property holding the entities in a list response (mirrors the v1 API envelopes). */
-const LIST_KEY_BY_ENTITY: Record<LinkableEntity, 'items' | 'routines'> = { item: 'items', routine: 'routines' };
+const LIST_KEY_BY_ENTITY: Record<LinkableEntity, 'items' | 'routines' | 'people'> = { item: 'items', routine: 'routines', person: 'people' };
 
 /**
  * Returns a shallow copy of `result` with `url` stamped onto the entity (or each entity in a

@@ -2,7 +2,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs } from './types.js';
+import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
  * Routine CRUD + composite gestures (pause/resume/split). Routines are recurring task templates
@@ -19,7 +19,7 @@ const routineTemplateSchema = z
         time: z.number().nonnegative().optional(),
         focus: z.boolean().optional(),
         urgent: z.boolean().optional(),
-        notes: z.string().optional(),
+        notes: notesSchema,
     })
     .strict();
 

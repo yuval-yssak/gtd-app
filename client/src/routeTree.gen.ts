@@ -29,6 +29,7 @@ import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated/
 import { Route as AuthenticatedDoneRouteImport } from './routes/_authenticated/done'
 import { Route as AuthenticatedCalendarRouteImport } from './routes/_authenticated/calendar'
 import { Route as AuthenticatedRoutineRoutineIdRouteImport } from './routes/_authenticated/routine.$routineId'
+import { Route as AuthenticatedPersonPersonIdRouteImport } from './routes/_authenticated/person.$personId'
 import { Route as AuthenticatedItemItemIdRouteImport } from './routes/_authenticated/item.$itemId'
 
 const LoginRoute = LoginRouteImport.update({
@@ -135,6 +136,12 @@ const AuthenticatedRoutineRoutineIdRoute =
     path: '/routine/$routineId',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedPersonPersonIdRoute =
+  AuthenticatedPersonPersonIdRouteImport.update({
+    id: '/person/$personId',
+    path: '/person/$personId',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 const AuthenticatedItemItemIdRoute = AuthenticatedItemItemIdRouteImport.update({
   id: '/item/$itemId',
   path: '/item/$itemId',
@@ -161,6 +168,7 @@ export interface FileRoutesByFullPath {
   '/work-contexts': typeof AuthenticatedWorkContextsRoute
   '/auth/callback': typeof AuthCallbackRoute
   '/item/$itemId': typeof AuthenticatedItemItemIdRoute
+  '/person/$personId': typeof AuthenticatedPersonPersonIdRoute
   '/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
 }
 export interface FileRoutesByTo {
@@ -183,6 +191,7 @@ export interface FileRoutesByTo {
   '/auth/callback': typeof AuthCallbackRoute
   '/': typeof AuthenticatedIndexRoute
   '/item/$itemId': typeof AuthenticatedItemItemIdRoute
+  '/person/$personId': typeof AuthenticatedPersonPersonIdRoute
   '/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
 }
 export interface FileRoutesById {
@@ -207,6 +216,7 @@ export interface FileRoutesById {
   '/auth/callback': typeof AuthCallbackRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/item/$itemId': typeof AuthenticatedItemItemIdRoute
+  '/_authenticated/person/$personId': typeof AuthenticatedPersonPersonIdRoute
   '/_authenticated/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
 }
 export interface FileRouteTypes {
@@ -231,6 +241,7 @@ export interface FileRouteTypes {
     | '/work-contexts'
     | '/auth/callback'
     | '/item/$itemId'
+    | '/person/$personId'
     | '/routine/$routineId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -253,6 +264,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/'
     | '/item/$itemId'
+    | '/person/$personId'
     | '/routine/$routineId'
   id:
     | '__root__'
@@ -276,6 +288,7 @@ export interface FileRouteTypes {
     | '/auth/callback'
     | '/_authenticated/'
     | '/_authenticated/item/$itemId'
+    | '/_authenticated/person/$personId'
     | '/_authenticated/routine/$routineId'
   fileRoutesById: FileRoutesById
 }
@@ -427,6 +440,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRoutineRoutineIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/person/$personId': {
+      id: '/_authenticated/person/$personId'
+      path: '/person/$personId'
+      fullPath: '/person/$personId'
+      preLoaderRoute: typeof AuthenticatedPersonPersonIdRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/item/$itemId': {
       id: '/_authenticated/item/$itemId'
       path: '/item/$itemId'
@@ -455,6 +475,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedWorkContextsRoute: typeof AuthenticatedWorkContextsRoute
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedItemItemIdRoute: typeof AuthenticatedItemItemIdRoute
+  AuthenticatedPersonPersonIdRoute: typeof AuthenticatedPersonPersonIdRoute
   AuthenticatedRoutineRoutineIdRoute: typeof AuthenticatedRoutineRoutineIdRoute
 }
 
@@ -476,6 +497,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedWorkContextsRoute: AuthenticatedWorkContextsRoute,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedItemItemIdRoute: AuthenticatedItemItemIdRoute,
+  AuthenticatedPersonPersonIdRoute: AuthenticatedPersonPersonIdRoute,
   AuthenticatedRoutineRoutineIdRoute: AuthenticatedRoutineRoutineIdRoute,
 }
 

@@ -23,6 +23,22 @@ export const accountSchema = zod
     .describe('Account label whose token signs this call. Defaults to "default" — set additional accounts via GTD_API_TOKEN_<LABEL> env vars.');
 
 /**
+ * Shared `notes` schema for every entity that has one (items, routines, people). The web app
+ * renders notes through react-markdown, so the description carries the Markdown-link rule right
+ * next to the field being written — the server-level `instructions` state the same rule, but a
+ * field description is the signal closest to the point of use (and reaches clients that ignore
+ * `instructions` entirely).
+ */
+export const notesSchema = zod
+    .string()
+    .optional()
+    .describe(
+        'Optional Markdown body — rendered as Markdown in the web app. Write links as Markdown links, ' +
+            '`[descriptive label](https://example.com)`, never a bare URL. Label the link with what it points at ' +
+            '(page title, ticket key, sender + subject); fall back to the domain if nothing better is available.',
+    );
+
+/**
  * Builds the `RequestOptions` payload for `apiClient.request`. Centralised so adding a new
  * option (e.g. recipientAccount) requires changing one helper, not every tool. Returns
  * `undefined` when no option is set so the apiClient sees a single argument shape.

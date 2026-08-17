@@ -42,8 +42,11 @@ test.describe('archived work contexts and people', () => {
             await expect(page.getByTestId('editorWorkContextChip')).toHaveText(['Errands', 'Phone']);
             await expect(page.getByTestId('editorWorkContextChip').filter({ hasText: 'Errands' })).toHaveClass(/MuiChip-filled/);
 
-            // Unarchive restores the filter chip.
+            // Unarchive restores the filter chip. Park the mouse first — the earlier archive click
+            // left the pointer where the rows have since reordered, so another row's archive-button
+            // tooltip opens under it and intercepts this click (flaky tooltip-overlap).
             await page.goto('/work-contexts');
+            await page.mouse.move(0, 0);
             await rowFor(page, 'Errands').getByTestId('workContextRowArchiveButton').click();
             await expect(rowFor(page, 'Errands').getByTestId('workContextArchivedChip')).toHaveCount(0);
             await page.goto('/next-actions');

@@ -18,21 +18,26 @@ import ListItemText from '@mui/material/ListItemText';
 import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { createFileRoute } from '@tanstack/react-router';
-import { useMemo, useState } from 'react';
+import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { useCallback, useMemo, useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
+import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { PersonEditDialog } from '../../components/people/PersonEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { useListSearch } from '../../hooks/useListSearch';
+import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
+import { orderPeople } from '../../lib/peopleList';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './-people.module.css';
 
 export const Route = createFileRoute('/_authenticated/people')({
+    validateSearch: parseListQuerySearch,
     component: PeoplePage,
 });
 
@@ -76,12 +81,16 @@ function personRowSecondary(person: StoredPerson) {
 
 function PeoplePage() {
     const { db } = Route.useRouteContext();
+    const { q } = Route.useSearch();
+    const navigate = useNavigate();
     useListScrollRestoration();
     const { account, people, refreshPeople, loggedInAccounts, isInitialSyncing } = useAppData();
+    const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/people', search: { q: query || undefined }, replace: true }), [navigate]);
+    const search = useListSearch({ urlQuery: q ?? '', writeUrlQuery });
     const [createOpen, setCreateOpen] = useState(false);
     const [editing, setEditing] = useState<StoredPerson | null>(null);
     const [createForm, setCreateForm] = useState<CreateFormState>(emptyForm);
-    // Owner of the entity for create flow. Edit flow lives inside PersonEditDialog (which has its own picker).
+    // Owner of the entity for create flow. Edit flow lives inside PersonEditorBody (which has its own picker).
     const [createOwnerUserId, setCreateOwnerUserId] = useState<string>('');
 
     function openCreate() {
@@ -120,10 +129,12 @@ function PeoplePage() {
         await refreshPeople();
     }
 
-    // Active people first, archived parked at the bottom. The "Unused" hint marks archive
-    // candidates: nothing outside the trash references them.
+    // Alphabetical with archived parked at the bottom, filtered by the in-page search (deferred
+    // query so typing re-filters in an interruptible background render — see useListSearch).
+    // The "Unused" hint marks archive candidates: nothing outside the trash references them.
     const usage = useEntityUsage();
-    const orderedPeople = useMemo(() => [...people.filter((p) => !p.archived), ...people.filter((p) => p.archived)], [people]);
+    const { deferredQuery } = search;
+    const orderedPeople = useMemo(() => orderPeople(people, deferredQuery), [people, deferredQuery]);
 
     return (
         <Box>
@@ -140,11 +151,21 @@ function PeoplePage() {
                     </Typography>
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                     <AccountSyncChip />
+                    {people.length > 0 && <ListSearchButton onToggle={search.toggleSearch} testId="peopleSearchButton" />}
                 </Box>
                 <Button startIcon={<AddIcon />} variant="contained" size="small" onClick={openCreate}>
                     Add person
                 </Button>
             </Box>
+            {people.length > 0 && search.isOpen && (
+                <ListSearchField
+                    value={search.queryInput}
+                    onValueChange={search.setQueryInput}
+                    onClose={search.closeSearch}
+                    placeholder="Search people…"
+                    testId="peopleSearchInput"
+                />
+            )}
             {people.length === 0 ? (
                 // First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading.
                 isInitialSyncing ? (
@@ -160,6 +181,17 @@ function PeoplePage() {
                         No people yet. Add contacts to reference in Waiting For and items.
                     </Typography>
                 )
+            ) : orderedPeople.length === 0 ? (
+                <Typography
+                    sx={{
+                        color: 'text.secondary',
+                        textAlign: 'center',
+                        mt: 6,
+                    }}
+                    data-testid="peopleSearchEmpty"
+                >
+                    No people match your search.
+                </Typography>
             ) : (
                 <List disablePadding className={styles.list}>
                     {orderedPeople.map((person, idx) => (
@@ -189,6 +221,10 @@ function PeoplePage() {
                                 }
                             >
                                 <ListItemText
+                                    // Row body opens the full /person page (deep-linkable, matching the other
+                                    // list pages); the pencil in secondaryAction keeps the quick edit dialog.
+                                    onClick={() => void navigate({ to: '/person/$personId', params: { personId: person._id } })}
+                                    data-testid="personRowText"
                                     primary={
                                         <Box
                                             sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}

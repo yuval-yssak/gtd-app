@@ -39,7 +39,8 @@ const getPerson = defineTool({
 
 const createPerson = defineTool({
     name: 'gtd_create_person',
-    description: 'Create a new person.',
+    description:
+        'Create a new person. Put contact details in the dedicated `email` and `phone` fields — never bury them in `notes`. Use `notes` for freeform context only (role, Slack handle, timezone, links).',
     inputSchema: {
         name: z.string().min(1),
         email: z.string().optional(),
@@ -53,7 +54,8 @@ const createPerson = defineTool({
 
 const updatePerson = defineTool({
     name: 'gtd_update_person',
-    description: 'Update fields on an existing person. At least one field must be present.',
+    description:
+        'Update fields on an existing person. At least one field must be present. Contact details belong in the dedicated `email` and `phone` fields, not in `notes`.',
     inputSchema: {
         id: idSchema,
         name: z.string().min(1).optional(),

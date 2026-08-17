@@ -75,9 +75,23 @@ describe('decorateWithUrls', () => {
         expect(result).toEqual({ items: [{ _id: 'a', url: `${STAGING}/item/a` }, { title: 'no id' }] });
     });
 
-    it('leaves unknown tools (people, work contexts, batch) untouched', () => {
-        const personResult = decorateWithUrls('gtd_create_person', { _id: 'p1', name: 'Alex' }, STAGING);
-        expect(personResult).toEqual({ _id: 'p1', name: 'Alex' });
+    it('stamps a person deep link on single-person responses', () => {
+        const created = decorateWithUrls('gtd_create_person', { _id: 'p1', name: 'Alex' }, STAGING);
+        expect(created).toEqual({ _id: 'p1', name: 'Alex', url: `${STAGING}/person/p1` });
+        const updated = decorateWithUrls('gtd_update_person', { _id: 'p2', name: 'Sam' }, STAGING);
+        expect(updated).toEqual({ _id: 'p2', name: 'Sam', url: `${STAGING}/person/p2` });
+    });
+
+    it('uses the people key for person list responses', () => {
+        const result = decorateWithUrls('gtd_list_people', { people: [{ _id: 'p1' }] }, STAGING);
+        expect(result).toEqual({ people: [{ _id: 'p1', url: `${STAGING}/person/p1` }] });
+    });
+
+    it('leaves unknown tools (work contexts, person delete, batch) untouched', () => {
+        const workContextResult = decorateWithUrls('gtd_create_work_context', { _id: 'w1', name: 'near a phone' }, STAGING);
+        expect(workContextResult).toEqual({ _id: 'w1', name: 'near a phone' });
+        const deleteResult = decorateWithUrls('gtd_delete_person', { ok: true }, STAGING);
+        expect(deleteResult).toEqual({ ok: true });
         const batchResult = decorateWithUrls('gtd_batch', { ok: true, count: 3 }, STAGING);
         expect(batchResult).toEqual({ ok: true, count: 3 });
     });

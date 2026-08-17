@@ -14,3 +14,5 @@
 - [rrule helpers branch on FREQ and ignore BYDAY/UNTIL](feedback_rrule_freq_branch_ignores_byday.md) — Test every new `RRule.fromString` reader against `FREQ=DAILY;BYDAY=MO..FR` and an expired UNTIL; GCal rrules are stored verbatim.
 - [New list chrome skips the empty-state gate](feedback_new_list_chrome_skips_empty_gate.md) — Tabs/view toggles render unconditionally under an already-gated search field; check both gates together.
 - [Narrowing a count label's scope](feedback_count_label_scope_narrowing.md) — Excluding paused/archived from a tab count re-filters inline instead of reusing the splitter; paired count untested, `(0)`-over-content unhandled.
+- [New page routes ship with no inbound in-app link](feedback_new_page_route_has_no_inbound_link.md) — Deep-link-only `/entity/$id` routes leave the list row on the dialog and the recorded-backTarget branch dead.
+- [Extracted editor bodies duplicate chrome type + lib helpers](feedback_extracted_body_diverges_from_shared_chrome_type.md) — Inline `'dialog' | 'page'` union instead of `ItemEditorChrome`; local `byName` instead of `lib/sortByName`.

@@ -2,7 +2,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs } from './types.js';
+import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
  * People CRUD. People are named contacts referenced from items via `peopleIds` and
@@ -40,13 +40,14 @@ const getPerson = defineTool({
 
 const createPerson = defineTool({
     name: 'gtd_create_person',
-    description: 'Create a new person.',
+    description:
+        'Create a new person. Put contact details in the dedicated `email` and `phone` fields — never bury them in `notes`. Use `notes` for freeform context only (role, Slack handle, timezone, links).',
     inputSchema: {
         name: z.string().min(1),
         email: z.string().optional(),
         phone: z.string().optional(),
         externalCalendarId: z.string().optional(),
-        notes: z.string().optional(),
+        notes: notesSchema,
         account: accountSchema,
     },
     handler: async ({ account, ...body }, api) => api.request('POST', '/v1/people', body, undefined, requestOptsFromArgs({ account })),
@@ -54,14 +55,15 @@ const createPerson = defineTool({
 
 const updatePerson = defineTool({
     name: 'gtd_update_person',
-    description: 'Update fields on an existing person. At least one field must be present.',
+    description:
+        'Update fields on an existing person. At least one field must be present. Contact details belong in the dedicated `email` and `phone` fields, not in `notes`.',
     inputSchema: {
         id: idSchema,
         name: z.string().min(1).optional(),
         email: z.string().optional(),
         phone: z.string().optional(),
         externalCalendarId: z.string().optional(),
-        notes: z.string().optional(),
+        notes: notesSchema,
         account: accountSchema,
     },
     handler: async ({ id, account, ...patch }, api) =>

@@ -24,9 +24,11 @@
     vertical-align: middle;
 }
 
-/* widened to accommodate three icon buttons in secondaryAction (edit / archive / delete) */
+/* widened to accommodate three icon buttons in secondaryAction (edit / archive / delete);
+   pointer because the row body navigates to the /person page */
 .listItemText {
     padding-right: 7rem;
+    cursor: pointer;
 }
 
 .personForm {

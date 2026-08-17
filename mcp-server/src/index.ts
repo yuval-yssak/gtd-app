@@ -22,11 +22,13 @@ import { registerWorkContextTools } from './tools/workContexts.js';
  * memory) so the URL-surfacing behaviour ships with the server and works for all operators.
  */
 const SERVER_INSTRUCTIONS = [
-    'After creating or editing an item or routine, item and routine tool responses include a `url` field — a direct',
+    'After creating or editing an item, routine or person, the tool response includes a `url` field — a direct',
     'web-app link to that entity. Always show the user this `url` at the end of your reply so they can jump straight to it.',
     'The `gtd_batch` tool returns only `{ ok, count }` with no entity, so it carries no `url`; when a batch creates or',
     'updates items/routines, construct the link yourself from each op as `<web-app-origin>/item/<entityId>` or',
     '`<web-app-origin>/routine/<entityId>` (infer the origin from a `url` returned by any other tool in the session).',
+    'When creating or updating a person, put contact details in the dedicated `email` and `phone` fields — never bury',
+    'them in `notes`.',
     'Every `notes` field (on items, routines and people) is rendered as Markdown in the web app. Always write links there',
     'as Markdown links — `[descriptive label](https://example.com)` — never a bare URL. Prefer a label that says what the',
     'link is (page title, ticket key, sender + subject); fall back to the domain when nothing better is available.',
