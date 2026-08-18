@@ -15994,3 +15994,294 @@ describe('relink sweep — active resolution of stranded lastKnown* markers', ()
         expect(routine?.calendarEventId).toBeDefined();
     });
 });
+
+// ─── Master-linked standalone item convergence ─────────────────────────────
+//
+// A GCal event can be synced as a standalone one-off item BEFORE its series is recognized as a
+// routine (`recurrence` not visible at first sight). The leftover item then links straight to the
+// series MASTER — marking it done used to PATCH the ✓ marker + sage colorId onto the master,
+// flagging every future occurrence done for all attendees, and the ✓ then round-tripped into the
+// routine's and open items' stored titles. Two layers of defense are covered here:
+//  1. import-side absorb: importing (or re-reporting) a recurring master converges any standalone
+//     item still linked to it — open duplicates are trashed, done ones are unlinked;
+//  2. pushback-side guard: a master-linked item push reroutes to a single-instance override and
+//     never PATCHes or deletes the master itself.
+
+describe('recurring-master import absorbs master-linked standalone items', () => {
+    const tomorrowAt9 = () => dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T09:00:00`, 'Asia/Jerusalem').format();
+    const tomorrowAt10 = () => dayjs.tz(`${dayjs().add(1, 'day').format('YYYY-MM-DD')}T10:00:00`, 'Asia/Jerusalem').format();
+
+    function mockMasterInFullSync() {
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
+            events: [
+                {
+                    id: 'gcal-master-absorb',
+                    title: 'Daily standup',
+                    timeStart: tomorrowAt9(),
+                    timeEnd: tomorrowAt10(),
+                    updated: dayjs().toISOString(),
+                    status: 'confirmed',
+                    recurrence: ['RRULE:FREQ=DAILY'],
+                },
+            ],
+            nextSyncToken: 'tok-absorb',
+        });
+    }
+
+    function makeMasterLinkedStandaloneItem(userId: string, overrides: Partial<ItemInterface> = {}) {
+        return makeItem(userId, {
+            _id: 'item-master-dup',
+            title: 'Daily standup',
+            calendarEventId: 'gcal-master-absorb',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            timeStart: tomorrowAt9(),
+            timeEnd: tomorrowAt10(),
+            ...overrides,
+        });
+    }
+
+    it('trashes an open standalone duplicate when the series is imported as a routine', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await itemsDAO.insertOne(makeMasterLinkedStandaloneItem(userId));
+        mockMasterInFullSync();
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findOne({ user: userId, calendarEventId: 'gcal-master-absorb' });
+        expect(routine).not.toBeNull();
+        // The standalone duplicate no longer competes with the routine's generated items.
+        const absorbed = await itemsDAO.findByOwnerAndId('item-master-dup', userId);
+        expect(absorbed?.status).toBe('trash');
+        // The convergence rode the operation log so other devices apply it too.
+        const ops = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-master-dup' });
+        expect(ops).toHaveLength(1);
+        expect(ops[0]!.snapshot).toMatchObject({ status: 'trash' });
+    });
+
+    it('unlinks (not trashes) a done standalone duplicate so the completion record survives', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await itemsDAO.insertOne(makeMasterLinkedStandaloneItem(userId, { status: 'done' }));
+        mockMasterInFullSync();
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const absorbed = await itemsDAO.findByOwnerAndId('item-master-dup', userId);
+        expect(absorbed?.status).toBe('done');
+        expect(absorbed?.calendarEventId).toBeUndefined();
+        const ops = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: 'item-master-dup' });
+        expect(ops).toHaveLength(1);
+        expect(ops[0]!.snapshot).toMatchObject({ status: 'done' });
+        expect(ops[0]!.snapshot).not.toHaveProperty('calendarEventId');
+    });
+
+    it('self-heals pre-existing damage: a master re-report absorbs the duplicate via updateRoutineFromGCal', async () => {
+        // The routine already exists (imported before the absorb fix) and the standalone duplicate
+        // lingers — the next re-report of the master must converge it even though the routine's
+        // schedule may be structurally unchanged.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-absorb-existing',
+                title: 'Daily standup',
+                rrule: 'FREQ=DAILY',
+                calendarEventId: 'gcal-master-absorb',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+            }),
+        );
+        await itemsDAO.insertOne(makeMasterLinkedStandaloneItem(userId));
+        mockMasterInFullSync();
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const absorbed = await itemsDAO.findByOwnerAndId('item-master-dup', userId);
+        expect(absorbed?.status).toBe('trash');
+        // No second routine was minted for the same series.
+        const routines = await routinesDAO.findArray({ user: userId, calendarEventId: 'gcal-master-absorb' });
+        expect(routines).toHaveLength(1);
+    });
+});
+
+describe('pushback guard — item linked to a recurring MASTER event', () => {
+    async function insertMasterRoutine(userId: string, overrides: Partial<RoutineInterface> = {}) {
+        const routine = makeRoutine(userId, {
+            _id: 'routine-master-guard',
+            title: 'Daily standup',
+            calendarEventId: 'recurring-master-guard',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            ...overrides,
+        });
+        await routinesDAO.insertOne(routine);
+        return routine;
+    }
+
+    function makeMasterLinkedItem(userId: string, overrides: Partial<ItemInterface> = {}) {
+        return makeItem(userId, {
+            _id: 'item-master-linked',
+            title: 'Daily standup',
+            calendarEventId: 'recurring-master-guard',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            ...overrides,
+        });
+    }
+
+    it('marking a master-linked item done patches a single instance override — never the master', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertMasterRoutine(userId);
+        const item = makeMasterLinkedItem(userId, { status: 'done' });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+        const instanceSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        // The whole-event PATCH (which would have applied the ✓ + sage color to EVERY occurrence
+        // of the series) must never fire against a master id.
+        expect(updateSpy).not.toHaveBeenCalled();
+        expect(instanceSpy).toHaveBeenCalledOnce();
+        const [eventId, originalDate, updates] = instanceSpy.mock.calls[0]!;
+        expect(eventId).toBe('recurring-master-guard');
+        expect(originalDate).toBe(dayjs(item.timeStart).format('YYYY-MM-DD'));
+        expect(updates).toMatchObject({ title: '✓ Daily standup', colorId: '2' });
+        // The reroute stamps the push anchor like any other instance override.
+        const updated = await itemsDAO.findByOwnerAndId(item._id!, userId);
+        expect(updated?.lastPushedToGCalTs).toBeTruthy();
+    });
+
+    it('a generic edit of a master-linked item reroutes to an instance override too', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertMasterRoutine(userId);
+        const item = makeMasterLinkedItem(userId, { status: 'calendar' });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+        const instanceSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).not.toHaveBeenCalled();
+        expect(instanceSpy).toHaveBeenCalledOnce();
+        const updates = instanceSpy.mock.calls[0]![2];
+        expect(updates).toMatchObject({ title: 'Daily standup', colorId: null });
+    });
+
+    it('trashing a master-linked item skips the delete — never removes the series', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertMasterRoutine(userId);
+        const item = makeMasterLinkedItem(userId, { status: 'trash' });
+        await itemsDAO.insertOne(item);
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it('hard-deleting a master-linked item skips the GCal delete — never removes the series', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertMasterRoutine(userId);
+        const item = makeMasterLinkedItem(userId, { status: 'calendar' });
+
+        const deleteSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockResolvedValue(undefined);
+
+        // Delete ops arrive with the pre-delete row hydrated as the snapshot.
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, opType: 'delete', snapshot: item }), mockBuildProvider());
+
+        expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it('reroutes onto the ACTIVE split successor, not the capped base, when a split shares the bare id', async () => {
+        // After "this and all following", the capped inactive base and the live successor
+        // legitimately coexist on ONE bare calendarEventId (the unique index is active-partial).
+        // The reroute must resolve the successor: the base's capped rrule and retired sync config
+        // would make the instance-window lookup come up empty and silently drop the push. The base
+        // carries the NEWER updatedTs to prove selection is by `active`, not recency.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertMasterRoutine(userId, {
+            _id: 'routine-split-capped-base',
+            active: false,
+            rrule: 'FREQ=DAILY;UNTIL=20260101T000000Z',
+            updatedTs: dayjs().toISOString(),
+            routineExceptions: [{ date: '2026-01-01', type: 'modified', itemId: 'item-master-linked' }],
+        });
+        await insertMasterRoutine(userId, {
+            _id: 'routine-split-live-successor',
+            active: true,
+            updatedTs: dayjs().subtract(1, 'day').toISOString(),
+            routineExceptions: [{ date: '2026-09-01', type: 'modified', itemId: 'item-master-linked' }],
+        });
+        const item = makeMasterLinkedItem(userId, { status: 'done' });
+        await itemsDAO.insertOne(item);
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
+        const instanceSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(updateSpy).not.toHaveBeenCalled();
+        expect(instanceSpy).toHaveBeenCalledOnce();
+        // The originalDate comes from the resolved routine's `modified` exception for this item —
+        // 2026-09-01 proves the successor supplied the context, not the newer-updatedTs base.
+        const [, originalDate] = instanceSpy.mock.calls[0]!;
+        expect(originalDate).toBe('2026-09-01');
+    });
+
+    it("does not forward the duplicate item's import-frozen attendees — the occurrence keeps inheriting from the master", async () => {
+        // The standalone duplicate's attendees snapshot dates from import and is never refreshed
+        // (master ids route to the routine import path). An RSVP since then would read as
+        // divergence and permanently fork this occurrence off the master's list (RFC 5545
+        // per-instance attendee override) — for what the user experienced as ticking a checkbox.
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertMasterRoutine(userId, {
+            attendees: [
+                { email: 'a@example.com', responseStatus: 'accepted' },
+                { email: 'b@example.com', responseStatus: 'needsAction' },
+            ],
+        });
+        const item = makeMasterLinkedItem(userId, {
+            status: 'done',
+            // Frozen pre-RSVP snapshot — differs from the routine's current list.
+            attendees: [
+                { email: 'a@example.com', responseStatus: 'needsAction' },
+                { email: 'b@example.com', responseStatus: 'needsAction' },
+            ],
+        });
+        await itemsDAO.insertOne(item);
+
+        const instanceSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockResolvedValue(undefined);
+
+        await maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider());
+
+        expect(instanceSpy).toHaveBeenCalledOnce();
+        expect(instanceSpy.mock.calls[0]![2]).not.toHaveProperty('attendees');
+    });
+});

@@ -23,7 +23,8 @@ import { markdownToHtml } from './markdownHtml.js';
 import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
 import { markOpFailed } from './opFailure.js';
-import { buildCalendarInstanceEventId, regenerateFutureRoutineItems } from './routineItemRegeneration.js';
+import { buildCalendarInstanceEventId, normalizeMasterEventId, regenerateFutureRoutineItems } from './routineItemRegeneration.js';
+import { hasAtLeastOne } from './typeUtils.js';
 
 type ProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
 
@@ -170,6 +171,16 @@ async function removeItemGCalPresence(snapshot: ItemInterface, userId: string, b
             console.log(
                 `[gcal-pushback] skipping fromGmail event delete (read-only via Calendar API) | eventId=${snapshot.calendarEventId} itemId=${snapshot._id}`,
             );
+            return;
+        }
+        // Same defense as pushExistingItemToGCal: if this id is a routine's MASTER recurring event,
+        // deleting it would wipe the entire series for all attendees. ANY owning routine counts —
+        // active or a split's retired capped base (whose master still holds past occurrences) —
+        // because series deletion is owned by routine deletion (pushRoutineDeletion), never by
+        // removing a duplicate item.
+        const routinesOnMaster = await findRoutinesOnMasterEvent(snapshot.calendarEventId, userId);
+        if (hasAtLeastOne(routinesOnMaster)) {
+            console.log(`[gcal-pushback] removed/detached item ${snapshot._id} targets recurring master ${snapshot.calendarEventId} — skipping series delete`);
             return;
         }
         const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
@@ -408,6 +419,18 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
         return;
     }
 
+    // Defense-in-depth: an item can be left pointing at a routine's MASTER recurring event id (the
+    // event was imported as a one-off before its series was recognized as a routine, and predates
+    // the absorb-on-import convergence). Patching that id would smear the change — most damagingly
+    // the ✓ done marker + sage color — across every occurrence for all attendees, and the trash
+    // branch would delete the entire series. Reroute done/open edits to a single-instance override
+    // on the item's own occurrence; never touch the master.
+    const routinesOnMaster = await findRoutinesOnMasterEvent(eventId, userId);
+    if (hasAtLeastOne(routinesOnMaster)) {
+        await rerouteMasterLinkedItemPush(snapshot, routinesOnMaster, userId, buildProvider, sendUpdates);
+        return;
+    }
+
     const link: CalendarLink = { integrationId: snapshot.calendarIntegrationId, configId: snapshot.calendarSyncConfigId };
     const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'item', entityId: itemId });
     if (!ctx) {
@@ -477,6 +500,63 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
     );
     const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
     await stampItemLastPushed(userId, itemId, htmlForSync);
+}
+
+/**
+ * Routines whose GCal master series id matches the given event id. User-scoped, deliberately NOT
+ * integration-scoped: stale integration ids after a disconnect/reconnect must not defeat the
+ * master guards. May legitimately hold several rows — a "this and all following" split keeps the
+ * capped base and its successor(s) on the same bare id.
+ */
+async function findRoutinesOnMasterEvent(eventId: string, userId: string): Promise<RoutineInterface[]> {
+    return await routinesDAO.findArray({ user: userId, calendarEventId: normalizeMasterEventId(eventId) });
+}
+
+/**
+ * The routine a master-linked item push should be rerouted onto: the ACTIVE routine on the series.
+ * A split's capped base legitimately shares the bare id, but its retired segment must not supply
+ * the push context or exception lookup — its capped rrule would make the instance-window lookup
+ * come up empty and silently drop the push. When two integrations each hold an active routine on
+ * the same shared meeting, prefer the item's own integration; then the most recently updated.
+ */
+function pickLiveRerouteTarget(routinesOnMaster: RoutineInterface[], itemIntegrationId: string | undefined): RoutineInterface | undefined {
+    const activeByRecency = routinesOnMaster.filter((routine) => routine.active).sort((a, b) => b.updatedTs.localeCompare(a.updatedTs));
+    return activeByRecency.find((routine) => routine.calendarIntegrationId === itemIntegrationId) ?? activeByRecency[0];
+}
+
+/**
+ * Handles a push for an item whose `calendarEventId` turned out to be a routine's MASTER recurring
+ * event. Done/open edits become a single-instance override for the item's own occurrence date
+ * (`pushRoutineInstanceOverride` resolves the routine via the injected `routineId`); anything else
+ * — notably trash, whose normal branch would delete the whole series, or a series with no live
+ * routine to reroute onto — is skipped with a log. The master itself is never patched or deleted.
+ */
+async function rerouteMasterLinkedItemPush(
+    snapshot: ItemInterface,
+    routinesOnMaster: RoutineInterface[],
+    userId: string,
+    buildProvider: ProviderFactory,
+    sendUpdates: 'all' | 'none',
+): Promise<void> {
+    const target = pickLiveRerouteTarget(routinesOnMaster, snapshot.calendarIntegrationId);
+    const isInstancePatchable = (snapshot.status === 'done' || snapshot.status === 'calendar') && Boolean(snapshot.timeStart);
+    if (!target || !isInstancePatchable) {
+        console.log(
+            `[gcal-pushback] item ${snapshot._id} targets recurring master ${snapshot.calendarEventId} (status=${snapshot.status}) — skipping master patch`,
+        );
+        return;
+    }
+    console.log(
+        `[gcal-pushback] item ${snapshot._id} targets recurring master ${snapshot.calendarEventId} — rerouting to instance override | routineId=${target._id}`,
+    );
+    // The duplicate's `attendees` were captured at import time and are never refreshed again
+    // (master ids route to the routine import path, so updateExistingCalendarItem skips this row).
+    // A single RSVP since import would read as divergence in pushRoutineInstanceOverride's gate and
+    // permanently fork this occurrence off the master's attendee list (RFC 5545 per-instance
+    // override). Mirror the routine's own list instead so the gate reads "inherit from master".
+    const { attendees: _frozenAtImportTime, ...snapshotSansAttendees } = snapshot;
+    const rerouted = { ...snapshotSansAttendees, routineId: target._id, ...(target.attendees !== undefined ? { attendees: target.attendees } : {}) };
+    await pushRoutineInstanceOverride(rerouted, userId, buildProvider, sendUpdates);
 }
 
 /**

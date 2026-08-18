@@ -3187,6 +3187,12 @@ async function createRoutineFromGCal(
     }
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routineId, snapshot: routine, opType: 'create', now: ctx.now }));
 
+    // The event may have been synced earlier as a one-off item (before its recurrence was visible).
+    // Converge that duplicate now, before regeneration mints the canonical per-occurrence items —
+    // otherwise it lingers with a live link to the series MASTER and a later done/edit pushback
+    // would patch the whole series.
+    await absorbStandaloneItemsOnMaster(event.id, source, ctx);
+
     // Generate the tail's calendar items here. updateRoutineFromGCal regenerates items on schedule
     // change (line ~1048) but a brand-new routine — most importantly the tail of a "this and following"
     // split — never goes through that path. Without this, the tail arrives via sync as a routine with
@@ -3232,8 +3238,62 @@ function buildNakedTemplateMatch(event: GCalEvent, timeZone: string) {
     };
 }
 
+/**
+ * Converges standalone items that hold a live link to a routine's MASTER recurring event id.
+ * Happens when the event was first synced as a one-off (its `recurrence` not yet visible) and only
+ * later imported as a routine: the leftover item keeps `calendarEventId` = the series master, so a
+ * later done/edit pushback would PATCH the master and smear the change (most damagingly the ✓ done
+ * marker + sage color) across every occurrence for all attendees. Open duplicates are trashed — the
+ * routine's generated items replace them; done ones are unlinked instead so the completion record
+ * survives. Each change records an op so other devices converge. Integration-scoped to avoid
+ * touching another account's representation of the same shared event.
+ */
+async function absorbStandaloneItemsOnMaster(masterEventId: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const duplicates = await itemsDAO.findArray({
+        user: ctx.userId,
+        calendarIntegrationId: source.integration._id,
+        routineId: { $exists: false },
+        calendarEventId: normalizeMasterEventId(masterEventId),
+        status: { $in: ['calendar', 'done'] },
+    });
+    await Promise.all(duplicates.map((duplicate) => absorbOneMasterLinkedDuplicate(duplicate, ctx)));
+}
+
+/** Converges a single master-linked standalone item: trash if open, unlink-but-keep if done. */
+async function absorbOneMasterLinkedDuplicate(duplicate: ItemInterface, ctx: SyncContext): Promise<void> {
+    console.log(
+        `[gcal-sync] absorbing standalone item linked to routine master | itemId=${duplicate._id} eventId=${duplicate.calendarEventId} status=${duplicate.status}`,
+    );
+    if (duplicate.status === 'done') {
+        await unlinkDoneMasterDuplicate(duplicate, ctx);
+        return;
+    }
+    await trashItem(duplicate, ctx);
+}
+
+/**
+ * Strips the master link off a done standalone duplicate (instead of trashing it) so the user's
+ * completion record survives the routine import while pushback can never reach the master through
+ * it again. Keeps the integration link fields — harmless without a `calendarEventId`.
+ */
+async function unlinkDoneMasterDuplicate(duplicate: ItemInterface, ctx: SyncContext): Promise<void> {
+    const itemId = duplicate._id;
+    if (!itemId) {
+        return;
+    }
+    await itemsDAO.updateOne({ _id: itemId, user: ctx.userId }, { $set: { updatedTs: ctx.now }, $unset: { calendarEventId: '', calendarInstanceEventId: '' } });
+    const { calendarEventId: _unlinked, calendarInstanceEventId: _unlinkedInstance, ...kept } = duplicate;
+    const snapshot = { ...kept, updatedTs: ctx.now };
+    ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot, opType: 'update', now: ctx.now }));
+}
+
 async function updateRoutineFromGCal(existing: RoutineInterface, event: GCalEvent, rrule: string, source: CalendarSource, ctx: SyncContext): Promise<void> {
     const routineId = existing._id;
+
+    // Self-healing: absorb any standalone item still linked to this master BEFORE the structural
+    // no-op gate below — a routine damaged before the absorb-on-import fix existed converges on the
+    // next master re-report even when nothing structural changed.
+    await absorbStandaloneItemsOnMaster(event.id, source, ctx);
 
     // Determine notes update independently of structural fields.
     // For routines, GCal description maps to template.notes (not a top-level notes field).

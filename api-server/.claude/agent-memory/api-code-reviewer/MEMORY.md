@@ -1,3 +1,4 @@
+- [Master-linked standalone item convergence](project_master_linked_standalone_item_convergence.md) — done ✓ smeared onto a whole series; fixes must use findActiveRoutineOnSeries + strip frozen attendees on reroute.
 - [(user, calendarInstanceEventId) index is NOT status-scoped](project_instance_id_unique_index_not_status_scoped.md) — but tier-1 resolve IS; trash/done dead twins E11000 invisibly. Narrow every absorb.
 - [Naive vs offset timeStart instant compare](project_naive_vs_offset_timestart_instant_compare.md) — generated rows are offset-naive, GCal rows carry offsets; dayjs().valueOf() misses by 3h on UTC servers.
 - [Broadened finders must bound cardinality](feedback_broadened_finder_must_bound_cardinality.md) — delete/trash branches write by filter; a widened resolver turns a recoverable duplicate into a silent wrong-delete.
