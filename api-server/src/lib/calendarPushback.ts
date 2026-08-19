@@ -98,15 +98,23 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
     // it was hard-deleted (often 'calendar'), so it would push an update for a row that no
     // longer exists.
     if (op.entityType === 'item' && op.opType === 'delete') {
-        await handleItemDelete(op.snapshot as ItemInterface | null, op.user, buildProvider);
+        const deleteSnapshot = op.snapshot as ItemInterface | null;
+        const outcome = await captureFailedOutcome(`GCal cleanup for deleted item ${op.entityId}`, () =>
+            handleItemDelete(deleteSnapshot, op.user, buildProvider),
+        );
+        await surfacePushFailure(op, outcome);
         return;
     }
     // Calendar → active-status transition (nextAction/somedayMaybe/waitingFor/inbox). The update
     // snapshot itself carries no GCal linkage anymore (the status matrix stripped it), so the
     // pre-update row rides on the op as `detachedCalendar` — remove its GCal presence and stop:
     // the new status has no calendar representation left to push.
-    if (op.entityType === 'item' && op.detachedCalendar) {
-        await removeItemGCalPresence(op.detachedCalendar, op.user, buildProvider);
+    const detachedCalendar = op.detachedCalendar;
+    if (op.entityType === 'item' && detachedCalendar) {
+        const outcome = await captureFailedOutcome(`GCal removal for detached item ${op.entityId}`, () =>
+            removeItemGCalPresence(detachedCalendar, op.user, buildProvider),
+        );
+        await surfacePushFailure(op, outcome);
         return;
     }
     if (op.entityType === 'item' && op.snapshot) {
@@ -121,11 +129,11 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
 }
 
 /**
- * Marks the driving op `syncFailed` when a create-push failed so the failure lands in the
+ * Marks the driving op `syncFailed` when its GCal push failed so the failure lands in the
  * SyncIssuesPanel with the right remediation affordance. The raw provider error is categorized
  * via `categorizeGCalError` (same convention as rsvpReplay): invalid_grant → scope_missing
- * ("Reconnect"), 404/410/403 → terminal (Dismiss-only), unknown/network → transient_exhausted
- * (Retry, which re-fires this idempotent deterministic-id push).
+ * ("Reconnect"), 404/410/plain 403 → terminal (Dismiss-only), rate-limit 403/unknown/network →
+ * transient_exhausted (Retry, which re-fires the idempotent push via `maybePushToGCal`).
  */
 async function surfacePushFailure(op: OperationInterface, outcome: PushOutcome | undefined): Promise<void> {
     if (outcome?.status !== 'failed') {
@@ -135,17 +143,37 @@ async function surfacePushFailure(op: OperationInterface, outcome: PushOutcome |
 }
 
 /**
+ * Runs one GCal-mutating push helper and converts a throw into a `failed` PushOutcome instead of
+ * letting it escape to the fire-and-forget catch in `notifyChange` (console-only). Every branch of
+ * `maybePushToGCal` / `handleItemPush` / `handleRoutinePush` funnels through this so transient
+ * provider failures — rate limits, 5xx, network blips — land on the driving op as a retryable
+ * SyncIssuesPanel row rather than leaving Google silently stale (a 9-item burst-trash once dropped
+ * 2 of its 9 instance-cancellation PATCHes to a rate limit with zero visibility).
+ *
+ * Helpers that only mutate GCal (no create bookkeeping) resolve to `undefined` on success/skip —
+ * only the create paths mint their own non-failed outcomes.
+ */
+async function captureFailedOutcome(pushDescription: string, push: () => Promise<PushOutcome | undefined>): Promise<PushOutcome | undefined> {
+    try {
+        return await push();
+    } catch (err) {
+        console.error(`[calendar-pushback] ${pushDescription} failed:`, err);
+        return { status: 'failed', failureDetail: err instanceof Error ? err.message : 'unknown error', failureError: err };
+    }
+}
+
+/**
  * GCal-side cleanup when an item is hard-deleted (via `opType: 'delete'`, not a `status: 'trash'`
  * update). Delegates the shape handling to `removeItemGCalPresence`.
  *
  * Snapshot:null reaches here only when the row was already gone at hydration time (concurrent
  * delete from another device). No way to recover GCal state in that case — just no-op.
  */
-async function handleItemDelete(snapshot: ItemInterface | null, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function handleItemDelete(snapshot: ItemInterface | null, userId: string, buildProvider: ProviderFactory): Promise<PushOutcome | undefined> {
     if (!snapshot) {
         return;
     }
-    await removeItemGCalPresence(snapshot, userId, buildProvider);
+    return await removeItemGCalPresence(snapshot, userId, buildProvider);
 }
 
 /**
@@ -157,7 +185,7 @@ async function handleItemDelete(snapshot: ItemInterface | null, userId: string, 
  * Same three shapes either way: linked standalone item → delete the event; routine-generated
  * instance → cancel that single occurrence on the master; no linkage → no-op.
  */
-async function removeItemGCalPresence(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function removeItemGCalPresence(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory): Promise<PushOutcome | undefined> {
     // Disconnect-with-keep renamed the live linkage to lastKnown* — there is no live GCal event
     // to remove. Defensive: today `calendarEventId` is always absent alongside lastKnown* (the
     // rename invariant), but deleting by a stale id after a relink would hit the wrong event.
@@ -198,8 +226,9 @@ async function removeItemGCalPresence(snapshot: ItemInterface, userId: string, b
         return;
     }
     if (snapshot.routineId && snapshot.timeStart) {
-        await pushRoutineInstanceCancellation(snapshot, userId, buildProvider, { skipStamp: true });
+        return await pushRoutineInstanceCancellation(snapshot, userId, buildProvider, { skipStamp: true });
     }
+    return;
 }
 
 // ── Item push-back ───────────────────────────────────────────────────────────
@@ -219,8 +248,7 @@ async function handleItemPush(
         return undefined;
     }
     if (snapshot.calendarEventId) {
-        await pushExistingItemToGCal(snapshot, userId, buildProvider, sendUpdates);
-        return undefined;
+        return await captureFailedOutcome(`event update for item ${snapshot._id}`, () => pushExistingItemToGCal(snapshot, userId, buildProvider, sendUpdates));
     }
     // Routine-generated instance trashed locally → cancel that single GCal occurrence.
     // The item op carries `routineId` + `timeStart`; the master event lives on the routine.
@@ -228,19 +256,23 @@ async function handleItemPush(
     // `done` is intentionally GTD-local — the GCal occurrence must remain (matrix A8); otherwise
     // the GCal echo round-trips a `deleted` exception back and the app-side item flips to `trash`.
     if (snapshot.routineId && snapshot.status === 'trash') {
-        await pushRoutineInstanceCancellation(snapshot, userId, buildProvider);
-        return undefined;
+        return await captureFailedOutcome(`instance cancellation for item ${snapshot._id}`, () =>
+            pushRoutineInstanceCancellation(snapshot, userId, buildProvider),
+        );
     }
     // Routine-generated calendar items carry routineId but no calendarEventId — their GCal
     // presence is the routine's master recurring event. Per-instance edits push a single-instance
     // override on that master (matrix A2/A3); marking done applies the ✓-prefix + sage colorId
     // to that instance (matrix A8); reopen clears both back to the master's defaults.
     if (snapshot.routineId && (snapshot.status === 'calendar' || snapshot.status === 'done')) {
-        await pushRoutineInstanceOverride(snapshot, userId, buildProvider, sendUpdates);
-        return undefined;
+        return await captureFailedOutcome(`instance override for item ${snapshot._id}`, () =>
+            pushRoutineInstanceOverride(snapshot, userId, buildProvider, sendUpdates),
+        );
     }
     if (snapshot.status === 'calendar') {
-        return await pushNewItemToGCal(snapshot, userId, buildProvider, sendUpdates);
+        // Wrapped even though pushNewItemToGCal converts its own create errors — resolvePushContext
+        // (timezone fetch, config lookup) runs before that internal try and can still throw.
+        return await captureFailedOutcome(`event creation for item ${snapshot._id}`, () => pushNewItemToGCal(snapshot, userId, buildProvider, sendUpdates));
     }
     return undefined;
 }
@@ -258,7 +290,7 @@ async function pushRoutineInstanceOverride(
     userId: string,
     buildProvider: ProviderFactory,
     sendUpdates: 'all' | 'none',
-): Promise<void> {
+): Promise<PushOutcome | undefined> {
     if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
         return;
     }
@@ -323,6 +355,7 @@ async function pushRoutineInstanceOverride(
         ),
     );
     await stampItemLastPushed(userId, snapshot._id);
+    return;
 }
 
 /**
@@ -342,7 +375,7 @@ async function pushRoutineInstanceCancellation(
     userId: string,
     buildProvider: ProviderFactory,
     opts: { skipStamp?: boolean } = {},
-): Promise<void> {
+): Promise<PushOutcome | undefined> {
     if (!snapshot.routineId || !snapshot.timeStart || !snapshot._id) {
         return;
     }
@@ -385,6 +418,7 @@ async function pushRoutineInstanceCancellation(
     if (!opts.skipStamp) {
         await stampItemLastPushed(userId, snapshot._id);
     }
+    return;
 }
 
 /**
@@ -403,7 +437,12 @@ function resolveOriginalDate(routine: RoutineInterface, snapshot: ItemInterface)
 }
 
 /** Pushes edits or deletion of an existing calendar-linked item back to Google Calendar. */
-async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, buildProvider: ProviderFactory, sendUpdates: 'all' | 'none'): Promise<void> {
+async function pushExistingItemToGCal(
+    snapshot: ItemInterface,
+    userId: string,
+    buildProvider: ProviderFactory,
+    sendUpdates: 'all' | 'none',
+): Promise<PushOutcome | undefined> {
     const eventId = snapshot.calendarEventId;
     const itemId = snapshot._id;
     if (!eventId || !itemId) {
@@ -500,6 +539,7 @@ async function pushExistingItemToGCal(snapshot: ItemInterface, userId: string, b
     );
     const htmlForSync = snapshot.notes != null ? markdownToHtml(snapshot.notes) : undefined;
     await stampItemLastPushed(userId, itemId, htmlForSync);
+    return;
 }
 
 /**
@@ -723,8 +763,7 @@ async function handleRoutinePush(
     buildProvider: ProviderFactory,
 ): Promise<PushOutcome | undefined> {
     if (opType === 'delete') {
-        await pushRoutineDeletion(snapshot, userId, buildProvider);
-        return undefined;
+        return await captureFailedOutcome(`series deletion for routine ${snapshot._id}`, () => pushRoutineDeletion(snapshot, userId, buildProvider));
     }
     // This routine was unlinked by disconnect-with-keep and will be relinked by the next inbound pull
     // (strong-key restore via lastKnownCalendarEventId). Don't create a duplicate by pushing now.
@@ -743,12 +782,12 @@ async function handleRoutinePush(
     const priorActive = await readPriorActiveFlag(snapshot._id, userId, currentOpId, currentOpTs);
     const activeTransitioned = priorActive !== null && priorActive !== snapshot.active;
     if (activeTransitioned && !snapshot.active) {
-        await pushRoutinePause(snapshot, userId, buildProvider);
-        return undefined;
+        return await captureFailedOutcome(`pause cap for routine ${snapshot._id}`, () => pushRoutinePause(snapshot, userId, buildProvider));
     }
     if (activeTransitioned && snapshot.active) {
-        await pushRoutineResume(snapshot, userId, buildProvider);
-        return undefined;
+        // Resume captures its own GCal failure internally so local item regeneration still runs
+        // after a failed series push; the captured outcome propagates here for surfacing.
+        return await pushRoutineResume(snapshot, userId, buildProvider);
     }
     // Steady-state update (or first-ever push): no active transition — skip GCal mutation entirely
     // if the routine is paused to avoid resurrecting a capped series.
@@ -756,10 +795,11 @@ async function handleRoutinePush(
         return undefined;
     }
     if (snapshot.calendarEventId) {
-        await pushExistingRoutineToGCal(snapshot, userId, buildProvider);
-        return undefined;
+        return await captureFailedOutcome(`series update for routine ${snapshot._id}`, () => pushExistingRoutineToGCal(snapshot, userId, buildProvider));
     }
-    return await pushNewRoutineToGCal(snapshot, userId, buildProvider);
+    // Wrapped for the same reason as the item-create branch: resolvePushContext runs before
+    // pushRoutineToGCalWithContext's internal try and can still throw.
+    return await captureFailedOutcome(`series creation for routine ${snapshot._id}`, () => pushNewRoutineToGCal(snapshot, userId, buildProvider));
 }
 
 /**
@@ -795,7 +835,7 @@ async function readPriorActiveFlag(routineId: string, userId: string, currentOpI
  * Keeps calendarEventId stable so a future resume can patch the same series. Past GCal occurrences
  * remain intact. No-ops gracefully if the routine isn't linked to GCal.
  */
-async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<PushOutcome | undefined> {
     const now = dayjs().toISOString();
     // Pause only hits the trash branch (`routine.active === false` short-circuits inside
     // regenerateFutureRoutineItems), so the TZ is never read and a missing value is safe here.
@@ -813,13 +853,10 @@ async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buil
     const untilDate = `${dayjs().subtract(1, 'day').utc().format('YYYYMMDD')}T235959Z`;
     const calendarEventId = snapshot.calendarEventId;
     console.log(`[gcal-pushback] capping GCal master for routine pause | routineId=${snapshot._id} until=${untilDate}`);
-    try {
-        await withAuthFailureHandling(ctx.integration._id, () =>
-            ctx.provider.capRecurringEvent(calendarEventId, untilDate, ctx.config.calendarId, ctx.timeZone),
-        );
-    } catch (err) {
-        console.error(`[calendar-pushback] failed to cap recurring event ${calendarEventId} for routine ${snapshot._id}:`, err);
-    }
+    // A cap failure propagates to handleRoutinePush's captureFailedOutcome wrapper (the local item
+    // trash above has already run, so nothing app-side is lost) and surfaces as a retryable op.
+    await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.capRecurringEvent(calendarEventId, untilDate, ctx.config.calendarId, ctx.timeZone));
+    return;
 }
 
 /**
@@ -827,17 +864,15 @@ async function pushRoutinePause(snapshot: RoutineInterface, userId: string, buil
  * events.update, then regenerates future items from the (possibly new) startDate/rrule in the
  * snapshot. No-ops gracefully if the routine isn't linked to GCal yet.
  */
-async function pushRoutineResume(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function pushRoutineResume(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<PushOutcome | undefined> {
     const now = dayjs().toISOString();
-    if (snapshot.calendarEventId) {
-        try {
-            await pushExistingRoutineToGCal(snapshot, userId, buildProvider);
-        } catch (err) {
-            // Mirror the pause path: don't block local item regen on GCal transient failures. The
-            // next resume-on-save will push the full current rrule and overwrite any stale UNTIL.
-            console.error(`[calendar-pushback] resume: failed to push updated series for routine ${snapshot._id}:`, err);
-        }
-    }
+    // Captured (not rethrown) so a GCal transient failure doesn't block local item regen below,
+    // yet still surfaces on the driving op via handleRoutinePush → surfacePushFailure. A panel
+    // Retry (or the next resume-on-save) re-pushes the full current rrule and overwrites any
+    // stale UNTIL.
+    const seriesPushOutcome = snapshot.calendarEventId
+        ? await captureFailedOutcome(`resume series push for routine ${snapshot._id}`, () => pushExistingRoutineToGCal(snapshot, userId, buildProvider))
+        : undefined;
     // Re-read after the GCal push: if resolvePushContext healed a stale calendarIntegrationId on
     // the routine row, the in-memory `snapshot` still carries the dead ids. Without this re-read,
     // `regenerateFutureRoutineItems` would stamp the dead ids onto every freshly-inserted item
@@ -849,6 +884,7 @@ async function pushRoutineResume(snapshot: RoutineInterface, userId: string, bui
     // instance id — the backfill script covers those rows later.
     const tz = await resolveTimeZoneForRoutine(refreshed, userId, buildProvider);
     await regenerateFutureRoutineItems(refreshed, userId, now, tz);
+    return seriesPushOutcome;
 }
 
 /** Returns the calendar TZ for a routine's pushback context, or undefined if unresolvable. */
@@ -868,8 +904,9 @@ async function resolveTimeZoneForRoutine(snapshot: RoutineInterface, userId: str
  * every generated item — both `calendar`-status occurrences and any still-open (non-done,
  * non-trash) `nextAction`-status item — so nothing keeps pointing at a routine that no longer
  * exists. Each trashed item records its own server-origin update op so other devices converge
- * via the sync pull. GCal deletion is best-effort — a provider failure does not block either
- * item cascade.
+ * via the sync pull. The item cascades run before the GCal delete, so a provider failure never
+ * blocks them — it propagates to handleRoutinePush's captureFailedOutcome wrapper and surfaces
+ * as a retryable op instead of being swallowed.
  *
  * `skipGCalDelete: true` keeps the GCal master event intact — used by the integration-disconnect
  * path, which trashes the routine app-side but leaves the user's Google Calendar untouched.
@@ -879,7 +916,7 @@ export async function pushRoutineDeletion(
     userId: string,
     buildProvider: ProviderFactory,
     options: { skipGCalDelete?: boolean } = {},
-): Promise<void> {
+): Promise<PushOutcome | undefined> {
     await trashGeneratedCalendarItems(snapshot._id, userId);
     await trashGeneratedOpenNextActionItems(snapshot._id, userId);
     if (options.skipGCalDelete) {
@@ -898,11 +935,8 @@ export async function pushRoutineDeletion(
     }
     const calendarEventId = snapshot.calendarEventId;
     console.log(`[gcal-pushback] deleting GCal recurring event for routine | routineId=${snapshot._id} eventId=${calendarEventId}`);
-    try {
-        await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.deleteRecurringEvent(calendarEventId, ctx.config.calendarId));
-    } catch (err) {
-        console.error(`[calendar-pushback] failed to delete GCal recurring event ${calendarEventId} for routine ${snapshot._id}:`, err);
-    }
+    await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.deleteRecurringEvent(calendarEventId, ctx.config.calendarId));
+    return;
 }
 
 /**
@@ -972,7 +1006,7 @@ async function trashGeneratedOpenNextActionItems(routineId: string, userId: stri
 }
 
 /** Pushes edits to an existing GCal recurring event when the routine already has a calendarEventId. */
-async function pushExistingRoutineToGCal(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<void> {
+async function pushExistingRoutineToGCal(snapshot: RoutineInterface, userId: string, buildProvider: ProviderFactory): Promise<PushOutcome | undefined> {
     const { calendarEventId } = snapshot;
     if (!calendarEventId) {
         return;
@@ -987,6 +1021,7 @@ async function pushExistingRoutineToGCal(snapshot: RoutineInterface, userId: str
     const htmlForSync = snapshot.template.notes !== undefined ? markdownToHtml(snapshot.template.notes) : undefined;
     await stampRoutineLastPushed(userId, snapshot._id, htmlForSync);
     await propagateRoutineNotesToItems(snapshot._id, snapshot.template.notes, userId);
+    return;
 }
 
 /** Creates a new GCal recurring event for a calendar routine that isn't linked yet. */
@@ -1299,16 +1334,18 @@ export async function runMissedPushSweep(scope: MissedPushSweepScope, buildProvi
     }
     console.log(`[gcal-pushback] missed-push sweep | userId=${userId} integrationId=${scope.integrationId} candidates=${candidates.length}`);
     // Sequential + paced like the outbound backfill; one failing push must not abort the sweep.
+    // handleItemPush converts provider throws into a `failed` outcome (captureFailedOutcome), so
+    // failure detection reads the outcome instead of catching. The sweep has no driving op to mark
+    // syncFailed — a failed candidate just stays a missed push and the next sweep retries it.
     const outcomes = await candidates.reduce(async (prevPromise: Promise<number>, item) => {
         const repushed = await prevPromise;
-        try {
-            await handleItemPush(item, userId, buildProvider, 'none');
-            await sleep(MISSED_PUSH_PACE_MS);
-            return repushed + 1;
-        } catch (err) {
-            console.error(`[gcal-pushback] missed-push re-push failed | itemId=${item._id}:`, err);
+        const outcome = await handleItemPush(item, userId, buildProvider, 'none');
+        await sleep(MISSED_PUSH_PACE_MS);
+        if (outcome?.status === 'failed') {
+            console.error(`[gcal-pushback] missed-push re-push failed | itemId=${item._id}:`, outcome.failureError);
             return repushed;
         }
+        return repushed + 1;
     }, Promise.resolve(0));
     return { repushedItems: outcomes };
 }

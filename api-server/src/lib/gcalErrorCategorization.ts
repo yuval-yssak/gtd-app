@@ -10,7 +10,8 @@ import type { OpFailureReason } from '../types/entities.js';
  *  - `scope_missing`   → token revoked / invalid_grant / lost write scope. Panel asks the user to
  *                        re-consent.
  *  - `terminal`        → 404/410 (event gone), 403 (uninvited / attendee mutation rejected). No
- *                        retry will help; panel shows Dismiss only.
+ *                        retry will help; panel shows Dismiss only. EXCEPT rate-limit 403s — see
+ *                        `isRateLimit403` — which are retryable and bucket as transient_exhausted.
  *  - `calendar_missing`→ 404 on the calendar resource itself. Panel asks the user to pick a calendar.
  *                        Currently differentiated from generic 404 only by caller intent — callers
  *                        that want this discrimination must categorize before invoking this helper,
@@ -35,7 +36,7 @@ export function categorizeGCalError(err: unknown): OpFailureReason {
         return 'terminal';
     }
     if (code === 403) {
-        return 'terminal';
+        return isRateLimit403(err) ? 'transient_exhausted' : 'terminal';
     }
     if (code === 409) {
         return 'edit_conflict';
@@ -44,4 +45,23 @@ export function categorizeGCalError(err: unknown): OpFailureReason {
         return 'transient_exhausted';
     }
     return 'transient_exhausted';
+}
+
+/**
+ * Google's short-window per-user write quota surfaces as HTTP 403 (not 429!) with reason
+ * `rateLimitExceeded` / `userRateLimitExceeded` and message "Rate Limit Exceeded". Unlike the
+ * other 403s (uninvited, attendee mutation rejected), it clears on its own — bucketing it as
+ * `terminal` would render a burst-trash failure Dismiss-only instead of Retry-able. Checks the
+ * structured `errors[].reason` list first and falls back to the message, covering both shapes
+ * googleapis has been observed to throw.
+ */
+function isRateLimit403(err: Error & { code: number }): boolean {
+    // Deliberately NOT matched: `dailyLimitExceeded` / `quotaExceeded` — those are long-window
+    // (daily) quotas where a Retry affordance would be misleading; only the short-window
+    // per-user write limiter clears fast enough for the panel's Retry to make sense.
+    const nestedErrors = (err as { errors?: Array<{ reason?: unknown }> }).errors ?? [];
+    if (nestedErrors.some((nested) => nested.reason === 'rateLimitExceeded' || nested.reason === 'userRateLimitExceeded')) {
+        return true;
+    }
+    return err.message.toLowerCase().includes('rate limit exceeded');
 }

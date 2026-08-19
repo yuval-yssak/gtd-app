@@ -20,6 +20,26 @@ describe('categorizeGCalError', () => {
         expect(categorizeGCalError(gcalErr(403))).toBe('terminal');
     });
 
+    it('classifies a 403 rate-limit error as transient_exhausted via the structured errors[].reason', () => {
+        // Google's short-window per-user write quota is a 403 (not 429). Bucketing it terminal
+        // rendered a burst-trash failure Dismiss-only — the 2026-08-19 silent-cancellation incident.
+        const rateLimited = Object.assign(new Error('Quota exceeded'), {
+            code: 403,
+            errors: [{ message: 'Rate Limit Exceeded', domain: 'usageLimits', reason: 'rateLimitExceeded' }],
+        });
+        expect(categorizeGCalError(rateLimited)).toBe('transient_exhausted');
+        const userRateLimited = Object.assign(new Error('Quota exceeded'), {
+            code: 403,
+            errors: [{ reason: 'userRateLimitExceeded' }],
+        });
+        expect(categorizeGCalError(userRateLimited)).toBe('transient_exhausted');
+    });
+
+    it('classifies a 403 with a rate-limit message but no structured errors as transient_exhausted', () => {
+        // Second observed googleapis shape: GaxiosError with only the message populated.
+        expect(categorizeGCalError(gcalErr(403, 'Rate Limit Exceeded'))).toBe('transient_exhausted');
+    });
+
     it('classifies 409 as edit_conflict', () => {
         expect(categorizeGCalError(gcalErr(409))).toBe('edit_conflict');
     });

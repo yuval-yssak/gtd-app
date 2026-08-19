@@ -6,9 +6,17 @@ import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
+import routinesDAO from '../dataAccess/routinesDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
-import type { CalendarIntegrationInterface, CalendarSyncConfigInterface, ItemInterface, OperationInterface, OpFailureReason } from '../types/entities.js';
+import type {
+    CalendarIntegrationInterface,
+    CalendarSyncConfigInterface,
+    ItemInterface,
+    OperationInterface,
+    OpFailureReason,
+    RoutineInterface,
+} from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const app = new Hono().on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw)).route('/sync', syncRoutes);
@@ -30,6 +38,7 @@ beforeEach(async () => {
         db.collection('account').deleteMany({}),
         db.collection('verification').deleteMany({}),
         db.collection('items').deleteMany({}),
+        db.collection('routines').deleteMany({}),
         db.collection('operations').deleteMany({}),
         db.collection('calendarIntegrations').deleteMany({}),
         db.collection('calendarSyncConfigs').deleteMany({}),
@@ -128,6 +137,54 @@ function makeCalendarItem(userId: string, itemId: string): ItemInterface {
         createdTs: now,
         updatedTs: now,
     };
+}
+
+/**
+ * Seeds the 2026-08-19 incident shape: a GCal-linked daily routine, one trashed generated
+ * instance, and the instance's update op previously marked failed by a rate-limited (403)
+ * cancellation PATCH. Returns the failed op ready for a /sync/issues/:opId/retry call.
+ */
+async function seedRateLimitedCancellationOp(userId: string): Promise<OperationInterface> {
+    await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+    await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId));
+    const now = dayjs().toISOString();
+    const routine: RoutineInterface = {
+        _id: `routine-${crypto.randomUUID()}`,
+        user: userId,
+        title: 'Daily standup',
+        routineType: 'calendar',
+        rrule: 'FREQ=DAILY',
+        template: {},
+        active: true,
+        createdTs: now,
+        updatedTs: now,
+        calendarItemTemplate: { timeOfDay: '09:45', duration: 15 },
+        calendarEventId: 'recurring-master-issues',
+        calendarIntegrationId: 'int-issues',
+        calendarSyncConfigId: 'sync-issues',
+    };
+    await routinesDAO.insertOne(routine);
+    const trashedInstance: ItemInterface = {
+        _id: `item-${crypto.randomUUID()}`,
+        user: userId,
+        status: 'trash',
+        title: 'Daily standup',
+        routineId: routine._id,
+        timeStart: dayjs().add(6, 'day').toISOString(),
+        timeEnd: dayjs().add(6, 'day').add(15, 'minute').toISOString(),
+        createdTs: now,
+        updatedTs: now,
+    };
+    await itemsDAO.insertOne(trashedInstance);
+    const op = makeFailedOp(userId, {
+        entityId: trashedInstance._id as string,
+        opType: 'update',
+        snapshot: trashedInstance,
+        failureReason: 'transient_exhausted',
+        failureDetail: 'Rate Limit Exceeded',
+    });
+    await operationsDAO.insertOne(op);
+    return op;
 }
 
 // ─── GET /sync/issues ──────────────────────────────────────────────────────
@@ -345,6 +402,47 @@ describe('POST /sync/issues/:opId/retry', () => {
         // Terminal op left untouched — dismiss is the only path forward.
         const refreshed = await operationsDAO.findOne({ _id: op._id });
         expect(refreshed?.syncFailed).toBe(true);
+    });
+
+    it('retries a rate-limited routine-instance cancellation via the generic pushback and clears the row on success', async () => {
+        // End-to-end shape of the 2026-08-19 incident: a burst-trash cancellation PATCH was
+        // rate-limited (403 Rate Limit Exceeded → transient_exhausted). The panel's Retry must
+        // re-fire maybePushToGCal, land the cancellation once Google stops throttling, and clear
+        // the row.
+        const cookie = await loginAsAlice();
+        const op = await seedRateLimitedCancellationOp(await getUserId(cookie));
+
+        // Google has stopped throttling — the retried cancellation goes through.
+        const cancelSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: `/sync/issues/${op._id}/retry`, sessionCookie: cookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { ok: boolean };
+        expect(body.ok).toBe(true);
+        expect(cancelSpy).toHaveBeenCalledOnce();
+        expect(cancelSpy.mock.calls[0]?.[0]).toBe('recurring-master-issues');
+        expect(await operationsDAO.findOne({ _id: op._id })).toBeNull();
+    });
+
+    it('re-marks a routine-instance cancellation retry that is rate-limited again', async () => {
+        const cookie = await loginAsAlice();
+        const op = await seedRateLimitedCancellationOp(await getUserId(cookie));
+
+        const stillThrottled = Object.assign(new Error('Rate Limit Exceeded'), {
+            code: 403,
+            errors: [{ reason: 'rateLimitExceeded' }],
+        });
+        vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockRejectedValue(stillThrottled);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: `/sync/issues/${op._id}/retry`, sessionCookie: cookie });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { ok: boolean; failureReason?: string };
+        expect(body.ok).toBe(false);
+        expect(body.failureReason).toBe('transient_exhausted');
+        // Row stays retryable — not demoted to terminal by the 403.
+        const refreshed = await operationsDAO.findOne({ _id: op._id });
+        expect(refreshed?.syncFailed).toBe(true);
+        expect(refreshed?.failureReason).toBe('transient_exhausted');
     });
 
     it("returns 404 when retrying another user's op (tenant isolation)", async () => {

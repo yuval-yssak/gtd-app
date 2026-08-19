@@ -8842,6 +8842,237 @@ describe('calendar push-back — routine instance overrides', () => {
     });
 });
 
+describe('calendar push-back — failure surfacing (ops marked syncFailed)', () => {
+    // Regression suite for the 2026-08-19 incident: a 9-item burst-trash hit Google's short-window
+    // rate limit on 2 of the 9 instance-cancellation PATCHes, and the failures vanished into the
+    // fire-and-forget console log — no syncFailed op, no SyncIssuesPanel row, no retry path. Every
+    // GCal-mutating branch (not just the create paths) must now surface a provider failure onto
+    // the driving op.
+
+    function gcalRateLimitError() {
+        // Gaxios shape of Google's short-window per-user write quota: HTTP 403 (not 429).
+        return Object.assign(new Error('Rate Limit Exceeded'), {
+            code: 403,
+            errors: [{ message: 'Rate Limit Exceeded', domain: 'usageLimits', reason: 'rateLimitExceeded' }],
+        });
+    }
+
+    function gcalServerError() {
+        return Object.assign(new Error('Backend Error'), { code: 500 });
+    }
+
+    async function insertLinkedRoutine(userId: string, overrides: Partial<RoutineInterface> = {}) {
+        const routine = makeRoutine(userId, {
+            calendarEventId: 'recurring-master-1',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+            ...overrides,
+        });
+        await routinesDAO.insertOne(routine);
+        return routine;
+    }
+
+    /** Persists the op first (markOpFailed updates the row in place), pushes, and returns the post-push row. */
+    async function pushPersistedOp(userId: string, overrides: Partial<OperationInterface>) {
+        const op = makeOp(userId, overrides);
+        await operationsDAO.insertOne(op);
+        await maybePushToGCal(op, mockBuildProvider());
+        return (await operationsDAO.findOne({ _id: op._id }))!;
+    }
+
+    it('marks the op transient_exhausted when a routine-instance cancellation is rate-limited (the silent-drop incident)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedRoutine(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-cancel-ratelimited',
+            routineId: 'routine-1',
+            status: 'trash',
+            timeStart: '2026-08-25T06:45:00.000Z',
+            timeEnd: '2026-08-25T07:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockRejectedValue(gcalRateLimitError());
+
+        const failed = await pushPersistedOp(userId, { _id: 'op-cancel-rl', entityType: 'item', entityId: item._id!, snapshot: item });
+
+        expect(failed.syncFailed).toBe(true);
+        expect(failed.failureReason).toBe('transient_exhausted');
+        expect(failed.failureDetail).toContain('Rate Limit Exceeded');
+        expect(failed.failedTs).toBeTruthy();
+    });
+
+    it('leaves the op unmarked when the cancellation succeeds', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedRoutine(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-cancel-ok',
+            routineId: 'routine-1',
+            status: 'trash',
+            timeStart: '2026-08-25T06:45:00.000Z',
+            timeEnd: '2026-08-25T07:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'cancelRecurringInstance').mockResolvedValue(undefined);
+
+        const pushed = await pushPersistedOp(userId, { _id: 'op-cancel-ok', entityType: 'item', entityId: item._id!, snapshot: item });
+
+        expect(pushed.syncFailed).toBeUndefined();
+        expect(pushed.failureReason).toBeUndefined();
+    });
+
+    it('marks the op when a routine-instance override push fails', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        await insertLinkedRoutine(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-override-500',
+            routineId: 'routine-1',
+            status: 'calendar',
+            timeStart: '2026-08-25T06:45:00.000Z',
+            timeEnd: '2026-08-25T07:00:00.000Z',
+        });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringInstance').mockRejectedValue(gcalServerError());
+
+        const failed = await pushPersistedOp(userId, { _id: 'op-override-500', entityType: 'item', entityId: item._id!, snapshot: item });
+
+        expect(failed.syncFailed).toBe(true);
+        expect(failed.failureReason).toBe('transient_exhausted');
+    });
+
+    it('marks the op when a standalone linked-item update fails', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const item = makeItem(userId, {
+            _id: 'item-update-500',
+            calendarEventId: 'gcal-ev-500',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        await itemsDAO.insertOne(item);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockRejectedValue(gcalServerError());
+
+        const failed = await pushPersistedOp(userId, { _id: 'op-update-500', entityType: 'item', entityId: item._id!, snapshot: item });
+
+        expect(failed.syncFailed).toBe(true);
+        expect(failed.failureReason).toBe('transient_exhausted');
+    });
+
+    it('marks the op when the GCal cleanup for a hard-deleted linked item fails', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Hydrated delete snapshot — the pre-delete row shape maybePushToGCal receives.
+        const snapshot = makeItem(userId, {
+            _id: 'item-hard-deleted',
+            calendarEventId: 'gcal-ev-deleted',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockRejectedValue(gcalRateLimitError());
+
+        const failed = await pushPersistedOp(userId, { _id: 'op-delete-rl', entityType: 'item', entityId: snapshot._id!, opType: 'delete', snapshot });
+
+        expect(failed.syncFailed).toBe(true);
+        expect(failed.failureReason).toBe('transient_exhausted');
+    });
+
+    it('marks the op when the GCal removal for a calendar-detached item fails', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        const detachedCalendar = makeItem(userId, {
+            _id: 'item-detached',
+            calendarEventId: 'gcal-ev-detached',
+            calendarIntegrationId: 'int-1',
+            calendarSyncConfigId: 'sync-config-1',
+        });
+        // Post-detach snapshot: active status, GCal linkage stripped by the status matrix.
+        const snapshot = makeItem(userId, { _id: 'item-detached', status: 'nextAction', timeStart: undefined, timeEnd: undefined });
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'deleteEvent').mockRejectedValue(gcalServerError());
+
+        const failed = await pushPersistedOp(userId, { _id: 'op-detach-500', entityType: 'item', entityId: 'item-detached', snapshot, detachedCalendar });
+
+        expect(failed.syncFailed).toBe(true);
+        expect(failed.failureReason).toBe('transient_exhausted');
+    });
+
+    it('marks the op when the pause cap fails, after the local item trash has already run', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = await insertLinkedRoutine(userId, { active: false });
+
+        // Future generated occurrence the pause must trash regardless of the GCal outcome.
+        const futureItem = makeItem(userId, {
+            _id: 'item-pause-future',
+            routineId: routine._id,
+            status: 'calendar',
+            timeStart: dayjs().add(7, 'day').toISOString(),
+            timeEnd: dayjs().add(7, 'day').add(30, 'minute').toISOString(),
+        });
+        await itemsDAO.insertOne(futureItem);
+
+        // Prior op with active:true so readPriorActiveFlag sees a pause transition.
+        const priorTs = dayjs().subtract(1, 'minute').toISOString();
+        await operationsDAO.insertOne(
+            makeOp(userId, { _id: 'op-pause-prior', ts: priorTs, entityType: 'routine', entityId: routine._id, snapshot: { ...routine, active: true } }),
+        );
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'capRecurringEvent').mockRejectedValue(gcalRateLimitError());
+
+        const failed = await pushPersistedOp(userId, { _id: 'op-pause-cap', entityType: 'routine', entityId: routine._id, snapshot: routine });
+
+        expect(failed.syncFailed).toBe(true);
+        expect(failed.failureReason).toBe('transient_exhausted');
+        // The cap failure must not have blocked the local trash cascade that ran before it.
+        const trashed = await itemsDAO.findByOwnerAndId(futureItem._id!, userId);
+        expect(trashed!.status).toBe('trash');
+    });
+
+    it('marks the op when the resume series push fails, and still regenerates local items', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        const routine = await insertLinkedRoutine(userId, { active: true });
+
+        // Prior op with active:false so readPriorActiveFlag sees a resume transition.
+        const priorTs = dayjs().subtract(1, 'minute').toISOString();
+        await operationsDAO.insertOne(
+            makeOp(userId, { _id: 'op-resume-prior', ts: priorTs, entityType: 'routine', entityId: routine._id, snapshot: { ...routine, active: false } }),
+        );
+
+        const updateSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'updateRecurringEvent').mockRejectedValue(gcalServerError());
+
+        const failed = await pushPersistedOp(userId, { _id: 'op-resume-500', entityType: 'routine', entityId: routine._id, snapshot: routine });
+
+        expect(updateSpy).toHaveBeenCalledOnce();
+        expect(failed.syncFailed).toBe(true);
+        expect(failed.failureReason).toBe('transient_exhausted');
+        // Regen must have run despite the failed series push — future occurrences exist locally.
+        const regenerated = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        expect(regenerated.length).toBeGreaterThan(0);
+    });
+});
+
 describe('calendar push-back — routines', () => {
     it('updates GCal recurring event when routine changes', async () => {
         const sessionCookie = await loginAsAlice();
