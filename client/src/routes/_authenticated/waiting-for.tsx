@@ -87,7 +87,7 @@ function WaitingForPage() {
                                 <Box className={styles.actionButtons}>
                                     <CopyIdButton id={item._id} testId="waitingForItemCopyIdButton" />
                                     <Tooltip title="Edit">
-                                        <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="waitingForItemEditButton">
+                                        <IconButton size="small" onClick={(e) => editor.openEditor({ item, event: e })} data-testid="waitingForItemEditButton">
                                             <EditIcon fontSize="small" />
                                         </IconButton>
                                     </Tooltip>
@@ -99,7 +99,7 @@ function WaitingForPage() {
                                 </Box>
                             }
                         >
-                            <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="waitingForItemRow">
+                            <ListItemButton onClick={(e) => editor.openEditor({ item, event: e })} className={styles.rowButton} data-testid="waitingForItemRow">
                                 <ListItemText
                                     primary={
                                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

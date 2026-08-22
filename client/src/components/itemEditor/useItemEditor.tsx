@@ -1,8 +1,8 @@
-import { useNavigate } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
 import { type ReactNode, useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { clarifyToNextAction, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
+import { isNewTabClick, type ModifierClickSource, useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { EditItemDialog } from '../EditItemDialog';
 import type { EditableStatus } from '../editItemDialogLogic';
@@ -26,6 +26,8 @@ export interface OpenEditorArgs {
     initialStatus?: EditableStatus;
     /** Required for popover mode — without an anchor we fall through to dialog. */
     anchor?: HTMLElement;
+    /** Pass the triggering mouse event so cmd/ctrl+click opens the item page in a new tab. */
+    event?: ModifierClickSource;
 }
 
 export interface ItemEditorAPI {
@@ -55,6 +57,11 @@ export type EditorState =
     | { kind: 'popover'; item: StoredItem; initialStatus: EditableStatus | undefined; anchor: HTMLElement }
     | { kind: 'expand'; item: StoredItem; initialStatus: EditableStatus | undefined };
 
+/** Route target for an item's full-page editor — used by both the 'page' clarify mode and the new-tab gesture. */
+function itemPageTargetFor(item: StoredItem, initialStatus: EditableStatus | undefined) {
+    return { to: '/item/$itemId', params: { itemId: item._id }, search: { status: initialStatus ?? null } } as const;
+}
+
 /**
  * Resolves the effective variant for a given clarifyMode + open args. Centralised so all the
  * fall-through rules (mobile, missing anchor, instant-only-for-nextAction) live in one place.
@@ -66,7 +73,12 @@ export function resolveVariant(
     args: OpenEditorArgs,
     isMobile: boolean,
     allowInstantNextAction: boolean,
-): { kind: 'state'; state: EditorState } | { kind: 'instant'; item: StoredItem } | { kind: 'page' } {
+): { kind: 'state'; state: EditorState } | { kind: 'instant'; item: StoredItem } | { kind: 'page' } | { kind: 'newTab' } {
+    // A modified click wins over every clarify mode — the user asked for a new tab, and in
+    // particular the instant variant must not fire its irreversible mutation on that gesture.
+    if (args.event && isNewTabClick(args.event)) {
+        return { kind: 'newTab' };
+    }
     if (mode === 'instant' && allowInstantNextAction && args.initialStatus === 'nextAction') {
         return { kind: 'instant', item: args.item };
     }
@@ -96,7 +108,7 @@ export function useItemEditor({
     allowInstantNextAction = false,
     isMobile = false,
 }: UseItemEditorOptions): ItemEditorAPI {
-    const navigate = useNavigate();
+    const navigateOrNewTab = useNewTabAwareNavigate();
     const [state, setState] = useState<EditorState>({ kind: 'closed' });
     const [, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
     const [isMutating, startMutation] = useTransition();
@@ -148,12 +160,9 @@ export function useItemEditor({
             fireInstantNextAction(resolved.item);
             return;
         }
-        if (resolved.kind === 'page') {
-            void navigate({
-                to: '/item/$itemId',
-                params: { itemId: args.item._id },
-                search: { status: args.initialStatus ?? null },
-            });
+        if (resolved.kind === 'newTab' || resolved.kind === 'page') {
+            // 'page' passes undefined so the plain page-mode click always stays in-tab.
+            navigateOrNewTab(resolved.kind === 'newTab' ? args.event : undefined, itemPageTargetFor(args.item, args.initialStatus));
             return;
         }
         setState(resolved.state);

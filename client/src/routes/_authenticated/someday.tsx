@@ -124,14 +124,18 @@ function SomedayPage() {
                                     <Box className={styles.actionButtons}>
                                         <CopyIdButton id={item._id} testId="somedayItemCopyIdButton" />
                                         <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="somedayItemEditButton">
+                                            <IconButton size="small" onClick={(e) => editor.openEditor({ item, event: e })} data-testid="somedayItemEditButton">
                                                 <EditIcon fontSize="small" />
                                             </IconButton>
                                         </Tooltip>
                                     </Box>
                                 }
                             >
-                                <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="somedayItemRow">
+                                <ListItemButton
+                                    onClick={(e) => editor.openEditor({ item, event: e })}
+                                    className={styles.rowButton}
+                                    data-testid="somedayItemRow"
+                                >
                                     <ListItemText
                                         primary={
                                             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

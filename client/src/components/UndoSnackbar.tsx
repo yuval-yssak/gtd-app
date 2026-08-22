@@ -3,8 +3,8 @@ import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import Snackbar from '@mui/material/Snackbar';
 import Stack from '@mui/material/Stack';
-import { useNavigate } from '@tanstack/react-router';
 import { useSyncExternalStore, useTransition } from 'react';
+import { isNewTabClick, useNewTabAwareNavigate } from '../lib/newTabNavigation';
 import { dismissCurrentUndo, getCurrentUndo, runCurrentUndo, subscribeToUndo } from '../lib/undoStore';
 
 /** How long the Undo affordance stays available after a save. */
@@ -17,7 +17,7 @@ export const UNDO_SNACKBAR_DURATION_MS = 6000;
 export function UndoSnackbar() {
     const entry = useSyncExternalStore(subscribeToUndo, getCurrentUndo);
     const [isUndoing, startUndo] = useTransition();
-    const navigate = useNavigate();
+    const navigateOrNewTab = useNewTabAwareNavigate();
 
     if (!entry) {
         return null;
@@ -30,13 +30,16 @@ export function UndoSnackbar() {
     }
 
     // Follow the offer's link, then dismiss so the snackbar doesn't linger over the destination.
-    function onViewClick() {
+    function onViewClick(e: React.MouseEvent) {
         if (!entry?.link) {
             return;
         }
         // `link` is a runtime-built path (e.g. `/item/<id>`); `as never` matches AppNav's dynamic-nav pattern.
-        navigate({ to: entry.link as never });
-        dismissCurrentUndo();
+        navigateOrNewTab(e, { to: entry.link as never });
+        // A cmd/ctrl+click opened a new tab — keep the snackbar here so Undo stays available.
+        if (!isNewTabClick(e)) {
+            dismissCurrentUndo();
+        }
     }
 
     return (

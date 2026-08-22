@@ -109,4 +109,27 @@ describe('resolveVariant', () => {
             expect(out1).not.toEqual(out2);
         });
     });
+
+    // A cmd/ctrl+click must win over EVERY clarify mode — the ordering matters most for
+    // instant mode, where falling through would fire an irreversible status mutation instead
+    // of opening the item page in a new tab.
+    describe('new-tab gesture', () => {
+        const CMD_CLICK = { metaKey: true, ctrlKey: false };
+
+        it('wins over instant mode so no mutation fires on a modified click', () => {
+            const out = resolveVariant('instant', { item: ITEM, initialStatus: 'nextAction', event: CMD_CLICK }, false, true);
+            expect(out).toEqual({ kind: 'newTab' });
+        });
+
+        it('wins over dialog, expand, popover, and page modes', () => {
+            for (const mode of ['dialog', 'expand', 'popover', 'page'] as const) {
+                expect(resolveVariant(mode, { item: ITEM, anchor: ANCHOR, event: CMD_CLICK }, false, false)).toEqual({ kind: 'newTab' });
+            }
+        });
+
+        it('an unmodified click event resolves the mode normally', () => {
+            const out = resolveVariant('dialog', { item: ITEM, event: { metaKey: false, ctrlKey: false } }, false, false);
+            expect(out).toEqual({ kind: 'state', state: { kind: 'dialog', item: ITEM, initialStatus: undefined } });
+        });
+    });
 });

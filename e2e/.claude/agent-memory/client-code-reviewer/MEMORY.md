@@ -16,3 +16,4 @@
 - [Narrowing a count label's scope](feedback_count_label_scope_narrowing.md) — Excluding paused/archived from a tab count re-filters inline instead of reusing the splitter; paired count untested, `(0)`-over-content unhandled.
 - [New page routes ship with no inbound in-app link](feedback_new_page_route_has_no_inbound_link.md) — Deep-link-only `/entity/$id` routes leave the list row on the dialog and the recorded-backTarget branch dead.
 - [Extracted editor bodies duplicate chrome type + lib helpers](feedback_extracted_body_diverges_from_shared_chrome_type.md) — Inline `'dialog' | 'page'` union instead of `ItemEditorChrome`; local `byName` instead of `lib/sortByName`.
+- [Modifier-click / new-tab gesture coverage](feedback_modifier_click_gesture_coverage.md) — Event threading reviews clean; the misses are eventless handlers, null `window.open`, and macOS ctrl=context-menu.

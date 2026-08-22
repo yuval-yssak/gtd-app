@@ -5,7 +5,7 @@ import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
-import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
@@ -13,6 +13,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
+import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { describeNextItemDate, findRoutineNextItem } from '../../lib/routineNextItem';
 import type { StoredItem, StoredRoutine } from '../../types/MyDB';
 import styles from './-routine.$routineId.module.css';
@@ -43,7 +44,7 @@ function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () =>
 
 /** Jump-link to the routine's next generated item; renders disabled with a reason when none exists. */
 function NextItemLink({ routine, items }: { routine: StoredRoutine; items: StoredItem[] }) {
-    const navigate = useNavigate();
+    const navigateOrNewTab = useNewTabAwareNavigate();
     const result = findRoutineNextItem(routine, items, dayjs());
 
     if (!result.item) {
@@ -60,7 +61,7 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
         <Button
             startIcon={<ArrowForwardIcon />}
             className={styles.nextItemLink}
-            onClick={() => void navigate({ to: '/item/$itemId', params: { itemId: item._id }, search: { status: null } })}
+            onClick={(e) => navigateOrNewTab(e, { to: '/item/$itemId', params: { itemId: item._id }, search: { status: null } })}
             data-testid="routineNextItemLink"
         >
             Next: {item.title}

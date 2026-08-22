@@ -27,8 +27,9 @@ import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
 import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
-import { createLink, useLocation, useNavigate } from '@tanstack/react-router';
+import { createLink, useLocation } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
+import { useNewTabAwareNavigate } from '../lib/newTabNavigation';
 import type { FileRouteTypes } from '../routeTree.gen';
 import type { MyDB } from '../types/MyDB';
 import { AccountSwitcher } from './AccountSwitcher';
@@ -172,7 +173,7 @@ interface AppNavProps {
 
 export function AppNav({ isMobileDrawerOpen, setIsMobileDrawerOpen, db }: AppNavProps) {
     const { pathname } = useLocation();
-    const navigate = useNavigate();
+    const navigateOrNewTab = useNewTabAwareNavigate();
 
     // "More" is highlighted when the current page is outside the 4 bottom-nav items
     const isBottomNavRoute = bottomNavItems.some((item) => item.to === pathname);
@@ -205,8 +206,8 @@ export function AppNav({ isMobileDrawerOpen, setIsMobileDrawerOpen, db }: AppNav
                             label={item.label}
                             value={item.to}
                             icon={item.icon}
-                            // useNavigate instead of component=Link to avoid MUI/TanStack type conflicts
-                            onClick={() => void navigate({ to: item.to as never })}
+                            // navigateOrNewTab instead of component=Link to avoid MUI/TanStack type conflicts
+                            onClick={(e) => navigateOrNewTab(e, { to: item.to as never })}
                         />
                     ))}
                     <BottomNavigationAction label="More" value="more" icon={<MenuIcon />} onClick={() => setIsMobileDrawerOpen(true)} />

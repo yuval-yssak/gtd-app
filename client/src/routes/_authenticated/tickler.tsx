@@ -142,7 +142,11 @@ function TicklerPage() {
                                         <Box className={styles.actionButtons}>
                                             <CopyIdButton id={item._id} testId="ticklerItemCopyIdButton" />
                                             <Tooltip title="Edit">
-                                                <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="ticklerItemEditButton">
+                                                <IconButton
+                                                    size="small"
+                                                    onClick={(e) => editor.openEditor({ item, event: e })}
+                                                    data-testid="ticklerItemEditButton"
+                                                >
                                                     <EditIcon fontSize="small" />
                                                 </IconButton>
                                             </Tooltip>
@@ -154,7 +158,11 @@ function TicklerPage() {
                                         </Box>
                                     }
                                 >
-                                    <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="ticklerItemRow">
+                                    <ListItemButton
+                                        onClick={(e) => editor.openEditor({ item, event: e })}
+                                        className={styles.rowButton}
+                                        data-testid="ticklerItemRow"
+                                    >
                                         <ListItemText
                                             primary={
                                                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

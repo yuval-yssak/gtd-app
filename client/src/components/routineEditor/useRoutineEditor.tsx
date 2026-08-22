@@ -1,7 +1,7 @@
-import { useNavigate } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
 import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
+import { isNewTabClick, type ModifierClickSource, useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import type { MyDB, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { RoutineDialog } from '../routines/RoutineDialog';
 import { RoutineEditorExpand } from './RoutineEditorExpand';
@@ -24,6 +24,8 @@ export interface OpenRoutineEditorArgs {
     routine?: StoredRoutine;
     /** Required for popover mode — without an anchor we fall through to dialog. */
     anchor?: HTMLElement;
+    /** Pass the triggering mouse event so cmd/ctrl+click opens the routine page in a new tab. */
+    event?: ModifierClickSource;
 }
 
 export interface RoutineEditorAPI {
@@ -54,9 +56,14 @@ export function resolveRoutineVariant(
     mode: InlineClarifyMode,
     args: OpenRoutineEditorArgs,
     isMobile: boolean,
-): { kind: 'state'; state: EditorState } | { kind: 'page'; routine: StoredRoutine } {
+): { kind: 'state'; state: EditorState } | { kind: 'page'; routine: StoredRoutine } | { kind: 'newTab'; routine: StoredRoutine } {
     if (!args.routine) {
         return { kind: 'state', state: { kind: 'dialog', routine: undefined } };
+    }
+    // A modified click wins over every clarify mode — but only existing routines have a page,
+    // so the new-routine gesture above still falls through to the create dialog.
+    if (args.event && isNewTabClick(args.event)) {
+        return { kind: 'newTab', routine: args.routine };
     }
     if (mode === 'page') {
         return { kind: 'page', routine: args.routine };
@@ -85,7 +92,7 @@ export function useRoutineEditor({
     refreshItems,
     isMobile = false,
 }: UseRoutineEditorOptions): RoutineEditorAPI {
-    const navigate = useNavigate();
+    const navigateOrNewTab = useNewTabAwareNavigate();
     const [state, setState] = useState<EditorState>({ kind: 'closed' });
     const [, setClarifyMode] = useState<InlineClarifyMode>(() => parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY)));
 
@@ -109,8 +116,12 @@ export function useRoutineEditor({
     function openEditor(args: OpenRoutineEditorArgs) {
         const mode = parseClarifyMode(localStorage.getItem(CLARIFY_MODE_KEY));
         const resolved = resolveRoutineVariant(mode, args, isMobile);
-        if (resolved.kind === 'page') {
-            void navigate({ to: '/routine/$routineId', params: { routineId: resolved.routine._id } });
+        if (resolved.kind === 'newTab' || resolved.kind === 'page') {
+            // 'page' passes undefined so the plain page-mode click always stays in-tab.
+            navigateOrNewTab(resolved.kind === 'newTab' ? args.event : undefined, {
+                to: '/routine/$routineId',
+                params: { routineId: resolved.routine._id },
+            });
             return;
         }
         setState(resolved.state);

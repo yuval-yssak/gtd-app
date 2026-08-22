@@ -490,7 +490,11 @@ function NextActionsPage() {
                                             <Box className={styles.actionButtons}>
                                                 <CopyIdButton id={item._id} testId="nextActionItemCopyIdButton" />
                                                 <Tooltip title="Edit">
-                                                    <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="nextActionItemEditButton">
+                                                    <IconButton
+                                                        size="small"
+                                                        onClick={(e) => editor.openEditor({ item, event: e })}
+                                                        data-testid="nextActionItemEditButton"
+                                                    >
                                                         <EditIcon fontSize="small" />
                                                     </IconButton>
                                                 </Tooltip>
@@ -503,7 +507,7 @@ function NextActionsPage() {
                                         }
                                     >
                                         <ListItemButton
-                                            onClick={() => editor.openEditor({ item })}
+                                            onClick={(e) => editor.openEditor({ item, event: e })}
                                             className={styles.rowButton}
                                             data-testid="nextActionItemRow"
                                         >

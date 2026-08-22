@@ -10,7 +10,7 @@ import styles from './RoutineWeekGrid.module.css';
 
 interface RoutineWeekGridProps {
     routines: StoredRoutine[];
-    onRoutineSelected: (routine: StoredRoutine) => void;
+    onRoutineSelected: (routine: StoredRoutine, event: React.MouseEvent) => void;
 }
 
 // Timed calendar routines lead with their time so a day column reads like a mini agenda.
@@ -43,7 +43,7 @@ export function RoutineWeekGrid({ routines, onRoutineSelected }: RoutineWeekGrid
                                     label={entryLabel(routine)}
                                     size="small"
                                     variant="outlined"
-                                    onClick={() => onRoutineSelected(routine)}
+                                    onClick={(e) => onRoutineSelected(routine, e)}
                                     className={styles.entryChip}
                                     data-testid="routineWeekGridEntry"
                                 />
@@ -67,7 +67,7 @@ export function RoutineWeekGrid({ routines, onRoutineSelected }: RoutineWeekGrid
                         <ListItemButton
                             key={routine._id}
                             className={styles.lessFrequentRow}
-                            onClick={() => onRoutineSelected(routine)}
+                            onClick={(e) => onRoutineSelected(routine, e)}
                             data-testid="routineWeekLessFrequentRow"
                         >
                             <Typography variant="body2">{routine.title}</Typography>

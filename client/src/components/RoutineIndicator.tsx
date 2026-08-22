@@ -1,7 +1,7 @@
 import LoopIcon from '@mui/icons-material/Loop';
 import Chip from '@mui/material/Chip';
 import Tooltip from '@mui/material/Tooltip';
-import { useNavigate } from '@tanstack/react-router';
+import { useNewTabAwareNavigate } from '../lib/newTabNavigation';
 import { useRoutineIndicatorStyle } from '../lib/routineIndicatorStyle';
 import styles from './RoutineIndicator.module.css';
 
@@ -15,7 +15,7 @@ interface Props {
 }
 
 export function RoutineIndicator({ routineId, routineTitle, forceChip = false }: Props) {
-    const navigate = useNavigate();
+    const navigateOrNewTab = useNewTabAwareNavigate();
     const listStyle = useRoutineIndicatorStyle();
     const style = forceChip ? 'chip' : listStyle;
 
@@ -28,7 +28,7 @@ export function RoutineIndicator({ routineId, routineTitle, forceChip = false }:
     function onClick(e: React.MouseEvent) {
         // Stop propagation so clicking the indicator doesn't trigger the parent item row action.
         e.stopPropagation();
-        void navigate({ to: '/routine/$routineId', params: { routineId } });
+        navigateOrNewTab(e, { to: '/routine/$routineId', params: { routineId } });
     }
 
     if (style === 'chip') {

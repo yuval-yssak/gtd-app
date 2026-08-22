@@ -48,6 +48,7 @@ import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
+import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { filterRoutinesByTitle, groupRoutinesByFrequency, splitActivePaused } from '../../lib/routineGrouping';
 import { buildRoutineNextItemIndex, describeNextItemDate } from '../../lib/routineNextItem';
 import { parseRoutinesSearch, type RoutinesTab, type RoutinesView } from '../../lib/routinesUrlParams';
@@ -66,6 +67,7 @@ function RoutinesPage() {
     // Route-scoped so functional `search` updaters receive (and must return) this route's
     // typed search state instead of the all-routes union.
     const navigate = useNavigate({ from: Route.fullPath });
+    const navigateOrNewTab = useNewTabAwareNavigate();
     const searchFieldRef = useAutoFocus();
     useListScrollRestoration();
     const { account, routines, items, workContexts, people, refreshRoutines, refreshItems, syncAndRefresh, isInitialSyncing, isCalendarSyncing } = useAppData();
@@ -156,11 +158,11 @@ function RoutinesPage() {
     }
 
     function onRowClick(routine: StoredRoutine, e: React.MouseEvent<HTMLElement>) {
-        editor.openEditor({ routine, anchor: e.currentTarget });
+        editor.openEditor({ routine, anchor: e.currentTarget, event: e });
     }
 
-    function openRoutinePage(routine: StoredRoutine) {
-        void navigate({ to: '/routine/$routineId', params: { routineId: routine._id } });
+    function openRoutinePage(routine: StoredRoutine, e: React.MouseEvent) {
+        navigateOrNewTab(e, { to: '/routine/$routineId', params: { routineId: routine._id } });
     }
 
     /** Schedule + upcoming date on one line, e.g. "Every Thu at 18:00 for 1h · next Thu, Jul 2 18:00". */
@@ -180,7 +182,7 @@ function RoutinesPage() {
                     <Box sx={{ display: 'flex', gap: 0.5 }}>
                         <CopyIdButton id={routine._id} testId="routineRowCopyIdButton" />
                         <Tooltip title="Open routine page">
-                            <IconButton size="small" onClick={() => openRoutinePage(routine)} data-testid="routineRowOpenPageButton">
+                            <IconButton size="small" onClick={(e) => openRoutinePage(routine, e)} data-testid="routineRowOpenPageButton">
                                 <OpenInNewIcon fontSize="small" />
                             </IconButton>
                         </Tooltip>
@@ -194,13 +196,18 @@ function RoutinesPage() {
                             <Tooltip title="Resume — opens editor to set a new start date">
                                 {/* No anchor passed: popover mode is too wide to attach to a 24px icon, so
                                     icon-button gestures fall through to dialog while row-body clicks still anchor. */}
-                                <IconButton size="small" color="success" onClick={() => editor.openEditor({ routine })} data-testid="routineRowResumeButton">
+                                <IconButton
+                                    size="small"
+                                    color="success"
+                                    onClick={(e) => editor.openEditor({ routine, event: e })}
+                                    data-testid="routineRowResumeButton"
+                                >
                                     <PlayArrowIcon fontSize="small" />
                                 </IconButton>
                             </Tooltip>
                         )}
                         <Tooltip title="Edit">
-                            <IconButton size="small" onClick={() => editor.openEditor({ routine })} data-testid="routineRowEditButton">
+                            <IconButton size="small" onClick={(e) => editor.openEditor({ routine, event: e })} data-testid="routineRowEditButton">
                                 <EditIcon fontSize="small" />
                             </IconButton>
                         </Tooltip>
@@ -330,7 +337,7 @@ function RoutinesPage() {
         }
         return (
             <>
-                <RoutineWeekGrid routines={active} onRoutineSelected={(routine) => editor.openEditor({ routine })} />
+                <RoutineWeekGrid routines={active} onRoutineSelected={(routine, e) => editor.openEditor({ routine, event: e })} />
                 {renderPausedSection()}
             </>
         );

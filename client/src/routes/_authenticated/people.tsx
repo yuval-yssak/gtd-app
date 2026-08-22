@@ -32,6 +32,7 @@ import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
+import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { orderPeople } from '../../lib/peopleList';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './-people.module.css';
@@ -83,6 +84,7 @@ function PeoplePage() {
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
     const navigate = useNavigate();
+    const navigateOrNewTab = useNewTabAwareNavigate();
     useListScrollRestoration();
     const { account, people, refreshPeople, loggedInAccounts, isInitialSyncing } = useAppData();
     const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/people', search: { q: query || undefined }, replace: true }), [navigate]);
@@ -223,7 +225,7 @@ function PeoplePage() {
                                 <ListItemText
                                     // Row body opens the full /person page (deep-linkable, matching the other
                                     // list pages); the pencil in secondaryAction keeps the quick edit dialog.
-                                    onClick={() => void navigate({ to: '/person/$personId', params: { personId: person._id } })}
+                                    onClick={(e) => navigateOrNewTab(e, { to: '/person/$personId', params: { personId: person._id } })}
                                     data-testid="personRowText"
                                     primary={
                                         <Box

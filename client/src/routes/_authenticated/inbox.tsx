@@ -414,8 +414,8 @@ function InboxPage() {
         await refreshItems();
     }
 
-    function openWithStatus(item: StoredItem, status: EditableStatus, anchor?: HTMLElement) {
-        editor.openEditor({ item, initialStatus: status, ...(anchor ? { anchor } : {}) });
+    function openWithStatus(item: StoredItem, status: EditableStatus, clickEvent?: React.MouseEvent<HTMLElement>) {
+        editor.openEditor({ item, initialStatus: status, ...(clickEvent ? { anchor: clickEvent.currentTarget, event: clickEvent } : {}) });
     }
 
     // Deliberate: with an in-page search active, the wizard batches only the matching items
@@ -562,7 +562,11 @@ function InboxPage() {
                                                     </IconButton>
                                                 </Tooltip>
                                                 <Tooltip title="Edit">
-                                                    <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="inboxItemEditButton">
+                                                    <IconButton
+                                                        size="small"
+                                                        onClick={(e) => editor.openEditor({ item, event: e })}
+                                                        data-testid="inboxItemEditButton"
+                                                    >
                                                         <EditIcon fontSize="small" />
                                                     </IconButton>
                                                 </Tooltip>
@@ -572,17 +576,17 @@ function InboxPage() {
                                                     </IconButton>
                                                 </Tooltip>
                                                 <Tooltip title="Next Action">
-                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'nextAction', e.currentTarget)}>
+                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'nextAction', e)}>
                                                         <ArrowForwardIcon fontSize="small" />
                                                     </IconButton>
                                                 </Tooltip>
                                                 <Tooltip title="Calendar">
-                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'calendar', e.currentTarget)}>
+                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'calendar', e)}>
                                                         <CalendarTodayIcon fontSize="small" />
                                                     </IconButton>
                                                 </Tooltip>
                                                 <Tooltip title="Waiting For">
-                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'waitingFor', e.currentTarget)}>
+                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'waitingFor', e)}>
                                                         <HourglassEmptyIcon fontSize="small" />
                                                     </IconButton>
                                                 </Tooltip>
@@ -594,7 +598,7 @@ function InboxPage() {
                                             </Box>
                                         }
                                     >
-                                        <ListItemButton onClick={() => editor.openEditor({ item })} data-testid="inboxItemRow">
+                                        <ListItemButton onClick={(e) => editor.openEditor({ item, event: e })} data-testid="inboxItemRow">
                                             <ListItemText
                                                 primary={
                                                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>

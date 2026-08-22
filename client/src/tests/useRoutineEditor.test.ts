@@ -94,4 +94,29 @@ describe('resolveRoutineVariant', () => {
             expect(out).toEqual({ kind: 'page', routine: ROUTINE });
         });
     });
+
+    // A cmd/ctrl+click on an existing routine must win over every clarify mode, while a new
+    // routine (no page to open) keeps falling through to the create dialog.
+    describe('new-tab gesture', () => {
+        const CMD_CLICK = { metaKey: true, ctrlKey: false };
+
+        it('wins over every mode for an existing routine', () => {
+            for (const mode of ['dialog', 'expand', 'popover', 'page', 'instant'] as const) {
+                expect(resolveRoutineVariant(mode, { routine: ROUTINE, anchor: ANCHOR, event: CMD_CLICK }, false)).toEqual({
+                    kind: 'newTab',
+                    routine: ROUTINE,
+                });
+            }
+        });
+
+        it('still opens the create dialog for a new routine — there is no page to open', () => {
+            const out = resolveRoutineVariant('dialog', { event: CMD_CLICK }, false);
+            expect(out).toEqual({ kind: 'state', state: { kind: 'dialog', routine: undefined } });
+        });
+
+        it('an unmodified click event resolves the mode normally', () => {
+            const out = resolveRoutineVariant('dialog', { routine: ROUTINE, event: { metaKey: false, ctrlKey: false } }, false);
+            expect(out).toEqual({ kind: 'state', state: { kind: 'dialog', routine: ROUTINE } });
+        });
+    });
 });

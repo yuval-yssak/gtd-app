@@ -124,7 +124,11 @@ function CalendarPage() {
                                             <Box className={styles.actionButtons}>
                                                 <CopyIdButton id={item._id} testId="calendarItemCopyIdButton" />
                                                 <Tooltip title="Edit">
-                                                    <IconButton size="small" onClick={() => editor.openEditor({ item })} data-testid="calendarItemEditButton">
+                                                    <IconButton
+                                                        size="small"
+                                                        onClick={(e) => editor.openEditor({ item, event: e })}
+                                                        data-testid="calendarItemEditButton"
+                                                    >
                                                         <EditIcon fontSize="small" />
                                                     </IconButton>
                                                 </Tooltip>
@@ -141,7 +145,11 @@ function CalendarPage() {
                                             </Box>
                                         }
                                     >
-                                        <ListItemButton onClick={() => editor.openEditor({ item })} className={styles.rowButton} data-testid="calendarItemRow">
+                                        <ListItemButton
+                                            onClick={(e) => editor.openEditor({ item, event: e })}
+                                            className={styles.rowButton}
+                                            data-testid="calendarItemRow"
+                                        >
                                             <Box className={styles.timeCol}>
                                                 <TimeColumn item={item} />
                                             </Box>

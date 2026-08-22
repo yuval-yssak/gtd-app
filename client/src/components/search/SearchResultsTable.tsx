@@ -10,10 +10,10 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-import { useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { itemContextNames, itemPersonNames } from '../../lib/itemSearch';
+import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { SEARCH_TABLE_COLUMNS, type SearchTableColumnId } from '../../lib/searchTableColumns';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { AccountChip } from '../AccountChip';
@@ -106,7 +106,7 @@ interface ResultTableRowProps {
     orderedColumns: typeof SEARCH_TABLE_COLUMNS;
     peopleById: Map<string, StoredPerson>;
     contextsById: Map<string, StoredWorkContext>;
-    onItemOpened: (itemId: string) => void;
+    onItemOpened: (event: React.MouseEvent, itemId: string) => void;
 }
 
 // memo: item identity is stable across filter re-renders (rows come straight from the IDB
@@ -115,7 +115,7 @@ const ResultTableRow = memo(function ResultTableRow({ item, orderedColumns, peop
     return (
         <TableRow
             hover
-            onClick={() => onItemOpened(item._id)}
+            onClick={(e) => onItemOpened(e, item._id)}
             className={styles.row}
             // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration);
             // set directly on the <tr> — wrapping table rows in a div would break table semantics.
@@ -133,11 +133,14 @@ const ResultTableRow = memo(function ResultTableRow({ item, orderedColumns, peop
 // memo: skips the whole table on urgent keystroke renders — `items` only changes identity when
 // the deferred filter pass commits (see search.tsx).
 export const SearchResultsTable = memo(function SearchResultsTable({ items, visibleColumns, onVisibleColumnsChange, people, workContexts }: Props) {
-    const navigate = useNavigate();
+    const navigateOrNewTab = useNewTabAwareNavigate();
     const peopleById = useMemo(() => new Map(people.map((p) => [p._id, p])), [people]);
     const contextsById = useMemo(() => new Map(workContexts.map((c) => [c._id, c])), [workContexts]);
     const orderedColumns = useMemo(() => SEARCH_TABLE_COLUMNS.filter((c) => visibleColumns.has(c.id)), [visibleColumns]);
-    const onItemOpened = useCallback((itemId: string) => void navigate({ to: '/item/$itemId', params: { itemId }, search: { status: null } }), [navigate]);
+    const onItemOpened = useCallback(
+        (event: React.MouseEvent, itemId: string) => navigateOrNewTab(event, { to: '/item/$itemId', params: { itemId }, search: { status: null } }),
+        [navigateOrNewTab],
+    );
 
     return (
         <>
