@@ -3,14 +3,16 @@ import dayjs from 'dayjs';
 import { useLayoutEffect } from 'react';
 import {
     type AnchorRect,
+    consensusScrollTop,
     type ListScrollEntry,
-    pickTopVisibleAnchor,
+    pickVisibleAnchors,
     readFreshListScrollEntry,
+    type ScrollFrame,
     saveListScrollEntry,
     scrollTopForAnchor,
 } from '../lib/listScrollMemory';
 
-/** Attribute carried by every restorable list row (rendered by ListRowShell) — the hook's scroll anchors. */
+/** Attribute carried by every restorable list row (rendered by ListRowShell, or stamped directly by list routes) — the hook's scroll anchors. */
 export const LIST_ANCHOR_ATTRIBUTE = 'data-list-item-id';
 
 interface ScrollSurface {
@@ -18,6 +20,8 @@ interface ScrollSurface {
     scroller: Element;
     /** Viewport-relative y of the surface's visual top — the reference line for anchor offsets. */
     visualTop: () => number;
+    /** Viewport-relative y of the surface's visual bottom — rows below it are off-screen. */
+    visualBottom: () => number;
 }
 
 /**
@@ -29,19 +33,25 @@ interface ScrollSurface {
 function resolveScrollSurface(): ScrollSurface | null {
     const main = document.querySelector('main');
     if (main && main.scrollHeight - main.clientHeight > 1) {
-        return { scroller: main, visualTop: () => main.getBoundingClientRect().top };
+        return {
+            scroller: main,
+            visualTop: () => main.getBoundingClientRect().top,
+            visualBottom: () => main.getBoundingClientRect().bottom,
+        };
     }
     const documentScroller = document.scrollingElement;
-    return documentScroller ? { scroller: documentScroller, visualTop: () => 0 } : null;
+    return documentScroller ? { scroller: documentScroller, visualTop: () => 0, visualBottom: () => window.innerHeight } : null;
 }
 
 function collectAnchorRects(): AnchorRect[] {
-    return [...document.querySelectorAll<HTMLElement>(`[${LIST_ANCHOR_ATTRIBUTE}]`)]
-        .map((rowEl) => {
-            const rect = rowEl.getBoundingClientRect();
-            return { id: rowEl.getAttribute(LIST_ANCHOR_ATTRIBUTE) ?? '', top: rect.top, bottom: rect.bottom };
-        })
-        .filter((anchor) => anchor.id !== '');
+    return [...document.querySelectorAll<HTMLElement>(`[${LIST_ANCHOR_ATTRIBUTE}]`)].flatMap((rowEl) => {
+        const id = rowEl.getAttribute(LIST_ANCHOR_ATTRIBUTE);
+        if (!id) {
+            return [];
+        }
+        const rect = rowEl.getBoundingClientRect();
+        return [{ id, top: rect.top, bottom: rect.bottom }];
+    });
 }
 
 function saveCurrentPosition(locationKey: string): void {
@@ -49,23 +59,58 @@ function saveCurrentPosition(locationKey: string): void {
     if (!surface) {
         return;
     }
-    const anchor = pickTopVisibleAnchor(surface.visualTop(), collectAnchorRects());
-    saveListScrollEntry(locationKey, { scrollTop: surface.scroller.scrollTop, anchor, savedAtMs: dayjs().valueOf() });
+    const anchors = pickVisibleAnchors({ top: surface.visualTop(), bottom: surface.visualBottom() }, collectAnchorRects());
+    saveListScrollEntry(locationKey, { scrollTop: surface.scroller.scrollTop, anchors, savedAtMs: dayjs().valueOf() });
 }
 
-function findAnchorElement(entry: ListScrollEntry): Element | null {
-    if (!entry.anchor) {
-        return null;
-    }
-    return document.querySelector(`[${LIST_ANCHOR_ATTRIBUTE}="${CSS.escape(entry.anchor.id)}"]`);
+/** ScrollTop target per saved anchor that is currently mounted — the consensus vote pool. */
+function anchorScrollTargets(surface: ScrollSurface, entry: ListScrollEntry): number[] {
+    // Snapshot the frame once: each getBoundingClientRect below forces a layout flush, and
+    // re-reading scrollTop/visualTop per anchor could mix baselines mid-loop.
+    const frame: ScrollFrame = { currentScrollTop: surface.scroller.scrollTop, containerTop: surface.visualTop() };
+    return entry.anchors.flatMap((anchor) => {
+        const anchorEl = document.querySelector(`[${LIST_ANCHOR_ATTRIBUTE}="${CSS.escape(anchor.id)}"]`);
+        if (!anchorEl) {
+            return [];
+        }
+        return [scrollTopForAnchor(frame, anchorEl.getBoundingClientRect().top, anchor.offset)];
+    });
 }
 
-/** Anchor-first target: where the saved row sits now, else the raw saved pixel offset. */
-function desiredScrollTop(surface: ScrollSurface, entry: ListScrollEntry, anchorEl: Element | null): number {
-    if (entry.anchor && anchorEl) {
-        return scrollTopForAnchor(surface.scroller.scrollTop, surface.visualTop(), anchorEl.getBoundingClientRect().top, entry.anchor.offset);
+/** Frames spent holding at the raw pixel fallback waiting for a second anchor to corroborate (~160ms). */
+export const ANCHOR_CORROBORATION_FRAMES = 10;
+
+export interface RestoreDecision {
+    /** The scrollTop to assign this frame. */
+    target: number;
+    /** Whether the retry chain should keep running (beyond clamping) so late-mounting anchors still land. */
+    shouldKeepWatching: boolean;
+}
+
+/**
+ * Two distinct questions per frame: what to assign NOW, and whether to KEEP WATCHING.
+ *
+ * Assign: a single re-found anchor may be exactly the row the edit MOVED in the sort
+ * (often the only saved row mounted right after arrival, since windowed lists mount
+ * around the current offset) — following it alone would drag the viewport to its new
+ * position. Hold at the raw pixel fallback until a second anchor corroborates the
+ * target; a lone survivor is acted on once the short corroboration budget is spent, so
+ * a list that genuinely lost most saved rows (bulk done/clarify) repositions early
+ * instead of snapping a second later.
+ *
+ * Keep watching: only the ASSIGNMENT decision is capped by the corroboration budget —
+ * the chain keeps running until enough anchors corroborate, so rows a windowed list
+ * mounts late (or a shift after a ghost row collapses) still get re-anchored precisely.
+ */
+export function restoreTargetForFrame(entry: ListScrollEntry, targets: number[], framesLeft: number): RestoreDecision {
+    const requiredAnchorMatches = Math.min(entry.anchors.length, 2);
+    const framesUsed = RESTORE_RETRY_FRAMES - framesLeft;
+    const hasEnoughAnchors = targets.length >= requiredAnchorMatches;
+    const shouldKeepWatching = !hasEnoughAnchors;
+    if (shouldKeepWatching && framesUsed < ANCHOR_CORROBORATION_FRAMES) {
+        return { target: entry.scrollTop, shouldKeepWatching };
     }
-    return entry.scrollTop;
+    return { target: consensusScrollTop(targets, entry.scrollTop) ?? entry.scrollTop, shouldKeepWatching };
 }
 
 // A restore may land while the list is still growing (Suspense fallback / transition
@@ -74,11 +119,11 @@ function desiredScrollTop(surface: ScrollSurface, entry: ListScrollEntry, anchor
 // The generation token cancels stale retry chains when a newer restore supersedes them.
 // Module-global: assumes a single active list surface at a time (one route's list in the
 // shared shell) — a future split-view would need per-surface generations.
-const RESTORE_RETRY_FRAMES = 60;
+export const RESTORE_RETRY_FRAMES = 60;
 let restoreGeneration = 0;
 // While a restore chain runs, scroll events are programmatic echoes of the chain's own
 // assignments — capturing them would overwrite the accurate saved entry with a provisional
-// position (see isAwaitingAnchor below) and freeze the drift in place.
+// position (see restoreTargetForFrame's pixel fallback) and freeze the drift in place.
 let isRestoreChainActive = false;
 
 function applyRestore(locationKey: string, generation: number, framesLeft: number): void {
@@ -100,17 +145,16 @@ function applyRestore(locationKey: string, generation: number, framesLeft: numbe
         finishChain();
         return;
     }
-    const anchorEl = findAnchorElement(entry);
-    const target = desiredScrollTop(surface, entry, anchorEl);
+    const targets = anchorScrollTargets(surface, entry);
+    const { target, shouldKeepWatching } = restoreTargetForFrame(entry, targets, framesLeft);
     surface.scroller.scrollTop = target;
     const wasClamped = Math.abs(surface.scroller.scrollTop - target) > 1;
-    // Windowed lists (virtua) don't have the saved anchor row mounted yet on arrival: the pixel
-    // fallback lands nearby (content height is partly estimated, so it drifts), the row then
-    // mounts, and a later frame re-anchors precisely. Keep retrying until the anchor appears.
-    // Worst case (anchor row was deleted and never mounts): the chain — and with it the
+    // Windowed lists (virtua) don't have the saved anchor rows mounted yet on arrival: the pixel
+    // fallback lands nearby (content height is partly estimated, so it drifts), the rows then
+    // mount, and a later frame re-anchors precisely. Keep retrying until enough anchors appear.
+    // Worst case (anchor rows were deleted and never mount): the chain — and with it the
     // scroll-capture suppression — runs the full retry budget (~1s) before saves resume.
-    const isAwaitingAnchor = entry.anchor !== null && !anchorEl;
-    if ((wasClamped || isAwaitingAnchor) && framesLeft > 0) {
+    if ((wasClamped || shouldKeepWatching) && framesLeft > 0) {
         requestAnimationFrame(() => {
             if (generation === restoreGeneration) {
                 applyRestore(locationKey, generation, framesLeft - 1);
@@ -121,7 +165,7 @@ function applyRestore(locationKey: string, generation: number, framesLeft: numbe
     finishChain();
 }
 
-/** Hybrid restore: re-anchor on the saved row when it still exists, else fall back to the raw pixel offset. */
+/** Hybrid restore: re-anchor on the consensus of surviving saved rows, else fall back to the raw pixel offset. */
 function restorePosition(locationKey: string): void {
     restoreGeneration += 1;
     isRestoreChainActive = true;

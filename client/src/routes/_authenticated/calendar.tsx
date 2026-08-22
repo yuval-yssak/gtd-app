@@ -29,6 +29,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
 import { formatAllDayDate, fromGCalExclusive } from '../../lib/allDayDate';
 import { filterItemsByQuery } from '../../lib/itemSearch';
@@ -49,6 +50,7 @@ function CalendarPage() {
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
+    useListScrollRestoration();
 
     const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/calendar', search: { q: query || undefined }, replace: true }), [navigate]);
     const search = useListSearch({ urlQuery: q ?? '', writeUrlQuery });
@@ -116,7 +118,8 @@ function CalendarPage() {
                         </Box>
                         <List disablePadding className={styles.list}>
                             {groupItems.map((item, idx) => (
-                                <Box key={item._id}>
+                                // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
+                                <Box key={item._id} data-list-item-id={item._id}>
                                     <ListItem
                                         disablePadding
                                         className={styles.item}
