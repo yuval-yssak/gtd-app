@@ -1,6 +1,7 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { performLocalAccountSwitch } from '../hooks/useAccounts';
+import { readFreshListScrollEntry, resetListScrollMemory, saveListScrollEntry } from '../lib/listScrollMemory';
 import type { MyDB } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -16,6 +17,7 @@ beforeEach(async () => {
 
 afterEach(() => {
     db.close();
+    resetListScrollMemory();
 });
 
 describe('performLocalAccountSwitch', () => {
@@ -25,6 +27,14 @@ describe('performLocalAccountSwitch', () => {
         expect(url).toBe('/settings?tab=devices');
         const active = await db.get('activeAccount', 'active');
         expect(active?.userId).toBe('user-b');
+    });
+
+    it('clears the saved scroll positions — they belong to the previous account and the switch reloads the same URL', async () => {
+        saveListScrollEntry('/next-actions', { scrollTop: 700, anchors: [{ id: 'prev-account-item', offset: 10 }], savedAtMs: 1_000 });
+
+        await performLocalAccountSwitch(db, 'user-b', { pathname: '/next-actions', search: '' });
+
+        expect(readFreshListScrollEntry('/next-actions', 1_000)).toBeNull();
     });
 
     it('propagates an IDB write failure so withPending can clear the backdrop and surface the error', async () => {

@@ -5,6 +5,7 @@ import { signOutDevice } from '../api/pushApi';
 import { clearAllAccounts, getActiveAccount, getAllAccounts, removeAccount, setActiveAccount, wipeUserData } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
 import { authClient } from '../lib/authClient';
+import { clearPersistedListScrollMemory } from '../lib/listScrollMemory';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
 
 export type PendingAction = 'switching' | 'signingOut' | 'signingOutAll';
@@ -42,6 +43,10 @@ export interface AccountsState {
  */
 export async function performLocalAccountSwitch(db: IDBPDatabase<MyDB>, userId: string, currentUrl: { pathname: string; search: string }): Promise<string> {
     await setActiveAccount(userId, db);
+    // Scroll positions are per-account (anchors are item _ids) and the switch hard-reloads
+    // the SAME url — without this the previous account's offset would restore onto the next
+    // account's completely different list.
+    clearPersistedListScrollMemory();
     return currentUrl.pathname + currentUrl.search;
 }
 

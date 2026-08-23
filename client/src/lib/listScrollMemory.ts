@@ -45,11 +45,109 @@ export interface AnchorRect {
     bottom: number;
 }
 
-// Session-scoped by design: a page reload starts the flow over, so positions need not survive it.
+// Tab-scoped: the in-memory map is the source of truth, mirrored to sessionStorage so a
+// page reload lands back at the same position. The mirror follows the map's eviction and
+// capacity rules, not just its writes — an entry the sticky window discarded must not
+// come back on reload. sessionStorage (not localStorage) keeps the memory per-tab — two
+// tabs on the same list never fight over one saved position.
 const entriesByLocation = new Map<string, ListScrollEntry>();
+
+const SESSION_STORAGE_KEY = 'gtd:listScrollPositions';
+
+/**
+ * Cap on persisted locations: keys include search params (/search?q=…), so a long-lived
+ * tab would otherwise accumulate one immortal key per typed query until the storage
+ * quota silently kills persistence altogether.
+ */
+export const MAX_PERSISTED_LOCATIONS = 50;
+
+/**
+ * The location the tab actually (re)loaded at — captured at module load, before any
+ * navigation, so the reload age-refresh applies to the reloaded page even when the
+ * first list to mount the hook is a different one (e.g. reload on /item/:id, then
+ * navigate to a list).
+ */
+const RELOADED_LOCATION_KEY = typeof location === 'undefined' ? null : `${location.pathname}${location.search}`;
+
+let isHydratedFromSession = false;
+
+/** Newest-first entries still inside the sticky window, capped — the only shape the mirror stores. */
+function freshestEntries(nowMs: number): [string, ListScrollEntry][] {
+    return [...entriesByLocation]
+        .filter(([, entry]) => nowMs - entry.savedAtMs <= SCROLL_STICKY_WINDOW_MS)
+        .sort(([, a], [, b]) => b.savedAtMs - a.savedAtMs)
+        .slice(0, MAX_PERSISTED_LOCATIONS);
+}
+
+function persistEntriesToSession(nowMs: number): void {
+    try {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(Object.fromEntries(freshestEntries(nowMs))));
+    } catch {
+        // Storage unavailable or full (private mode, quota, node tests) — the in-memory map
+        // still works; only reload survival degrades.
+    }
+}
+
+function readSessionEntries(): Record<string, unknown> {
+    try {
+        const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+        const parsed: unknown = raw ? JSON.parse(raw) : null;
+        return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>) : {};
+    } catch {
+        return {};
+    }
+}
+
+// Validation guard for values crossing the JSON boundary — the one place a cast is justified.
+function isPersistedEntry(candidate: unknown): candidate is ListScrollEntry {
+    if (typeof candidate !== 'object' || candidate === null) {
+        return false;
+    }
+    const { scrollTop, anchors, savedAtMs } = candidate as Partial<ListScrollEntry>;
+    return typeof scrollTop === 'number' && Array.isArray(anchors) && typeof savedAtMs === 'number';
+}
+
+/**
+ * The hydration merge rule. The reloaded page restores regardless of idle time (native
+ * scroll-restoration parity) — its age is refreshed; other locations keep their real age,
+ * and ones already past the sticky window stay dead instead of entering the map.
+ */
+function admitPersistedEntry(locationKey: string, entry: ListScrollEntry, reloadedLocationKey: string | null, nowMs: number): void {
+    if (entriesByLocation.has(locationKey)) {
+        return;
+    }
+    if (locationKey === reloadedLocationKey) {
+        entriesByLocation.set(locationKey, { ...entry, savedAtMs: nowMs });
+        return;
+    }
+    if (nowMs - entry.savedAtMs <= SCROLL_STICKY_WINDOW_MS) {
+        entriesByLocation.set(locationKey, entry);
+    }
+}
+
+/**
+ * Loads the positions this tab persisted before a reload (see admitPersistedEntry for the
+ * merge rule). In-memory entries always win over persisted ones. Idempotent — only the
+ * first call per page load reads storage. The parameters exist for tests; production
+ * callers rely on the defaults.
+ */
+export function hydrateListScrollMemory(reloadedLocationKey = RELOADED_LOCATION_KEY, nowMs = dayjs().valueOf()): void {
+    if (isHydratedFromSession) {
+        return;
+    }
+    isHydratedFromSession = true;
+    for (const [locationKey, entry] of Object.entries(readSessionEntries())) {
+        if (isPersistedEntry(entry)) {
+            admitPersistedEntry(locationKey, entry, reloadedLocationKey, nowMs);
+        }
+    }
+}
 
 export function saveListScrollEntry(locationKey: string, entry: ListScrollEntry): void {
     entriesByLocation.set(locationKey, entry);
+    // The entry's own timestamp is "now" from the caller's clock — using it keeps the
+    // mirror's pruning on the same clock as the entries (real time in prod, fake in tests).
+    persistEntriesToSession(entry.savedAtMs);
 }
 
 /** Returns the saved entry for the location if it is still within the sticky window; drops stale entries. */
@@ -60,13 +158,30 @@ export function readFreshListScrollEntry(locationKey: string, nowMs = dayjs().va
     }
     if (nowMs - entry.savedAtMs > SCROLL_STICKY_WINDOW_MS) {
         entriesByLocation.delete(locationKey);
+        // Write-through: a position the app visibly discarded must not resurrect on reload.
+        persistEntriesToSession(nowMs);
         return null;
     }
     return entry;
 }
 
+/**
+ * Wipes both the map and the mirror. Scroll positions are per-account (anchors are item
+ * _ids), and an account switch hard-reloads the same URL — without this, the previous
+ * account's offset would restore onto the next account's completely different list.
+ */
+export function clearPersistedListScrollMemory(): void {
+    entriesByLocation.clear();
+    try {
+        sessionStorage.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+        // Storage unavailable — the in-memory clear above is the part that matters.
+    }
+}
+
 export function resetListScrollMemory(): void {
     entriesByLocation.clear();
+    isHydratedFromSession = false;
 }
 
 /** The scroll container's visible band in viewport coordinates — rows outside it are off-screen. */

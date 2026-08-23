@@ -1,7 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     ANCHOR_AGREEMENT_TOLERANCE_PX,
+    clearPersistedListScrollMemory,
     consensusScrollTop,
+    hydrateListScrollMemory,
+    MAX_PERSISTED_LOCATIONS,
     MAX_SAVED_ANCHORS,
     pickVisibleAnchors,
     readFreshListScrollEntry,
@@ -13,7 +16,20 @@ import {
 
 afterEach(() => {
     resetListScrollMemory();
+    vi.unstubAllGlobals();
 });
+
+/** Minimal in-memory sessionStorage stand-in — the node test env has no DOM storage. */
+function stubSessionStorage(initial: Record<string, string> = {}) {
+    const backing = new Map(Object.entries(initial));
+    const fake = {
+        getItem: (key: string) => backing.get(key) ?? null,
+        setItem: (key: string, value: string) => void backing.set(key, value),
+        removeItem: (key: string) => void backing.delete(key),
+    };
+    vi.stubGlobal('sessionStorage', fake);
+    return backing;
+}
 
 describe('listScrollMemory store', () => {
     it('returns a saved entry within the sticky window', () => {
@@ -38,6 +54,127 @@ describe('listScrollMemory store', () => {
 
     it('returns null for a location never saved', () => {
         expect(readFreshListScrollEntry('/someday', 1_000)).toBeNull();
+    });
+
+    it('does not throw when sessionStorage is unavailable (memory-only fallback)', () => {
+        // No stub installed — the node env has no sessionStorage at all.
+        saveListScrollEntry('/next-actions', { scrollTop: 480, anchors: [], savedAtMs: 1_000 });
+        hydrateListScrollMemory('/next-actions', 1_000);
+        expect(readFreshListScrollEntry('/next-actions', 1_000)?.scrollTop).toBe(480);
+    });
+});
+
+describe('sessionStorage persistence across reloads', () => {
+    const entry = (scrollTop: number, savedAtMs: number) => ({ scrollTop, anchors: [{ id: 'a', offset: 10 }], savedAtMs });
+
+    it('restores a saved position after a simulated reload', () => {
+        stubSessionStorage();
+        saveListScrollEntry('/next-actions', entry(700, 1_000));
+        resetListScrollMemory(); // the reload: in-memory map gone, storage survives
+        hydrateListScrollMemory('/next-actions', 2_000);
+        expect(readFreshListScrollEntry('/next-actions', 2_000)?.scrollTop).toBe(700);
+    });
+
+    it('refreshes the age of the reloaded location so reload restores beyond the sticky window', () => {
+        stubSessionStorage();
+        saveListScrollEntry('/next-actions', entry(700, 1_000));
+        saveListScrollEntry('/someday', entry(300, 1_000));
+        resetListScrollMemory();
+        const reloadAt = 1_000 + SCROLL_STICKY_WINDOW_MS + 60_000; // tab sat idle past the window
+        hydrateListScrollMemory('/next-actions', reloadAt);
+        // The reloaded page restores anyway (native-browser-like behavior)…
+        expect(readFreshListScrollEntry('/next-actions', reloadAt)?.scrollTop).toBe(700);
+        // …but other lists keep their original age and stay subject to the window.
+        expect(readFreshListScrollEntry('/someday', reloadAt)).toBeNull();
+    });
+
+    it('keeps in-memory entries over persisted ones on hydrate', () => {
+        stubSessionStorage();
+        saveListScrollEntry('/next-actions', entry(700, 1_000));
+        resetListScrollMemory();
+        saveListScrollEntry('/next-actions', entry(950, 2_000)); // newer in-memory save after the reload
+        hydrateListScrollMemory('/next-actions', 2_000);
+        expect(readFreshListScrollEntry('/next-actions', 2_000)?.scrollTop).toBe(950);
+    });
+
+    it('hydrates only once per page load', () => {
+        const backing = stubSessionStorage();
+        saveListScrollEntry('/next-actions', entry(700, 1_000));
+        resetListScrollMemory();
+        hydrateListScrollMemory('/next-actions', 2_000);
+        backing.clear(); // later storage state must not matter
+        hydrateListScrollMemory('/someday', 2_000);
+        expect(readFreshListScrollEntry('/next-actions', 2_000)?.scrollTop).toBe(700);
+    });
+
+    it('ignores corrupt or foreign-shaped persisted data', () => {
+        stubSessionStorage({ 'gtd:listScrollPositions': '{"/next-actions": {"bogus": true}, "/someday": "nope"' });
+        hydrateListScrollMemory('/next-actions', 1_000);
+        expect(readFreshListScrollEntry('/next-actions', 1_000)).toBeNull();
+    });
+
+    it('drops malformed entries while keeping valid siblings', () => {
+        stubSessionStorage({
+            'gtd:listScrollPositions': JSON.stringify({ '/next-actions': { scrollTop: 'high', anchors: [], savedAtMs: 1 }, '/someday': entry(300, 1_000) }),
+        });
+        hydrateListScrollMemory('/someday', 1_000);
+        expect(readFreshListScrollEntry('/next-actions', 1_000)).toBeNull();
+        expect(readFreshListScrollEntry('/someday', 1_000)?.scrollTop).toBe(300);
+    });
+
+    it('does not resurrect an entry the sticky window already evicted', () => {
+        stubSessionStorage();
+        saveListScrollEntry('/next-actions', entry(700, 1_000));
+        const afterWindow = 1_001 + SCROLL_STICKY_WINDOW_MS;
+        // The read evicts — the user has already seen the list start at the top.
+        expect(readFreshListScrollEntry('/next-actions', afterWindow)).toBeNull();
+        resetListScrollMemory(); // the reload
+        hydrateListScrollMemory('/next-actions', afterWindow);
+        expect(readFreshListScrollEntry('/next-actions', afterWindow)).toBeNull();
+    });
+
+    it('prunes expired entries from storage on the next save instead of growing forever', () => {
+        const backing = stubSessionStorage();
+        saveListScrollEntry('/someday', entry(300, 1_000));
+        saveListScrollEntry('/next-actions', entry(700, 1_000 + SCROLL_STICKY_WINDOW_MS * 2));
+        const persisted = backing.get('gtd:listScrollPositions');
+        expect(persisted).toContain('/next-actions');
+        expect(persisted).not.toContain('/someday');
+    });
+
+    it('caps the number of persisted locations, evicting the oldest first', () => {
+        const backing = stubSessionStorage();
+        for (let i = 0; i <= MAX_PERSISTED_LOCATIONS; i++) {
+            saveListScrollEntry(`/search?q=${i}`, entry(i, 1_000 + i));
+        }
+        const raw = backing.get('gtd:listScrollPositions');
+        if (!raw) throw new Error('expected persisted positions');
+        const storedKeys = Object.keys(JSON.parse(raw));
+        expect(storedKeys).toHaveLength(MAX_PERSISTED_LOCATIONS);
+        expect(storedKeys).not.toContain('/search?q=0');
+    });
+
+    it('keeps the in-memory entry when storage rejects the write (quota exceeded)', () => {
+        vi.stubGlobal('sessionStorage', {
+            getItem: () => null,
+            setItem: () => {
+                throw new DOMException('QuotaExceededError');
+            },
+        });
+        saveListScrollEntry('/next-actions', entry(700, 1_000));
+        expect(readFreshListScrollEntry('/next-actions', 1_000)?.scrollTop).toBe(700);
+    });
+
+    it('clearPersistedListScrollMemory wipes both the map and the mirror', () => {
+        const backing = stubSessionStorage();
+        saveListScrollEntry('/next-actions', entry(700, 1_000));
+        clearPersistedListScrollMemory();
+        expect(readFreshListScrollEntry('/next-actions', 1_000)).toBeNull();
+        expect(backing.has('gtd:listScrollPositions')).toBe(false);
+        // Nothing to hydrate afterwards either — a reload after the clear starts clean.
+        resetListScrollMemory();
+        hydrateListScrollMemory('/next-actions', 1_000);
+        expect(readFreshListScrollEntry('/next-actions', 1_000)).toBeNull();
     });
 });
 

@@ -226,6 +226,25 @@ test.describe('List scroll restoration + ghost rows', () => {
         });
     });
 
+    test('reloading the page restores the scroll position', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `scroll-reload-${dayjs().valueOf()}@example.com`, async (page) => {
+            await seedNextActions(page, 35, 'Reload item');
+
+            await page.goto('/next-actions');
+            await expect(page.getByTestId('nextActionItemRow').first()).toBeVisible();
+            const savedScrollTop = await scrollListToMiddle(page);
+            expect(savedScrollTop).toBeGreaterThan(200);
+
+            // The rAF-throttled capture mirrors positions to sessionStorage — wait for the
+            // write to land so the reload has something to hydrate from.
+            await expect.poll(() => page.evaluate(() => sessionStorage.getItem('gtd:listScrollPositions') ?? '')).toContain('/next-actions');
+
+            await page.reload();
+            await expect(page.getByTestId('nextActionItemRow').first()).toBeVisible();
+            await expect.poll(async () => Math.abs((await readListScrollTop(page)) - savedScrollTop)).toBeLessThan(150);
+        });
+    });
+
     test('back from an item page returns to the filtered list URL', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `scroll-filters-${dayjs().valueOf()}@example.com`, async (page) => {
             await seedNextActions(page, 2, 'Filtered item');

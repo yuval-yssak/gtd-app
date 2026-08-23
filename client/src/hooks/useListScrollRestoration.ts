@@ -4,6 +4,7 @@ import { useLayoutEffect } from 'react';
 import {
     type AnchorRect,
     consensusScrollTop,
+    hydrateListScrollMemory,
     type ListScrollEntry,
     pickVisibleAnchors,
     readFreshListScrollEntry,
@@ -190,10 +191,19 @@ function keyOfLocation(location: ParsedLocation): string {
  *   even with the scrollRestoration option unset) that scrolls the window to top on every
  *   navigation render, after this layout effect. Our subscription registers later than
  *   that handler, so it runs after the reset and wins.
+ *
+ * Positions also survive a page reload: entries are mirrored to sessionStorage and
+ * hydrated back on the first mount after a reload (see hydrateListScrollMemory).
  */
 export function useListScrollRestoration(): void {
     const router = useRouter();
     useLayoutEffect(() => {
+        // On a fresh page load this pulls the pre-reload positions out of sessionStorage
+        // (no-op afterwards), so the restorePosition below lands where the tab was. The
+        // reloaded location is captured at module load inside listScrollMemory — passing
+        // the router location here would mis-attribute the reload when the first list
+        // mounts only after navigating away from a detail page.
+        hydrateListScrollMemory();
         restorePosition(keyOfLocation(router.latestLocation));
         // Track the position continuously (rAF-throttled) instead of only at departure:
         // onRendered can misfire during a departure while still carrying this page's
@@ -226,6 +236,16 @@ export function useListScrollRestoration(): void {
             });
         };
         window.addEventListener('scroll', captureOnScroll, { capture: true, passive: true });
+        // Final save before a reload/close: the rAF-throttled capture may still be pending
+        // when the page unloads. Skipped while a restore chain runs (mid-restore positions
+        // are provisional) and mid-departure (latestLocation already points at the
+        // destination — measuring the departing DOM would save under the wrong key).
+        const persistFinalPositionOnPageHide = () => {
+            if (!isRestoreChainActive && !isDeparting) {
+                saveCurrentPosition(keyOfLocation(router.latestLocation));
+            }
+        };
+        window.addEventListener('pagehide', persistFinalPositionOnPageHide);
         const unsubscribeBeforeLoad = router.subscribe('onBeforeLoad', (event) => {
             isDeparting = true;
             cancelPendingCapture();
@@ -245,6 +265,7 @@ export function useListScrollRestoration(): void {
         });
         return () => {
             window.removeEventListener('scroll', captureOnScroll, { capture: true });
+            window.removeEventListener('pagehide', persistFinalPositionOnPageHide);
             cancelPendingCapture();
             unsubscribeBeforeLoad();
             unsubscribeRendered();

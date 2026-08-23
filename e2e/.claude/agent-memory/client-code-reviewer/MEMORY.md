@@ -17,3 +17,4 @@
 - [New page routes ship with no inbound in-app link](feedback_new_page_route_has_no_inbound_link.md) — Deep-link-only `/entity/$id` routes leave the list row on the dialog and the recorded-backTarget branch dead.
 - [Extracted editor bodies duplicate chrome type + lib helpers](feedback_extracted_body_diverges_from_shared_chrome_type.md) — Inline `'dialog' | 'page'` union instead of `ItemEditorChrome`; local `byName` instead of `lib/sortByName`.
 - [Modifier-click / new-tab gesture coverage](feedback_modifier_click_gesture_coverage.md) — Event threading reviews clean; the misses are eventless handlers, null `window.open`, and macOS ctrl=context-menu.
+- [In-memory Map gains a Web Storage mirror](feedback_memory_map_to_storage_mirroring.md) — Mirror gets wired to writes only: TTL eviction never re-persists (expired entries resurrect) and nothing bounds `?q=`-derived keys.
