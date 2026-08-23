@@ -22,6 +22,16 @@ function parseAnchorToUtcDate(anchor: string): Date {
     return dayjs.utc(anchor.slice(0, 10)).toDate();
 }
 
+/** True when `startDate` is set AND strictly after today. Creation/edit paths skip seeding the
+ *  first nextAction item in that case — the boot-tick materialises the routine on the day. */
+export function isFutureStartDate(startDate: string | undefined): boolean {
+    // Falsy covers both undefined and the empty string form value — neither is "set".
+    if (!startDate) {
+        return false;
+    }
+    return startDate > dayjs().startOf('day').format('YYYY-MM-DD');
+}
+
 /**
  * Build, persist, and queue-sync a nextAction item for the given expectedBy date. Shared body
  * between createNextRoutineItem (disposal path) and createFirstRoutineItem (creation path).

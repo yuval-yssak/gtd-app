@@ -8,6 +8,12 @@ import { buildCalendarMeta, type CalendarMeta } from './clarify/types';
 
 export type EditableStatus = 'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash';
 
+/**
+ * What the editor's status-chip row can target: every item status plus the clarify-only 'routine'
+ * destination, which converts the item into a recurring routine instead of transitioning it.
+ */
+export type ClarifyDestination = EditableStatus | 'routine';
+
 /** The four per-status form states the editor maintains, bundled so the merge/patch builders take
  *  one cohesive "editor forms" argument instead of a growing list of positional form params. */
 export interface EditorForms {
@@ -33,7 +39,7 @@ export function stripRoutineId(item: StoredItem): StoredItem {
  * done and trash MUST keep routineId so the disposal path records a skipped exception
  * or advances the series. Otherwise the trashed date silently regenerates.
  */
-export function shouldDetachFromRoutine(previous: EditableStatus, next: EditableStatus, hasRoutineId: boolean): boolean {
+export function shouldDetachFromRoutine(previous: EditableStatus, next: ClarifyDestination, hasRoutineId: boolean): boolean {
     if (!hasRoutineId) {
         return false;
     }
@@ -46,7 +52,7 @@ export function shouldDetachFromRoutine(previous: EditableStatus, next: Editable
 /** Returns true when the selected status requires a field that isn't filled in the form.
  *  Only calendar (date/time validity) and a non-empty title gate the save — every other status,
  *  including waitingFor (the person is optional) and somedayMaybe, has no required field. */
-export function isSaveDisabled(title: string, status: EditableStatus, cal: CalendarFormState): boolean {
+export function isSaveDisabled(title: string, status: ClarifyDestination, cal: CalendarFormState): boolean {
     if (!title.trim()) {
         return true;
     }
@@ -263,7 +269,7 @@ export function buildEditPatch(
     item: StoredItem,
     trimmedTitle: string,
     trimmedNotes: string,
-    status: EditableStatus,
+    status: ClarifyDestination,
     forms: EditorForms,
 ): ReassignItemEditPatch {
     const patch: ReassignItemEditPatch = {};
@@ -407,7 +413,7 @@ function arraysSetEqual(a: string[], b: string[]): boolean {
     return b.every((v) => setA.has(v));
 }
 
-export function mergeFormsIntoItem(item: StoredItem, status: EditableStatus, forms: EditorForms, calendarOptions: CalendarOption[]): StoredItem {
+export function mergeFormsIntoItem(item: StoredItem, status: ClarifyDestination, forms: EditorForms, calendarOptions: CalendarOption[]): StoredItem {
     if (status === 'nextAction') {
         return applyNextActionForm(item, forms.na);
     }

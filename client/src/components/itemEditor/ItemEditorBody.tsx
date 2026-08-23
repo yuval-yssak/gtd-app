@@ -3,6 +3,7 @@ import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlin
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
+import LoopIcon from '@mui/icons-material/Loop';
 import MoveToInboxIcon from '@mui/icons-material/MoveToInbox';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import Alert from '@mui/material/Alert';
@@ -36,6 +37,7 @@ import {
     updateItemWithGcalMeta,
 } from '../../db/itemMutations';
 import { offlineReassignMessage } from '../../db/reassignMutations';
+import { clarifyToRoutine, undoClarifyToRoutine } from '../../db/routineClarifyMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
@@ -45,10 +47,11 @@ import { omitArchived } from '../../lib/entityUsage';
 import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { offerUndo } from '../../lib/undoStore';
-import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
+import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
 import { CalendarFields } from '../clarify/CalendarFields';
 import { NextActionFields } from '../clarify/NextActionFields';
+import { buildRoutineFieldsFromClarify, canClarifyToRoutine, isClarifyToRoutineSaveDisabled, itemToRoutineForm } from '../clarify/routineClarify';
 import { TicklerDateFields } from '../clarify/TicklerDateFields';
 import {
     buildCalendarMeta,
@@ -65,6 +68,7 @@ import {
     applyCalendarPatch,
     buildClarifyToDoneOpts,
     buildEditPatch,
+    type ClarifyDestination,
     decideSavePath,
     type EditableStatus,
     type EditorForms,
@@ -78,6 +82,8 @@ import {
     stripRoutineId,
 } from '../editItemDialogLogic';
 import { RoutineIndicator } from '../RoutineIndicator';
+import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
+import type { FormState as RoutineFormState } from '../routineEditor/routineFormState';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import styles from './ItemEditorBody.module.css';
@@ -100,7 +106,7 @@ import { shouldFireSendUpdatesDialog } from './sendUpdatesDialogLogic';
 export type { ItemEditorChrome } from '../editItemDialogLogic';
 
 interface StatusChipConfig {
-    value: EditableStatus;
+    value: ClarifyDestination;
     label: string;
     icon: React.ReactElement;
     color?: 'default' | 'primary' | 'success' | 'error';
@@ -112,6 +118,8 @@ const STATUS_CHIPS: StatusChipConfig[] = [
     { value: 'calendar', label: 'Calendar', icon: <CalendarTodayIcon fontSize="small" /> },
     { value: 'waitingFor', label: 'Waiting For', icon: <HourglassEmptyIcon fontSize="small" /> },
     { value: 'somedayMaybe', label: 'Someday / Maybe', icon: <LightbulbOutlinedIcon fontSize="small" /> },
+    // Clarify-only destination: converts the inbox item into a recurring routine (see canClarifyToRoutine).
+    { value: 'routine', label: 'Routine', icon: <LoopIcon fontSize="small" /> },
     { value: 'done', label: 'Done', icon: <CheckCircleOutlineIcon fontSize="small" />, color: 'success' },
     { value: 'trash', label: 'Trash', icon: <DeleteOutlineIcon fontSize="small" />, color: 'error' },
 ];
@@ -200,7 +208,7 @@ export function ItemEditorBody({
 
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
-    const [status, setStatus] = useState<EditableStatus>(initialStatus ?? item.status);
+    const [status, setStatus] = useState<ClarifyDestination>(initialStatus ?? item.status);
     const [ownerUserId, setOwnerUserId] = useState(item.userId);
     const [reassignError, setReassignError] = useState<string | null>(null);
     const [isSaving, startSaving] = useTransition();
@@ -221,25 +229,38 @@ export function ItemEditorBody({
         () => (ownerUserId === item.userId ? calendarOptions : calendarOptions.filter((opt) => opt.userId === ownerUserId)),
         [calendarOptions, ownerUserId, item.userId],
     );
+    // The routine destination always creates under the item's owner (owner change + routine is
+    // blocked), so its calendar picker/link-resolution must never see another account's calendars —
+    // resolveCalendarLink's default-fallback would otherwise cross accounts on multi-account devices.
+    const routineCalendarOptions = useMemo(() => calendarOptions.filter((opt) => opt.userId === item.userId), [calendarOptions, item.userId]);
     const [wfForm, setWfForm] = useState<WaitingForFormState>(() => itemToWaitingForForm(item));
     const [smForm, setSmForm] = useState<SomedayMaybeFormState>(() => itemToSomedayMaybeForm(item));
+    // Routine destination form — the routine editor's own FormState, seeded from the item's
+    // metadata. Title/notes stay on this editor's fields and flow in at save time.
+    const [routineForm, setRoutineForm] = useState<RoutineFormState>(() => itemToRoutineForm(item));
+    // Routine-destination save failures need their own surface: reassignError renders inside
+    // AccountPicker, which single-account devices never mount.
+    const [routineSaveError, setRoutineSaveError] = useState<string | null>(null);
 
     // Picker options scoped to the owner account (mirrors visibleCalendarOptions above): the
     // merged multi-account sets would otherwise offer another account's identically-named
     // contexts/people — duplicate "anywhere" chips — and allow cross-account tagging. Archived
     // entities are hidden too, except ids the item already carries (they must stay removable).
     const entityUsage = useEntityUsage();
+    // The routine destination has its own contexts/people selection — the picker pools must track
+    // whichever form the active destination renders, or its assigned ids degrade to strays.
+    const assignedContextIds = status === 'routine' ? routineForm.workContextIds : naForm.workContextIds;
     const pickerWorkContexts = useMemo(
         () =>
             omitArchived(
-                scopeOptionsToOwner(workContexts, { ownerUserId, assignedIds: naForm.workContextIds, allOptions: allWorkContexts }),
-                new Set(naForm.workContextIds),
+                scopeOptionsToOwner(workContexts, { ownerUserId, assignedIds: assignedContextIds, allOptions: allWorkContexts }),
+                new Set(assignedContextIds),
             ),
-        [workContexts, ownerUserId, naForm.workContextIds, allWorkContexts],
+        [workContexts, ownerUserId, assignedContextIds, allWorkContexts],
     );
     const assignedPeopleIds = useMemo(
-        () => [...naForm.peopleIds, ...(wfForm.waitingForPersonId ? [wfForm.waitingForPersonId] : [])],
-        [naForm.peopleIds, wfForm.waitingForPersonId],
+        () => (status === 'routine' ? routineForm.peopleIds : [...naForm.peopleIds, ...(wfForm.waitingForPersonId ? [wfForm.waitingForPersonId] : [])]),
+        [status, routineForm.peopleIds, naForm.peopleIds, wfForm.waitingForPersonId],
     );
     const pickerPeople = useMemo(
         () => omitArchived(scopeOptionsToOwner(people, { ownerUserId, assignedIds: assignedPeopleIds, allOptions: allPeople }), new Set(assignedPeopleIds)),
@@ -248,7 +269,7 @@ export function ItemEditorBody({
 
     // Bundle the per-status forms so the merge/patch builders take one cohesive argument.
     const forms: EditorForms = { na: naForm, cal: calForm, wf: wfForm, sm: smForm };
-    const saveDisabled = isSaveDisabled(title, status, calForm) || isSaving;
+    const saveDisabled = (status === 'routine' ? isClarifyToRoutineSaveDisabled(title, routineForm) : isSaveDisabled(title, status, calForm)) || isSaving;
 
     // ── Hybrid save model ────────────────────────────────────────────────────
     // Title/notes autosave (debounced, with Undo); everything else (status, schedule, contexts,
@@ -460,6 +481,23 @@ export function ItemEditorBody({
             setReassignError(path.error);
             return;
         }
+        // Routine is a clarify-only destination with its own commit path — the item is consumed
+        // (trashed) and a routine is born, rather than the item transitioning status. Reached only
+        // without an owner change: status !== live.status always holds here, so an owner change
+        // lands in the `block` branch above.
+        if (status === 'routine') {
+            // Re-validate against the LIVE item: a remote sync may have clarified it (or attached
+            // it to a routine) while this editor held a dirty 'routine' selection — the chip is
+            // gone from the row, but the local status survives the live merge.
+            if (!canClarifyToRoutine(live)) {
+                setRoutineSaveError('This item changed on another device and is no longer an inbox capture. Pick a different status.');
+                return;
+            }
+            setReassignError(null);
+            setRoutineSaveError(null);
+            commitClarifyToRoutine(trimmedTitle, trimmedNotes);
+            return;
+        }
         if (path.kind === 'reassign' && !validateReassign()) {
             return;
         }
@@ -503,6 +541,49 @@ export function ItemEditorBody({
             offerSaveUndo(base);
             await onSaved();
             closeEditor();
+        });
+    }
+
+    function commitClarifyToRoutine(trimmedTitle: string, trimmedNotes: string) {
+        startSaving(async () => {
+            // Drain any text edit still inside the debounce window first — same rationale as
+            // commitSave: a late snapshot with a newer updatedTs would resurrect the trashed item.
+            await textAutosave.flush();
+            const normalized = normalizeTitleAndNotes(liveItemRef.current, trimmedTitle, trimmedNotes);
+            try {
+                const { routine } = await clarifyToRoutine(db, normalized, buildRoutineFieldsFromClarify(normalized, routineForm, routineCalendarOptions));
+                offerClarifyToRoutineUndo(normalized, routine);
+            } catch (err) {
+                // clarifyToRoutine creates the routine BEFORE trashing the item, so on failure the
+                // capture is intact — keep the editor open with an actionable error instead of
+                // silently re-enabling the Save button.
+                console.error('[clarify-to-routine] failed:', err);
+                setRoutineSaveError('Could not create the routine. Your item was not changed.');
+                return;
+            }
+            await onSaved();
+            closeEditor();
+        });
+    }
+
+    /**
+     * Undo for clarify-to-routine: restores the pre-clarify item AND deletes the just-created
+     * routine (plus everything it generated). Skipped when the item itself was routine-generated —
+     * trashing it advanced the OLD routine's series, which a snapshot restore can't reverse (same
+     * rule as offerSaveUndo's routine-disposal guard).
+     */
+    function offerClarifyToRoutineUndo(beforeSnapshot: StoredItem, routine: StoredRoutine) {
+        if (beforeSnapshot.routineId) {
+            return;
+        }
+        offerUndo({
+            key: `item:${beforeSnapshot._id}:save`,
+            message: 'Routine created',
+            link: `/routine/${routine._id}`,
+            undo: async () => {
+                await undoClarifyToRoutine(db, routine, beforeSnapshot);
+                await onSaved();
+            },
         });
     }
 
@@ -799,14 +880,17 @@ export function ItemEditorBody({
                         gap: 1,
                     }}
                 >
-                    {STATUS_CHIPS.map((cfg) => (
+                    {STATUS_CHIPS.filter((cfg) => cfg.value !== 'routine' || canClarifyToRoutine(liveItem)).map((cfg) => (
                         <Chip
                             key={cfg.value}
                             icon={cfg.icon}
                             label={cfg.label}
                             variant={status === cfg.value ? 'filled' : 'outlined'}
                             color={status === cfg.value ? (cfg.color ?? 'primary') : 'default'}
-                            onClick={() => setStatus(cfg.value)}
+                            onClick={() => {
+                                setRoutineSaveError(null);
+                                setStatus(cfg.value);
+                            }}
                         />
                     ))}
                 </Stack>
@@ -906,6 +990,41 @@ export function ItemEditorBody({
                             Parked for later review. Optionally set a deadline or hide it from review until a date.
                         </Typography>
                         <TicklerDateFields value={smForm} onChange={(patch) => setSmForm((f) => ({ ...f, ...patch }))} />
+                    </Stack>
+                </>
+            )}
+
+            {status === 'routine' && (
+                <>
+                    <Divider />
+                    <Stack
+                        sx={{
+                            gap: 2,
+                        }}
+                        data-testid="itemEditorRoutineFields"
+                    >
+                        <Typography
+                            variant="body2"
+                            sx={{
+                                color: 'text.secondary',
+                            }}
+                        >
+                            Turns this item into a repeating routine. The item itself is consumed — the routine takes its title and notes.
+                        </Typography>
+                        {routineSaveError && (
+                            <Alert severity="error" data-testid="itemEditorRoutineSaveError">
+                                {routineSaveError}
+                            </Alert>
+                        )}
+                        <RoutineScheduleFields
+                            form={routineForm}
+                            onPatch={(patch) => setRoutineForm((f) => ({ ...f, ...patch }))}
+                            calendarOptions={routineCalendarOptions}
+                            workContexts={pickerWorkContexts}
+                            people={pickerPeople}
+                            usage={entityUsage}
+                            frequencyKey={item._id}
+                        />
                     </Stack>
                 </>
             )}

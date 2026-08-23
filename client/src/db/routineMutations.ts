@@ -2,7 +2,13 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB, StoredRoutine } from '../types/MyDB';
 import { deleteRoutineById, putRoutine } from './routineHelpers';
-import { trashAllOpenItemsForRoutine, trashFutureItemsFromDate } from './routineItemHelpers';
+import {
+    createFirstRoutineItem,
+    generateCalendarItemsToHorizon,
+    isFutureStartDate,
+    trashAllOpenItemsForRoutine,
+    trashFutureItemsFromDate,
+} from './routineItemHelpers';
 import { queueSyncOp } from './syncHelpers';
 
 function nowIso(): string {
@@ -17,6 +23,34 @@ export async function createRoutine(db: IDBPDatabase<MyDB>, fields: NewRoutineFi
     await putRoutine(db, routine);
     await queueSyncOp(db, { opType: 'create', entityType: 'routine', entityId: routine._id, snapshot: routine, userId: routine.userId });
     return routine;
+}
+
+/**
+ * Create a routine and seed its first item(s) — calendar routines fill the generation horizon,
+ * nextAction routines seed one item unless the startDate is in the future (the boot-tick
+ * materialises those on the day). Seeding errors are logged, not thrown: a failed first item must
+ * never roll back a successfully persisted routine. Shared by the routine editor's create path
+ * and the clarify-to-routine flow so both create routines identically.
+ */
+export async function createRoutineWithFirstItems(db: IDBPDatabase<MyDB>, fields: NewRoutineFields): Promise<StoredRoutine> {
+    const created = await createRoutine(db, fields);
+    try {
+        await seedFirstItems(db, created);
+    } catch (err) {
+        console.error('[routine] failed to create items:', err);
+    }
+    return created;
+}
+
+async function seedFirstItems(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<void> {
+    if (routine.routineType === 'calendar') {
+        await generateCalendarItemsToHorizon(db, routine.userId, routine);
+        return;
+    }
+    if (isFutureStartDate(routine.startDate)) {
+        return;
+    }
+    await createFirstRoutineItem(db, routine.userId, routine);
 }
 
 export async function updateRoutine(db: IDBPDatabase<MyDB>, routine: StoredRoutine): Promise<StoredRoutine> {

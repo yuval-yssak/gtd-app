@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hasUnsavedStructuralItemEdits, itemToFormSeeds } from '../components/itemEditor/itemEditorLiveMerge';
-import { hasUnsavedStructuralRoutineEdits, initFormState } from '../components/routineEditor/RoutineEditorBody';
+import { hasUnsavedStructuralRoutineEdits } from '../components/routineEditor/RoutineEditorBody';
+import { initFormState } from '../components/routineEditor/routineFormState';
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
 
 function makeItem(overrides: Partial<StoredItem> = {}): StoredItem {

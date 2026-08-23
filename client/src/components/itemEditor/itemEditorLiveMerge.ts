@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import type { StoredItem } from '../../types/MyDB';
 import { type CalendarFormState, emptyCalendar, type NextActionFormState, type SomedayMaybeFormState, type WaitingForFormState } from '../clarify/types';
-import type { EditableStatus } from '../editItemDialogLogic';
+import type { ClarifyDestination, EditableStatus } from '../editItemDialogLogic';
 
 /**
  * Live-merge support for the item editor: while the editor is open, sync can update the item
@@ -15,11 +15,13 @@ import type { EditableStatus } from '../editItemDialogLogic';
  *   "changed on another device" notice with a "Use their version" escape hatch.
  */
 
-/** Everything the editor seeds from the item, bundled so merge logic can treat it uniformly. */
+/** Everything the editor seeds from the item, bundled so merge logic can treat it uniformly.
+ *  `status` is a ClarifyDestination because the editor's local status can point at the
+ *  routine destination; item-derived seeds only ever hold real statuses. */
 export interface ItemFormSeeds {
     title: string;
     notes: string;
-    status: EditableStatus;
+    status: ClarifyDestination;
     na: NextActionFormState;
     cal: CalendarFormState;
     wf: WaitingForFormState;
@@ -238,7 +240,7 @@ function isActiveGroupDirty(form: ItemFormSeeds, seed: ItemFormSeeds): boolean {
     return false;
 }
 
-function groupConflictsForStatus(status: EditableStatus, groups: { na: string[]; cal: string[]; wf: string[]; sm: string[] }): string[] {
+function groupConflictsForStatus(status: ClarifyDestination, groups: { na: string[]; cal: string[]; wf: string[]; sm: string[] }): string[] {
     if (status === 'nextAction') {
         return groups.na;
     }

@@ -4,7 +4,8 @@
  * helper — which is the same function the editor calls during onSave.
  */
 import { describe, expect, it } from 'vitest';
-import { buildRoutineTemplateFromForm, buildSplitPatch, buildUpdatedRoutine } from '../components/routineEditor/RoutineEditorBody';
+import { buildSplitPatch, buildUpdatedRoutine } from '../components/routineEditor/RoutineEditorBody';
+import { buildRoutineTemplateFromForm } from '../components/routineEditor/routineFormState';
 import type { StoredRoutine } from '../types/MyDB';
 
 describe('buildRoutineTemplateFromForm', () => {
