@@ -205,6 +205,13 @@ export interface ItemEditorBodyProps {
      * `resolveActionsPlacement` for the full tri-state semantics.
      */
     actionsContainer?: HTMLElement | null;
+    /**
+     * The host renders its own CopyIdButton in its header (EditItemDialog, item page), so the
+     * meta row skips its copy button to keep exactly one copy affordance per screen — two
+     * identical buttons once shipped because distinct testids hid the duplicate. The ID text
+     * itself always renders.
+     */
+    hasHostCopyIdButton?: boolean;
 }
 
 // Re-exported for callers/tests that historically imported it from here; the implementation moved
@@ -241,6 +248,7 @@ export function ItemEditorBody({
     chrome,
     renderActions,
     actionsContainer,
+    hasHostCopyIdButton,
 }: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
     // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
@@ -1147,9 +1155,9 @@ export function ItemEditorBody({
                 >
                     ID {item._id}
                 </Typography>
-                {/* The shared hardened button (tooltip + failure snackbar) — hosts that used to
-                    render their own header copy no longer do, so exactly one shows per screen. */}
-                <CopyIdButton id={item._id} />
+                {/* The shared hardened button (tooltip + failure snackbar). Hosts with their own
+                    header CopyIdButton suppress this one so exactly one shows per screen. */}
+                {!hasHostCopyIdButton && <CopyIdButton id={item._id} />}
             </Box>
 
             {actionsPlacement.kind === 'inline' && actionsRow}

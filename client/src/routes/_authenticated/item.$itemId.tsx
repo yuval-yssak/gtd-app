@@ -8,6 +8,7 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
+import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
@@ -34,7 +35,7 @@ export const Route = createFileRoute('/_authenticated/item/$itemId')({
     component: ItemPage,
 });
 
-function PageHeader({ title, onBack }: { title: string; onBack: () => void }) {
+function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () => void; idForCopy?: string }) {
     return (
         <Box className={styles.header}>
             <IconButton onClick={onBack} size="small" aria-label="Go back">
@@ -49,7 +50,7 @@ function PageHeader({ title, onBack }: { title: string; onBack: () => void }) {
             >
                 {title}
             </Typography>
-            {/* No header CopyIdButton: ItemEditorBody's bottom meta row owns the ID + copy now. */}
+            {idForCopy && <CopyIdButton id={idForCopy} />}
         </Box>
     );
 }
@@ -162,7 +163,7 @@ function ItemPage() {
 
     return (
         <Box className={styles.page} data-testid="itemPageWrapper">
-            <PageHeader title="Edit item" onBack={goBack} />
+            <PageHeader title="Edit item" onBack={goBack} idForCopy={item._id} />
             <Paper variant="outlined" className={styles.card}>
                 <ItemEditorBody
                     key={item._id}
@@ -174,6 +175,7 @@ function ItemPage() {
                     onSaved={refreshItems}
                     onFromGmailReadOnly={onFromGmailReadOnly}
                     chrome="page"
+                    hasHostCopyIdButton
                     {...(initialStatus ? { initialStatus } : {})}
                 />
             </Paper>

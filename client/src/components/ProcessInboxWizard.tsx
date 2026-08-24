@@ -182,7 +182,8 @@ function WizardHeader({ index, total, chrome }: WizardHeaderProps) {
                     {index + 1} of {total}
                 </Typography>
             </Box>
-            {/* No header CopyIdButton: ItemEditorBody's bottom meta row owns the ID + copy now. */}
+            {/* No header CopyIdButton here: the wizard passes no `hasHostCopyIdButton`, so
+                ItemEditorBody's meta row renders the copy button for this host. */}
         </Box>
     );
 }
