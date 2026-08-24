@@ -1,10 +1,13 @@
 /// <reference lib="webworker" />
+
 import { clientsClaim } from 'workbox-core';
 import { createHandlerBoundToURL, precacheAndRoute } from 'workbox-precaching';
 import { NavigationRoute, registerRoute } from 'workbox-routing';
 import { BootstrapRequiredError, SyncAuthError } from './api/syncClient';
 import { fetchSessionUserId, flushQueueForSessionUser, pullForSessionUser } from './db/backgroundSync';
-import { openAppDB } from './db/indexedDB';
+// withAppDB (not a bare openAppDB) — the SW outlives individual events, and a connection left
+// open here holds the schema version and blocks the next upgrade in every tab.
+import { withAppDB } from './db/indexedDB';
 import { hasAtLeastOne } from './lib/typeUtils';
 
 /** Posted to open tabs so they can call `dispatchAccountNeedsReauth` — the SW has no `window` to dispatch on directly. */
@@ -49,7 +52,7 @@ self.addEventListener('sync', (event) => {
     const syncEvent = event as SyncEvent;
     if (syncEvent.tag !== 'gtd-sync-queue') return;
     syncEvent.waitUntil(
-        openAppDB().then(async (db) => {
+        withAppDB(async (db) => {
             // Session-scoped, NOT IDB-scoped: after an offline account switch the cookie can still
             // point at the previous account until a foreground tab runs the cookie reconcile. An
             // unscoped flush here would push the new account's queued ops under the old session —
@@ -115,32 +118,31 @@ self.addEventListener('push', (event) => {
     console.log('[sw-push] received push notification', payload);
 
     event.waitUntil(
-        openAppDB()
-            // Per-user cursors require a userId on every pull. The SW can't pivot Better Auth
-            // sessions (the auth client is React-only), so the pull is scoped to whoever the
-            // cookie authenticates as — and ONLY when that agrees with IDB's activeAccount
-            // (pullForSessionUser skips on drift, e.g. an offline account switch not yet
-            // reconciled; pulling in that window would land the cookie-user's ops under the
-            // IDB-user's cursor). Other logged-in accounts catch up at the next foreground sync.
-            .then(async (db) => {
-                const sessionUserId = await fetchSessionUserId();
-                if (!sessionUserId) return;
-                try {
-                    await pullForSessionUser(db, async () => sessionUserId);
-                } catch (err) {
-                    if (err instanceof SyncAuthError) {
-                        await notifyClientsAccountNeedsReauth(sessionUserId);
-                        return;
-                    }
-                    if (err instanceof BootstrapRequiredError) {
-                        // The SW can't show the recovery dialog. Swallow — the next foreground sync
-                        // (syncOneUser) detects the reaped device and runs the recovery flow there.
-                        console.log('[sw-push] pull requires full bootstrap — deferring recovery to the next foreground sync');
-                        return;
-                    }
-                    throw err;
+        // Per-user cursors require a userId on every pull. The SW can't pivot Better Auth
+        // sessions (the auth client is React-only), so the pull is scoped to whoever the
+        // cookie authenticates as — and ONLY when that agrees with IDB's activeAccount
+        // (pullForSessionUser skips on drift, e.g. an offline account switch not yet
+        // reconciled; pulling in that window would land the cookie-user's ops under the
+        // IDB-user's cursor). Other logged-in accounts catch up at the next foreground sync.
+        withAppDB(async (db) => {
+            const sessionUserId = await fetchSessionUserId();
+            if (!sessionUserId) return;
+            try {
+                await pullForSessionUser(db, async () => sessionUserId);
+            } catch (err) {
+                if (err instanceof SyncAuthError) {
+                    await notifyClientsAccountNeedsReauth(sessionUserId);
+                    return;
                 }
-            })
+                if (err instanceof BootstrapRequiredError) {
+                    // The SW can't show the recovery dialog. Swallow — the next foreground sync
+                    // (syncOneUser) detects the reaped device and runs the recovery flow there.
+                    console.log('[sw-push] pull requires full bootstrap — deferring recovery to the next foreground sync');
+                    return;
+                }
+                throw err;
+            }
+        })
             .then(() => {
                 console.log('[sw-push] pulled from server, notifying open tabs');
                 // Notify any open tabs so they can refresh React state from IndexedDB —

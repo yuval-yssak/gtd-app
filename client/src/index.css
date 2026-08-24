@@ -61,3 +61,13 @@ body {
 #root {
     height: 100%;
 }
+
+/* Shown by main.tsx while a blocked schema upgrade is pending — before React mounts,
+   so it cannot live in a CSS Module. */
+.dbUpgradeBlockedNotice {
+    margin: 30vh auto 0;
+    max-width: 26rem;
+    padding: 0 1rem;
+    text-align: center;
+    font-family: Roboto, sans-serif;
+}

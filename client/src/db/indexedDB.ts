@@ -2,8 +2,13 @@ import type { IDBPDatabase, IDBPTransaction, StoreNames } from 'idb';
 import { openDB } from 'idb';
 import type { MyDB, StoredSyncCursor, SyncOperation } from '../types/MyDB';
 
-export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
-    return openDB<MyDB>('gtd-app', 8, {
+interface OpenAppDBOptions {
+    /** Called when our upgrade is stalled by an older connection (stale tab / live SW) that won't close. */
+    onUpgradeBlocked?: () => void;
+}
+
+export async function openAppDB(options?: OpenAppDBOptions): Promise<IDBPDatabase<MyDB>> {
+    const db = await openDB<MyDB>('gtd-app', 8, {
         async upgrade(db, oldVersion, _newVersion, tx) {
             // Version 1: core stores
             if (oldVersion < 1) {
@@ -85,7 +90,38 @@ export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
                 reviewInboxes.createIndex('userId', 'userId', { unique: false });
             }
         },
+        // Without this, a version bump deadlocks silently when any older connection stays open
+        // (openDB has no timeout) — every new tab then boots to a blank page. The warn line keeps
+        // the next occurrence self-diagnosing even in contexts that pass no callback (the SW).
+        blocked() {
+            console.warn('[gtd-db] schema upgrade blocked by an older open connection (stale tab, PWA window, or service worker)');
+            options?.onUpgradeBlocked?.();
+        },
+        // A newer bundle elsewhere requested an upgrade: release our connection so it can proceed.
+        // Window contexts reload to boot on the new schema (this page can't run on a closed DB);
+        // the service worker just closes — its next event re-opens at the new version.
+        blocking(_currentVersion, blockedVersion) {
+            db.close();
+            // deleteDatabase also fires versionchange, with blockedVersion === null — only a
+            // genuine version bump warrants bouncing the page (a reload can eat unsaved edits).
+            if (typeof window !== 'undefined' && blockedVersion !== null) {
+                window.location.reload();
+            }
+        },
     });
+    return db;
+}
+
+// Long-lived contexts (the service worker) outlive individual events — a connection left open
+// there holds the schema version and blocks the next upgrade in every tab. Opens per task and
+// always releases, even when the task throws.
+export async function withAppDB<T>(task: (db: IDBPDatabase<MyDB>) => Promise<T>): Promise<T> {
+    const db = await openAppDB();
+    try {
+        return await task(db);
+    } finally {
+        db.close();
+    }
 }
 
 /**
