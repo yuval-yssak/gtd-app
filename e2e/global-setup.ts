@@ -27,12 +27,19 @@ function buildMcp(): void {
 // editor-open handler), which fails silently as "dialog never appears". Building up front guarantees
 // the served bundle matches HEAD; the concurrent `--watch` then idles and `reuseExistingServer`
 // still works for the keep-`npm run dev`-running iterative workflow.
+//
+// Deliberately `vite build` alone, NOT `npm run build`: the full build starts with
+// generate-typed-css-modules, whose first step DELETES every src/**/*.css.d.ts before
+// regenerating. The stop hook runs this e2e suite in parallel with the client block, so that
+// delete lands mid-`tsc -b` and fails the client typecheck with TS6053 "file not found". The
+// bundle doesn't need the .d.ts files (esbuild strips types), and typechecking is the client
+// block's job — a type error still fails the hook through that block.
 function buildClient(): void {
     const cwd = path.resolve(__dirname, '../client');
     if (!fs.existsSync(path.join(cwd, 'node_modules'))) {
         return;
     }
-    execSync('npm run build', { cwd, stdio: 'inherit' });
+    execSync('npx vite build', { cwd, stdio: 'inherit' });
 }
 
 export default function globalSetup(): void {
