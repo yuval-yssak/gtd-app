@@ -12,6 +12,7 @@ import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { AppNav } from '../components/AppNav';
 import { NavigationProgress } from '../components/NavigationProgress';
 import { NotificationNudge } from '../components/NotificationNudge';
+import { QuickCaptureFab } from '../components/quickCapture/QuickCaptureFab';
 import { RouteFallback } from '../components/RouteFallback';
 import { SyncRecoveryDialog } from '../components/SyncRecoveryDialog';
 import { UndoSnackbar } from '../components/UndoSnackbar';
@@ -74,6 +75,11 @@ export function AuthenticatedLayout() {
                                 {/* Global "Saved — UNDO" surface for autosaving editors; fed by lib/undoStore. */}
                                 <UndoSnackbar />
                             </Suspense>
+                            {/* App-wide quick capture: FAB + the "c" shortcut on every page. Outside the
+                                route Suspense so a route-level suspend can't unmount it mid-capture
+                                (discarding typed text and the keydown listener); it reads useAppData(),
+                                so it must stay inside AppDataProvider. */}
+                            <QuickCaptureFab db={db} />
                         </AppErrorBoundary>
                     </AppDataProvider>
                 </PendingReassignProvider>

@@ -33,6 +33,9 @@
     padding-bottom: 4.5rem;
     padding-left: 1rem;
     padding-right: 1rem;
+    /* Mirrors this element's vertical padding so viewport-fitted pages (weekly review) can size
+       themselves to exactly the visible content area: calc(100dvh - var(--gtd-main-vertical-inset)). */
+    --gtd-main-vertical-inset: 9rem;
 }
 
 @media (min-width: 56.25rem) {
@@ -40,5 +43,6 @@
        no margin-left needed. Reset padding to desktop value. */
     .mainContent {
         padding: 1.5rem;
+        --gtd-main-vertical-inset: 3rem;
     }
 }

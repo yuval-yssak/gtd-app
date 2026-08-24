@@ -19,12 +19,6 @@
     gap: 0.125rem;
 }
 
-.headerActions {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-}
-
 .completedContent {
     text-align: center;
     padding: 2.5rem 1.5rem;

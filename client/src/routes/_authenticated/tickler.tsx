@@ -23,7 +23,7 @@ import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { updateItem } from '../../db/itemMutations';
+import { releaseFromTickler } from '../../db/itemMutations';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { ticklerDayLabel } from '../../lib/ticklerDayLabel';
@@ -59,9 +59,7 @@ function TicklerPage() {
     }, {});
 
     async function onRelease(item: StoredItem) {
-        // Remove ignoreBefore so the item becomes visible in its normal list immediately
-        const { ignoreBefore: _ib, ...rest } = item;
-        await updateItem(db, rest as StoredItem);
+        await releaseFromTickler(db, item);
         await refreshItems();
     }
 

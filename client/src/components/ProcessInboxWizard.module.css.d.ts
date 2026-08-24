@@ -4,7 +4,6 @@ declare const styles: {
     readonly completedIcon: string;
     readonly dialogTitle: string;
     readonly donePage: string;
-    readonly headerActions: string;
     readonly headerRow: string;
     readonly headerTextBlock: string;
     readonly inFlightActions: string;

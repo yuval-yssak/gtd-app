@@ -11,6 +11,7 @@ import type {
     StoredEntity,
     StoredItem,
     StoredPerson,
+    StoredReviewInbox,
     StoredRoutine,
     StoredRsvpOpPayload,
     StoredWorkContext,
@@ -332,12 +333,14 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
 
     // describeDevice gives the row a human-readable label for Settings → Connected devices.
     // navigator.userAgent exists in both window and Service Worker globals.
-    const { items, routines, people, workContexts, serverTs, serverId } = await fetchBootstrap(deviceId, describeDevice(navigator.userAgent));
+    const { items, routines, people, workContexts, reviewInboxes, serverTs, serverId } = await fetchBootstrap(deviceId, describeDevice(navigator.userAgent));
 
     const mappedItems = items.map((doc) => remapUser(doc) as unknown as StoredItem);
     const mappedRoutines = routines.map((doc) => remapUser(doc) as unknown as StoredRoutine);
     const mappedPeople = people.map((doc) => remapUser(doc) as unknown as StoredPerson);
     const mappedWorkContexts = workContexts.map((doc) => remapUser(doc) as unknown as StoredWorkContext);
+    // `?? []` — a server deployed before the reviewInboxes entity omits the field entirely.
+    const mappedReviewInboxes = (reviewInboxes ?? []).map((doc) => remapUser(doc) as unknown as StoredReviewInbox);
 
     await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
         await bulkPutItems(db, mappedItems);
@@ -350,6 +353,9 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
 
         const workContextsTx = db.transaction('workContexts', 'readwrite');
         await Promise.all([...mappedWorkContexts.map((wc) => workContextsTx.store.put(wc)), workContextsTx.done]);
+
+        const reviewInboxesTx = db.transaction('reviewInboxes', 'readwrite');
+        await Promise.all([...mappedReviewInboxes.map((ri) => reviewInboxesTx.store.put(ri)), reviewInboxesTx.done]);
 
         // Per-user compound cursor at (serverTs, serverId) — the snapshot already delivered the current
         // state, so incremental pull starts from here. serverId is MAX_OP_ID (suppresses re-delivery of
@@ -521,17 +527,23 @@ async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: Ser
             return applyEntityOp(db, 'people', pullUserId, op);
         case 'workContext':
             return applyEntityOp(db, 'workContexts', pullUserId, op);
+        case 'reviewInbox':
+            return applyEntityOp(db, 'reviewInboxes', pullUserId, op);
         default: {
             // Compile-time exhaustiveness: a new EntityType without a case here becomes a type
-            // error instead of a silent runtime no-op for that entity's ops.
+            // error. At runtime this branch IS reachable — a server deployed ahead of this client
+            // build can emit entity types we don't know. Skip (never throw): a throw here aborts
+            // doPull's apply loop before advanceSyncCursor, so the device would re-fetch the same
+            // op and re-throw forever, halting sync for every entity type — not just the new one.
             const unreachable: never = op.entityType;
-            throw new Error(`applyServerOp: unhandled entityType ${String(unreachable)}`);
+            console.warn(`[sync] skipping op for unknown entityType ${String(unreachable)} — client build predates it`);
+            return;
         }
     }
 }
 
 /** The IDB stores that back syncable entities. */
-type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts';
+type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes';
 
 /**
  * Ordinary clock skew between devices must never trip the poisoned-watermark escape below —

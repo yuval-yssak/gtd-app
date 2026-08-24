@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { wipeUserData } from '../db/accountHelpers';
-import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } from '../db/draftHelpers';
+import {
+    deleteInboxCaptureDraft,
+    deleteQuickCaptureDraft,
+    getInboxCaptureDraft,
+    getQuickCaptureDraft,
+    saveInboxCaptureDraft,
+    saveQuickCaptureDraft,
+} from '../db/draftHelpers';
 import { openTestDB } from './openTestDB';
 
 const USER = 'user-1';
@@ -53,5 +60,27 @@ describe('draftHelpers (inbox capture)', () => {
 
         expect(await getInboxCaptureDraft(db, USER)).toBeUndefined();
         expect((await getInboxCaptureDraft(db, 'user-2'))?.title).toBe('theirs');
+    });
+});
+
+describe('draftHelpers (quick capture)', () => {
+    it('round-trips independently of the inbox capture draft under the same user', async () => {
+        const db = await openTestDB();
+        await saveQuickCaptureDraft(db, USER, { title: 'half a thought', notes: '- with **md** notes' });
+
+        const draft = await getQuickCaptureDraft(db, USER);
+        expect(draft).toMatchObject({ kind: 'quickCapture', title: 'half a thought', notes: '- with **md** notes', userId: USER });
+        // Separate kinds/keys: the inbox page's field must not restore the FAB's leftover.
+        expect(await getInboxCaptureDraft(db, USER)).toBeUndefined();
+
+        await deleteQuickCaptureDraft(db, USER);
+        expect(await getQuickCaptureDraft(db, USER)).toBeUndefined();
+    });
+
+    it('an all-whitespace draft deletes the row instead of persisting blanks', async () => {
+        const db = await openTestDB();
+        await saveQuickCaptureDraft(db, USER, { title: 'text', notes: '' });
+        await saveQuickCaptureDraft(db, USER, { title: '  ', notes: '' });
+        expect(await getQuickCaptureDraft(db, USER)).toBeUndefined();
     });
 });

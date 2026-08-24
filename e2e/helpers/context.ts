@@ -123,9 +123,12 @@ export async function withTwoAccountsOnOneDevice(
     browser: Browser,
     emails: [string, string],
     fn: (page: Page, accounts: { active: AccountIdentity; secondary: AccountIdentity }) => Promise<void>,
+    // Pass { serviceWorkers: 'block' } when the test intercepts API calls with page.route — once
+    // the PWA's service worker controls the page, routed requests bypass Playwright's interception.
+    contextOptions?: Parameters<Browser['newContext']>[0],
 ): Promise<void> {
     const { sessions, cookies } = await fetchDevMultiSessionCookies(emails);
-    const ctx = await browser.newContext();
+    const ctx = await browser.newContext(contextOptions);
     try {
         const page = await bootMultiSessionDevice(ctx, cookies);
         const active = sessions[0];

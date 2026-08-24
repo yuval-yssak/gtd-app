@@ -30,6 +30,8 @@ import { getPeopleByUser } from './personHelpers';
 import type { NewPersonFields } from './personMutations';
 import { createPerson } from './personMutations';
 import { reassignEntity } from './reassignMutations';
+import { getReviewInboxesByUser } from './reviewInboxHelpers';
+import { createReviewInbox, removeReviewInbox, seedDefaultReviewInboxesIfEmpty, updateReviewInbox } from './reviewInboxMutations';
 import { getRoutinesByUser } from './routineHelpers';
 import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
@@ -87,6 +89,13 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         createWorkContext: (name: string) => resolveUserId(db).then((uid) => createWorkContext(db, { userId: uid, name })),
         listPeople: () => resolveUserId(db).then((uid) => getPeopleByUser(db, uid)),
         listWorkContexts: () => resolveUserId(db).then((uid) => getWorkContextsByUser(db, uid)),
+
+        // ── Review inboxes (weekly-review capture buckets) ───────────────────
+        listReviewInboxes: () => resolveUserId(db).then((uid) => getReviewInboxesByUser(db, uid)),
+        createReviewInbox: (name: string, order: number) => resolveUserId(db).then((uid) => createReviewInbox(db, { userId: uid, name, order })),
+        updateReviewInbox: (reviewInbox: Parameters<typeof updateReviewInbox>[1]) => updateReviewInbox(db, reviewInbox),
+        removeReviewInbox: (reviewInboxId: string) => removeReviewInbox(db, reviewInboxId),
+        seedDefaultReviewInboxes: () => resolveUserId(db).then((uid) => seedDefaultReviewInboxesIfEmpty(db, uid)),
 
         // ── Routines ─────────────────────────────────────────────────────────
         listRoutines: () => resolveUserId(db).then((uid) => getRoutinesByUser(db, uid)),

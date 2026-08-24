@@ -48,11 +48,11 @@ import { MarkdownPreview } from '../../components/markdown/MarkdownPreview';
 import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { getHiddenAccountIds, toggleAccountHidden } from '../../contexts/hiddenAccounts';
 import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } from '../../db/draftHelpers';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useAutosave } from '../../hooks/useAutosave';
+import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptureNotice';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
@@ -282,9 +282,8 @@ function InboxPage() {
     const [notes, setNotes] = useState('');
     const [notesOpen, setNotesOpen] = useState(false);
     const [notesTab, setNotesTab] = useState<0 | 1>(0);
-    // Captures always land in the active account, but the account toggles are display-only — if the
-    // active account is currently hidden, the new item vanishes from every list with no other signal.
-    const [capturedIntoHiddenAccount, setCapturedIntoHiddenAccount] = useState(false);
+    // Shared "captured into a hidden account" snackbar — same surface the quick-capture FAB uses.
+    const { noticeCaptureIfHidden, hiddenAccountNotice } = useHiddenAccountCaptureNotice();
 
     // Capture-field draft persistence: half-typed title/notes survive reloads and navigation.
     // Debounce is short — writes are local-only (drafts never sync), so eager persistence is cheap.
@@ -385,19 +384,7 @@ function InboxPage() {
         await deleteInboxCaptureDraft(db, account.id);
         await collectItem(db, account.id, { title, notes });
         await refreshItems();
-        if (getHiddenAccountIds().includes(account.id)) {
-            setCapturedIntoHiddenAccount(true);
-        }
-    }
-
-    function onShowHiddenAccount() {
-        // Guard against the account having already been un-hidden via the avatar toggle row while
-        // this snackbar was still open — toggleAccountHidden is symmetric, so an unguarded call here
-        // would hide it right back.
-        if (account && getHiddenAccountIds().includes(account.id)) {
-            toggleAccountHidden(account.id);
-        }
-        setCapturedIntoHiddenAccount(false);
+        noticeCaptureIfHidden(account.id);
     }
 
     async function onKeyDown(e: React.KeyboardEvent) {
@@ -628,26 +615,7 @@ function InboxPage() {
             {editor.renderGlobal()}
             {review.renderGlobal()}
             <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
-            <Snackbar
-                open={capturedIntoHiddenAccount}
-                autoHideDuration={8000}
-                // Default bottom-left anchor sits directly on top of the account visibility toggle
-                // row in the nav drawer footer — bottom-center avoids covering the control the user
-                // needs to click (same reasoning as AccountSwitcher's own error snackbar).
-                anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-                onClose={(_, reason) => {
-                    if (reason !== 'clickaway') {
-                        setCapturedIntoHiddenAccount(false);
-                    }
-                }}
-                message="Item captured, but its account is hidden — you won't see it until you show that account again"
-                action={
-                    <Button color="secondary" size="small" onClick={onShowHiddenAccount} data-testid="showHiddenAccountButton">
-                        Show account
-                    </Button>
-                }
-                data-testid="hiddenAccountCaptureSnackbar"
-            />
+            {hiddenAccountNotice}
 
             {batchSnapshot && (
                 <ProcessInboxWizard

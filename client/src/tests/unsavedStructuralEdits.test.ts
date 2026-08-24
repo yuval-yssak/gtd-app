@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasUnsavedStructuralItemEdits, itemToFormSeeds } from '../components/itemEditor/itemEditorLiveMerge';
+import { hasUnsavedStructuralItemEdits, isOwnerOrStructurallyEdited, itemToFormSeeds } from '../components/itemEditor/itemEditorLiveMerge';
 import { hasUnsavedStructuralRoutineEdits } from '../components/routineEditor/RoutineEditorBody';
 import { initFormState } from '../components/routineEditor/routineFormState';
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
@@ -55,6 +55,21 @@ describe('hasUnsavedStructuralItemEdits', () => {
         expect(hasUnsavedStructuralItemEdits({ form, seed, initialStatus: 'nextAction', includeText: false })).toBe(true);
     });
 
+    // Pins the two non-obvious branches of ItemEditorActionsApi.isDirty, which delegates here.
+    it("the 'routine' destination is always a structural edit — no item or initialStatus can equal it", () => {
+        const seed = itemToFormSeeds(makeItem());
+        const form = { ...seed, status: 'routine' as const };
+        expect(hasUnsavedStructuralItemEdits({ form, seed, includeText: false })).toBe(true);
+        expect(hasUnsavedStructuralItemEdits({ form, seed, initialStatus: 'nextAction', includeText: false })).toBe(true);
+    });
+
+    it('a title edit is NOT structural while text autosave owns it (includeText: false)', () => {
+        const seed = itemToFormSeeds(makeItem());
+        const form = { ...seed, title: 'Renamed task' };
+        expect(hasUnsavedStructuralItemEdits({ form, seed, includeText: false })).toBe(false);
+        expect(hasUnsavedStructuralItemEdits({ form, seed, includeText: true })).toBe(true);
+    });
+
     it('only the form group the current status renders counts', () => {
         const seed = itemToFormSeeds(makeItem({ status: 'nextAction' }));
         // Calendar-group edit while the item is a nextAction — dropped on save, so not "unsaved".
@@ -76,6 +91,23 @@ describe('hasUnsavedStructuralItemEdits', () => {
         const form = { ...seed, title: 'Renamed' };
         expect(hasUnsavedStructuralItemEdits({ form, seed, includeText: false })).toBe(false);
         expect(hasUnsavedStructuralItemEdits({ form, seed, includeText: true })).toBe(true);
+    });
+});
+
+describe('isOwnerOrStructurallyEdited', () => {
+    it('a pending owner change is always structural, with no other edit at all', () => {
+        // Also fires when a REMOTE reassign moves the open item's row (liveUserId changes under an
+        // untouched form) — the documented spurious "Save & next" case; pinned so it stays a
+        // conscious trade-off, not an accident.
+        const seed = itemToFormSeeds(makeItem());
+        expect(isOwnerOrStructurallyEdited({ form: seed, seed, includeText: false, ownerUserId: 'u2', liveUserId: 'u1' })).toBe(true);
+    });
+
+    it('a matching owner delegates to the structural check', () => {
+        const seed = itemToFormSeeds(makeItem());
+        expect(isOwnerOrStructurallyEdited({ form: seed, seed, includeText: false, ownerUserId: 'u1', liveUserId: 'u1' })).toBe(false);
+        const form = { ...seed, status: 'nextAction' as const };
+        expect(isOwnerOrStructurallyEdited({ form, seed, includeText: false, ownerUserId: 'u1', liveUserId: 'u1' })).toBe(true);
     });
 });
 

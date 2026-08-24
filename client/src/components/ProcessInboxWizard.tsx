@@ -13,7 +13,6 @@ import { useCallback, useState } from 'react';
 import { usePendingReassign } from '../contexts/PendingReassignProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../db/itemMutations';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
-import { CopyIdButton } from './itemEditor/CopyIdButton';
 import { type ItemEditorActionsApi, ItemEditorBody, type ItemEditorChrome } from './itemEditor/ItemEditorBody';
 import styles from './ProcessInboxWizard.module.css';
 
@@ -131,7 +130,7 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
         return (
             <>
                 <Box className={styles.pageRoot}>
-                    <WizardHeader index={step.index} total={items.length} itemId={currentItem._id} chrome="page" />
+                    <WizardHeader index={step.index} total={items.length} chrome="page" />
                     <Box className={styles.pageBody}>{inFlightContent ?? editorBody('page')}</Box>
                 </Box>
                 {toastSnackbar}
@@ -143,7 +142,7 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
         <>
             <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
                 <DialogTitle className={styles.dialogTitle}>
-                    <WizardHeader index={step.index} total={items.length} itemId={currentItem._id} chrome="dialog" />
+                    <WizardHeader index={step.index} total={items.length} chrome="dialog" />
                 </DialogTitle>
                 <DialogContent dividers>{inFlightContent ?? editorBody('dialog')}</DialogContent>
             </Dialog>
@@ -155,11 +154,10 @@ export function ProcessInboxWizard({ items, db, people, workContexts, onClose, o
 interface WizardHeaderProps {
     index: number;
     total: number;
-    itemId: string;
     chrome: 'dialog' | 'page';
 }
 
-function WizardHeader({ index, total, itemId, chrome }: WizardHeaderProps) {
+function WizardHeader({ index, total, chrome }: WizardHeaderProps) {
     const titleVariant = chrome === 'page' ? 'h6' : 'subtitle1';
     return (
         <Box className={styles.headerRow}>
@@ -184,9 +182,7 @@ function WizardHeader({ index, total, itemId, chrome }: WizardHeaderProps) {
                     {index + 1} of {total}
                 </Typography>
             </Box>
-            <Box className={styles.headerActions}>
-                <CopyIdButton id={itemId} />
-            </Box>
+            {/* No header CopyIdButton: ItemEditorBody's bottom meta row owns the ID + copy now. */}
         </Box>
     );
 }

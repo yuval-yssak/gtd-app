@@ -8,7 +8,6 @@ import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
-import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
@@ -35,7 +34,7 @@ export const Route = createFileRoute('/_authenticated/item/$itemId')({
     component: ItemPage,
 });
 
-function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () => void; idForCopy?: string }) {
+function PageHeader({ title, onBack }: { title: string; onBack: () => void }) {
     return (
         <Box className={styles.header}>
             <IconButton onClick={onBack} size="small" aria-label="Go back">
@@ -50,7 +49,7 @@ function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () =>
             >
                 {title}
             </Typography>
-            {idForCopy && <CopyIdButton id={idForCopy} />}
+            {/* No header CopyIdButton: ItemEditorBody's bottom meta row owns the ID + copy now. */}
         </Box>
     );
 }
@@ -163,7 +162,7 @@ function ItemPage() {
 
     return (
         <Box className={styles.page} data-testid="itemPageWrapper">
-            <PageHeader title="Edit item" onBack={goBack} idForCopy={item._id} />
+            <PageHeader title="Edit item" onBack={goBack} />
             <Paper variant="outlined" className={styles.card}>
                 <ItemEditorBody
                     key={item._id}

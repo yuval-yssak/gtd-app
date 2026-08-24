@@ -5,6 +5,7 @@ import type {
     StoredDeviceMeta,
     StoredItem,
     StoredPerson,
+    StoredReviewInbox,
     StoredRoutine,
     StoredSyncCursor,
     StoredWorkContext,
@@ -55,6 +56,9 @@ const gtdImpl = {
 
     listRoutines: (page: Page): Promise<StoredRoutine[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { listRoutines(): Promise<StoredRoutine[]> } }).__gtd.listRoutines()),
+
+    listReviewInboxes: (page: Page): Promise<StoredReviewInbox[]> =>
+        page.evaluate(() => (window as unknown as { __gtd: { listReviewInboxes(): Promise<StoredReviewInbox[]> } }).__gtd.listReviewInboxes()),
 
     // ── Collect ──────────────────────────────────────────────────────────────
     collect: (page: Page, title: string): Promise<StoredItem> =>

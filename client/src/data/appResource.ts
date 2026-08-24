@@ -1,9 +1,10 @@
 import type { IDBPDatabase } from 'idb';
 import { getItemsAcrossUsers } from '../db/itemHelpers';
 import { getPeopleAcrossUsers } from '../db/personHelpers';
+import { getReviewInboxesAcrossUsers } from '../db/reviewInboxHelpers';
 import { getRoutinesAcrossUsers } from '../db/routineHelpers';
 import { getWorkContextsAcrossUsers } from '../db/workContextHelpers';
-import type { MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import type { MyDB, StoredItem, StoredPerson, StoredReviewInbox, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 
 /**
  * Per-user-set bundle of promises that components `use()`. The fields are kept independent so
@@ -14,9 +15,10 @@ export interface AppResourceSnapshot {
     routines: Promise<StoredRoutine[]>;
     people: Promise<StoredPerson[]>;
     workContexts: Promise<StoredWorkContext[]>;
+    reviewInboxes: Promise<StoredReviewInbox[]>;
 }
 
-export type ResourceScope = 'items' | 'routines' | 'people' | 'workContexts' | 'all';
+export type ResourceScope = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'all';
 
 interface CacheEntry {
     db: IDBPDatabase<MyDB>;
@@ -57,6 +59,7 @@ function buildSnapshot(db: IDBPDatabase<MyDB>, userIds: readonly string[]): AppR
         routines: getRoutinesAcrossUsers(db, ids),
         people: getPeopleAcrossUsers(db, ids),
         workContexts: getWorkContextsAcrossUsers(db, ids),
+        reviewInboxes: getReviewInboxesAcrossUsers(db, ids),
     };
 }
 
@@ -104,6 +107,8 @@ function replaceField(prev: AppResourceSnapshot, db: IDBPDatabase<MyDB>, userIds
             return { ...prev, people: getPeopleAcrossUsers(db, userIds) };
         case 'workContexts':
             return { ...prev, workContexts: getWorkContextsAcrossUsers(db, userIds) };
+        case 'reviewInboxes':
+            return { ...prev, reviewInboxes: getReviewInboxesAcrossUsers(db, userIds) };
     }
 }
 

@@ -1,0 +1,24 @@
+/* Stage layout comes from stageLayout.module.css (.stageRoot / .actionBar). */
+
+.checklistCard {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    width: 100%;
+    max-width: 34rem;
+    padding: 1.5rem 2rem;
+    /* Scrolls internally (many inboxes) instead of pushing the pinned action bar off-screen. */
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.rowLabel {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.manageButton {
+    align-self: flex-start;
+    margin-top: 0.75rem;
+}

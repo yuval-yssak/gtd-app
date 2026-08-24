@@ -108,7 +108,8 @@ export async function clearAllAccounts(db: IDBPDatabase<MyDB>): Promise<void> {
 
 /**
  * Wipes every IDB row owned by a single user when their session ends — items, routines, people,
- * workContexts, the per-user sync cursor, and any sync operations still queued under that userId.
+ * workContexts, reviewInboxes, drafts, the per-user sync cursor, and any sync operations still
+ * queued under that userId.
  * `deviceMeta` and other accounts' rows are intentionally untouched: the deviceId must outlive
  * any single sign-out so push subscriptions and operation log purges stay attached to the same
  * physical device, and other logged-in accounts on this browser must keep their data.
@@ -117,12 +118,13 @@ export async function clearAllAccounts(db: IDBPDatabase<MyDB>): Promise<void> {
  * orphan rows belonging to a userId that's no longer in `accounts`.
  */
 export async function wipeUserData(userId: string, db: IDBPDatabase<MyDB>): Promise<void> {
-    const tx = db.transaction(['items', 'routines', 'people', 'workContexts', 'syncOperations', 'syncCursors', 'drafts'], 'readwrite');
+    const tx = db.transaction(['items', 'routines', 'people', 'workContexts', 'reviewInboxes', 'syncOperations', 'syncCursors', 'drafts'], 'readwrite');
     await Promise.all([
         deleteByUserIdIndexInTx(tx, 'items', userId),
         deleteByUserIdIndexInTx(tx, 'routines', userId),
         deleteByUserIdIndexInTx(tx, 'people', userId),
         deleteByUserIdIndexInTx(tx, 'workContexts', userId),
+        deleteByUserIdIndexInTx(tx, 'reviewInboxes', userId),
         deleteSyncOperationsForUserInTx(tx, userId),
         tx.objectStore('syncCursors').delete(userId),
         deleteDraftsForUserInTx(tx, userId),
@@ -130,9 +132,9 @@ export async function wipeUserData(userId: string, db: IDBPDatabase<MyDB>): Prom
     await tx.done;
 }
 
-type UserScopedStore = 'items' | 'routines' | 'people' | 'workContexts';
+type UserScopedStore = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes';
 
-type WipeStores = Array<'items' | 'routines' | 'people' | 'workContexts' | 'syncOperations' | 'syncCursors' | 'drafts'>;
+type WipeStores = Array<UserScopedStore | 'syncOperations' | 'syncCursors' | 'drafts'>;
 type WipeTx = IDBPTransaction<MyDB, WipeStores, 'readwrite'>;
 
 async function deleteByUserIdIndexInTx(tx: WipeTx, store: UserScopedStore, userId: string): Promise<void> {

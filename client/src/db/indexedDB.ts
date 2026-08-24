@@ -3,7 +3,7 @@ import { openDB } from 'idb';
 import type { MyDB, StoredSyncCursor, SyncOperation } from '../types/MyDB';
 
 export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
-    return openDB<MyDB>('gtd-app', 7, {
+    return openDB<MyDB>('gtd-app', 8, {
         async upgrade(db, oldVersion, _newVersion, tx) {
             // Version 1: core stores
             if (oldVersion < 1) {
@@ -76,6 +76,14 @@ export async function openAppDB(): Promise<IDBPDatabase<MyDB>> {
             if (oldVersion < 7) {
                 db.createObjectStore('drafts', { keyPath: 'key' });
             }
+
+            // Version 8: user-defined review inboxes (weekly-review capture buckets) — a new
+            // server-replicated entity store. Existing devices repopulate it via incremental pull
+            // (the entity is brand-new, so there are no historical rows to backfill).
+            if (oldVersion < 8) {
+                const reviewInboxes = db.createObjectStore('reviewInboxes', { keyPath: '_id' });
+                reviewInboxes.createIndex('userId', 'userId', { unique: false });
+            }
         },
     });
 }
@@ -109,6 +117,8 @@ async function backfillSyncCursorIds(tx: IDBPTransaction<MyDB, Array<StoreNames<
  * DB would otherwise leave a lingering lock until the 30s self-heal window elapses on next mount.
  */
 async function wipeCachedEntitiesAndSyncState(tx: IDBPTransaction<MyDB, Array<StoreNames<MyDB>>, 'versionchange'>): Promise<void> {
+    // 'reviewInboxes' is intentionally absent: this wipe runs only on the v4→v5 upgrade path,
+    // before the v8 step creates that store — clearing it here would throw NotFoundError.
     const stores = ['items', 'routines', 'people', 'workContexts', 'syncOperations', 'syncCursors'] as const satisfies ReadonlyArray<StoreNames<MyDB>>;
     await Promise.all(stores.map((name) => tx.objectStore(name).clear()));
     const meta = await tx.objectStore('deviceMeta').get('local');

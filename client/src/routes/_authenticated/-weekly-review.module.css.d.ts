@@ -1,12 +1,8 @@
 declare const styles: {
-    readonly actionRow: string;
-    readonly checkboxLabel: string;
-    readonly headerRow: string;
-    readonly pageWrapper: string;
-    readonly progressBar: string;
-    readonly progressHeader: string;
-    readonly progressSection: string;
-    readonly stepCard: string;
-    readonly stepTasks: string;
+    readonly introActions: string;
+    readonly introCard: string;
+    readonly introTitle: string;
+    readonly introWrapper: string;
+    readonly loadingWrapper: string;
 };
 export = styles;

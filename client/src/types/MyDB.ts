@@ -2,7 +2,7 @@ import type { DBSchema } from 'idb';
 
 export type OAuthProvider = 'google' | 'github';
 export type EnergyLevel = 'low' | 'medium' | 'high';
-export type EntityType = 'item' | 'routine' | 'person' | 'workContext';
+export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox';
 export type OpType = 'create' | 'update' | 'delete' | 'rsvp';
 
 /** Mirrored from api-server/src/types/entities.ts. Keep in sync. */
@@ -200,6 +200,20 @@ export interface StoredWorkContext {
     updatedTs: string;
 }
 
+/**
+ * User-defined external capture bucket ticked off during the weekly review's inbox-clearing stage
+ * (e.g. "Email", "Physical In Tray"). Mirrors ReviewInboxInterface on the server. `order` is
+ * required — full-snapshot LWW would silently clear an omitted optional field on every update.
+ */
+export interface StoredReviewInbox {
+    _id: string;
+    userId: string;
+    name: string;
+    order: number; // display position in the review checklist
+    createdTs: string;
+    updatedTs: string;
+}
+
 /** Per-calendar sync configuration — one OAuth integration can sync multiple Google Calendars. */
 export interface StoredCalendarSyncConfig {
     _id: string;
@@ -218,23 +232,61 @@ export interface StoredCalendarSyncConfig {
     updatedTs: string;
 }
 
-export type StoredEntity = StoredItem | StoredRoutine | StoredPerson | StoredWorkContext;
+export type StoredEntity = StoredItem | StoredRoutine | StoredPerson | StoredWorkContext | StoredReviewInbox;
 
 /**
  * Device-local unsaved-input draft. Never synced to the server — drafts exist so text typed into a
  * capture/edit surface survives reloads and navigation until it is committed as a real entity write.
- * `kind` discriminates future draft shapes; keys embed the kind + owning scope (see draftHelpers).
+ * `kind` discriminates draft shapes; keys embed the kind + owning scope (see draftHelpers).
+ * The two capture surfaces (inbox page field, global quick-capture dialog) share one shape but
+ * keep separate kinds/keys so each restores its own leftover text.
  */
-export interface StoredInboxCaptureDraft {
-    key: string; // `inboxCapture:<userId>`
-    kind: 'inboxCapture';
+export interface StoredCaptureDraft<Kind extends 'inboxCapture' | 'quickCapture'> {
+    key: string; // `<kind>:<userId>`
+    kind: Kind;
     userId: string;
     title: string;
     notes: string;
     updatedTs: string; // ISO datetime of the last local keystroke flush
 }
 
-export type StoredDraft = StoredInboxCaptureDraft;
+export type StoredInboxCaptureDraft = StoredCaptureDraft<'inboxCapture'>;
+export type StoredQuickCaptureDraft = StoredCaptureDraft<'quickCapture'>;
+
+/**
+ * Device-local weekly-review progress so an interrupted review resumes where it left off. The
+ * queue/stage shape is owned by components/weeklyReview/reviewFlowState.ts; it's embedded here as
+ * a structural copy to keep MyDB free of component imports.
+ */
+export interface StoredWeeklyReviewDraft {
+    key: string; // `weeklyReview:<userId>`
+    kind: 'weeklyReview';
+    userId: string;
+    updatedTs: string;
+    flow: {
+        stageIndex: number;
+        tickedInboxIds: string[];
+        // decisions is the current shape (id + optional undo payload); the legacy optional fields
+        // cover device-local drafts written by earlier builds (flat undoSnapshot, processedIds, or
+        // only a count before that) — the read path coerces them all (see flowFromDraft). cursor
+        // is optional for the same reason (pre-cursor drafts rotated the pending list instead).
+        queues: Partial<
+            Record<
+                string,
+                {
+                    pending: string[];
+                    cursor?: number;
+                    decisions?: Array<{ itemId: string; undo?: { snapshot?: StoredItem }; undoSnapshot?: StoredItem }>;
+                    processedIds?: string[];
+                }
+            >
+        >;
+        skippedStageIds: string[];
+        startedTs: string;
+    };
+}
+
+export type StoredDraft = StoredInboxCaptureDraft | StoredQuickCaptureDraft | StoredWeeklyReviewDraft;
 
 /**
  * Singleton record holding device-scoped state — the stable deviceId and the cross-context flush
@@ -328,6 +380,12 @@ export interface MyDB extends DBSchema {
     workContexts: {
         key: string; // StoredWorkContext._id
         value: StoredWorkContext;
+        indexes: { userId: string };
+    };
+    // User-defined external capture buckets for the weekly review's inbox-clearing stage
+    reviewInboxes: {
+        key: string; // StoredReviewInbox._id
+        value: StoredReviewInbox;
         indexes: { userId: string };
     };
     // Pending mutations to replay against the server when connectivity is restored

@@ -1,0 +1,44 @@
+/* Doubled class raises specificity to (0,2,0), beating MUI Fab's emotion class (0,1,0) which is
+   injected later in the cascade and would otherwise leave the FAB in normal flow — where it pads
+   the document past the viewport under the viewport-fitted weekly-review column. */
+.fab.fab {
+    position: fixed;
+    right: 1.25rem;
+    /* Clear the mobile bottom navigation (see AppNav) */
+    bottom: 5rem;
+    /* Below MUI modals (1300) so open dialogs cover it, above page content */
+    z-index: 1050;
+}
+
+@media (min-width: 56.25rem) {
+    .fab.fab {
+        bottom: 1.5rem;
+    }
+}
+
+.capturedCount {
+    margin-right: auto;
+    margin-left: 1rem;
+}
+
+.captureNotes {
+    padding-top: 0.75rem;
+}
+
+.tabs {
+    margin-bottom: 0.5rem;
+}
+
+.notesPreview {
+    min-height: 7.5rem;
+    padding: 0.75rem 0.875rem;
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
+    border-radius: 0.25rem;
+    font-size: 0.875rem;
+    line-height: 1.6;
+}
+
+.notesEmpty {
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    font-style: italic;
+}

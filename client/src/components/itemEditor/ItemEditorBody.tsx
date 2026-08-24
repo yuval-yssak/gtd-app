@@ -18,6 +18,7 @@ import Typography from '@mui/material/Typography';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { createPortal } from 'react-dom';
 import { type RsvpPushStatus, rsvpOnline } from '../../api/calendarApi';
 import type { ReassignItemEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -86,9 +87,11 @@ import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
 import type { FormState as RoutineFormState } from '../routineEditor/routineFormState';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import { CalendarEventLinks } from './CalendarEventLinks';
+import { CopyIdButton } from './CopyIdButton';
 import styles from './ItemEditorBody.module.css';
+import { resolveActionsPlacement } from './itemEditorActionsPlacement';
 import {
-    hasUnsavedStructuralItemEdits,
+    isOwnerOrStructurallyEdited,
     itemToCalendarForm,
     itemToFormSeeds,
     itemToNextActionForm,
@@ -133,6 +136,27 @@ export interface ItemEditorActionsApi {
     triggerSave: () => void;
     saveDisabled: boolean;
     isSaving: boolean;
+    /**
+     * True while structural (explicit-save) edits are pending — status, schedule, contexts, owner…
+     * Title/notes don't count while text autosave is active (they self-commit). The weekly-review
+     * focus card routes its primary action (advance vs. save) on this.
+     */
+    isDirty: boolean;
+    /**
+     * The user edited title/notes this editor session. Autosaved text is deliberately excluded
+     * from `isDirty` (it commits itself), but hosts whose primary button doubles as an
+     * acknowledgement ("Looks good" ↔ "Save & next") still want to reflect the edit. Sticky
+     * across the autosave commit (state, not derived); un-flags only if the text is typed back to
+     * the CURRENT seed (the last saved/merged text — not necessarily the session's original), and
+     * resets on remount (`key={item._id}`) and on "Use their version".
+     */
+    hasTextEdits: boolean;
+    /**
+     * True while the selected destination is `routine`. Saving then runs clarify-to-routine — a
+     * COMPOUND write (new routine + seeded items + the capture trashed) that a bare snapshot
+     * restore cannot reverse, so hosts offering decision undo must not capture one for it.
+     */
+    isRoutineDestination: boolean;
     onClose: () => void;
 }
 
@@ -147,6 +171,22 @@ export interface ItemEditorBodyProps {
     onClose: () => void;
     onSaved: () => Promise<void>;
     /**
+     * Fired only when an EXPLICIT save commits (triggerSave / Save button, incl. clarify-to-
+     * routine), right before the post-save `onClose`. Debounced text autosaves and reassign
+     * post-flights fire `onSaved` but never this — hosts that treat "the user saved" as a
+     * decision (weekly review) key off this instead of inferring it from `onSaved` timing,
+     * which a late autosave flush would corrupt.
+     */
+    onSaveCommitted?: () => void;
+    /**
+     * Reactive mirror of `isDirty || isSaving` for host chrome that lives OUTSIDE renderActions
+     * and must lock while a structural edit is pending or a save is in flight — e.g. the weekly
+     * review's stage-travel arrows, where navigating away is a state change the router-based
+     * unsaved-changes guard can never see (so the edit would silently drop). Resets to false on
+     * unmount; pass a stable callback (a setState setter) to avoid effect churn.
+     */
+    onDirtyLockChange?: (isLocked: boolean) => void;
+    /**
      * Fired post-save when the user transitions a `fromGmail` calendar item to a status the server
      * would normally push to GCal. The body has no Snackbar of its own — the host (useItemEditor)
      * wires this to `setInstantToast` so the warning surfaces through the page's existing toast.
@@ -158,6 +198,13 @@ export interface ItemEditorBodyProps {
     chrome: ItemEditorChrome;
     /** Replaces the default Cancel/Save actions row. Wizards use this for Skip / Save-and-next. */
     renderActions?: (api: ItemEditorActionsApi) => React.ReactNode;
+    /**
+     * Portals the actions row into this element instead of rendering it at the body's end — hosts
+     * with a pinned action bar (weekly review) pass the bar element so the buttons stay put while
+     * the body scrolls. Pass `null` while the bar's ref hasn't mounted yet; see
+     * `resolveActionsPlacement` for the full tri-state semantics.
+     */
+    actionsContainer?: HTMLElement | null;
 }
 
 // Re-exported for callers/tests that historically imported it from here; the implementation moved
@@ -187,10 +234,13 @@ export function ItemEditorBody({
     workContexts,
     onClose,
     onSaved,
+    onSaveCommitted,
+    onDirtyLockChange,
     onFromGmailReadOnly,
     initialStatus,
     chrome,
     renderActions,
+    actionsContainer,
 }: ItemEditorBodyProps) {
     const { options: calendarOptions } = useCalendarOptions();
     // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
@@ -213,6 +263,7 @@ export function ItemEditorBody({
     const [reassignError, setReassignError] = useState<string | null>(null);
     const [isSaving, startSaving] = useTransition();
     const isRoutineGenerated = Boolean(item.routineId);
+
     // Live mirror of the GCal-owned fields the meeting editor mutates. Seeded from `item` on mount
     // (the body remounts on `key={item._id}` per ItemEditorBody contract). Kept separate from
     // `calForm` because attendees aren't a calendar form input — they live on the item itself and
@@ -280,8 +331,12 @@ export function ItemEditorBody({
 
     // The item values the form state was last seeded/merged from. A form field differing from its
     // seed is "dirty" (user is editing it); the live-merge effect below uses this to decide which
-    // fields silently adopt remote changes and which keep local edits.
-    const seedFormsRef = useRef(itemToFormSeeds(item));
+    // fields silently adopt remote changes and which keep local edits. State (not a ref) so the
+    // render-time isDirty below is honestly derived; the ref mirror serves the stable callbacks
+    // (navigation guard) exactly like formRefs does.
+    const [seedForms, setSeedForms] = useState(() => itemToFormSeeds(item));
+    const seedFormsRef = useRef(seedForms);
+    seedFormsRef.current = seedForms;
 
     // Fields where the user's edit collided with a change from another device. Rendered as a
     // dismissible notice with a whole-form "Use their version" escape hatch.
@@ -289,6 +344,29 @@ export function ItemEditorBody({
 
     const formRefs = useRef({ title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId });
     formRefs.current = { title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId };
+
+    /**
+     * Shared structural-dirty core for the render-time `isDirty` and the navigation guard's
+     * `hasStructuralEdits()` — see isOwnerOrStructurallyEdited for the remote-reassign nuance.
+     * A `routine` destination is always dirty through the status check (an item's status is never
+     * 'routine', nor is any initialStatus).
+     */
+    function isStructurallyEdited(form: typeof formRefs.current, seed: typeof seedForms, liveUserId: string): boolean {
+        return isOwnerOrStructurallyEdited({ form, seed, initialStatus, includeText: !textAutosaveEnabled, ownerUserId: form.ownerUserId, liveUserId });
+    }
+
+    // Reactive mirror of hasStructuralEdits() for custom action renderers (ItemEditorActionsApi.
+    // isDirty) — state-only inputs, no refs. guardBypassRef is deliberately NOT consulted here:
+    // it means "a close is in flight, don't prompt", which is orthogonal to what the primary
+    // action button should read.
+    const isDirty = isStructurallyEdited({ title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId }, seedForms, liveItem.userId);
+
+    // See onDirtyLockChange's prop doc. Text edits are deliberately NOT part of the lock — the
+    // autosave's unmount flush commits them, so navigating away can't lose them.
+    useEffect(() => {
+        onDirtyLockChange?.(isDirty || isSaving);
+    }, [isDirty, isSaving, onDirtyLockChange]);
+    useEffect(() => () => onDirtyLockChange?.(false), [onDirtyLockChange]);
 
     const textAutosave = useAutosave<{ title: string; notes: string }>({
         initial: { title: item.title, notes: item.notes ?? '' },
@@ -340,8 +418,14 @@ export function ItemEditorBody({
         });
     }
 
+    // Text-edit marker for ItemEditorActionsApi.hasTextEdits. Compared against the current seed
+    // (not blindly latched) so typing text back to its saved value un-flags it; once an autosave
+    // commit re-seeds, the flag stays put in state — the acknowledgement survives the commit.
+    const [hasTextEdits, setHasTextEdits] = useState(false);
+
     function onTitleChange(nextTitle: string) {
         setTitle(nextTitle);
+        setHasTextEdits(nextTitle !== seedForms.title || formRefs.current.notes !== seedForms.notes);
         if (textAutosaveEnabled) {
             textAutosave.onChange({ title: nextTitle, notes: formRefs.current.notes });
         }
@@ -349,6 +433,7 @@ export function ItemEditorBody({
 
     function onNotesChange(nextNotes: string) {
         setNotes(nextNotes);
+        setHasTextEdits(formRefs.current.title !== seedForms.title || nextNotes !== seedForms.notes);
         if (textAutosaveEnabled) {
             textAutosave.onChange({ title: formRefs.current.title, notes: nextNotes });
         }
@@ -371,13 +456,7 @@ export function ItemEditorBody({
         if (guardBypassRef.current) {
             return false;
         }
-        // ownerUserId is seeded from the mount-time item and only changes via the picker, so a
-        // REMOTE reassign of the open item makes this true without a local edit — one spurious
-        // prompt, no data loss. Accepted: the save paths use the same comparison to route saves.
-        if (formRefs.current.ownerUserId !== liveItemRef.current.userId) {
-            return true;
-        }
-        return hasUnsavedStructuralItemEdits({ form: formRefs.current, seed: seedFormsRef.current, initialStatus, includeText: !textAutosaveEnabled });
+        return isStructurallyEdited(formRefs.current, seedFormsRef.current, liveItemRef.current.userId);
     }
 
     const navigationBlocker = useUnsavedChangesGuard({
@@ -412,7 +491,7 @@ export function ItemEditorBody({
             seed,
             incoming,
         );
-        seedFormsRef.current = incoming;
+        setSeedForms(incoming);
 
         // Echo suppression: an incoming text value that equals what our autosave last committed is
         // this editor's own write coming back — never a conflict, even while the user keeps typing.
@@ -451,7 +530,7 @@ export function ItemEditorBody({
     function adoptTheirVersion() {
         const live = liveItemRef.current;
         const seeds = itemToFormSeeds(live);
-        seedFormsRef.current = seeds;
+        setSeedForms(seeds);
         setTitle(seeds.title);
         setNotes(seeds.notes);
         setStatus(seeds.status);
@@ -461,6 +540,7 @@ export function ItemEditorBody({
         setSmForm(seeds.sm);
         setOwnerUserId(live.userId);
         textAutosave.reset({ title: seeds.title, notes: seeds.notes });
+        setHasTextEdits(false); // the discarded local edits no longer warrant a "Save & next" acknowledgement
         setConflictFields([]);
     }
 
@@ -540,6 +620,7 @@ export function ItemEditorBody({
             }
             offerSaveUndo(base);
             await onSaved();
+            onSaveCommitted?.();
             closeEditor();
         });
     }
@@ -562,6 +643,7 @@ export function ItemEditorBody({
                 return;
             }
             await onSaved();
+            onSaveCommitted?.();
             closeEditor();
         });
     }
@@ -831,6 +913,20 @@ export function ItemEditorBody({
 
     const shouldAutoFocus = shouldAutoFocusTitle(chrome, initialStatus);
 
+    const actionButtons = renderActions ? (
+        renderActions({ triggerSave: onSave, saveDisabled, isSaving, isDirty, hasTextEdits, isRoutineDestination: status === 'routine', onClose: closeEditor })
+    ) : (
+        <>
+            <Button onClick={closeEditor}>Cancel</Button>
+            <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()}>
+                Save changes
+            </Button>
+        </>
+    );
+    const actionsRow =
+        chrome === 'dialog' ? <DialogActions sx={{ px: 0 }}>{actionButtons}</DialogActions> : <Box className={styles.inlineActions}>{actionButtons}</Box>;
+    const actionsPlacement = resolveActionsPlacement(actionsContainer);
+
     return (
         <Box className={bodyClassFor(chrome)}>
             {conflictFields.length > 0 && (
@@ -1031,37 +1127,33 @@ export function ItemEditorBody({
 
             <Divider />
 
-            <Typography
-                variant="caption"
-                data-testid="itemEditorCreatedAt"
-                sx={{
-                    color: 'text.secondary',
-                }}
-            >
-                Created {dayjs(liveItem.createdTs).format('MMM D, YYYY h:mm A')}
-            </Typography>
+            <Box className={styles.metaRow}>
+                <Typography
+                    variant="caption"
+                    data-testid="itemEditorCreatedAt"
+                    sx={{
+                        color: 'text.secondary',
+                    }}
+                >
+                    Created {dayjs(liveItem.createdTs).format('MMM D, YYYY h:mm A')}
+                </Typography>
+                <Typography
+                    variant="caption"
+                    className={styles.itemId}
+                    data-testid="itemEditorId"
+                    sx={{
+                        color: 'text.secondary',
+                    }}
+                >
+                    ID {item._id}
+                </Typography>
+                {/* The shared hardened button (tooltip + failure snackbar) — hosts that used to
+                    render their own header copy no longer do, so exactly one shows per screen. */}
+                <CopyIdButton id={item._id} />
+            </Box>
 
-            {renderActions ? (
-                chrome === 'dialog' ? (
-                    <DialogActions sx={{ px: 0 }}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose: closeEditor })}</DialogActions>
-                ) : (
-                    <Box className={styles.inlineActions}>{renderActions({ triggerSave: onSave, saveDisabled, isSaving, onClose: closeEditor })}</Box>
-                )
-            ) : chrome === 'dialog' ? (
-                <DialogActions sx={{ px: 0 }}>
-                    <Button onClick={closeEditor}>Cancel</Button>
-                    <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()}>
-                        Save changes
-                    </Button>
-                </DialogActions>
-            ) : (
-                <Box className={styles.inlineActions}>
-                    <Button onClick={closeEditor}>Cancel</Button>
-                    <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()}>
-                        Save changes
-                    </Button>
-                </Box>
-            )}
+            {actionsPlacement.kind === 'inline' && actionsRow}
+            {actionsPlacement.kind === 'portal' && createPortal(actionsRow, actionsPlacement.container)}
             <UnsavedChangesDialog blocker={navigationBlocker} />
             <SendUpdatesDialog
                 open={pendingSave !== null}

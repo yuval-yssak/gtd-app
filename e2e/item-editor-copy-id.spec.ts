@@ -3,10 +3,10 @@ import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
-// Verifies the unified editor exposes the item ID via a copy-to-clipboard button in:
-// - the Dialog header (default editor mode)
-// - the Page-mode header (item.$itemId page)
-// Each path must land the item's _id on the clipboard.
+// Verifies the unified editor exposes the item ID + copy-to-clipboard button via ItemEditorBody's
+// bottom meta row in both the Dialog editor and the item.$itemId page — and that EXACTLY ONE copy
+// affordance renders per screen (the hosts' old header buttons were removed when the body row
+// arrived; two identical buttons once shipped because their distinct testids hid the duplicate).
 
 test.describe('Copy item ID', () => {
     test.use({ permissions: ['clipboard-read', 'clipboard-write'] });
@@ -23,17 +23,21 @@ test.describe('Copy item ID', () => {
             const dialog = page.getByRole('dialog', { name: 'Edit item' });
             await expect(dialog).toBeVisible();
 
+            // The ID itself is readable, and only ONE copy button exists in the editor dialog —
+            // by role+name, not testid, since distinct testids are what once hid a duplicate.
+            // (Scoped to the dialog: the list rows behind it carry their own per-row buttons.)
+            await expect(dialog.getByTestId('itemEditorId')).toContainText(inbox._id);
+            await expect(dialog.getByRole('button', { name: 'Copy item ID' })).toHaveCount(1);
             await dialog.getByTestId('copyItemIdButton').click();
             const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
             expect(clipboardText).toBe(inbox._id);
         });
     });
 
-    test('page mode: header exposes the copy button', async ({ browser }) => {
+    test('page mode: the body meta row exposes the copy button', async ({ browser }) => {
         // The CopyIdButton component itself is exercised in the dialog test above; here we
-        // only assert that the page-mode header surfaces the same button — the full clipboard
-        // read needs a context-level permissions grant that withOneLoggedInDevice does not wire
-        // through, and the dialog test already proves the click→clipboard wiring works.
+        // only assert that page mode surfaces the same (single) button — the dialog test
+        // already proves the click→clipboard wiring works.
         await withOneLoggedInDevice(browser, `copyid-page-${dayjs().valueOf()}@example.com`, async (page) => {
             const inbox = await gtd.collect(page, 'Copy ID page-mode target');
             await gtd.clarifyToNextAction(page, inbox);
@@ -43,6 +47,8 @@ test.describe('Copy item ID', () => {
             // text= selector wouldn't match — wait for the editor's Title input by role.
             await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Copy ID page-mode target');
             await expect(page.getByTestId('copyItemIdButton')).toBeVisible();
+            await expect(page.getByTestId('itemEditorId')).toContainText(inbox._id);
+            await expect(page.getByRole('button', { name: 'Copy item ID' })).toHaveCount(1);
         });
     });
 });

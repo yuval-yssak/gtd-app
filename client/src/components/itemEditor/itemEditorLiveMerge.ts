@@ -224,6 +224,27 @@ export function hasUnsavedStructuralItemEdits({ form, seed, initialStatus, inclu
     return isActiveGroupDirty(form, seed);
 }
 
+/** `ItemStructuralEditCheck` plus ownership — the full input of the editor's dirty computation. */
+export interface OwnedItemStructuralEditCheck extends ItemStructuralEditCheck {
+    /** The owner account the form currently selects (AccountPicker). */
+    ownerUserId: string;
+    /** The persisted row's owner. */
+    liveUserId: string;
+}
+
+/**
+ * Owner-aware structural-dirty core behind `ItemEditorActionsApi.isDirty` and the navigation
+ * guard: a pending owner change is always structural. The comparison also fires on a REMOTE
+ * reassign of the open item (no local edit) — one spurious prompt / a premature "Save & next"
+ * label, no data loss; the save paths use the same comparison to route saves.
+ */
+export function isOwnerOrStructurallyEdited({ ownerUserId, liveUserId, ...check }: OwnedItemStructuralEditCheck): boolean {
+    if (ownerUserId !== liveUserId) {
+        return true;
+    }
+    return hasUnsavedStructuralItemEdits(check);
+}
+
 function isActiveGroupDirty(form: ItemFormSeeds, seed: ItemFormSeeds): boolean {
     if (form.status === 'nextAction') {
         return !valuesEqual(form.na, seed.na);

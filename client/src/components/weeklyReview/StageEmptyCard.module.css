@@ -1,0 +1,14 @@
+.emptyCard {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+    max-width: 34rem;
+    padding: 2.5rem 2rem;
+    text-align: center;
+}
+
+.emptyIcon {
+    font-size: 3rem;
+}

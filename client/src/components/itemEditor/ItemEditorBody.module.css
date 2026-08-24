@@ -88,6 +88,21 @@
 /* Inline action row used by non-dialog chromes (popover/expand/page) — Dialog uses MUI's DialogActions */
 .inlineActions {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.5rem;
     justify-content: flex-end;
+}
+
+/* Bottom meta row: created timestamp on the left, the copiable item id pushed right. */
+.metaRow {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+}
+
+.itemId {
+    margin-left: auto;
+    font-family: monospace;
+    overflow-wrap: anywhere;
 }

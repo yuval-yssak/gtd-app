@@ -1,0 +1,42 @@
+.wizardRoot {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 44rem;
+    margin: 0 auto;
+    /* Viewport-fitted so the stage action bar stays pinned at the bottom: item content scrolls
+       INSIDE its card, never the page — the decision buttons keep one fixed screen position. The
+       inset var mirrors mainContent's vertical padding (fallback = its desktop value). */
+    height: calc(100dvh - var(--gtd-main-vertical-inset, 3rem));
+}
+
+/* Horizontal scroll on narrow screens — 8 steps never wrap, they scroll. */
+.stepperScroller {
+    overflow-x: auto;
+    padding-bottom: 0.25rem;
+}
+
+.stepper {
+    min-width: 40rem;
+}
+
+.header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.headerRow {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.stageTitle {
+    font-weight: 600;
+}
+
+.progressBar {
+    border-radius: 0.25rem;
+}

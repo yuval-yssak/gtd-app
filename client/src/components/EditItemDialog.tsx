@@ -9,7 +9,6 @@ import { usePendingReassign } from '../contexts/PendingReassignProvider';
 import type { MyDB, StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 import styles from './EditItemDialog.module.css';
 import type { EditableStatus } from './editItemDialogLogic';
-import { CopyIdButton } from './itemEditor/CopyIdButton';
 import { ItemEditorBody } from './itemEditor/ItemEditorBody';
 
 interface Props {
@@ -41,9 +40,9 @@ export function EditItemDialog({ item, db, people, workContexts, onClose, onSave
     }
     return (
         <Dialog open onClose={onClose} fullWidth maxWidth="sm">
+            {/* No header CopyIdButton: ItemEditorBody's bottom meta row owns the ID + copy now. */}
             <DialogTitle className={styles.dialogTitle}>
                 <span>Edit item</span>
-                <CopyIdButton id={item._id} />
             </DialogTitle>
             <DialogContent className={styles.dialogContent}>
                 <ItemEditorBody

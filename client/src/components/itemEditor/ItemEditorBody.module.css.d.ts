@@ -4,6 +4,8 @@ declare const styles: {
     readonly bodyPopover: string;
     readonly empty: string;
     readonly inlineActions: string;
+    readonly itemId: string;
+    readonly metaRow: string;
     readonly notesHeader: string;
     readonly preview: string;
     readonly previewClickable: string;

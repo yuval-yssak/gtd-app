@@ -1,50 +1,31 @@
-.pageWrapper {
-    max-width: 37.5rem;
-}
-
-.headerRow {
+.loadingWrapper {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    margin-bottom: 0.5rem;
+    justify-content: center;
+    padding: 3rem 0;
 }
 
-.progressSection {
-    margin-bottom: 1.5rem;
-}
-
-.progressHeader {
+.introWrapper {
     display: flex;
-    justify-content: space-between;
-    margin-bottom: 0.25rem;
+    justify-content: center;
+    padding: 2rem 0;
 }
 
-/* borderRadius: 1 = 0.25rem — rounds the progress bar ends for a softer look */
-.progressBar {
-    border-radius: 0.25rem;
-}
-
-.stepCard {
-    margin-bottom: 1rem;
-    padding: 1rem;
-}
-
-.stepTasks {
+.introCard {
     display: flex;
     flex-direction: column;
+    align-items: center;
+    gap: 1.25rem;
+    max-width: 34rem;
+    padding: 3rem 2.5rem;
+    text-align: center;
 }
 
-.checkboxLabel {
-    align-items: flex-start;
+.introTitle {
+    font-weight: 700;
 }
 
-/* pt: 0.5 in MUI sx = 0.25rem — nudges the checkbox down to align with the first line of a multiline label */
-.checkboxLabel :global(.MuiCheckbox-root) {
-    padding-top: 0.25rem;
-}
-
-.actionRow {
+.introActions {
     display: flex;
-    gap: 0.5rem;
-    margin-top: 1rem;
+    align-items: center;
+    gap: 1rem;
 }

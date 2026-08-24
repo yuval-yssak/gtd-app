@@ -331,6 +331,12 @@ export async function updateItem(db: IDBPDatabase<MyDB>, item: StoredItem): Prom
     return updated;
 }
 
+/** Releases a snoozed item from the tickler by dropping `ignoreBefore` entirely — it becomes visible in its normal list immediately. */
+export async function releaseFromTickler(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
+    const { ignoreBefore: _released, ...released } = item;
+    return updateItem(db, released);
+}
+
 /**
  * Variant of `updateItem` that forwards an organizer-notification decision (captured by the
  * SendUpdatesDialog) to the queued sync op. The sidecar rides the op through the offline queue so

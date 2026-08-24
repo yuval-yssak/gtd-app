@@ -52,9 +52,9 @@ test.describe('calendar item detach (calendar → nextAction)', () => {
             });
             expect(detach.status()).toBe(200);
             const patched = (await detach.json()) as Record<string, unknown>;
-            expect(patched['status']).toBe('nextAction');
-            expect(patched['calendarEventId']).toBeUndefined();
-            expect(patched['timeStart']).toBeUndefined();
+            expect(patched.status).toBe('nextAction');
+            expect(patched.calendarEventId).toBeUndefined();
+            expect(patched.timeStart).toBeUndefined();
 
             // The sidecar-carrying op must apply cleanly on a second device.
             await gtd.pull(page2);

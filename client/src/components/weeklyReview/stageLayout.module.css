@@ -1,0 +1,80 @@
+/* Shared layout for the wizard's stage area (solo-item stages, checklist, empty state): a
+ * scrollable content region with a pinned action bar at the bottom, inside the viewport-fitted
+ * wizard column (see .wizardRoot). */
+
+.stageRoot {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    width: 100%;
+}
+
+/* Natural height while it fits; shrinks and scrolls internally when the item content is taller
+ * than the space above the action bar (min-height: 0 lets it shrink past its content). */
+.editorCard {
+    width: 100%;
+    max-width: 40rem;
+    padding: 1.5rem;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* Fills the space above the bar so short content (empty state) centers instead of hugging the top. */
+.centeredArea {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Anchors the item-level ◀ ▶ pair to the content slot's left edge while the decision buttons
+ * keep right. */
+.navArrows {
+    display: flex;
+    gap: 0.25rem;
+    margin-right: auto;
+}
+
+/* Pinned action bar: always the last, fully visible element of the stage column, so the decision
+ * buttons sit at the same screen position for every item, however long its content — and the
+ * empty state's Continue lands exactly where the primary action button was. The stage-travel
+ * arrows bracket the content slot at the bar's outer edges. */
+.actionBar {
+    margin-top: auto;
+    flex-shrink: 0;
+    width: 100%;
+    max-width: 40rem;
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* The fixed quick-capture FAB (3.5rem circle at right:1.25rem, fixed to the VIEWPORT) floats over
+ * the bar's right end until the viewport is wide enough for the bar to clear it. Mobile (no
+ * drawer): the 40rem bar centers in the viewport → overlap below ~49.5rem. Desktop (permanent
+ * 15rem drawer + 1.5rem padding from min-width 56.25rem): the bar centers in the CONTENT column,
+ * shifted right → overlap below ~64.5rem. Gate the reserve on the larger threshold; above it the
+ * padding stays symmetric. */
+@media (max-width: 66rem) {
+    .actionBar {
+        padding-right: 5rem;
+    }
+}
+
+/* The slot between the travel arrows: portal target for the editor's action row (plus any
+ * bar-owned children). Carries the wrap/justify behavior the bar itself used to own. */
+.actionBarContent {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
