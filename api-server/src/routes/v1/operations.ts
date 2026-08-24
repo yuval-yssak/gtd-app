@@ -62,6 +62,9 @@ function parseBatchBody(raw: BatchBody | null): { ok: true; value: ParsedBatch }
     return { ok: true, value: { ops: parsed } };
 }
 
+// 'reviewInbox' is deliberately excluded: the entity is sync-only for now (no public /v1 or MCP
+// surface). Widening this set also requires a scope decision in scopeForOp — today its fallback
+// would mislabel a reviewInbox op as requiring 'contexts.write'.
 const ENTITY_TYPES = new Set<EntityType>(['item', 'routine', 'person', 'workContext']);
 const OP_TYPES = new Set<OpType>(['create', 'update', 'delete']);
 

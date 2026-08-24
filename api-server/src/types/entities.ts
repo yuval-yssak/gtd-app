@@ -10,7 +10,7 @@ export const ItemStatus = {
 export type ItemStatus = (typeof ItemStatus)[keyof typeof ItemStatus];
 
 export type EnergyLevel = 'low' | 'medium' | 'high';
-export type EntityType = 'item' | 'routine' | 'person' | 'workContext';
+export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox';
 export type OpType = 'create' | 'update' | 'delete' | 'rsvp';
 
 /**
@@ -420,6 +420,25 @@ export interface WorkContextInterface {
 }
 
 /**
+ * A user-defined external capture bucket ticked off during the weekly review's inbox-clearing
+ * stage (e.g. "Email", "Physical In Tray", "Voice recordings"). Lives outside the system —
+ * the row is only a named checklist entry, not a container of items.
+ */
+export interface ReviewInboxInterface {
+    _id: string;
+    user: string;
+    name: string;
+    /**
+     * Display position in the review checklist. Required (not optional) so full-snapshot LWW can
+     * never silently clear it: a snapshot missing `order` fails strict validation instead of
+     * destroying the list ordering.
+     */
+    order: number;
+    createdTs: string;
+    updatedTs: string;
+}
+
+/**
  * Payload for an `rsvp` opType: a local RSVP click that needs to push the user's responseStatus
  * to GCal as the only sanctioned local-write into the GCal-owned attendee set. Carried in the
  * op log so an offline RSVP replays correctly on reconnect.
@@ -454,7 +473,7 @@ export interface OperationInterface {
      * Stored to allow any device to reconstruct state by replaying operations in ts order.
      * For opType === 'rsvp', snapshot is null and rsvp lives in `rsvp` sidecar instead.
      */
-    snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | null;
+    snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface | null;
     /**
      * Sidecar for GCal-coupled writes. Populated when the user picked Send/Don't Send in the
      * SendUpdatesDialog so the choice survives offline queueing and replays through pushback.
@@ -690,7 +709,7 @@ export interface CalendarSyncConfigInterface {
 }
 
 /** Union of all entity types that can appear as an operation snapshot. */
-export type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface;
+export type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface;
 
 /** Discrete event types webhooks can subscribe to. Adding a new event requires extending `mapOpToEvents`. */
 export type WebhookEvent = 'item.created' | 'item.completed';

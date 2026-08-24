@@ -48,7 +48,7 @@ export const itemStatusSchema = z.enum(Object.values(ItemStatus) as [string, ...
 
 export const energySchema = z.enum(['low', 'medium', 'high']);
 
-export const entityTypeSchema = z.enum(['item', 'routine', 'person', 'workContext']);
+export const entityTypeSchema = z.enum(['item', 'routine', 'person', 'workContext', 'reviewInbox']);
 export const opTypeSchema = z.enum(['create', 'update', 'delete']);
 
 // RFC 5545 RRULE — looser regex than full validation. Must contain FREQ= so we catch obvious

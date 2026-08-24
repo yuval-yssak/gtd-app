@@ -15,6 +15,7 @@ import oauthRefreshTokensDAO from '../dataAccess/oauthRefreshTokensDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
+import reviewInboxesDAO from '../dataAccess/reviewInboxesDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import sentEmailsDAO from '../dataAccess/sentEmailsDAO.js';
 import webhookDeliveriesDAO from '../dataAccess/webhookDeliveriesDAO.js';
@@ -85,6 +86,7 @@ async function loadDataAccess(customDBName?: string) {
         routinesDAO.init(dbClient, resolvedDBName),
         peopleDAO.init(dbClient, resolvedDBName),
         workContextsDAO.init(dbClient, resolvedDBName),
+        reviewInboxesDAO.init(dbClient, resolvedDBName),
         calendarIntegrationsDAO.init(dbClient, resolvedDBName),
         calendarSyncConfigsDAO.init(dbClient, resolvedDBName),
         sentEmailsDAO.init(dbClient, resolvedDBName),

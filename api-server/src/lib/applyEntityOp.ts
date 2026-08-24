@@ -1,6 +1,7 @@
 import type AbstractDAO from '../dataAccess/abstractDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
+import reviewInboxesDAO from '../dataAccess/reviewInboxesDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import {
@@ -11,6 +12,7 @@ import {
     type OperationInterface,
     type OpType,
     type PersonInterface,
+    type ReviewInboxInterface,
     type RoutineInterface,
     type WorkContextInterface,
 } from '../types/entities.js';
@@ -98,6 +100,8 @@ export function applyEntityOp(userId: string, op: OperationInterface): Promise<A
             return applyEntitySnapshotOp(peopleDAO, userId, entityId, opType, snapshot as PersonInterface | null);
         case 'workContext':
             return applyEntitySnapshotOp(workContextsDAO, userId, entityId, opType, snapshot as WorkContextInterface | null);
+        case 'reviewInbox':
+            return applyEntitySnapshotOp(reviewInboxesDAO, userId, entityId, opType, snapshot as ReviewInboxInterface | null);
     }
 }
 
@@ -199,5 +203,7 @@ function pickHydrationLookup(entityType: EntityType): HydrationLookup | null {
             return (id, uid) => peopleDAO.findByOwnerAndId(id, uid);
         case 'workContext':
             return (id, uid) => workContextsDAO.findByOwnerAndId(id, uid);
+        case 'reviewInbox':
+            return (id, uid) => reviewInboxesDAO.findByOwnerAndId(id, uid);
     }
 }

@@ -5,6 +5,7 @@ import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
+import reviewInboxesDAO from '../dataAccess/reviewInboxesDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import { isDuplicateKeyError } from '../lib/applyEntityOp.js';
@@ -142,11 +143,12 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // floor exactly matches what the client claims it has after consuming this response.
         const serverTs = dayjs().toISOString();
 
-        const [items, routines, people, workContexts] = await Promise.all([
+        const [items, routines, people, workContexts, reviewInboxes] = await Promise.all([
             itemsDAO.findArray({ user: user.id }),
             routinesDAO.findArray({ user: user.id }),
             peopleDAO.findArray({ user: user.id }),
             workContextsDAO.findArray({ user: user.id }),
+            reviewInboxesDAO.findArray({ user: user.id }),
         ]);
 
         // Register the device as soon as we've decided what's in the response. Bootstrap delivers
@@ -178,7 +180,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             );
         }
 
-        return c.json({ items, routines, people, workContexts, serverTs, serverId: MAX_OP_ID });
+        return c.json({ items, routines, people, workContexts, reviewInboxes, serverTs, serverId: MAX_OP_ID });
     })
 
     // ---------------------------------------------------------------------------

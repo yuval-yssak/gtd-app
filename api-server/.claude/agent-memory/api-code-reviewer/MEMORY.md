@@ -86,3 +86,5 @@
 - [Guard-predicate boundary needs branch proof](feedback_guard_predicate_boundary_needs_branch_proof.md) — `<=` vs `<` on a pass-through guard is invisible to value assertions; demand a log/side-effect spy at equality.
 - [alreadyMoved idempotency needs provenance](project_already_moved_idempotency_needs_provenance.md) — FIXED via entityMoves receipt; keep the pattern: retry/heal branches need a receipt, not post-state shape.
 - [Fire-and-forget cascades need waitFor in tests](feedback_fire_and_forget_cascade_assertions_need_waitfor.md) — sync→op-driven refactors leave bare assertions passing on microtask luck; probe with an injected delay.
+- [New synced entity wedges old clients](project_new_synced_entity_wedges_old_clients.md) — server-side EntityType widening emits ops old client builds can't dispatch; applyServerOp's throw halted the whole pull loop pre-cursor-advance.
+- [Parity pin tests for inherited gaps](feedback_parity_pin_tests_for_known_gaps.md) — new entity inheriting a known defect: pin current behaviour + comment it should flip; validate the pin by simulating the future fix.

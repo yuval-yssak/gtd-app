@@ -139,6 +139,13 @@ async function dispatchByEntityType(params: ReassignParams): Promise<ReassignRes
                 error: 'persons and workContexts cannot be reassigned — items/routines that reference them are auto-relinked into the target user on move',
                 code: 'validation_failed',
             };
+        case 'reviewInbox':
+            return {
+                ok: false,
+                status: 400,
+                error: 'reviewInboxes are per-user review checklist entries and cannot be reassigned',
+                code: 'validation_failed',
+            };
     }
 }
 

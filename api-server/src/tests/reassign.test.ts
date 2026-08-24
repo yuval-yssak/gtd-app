@@ -365,7 +365,10 @@ describe('POST /sync/reassign', () => {
             if (!seeded) throw new Error('expected one seeded nextAction item');
             expect(seeded.title).toBe(routine.title);
             // Routine-generated items are ticklered until their due date; daily rrule lands today.
-            expect(seeded.expectedBy).toBe(dayjs.utc().format('YYYY-MM-DD'));
+            // "Today" is the LOCAL calendar date — routineItemGeneration floors occurrences on
+            // dayjs().format('YYYY-MM-DD'); asserting dayjs.utc() flaked nightly between local
+            // midnight and UTC midnight (expected the previous UTC day).
+            expect(seeded.expectedBy).toBe(dayjs().format('YYYY-MM-DD'));
             expect(seeded.ignoreBefore).toBe(seeded.expectedBy);
             // The seed op must be recorded on Bob's op log so his devices pull the item.
             const seededOps = await operationsDAO.findArray({ user: bob.userId, entityType: 'item', entityId: seeded._id });

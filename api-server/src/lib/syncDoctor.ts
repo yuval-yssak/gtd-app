@@ -4,6 +4,7 @@ import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
+import reviewInboxesDAO from '../dataAccess/reviewInboxesDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import type { EntitySnapshot, EntityType, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
@@ -77,16 +78,18 @@ interface UserSyncState {
     routines: RoutineInterface[];
     people: EntitySnapshot[];
     workContexts: EntitySnapshot[];
+    reviewInboxes: EntitySnapshot[];
     deviceCursors: Array<{ deviceId: string; lastSyncedTs: string }>;
     integrationIds: Set<string>;
 }
 
 async function loadUserSyncState(userId: string): Promise<UserSyncState> {
-    const [items, routines, people, workContexts, deviceStates, integrations] = await Promise.all([
+    const [items, routines, people, workContexts, reviewInboxes, deviceStates, integrations] = await Promise.all([
         itemsDAO.findArray({ user: userId }),
         routinesDAO.findArray({ user: userId }),
         peopleDAO.findArray({ user: userId }),
         workContextsDAO.findArray({ user: userId }),
+        reviewInboxesDAO.findArray({ user: userId }),
         deviceSyncStateDAO.findArray({ user: userId }),
         calendarIntegrationsDAO.findArray({ user: userId }),
     ]);
@@ -95,6 +98,7 @@ async function loadUserSyncState(userId: string): Promise<UserSyncState> {
         routines,
         people,
         workContexts,
+        reviewInboxes,
         deviceCursors: deviceStates.map((row) => ({ deviceId: row.deviceId, lastSyncedTs: row.lastSyncedTs })),
         integrationIds: new Set(integrations.map((integration) => integration._id)),
     };
@@ -185,6 +189,7 @@ function findPoisonedWatermarks(state: UserSyncState, now: string): PoisonedWate
         ['routine', state.routines],
         ['person', state.people],
         ['workContext', state.workContexts],
+        ['reviewInbox', state.reviewInboxes],
     ];
     return byType.flatMap(([entityType, rows]) =>
         rows.filter((row) => row.updatedTs > horizon).map((row) => ({ entityType, entityId: row._id ?? '', updatedTs: row.updatedTs })),
@@ -230,6 +235,8 @@ export function healPoisonedWatermark(userId: string, finding: PoisonedWatermark
             return restampEntity(peopleDAO, userId, finding, now);
         case 'workContext':
             return restampEntity(workContextsDAO, userId, finding, now);
+        case 'reviewInbox':
+            return restampEntity(reviewInboxesDAO, userId, finding, now);
     }
 }
 
@@ -246,7 +253,7 @@ async function restampEntity<T extends EntitySnapshot>(
         return null;
     }
     // Cast: under an unresolved generic the Mongo driver widens `_id` to `InferIdType<T>`; every
-    // concrete instantiation (the four DAOs above) stores string ids, so the spread is a T.
+    // concrete instantiation (the five DAOs above) stores string ids, so the spread is a T.
     const restamped = { ...fresh, updatedTs: now } as unknown as T;
     await dao.replaceById(finding.entityId, restamped);
     return recordOperation(userId, { entityType: finding.entityType, entityId: finding.entityId, snapshot: restamped, opType: 'update', now });
