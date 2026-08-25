@@ -281,4 +281,24 @@ test.describe('Item editor — page mode UX', () => {
             await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
         });
     });
+
+    test('calendar item renders date/time fields between the title and the notes', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-cal-order-${dayjs().valueOf()}@example.com`, async (page) => {
+            const captured = await gtd.collect(page, 'Dentist appointment');
+            const calItem = await gtd.clarifyToCalendar(page, captured, { timeStart: '2026-09-01T10:00:00', timeEnd: '2026-09-01T10:30:00' });
+            await gtd.updateItem(page, { ...calItem, notes: 'Bring the referral letter' });
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await page.goto(`/item/${calItem._id}`);
+            await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
+
+            const titleBox = await page.getByRole('textbox', { name: 'Title' }).boundingBox();
+            const dateBox = await page.getByTestId('allDayToggle').boundingBox();
+            const notesBox = await page.getByTestId('pageNotesPreview').boundingBox();
+            if (!titleBox || !dateBox || !notesBox) throw new Error('expected title, date-toggle, and notes boxes');
+            // Date/time block sits below the title but ABOVE the notes for calendar items.
+            expect(dateBox.y).toBeGreaterThan(titleBox.y);
+            expect(dateBox.y).toBeLessThan(notesBox.y);
+        });
+    });
 });

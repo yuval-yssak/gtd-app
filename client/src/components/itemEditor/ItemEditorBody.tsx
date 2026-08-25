@@ -961,6 +961,15 @@ export function ItemEditorBody({
                 {...(shouldAutoFocus ? { autoFocus: true } : {})}
             />
 
+            {status === 'calendar' && (
+                <CalendarFields
+                    value={calForm}
+                    onChange={(patch) => setCalForm((f) => applyCalendarPatch(f, patch))}
+                    calendarOptions={visibleCalendarOptions}
+                    forceShowPicker={ownerUserId !== item.userId}
+                />
+            )}
+
             <NotesSection notes={notes} onNotesChange={onNotesChange} chrome={chrome} />
 
             <Divider />
@@ -1048,13 +1057,6 @@ export function ItemEditorBody({
 
             {status === 'calendar' && (
                 <>
-                    <Divider />
-                    <CalendarFields
-                        value={calForm}
-                        onChange={(patch) => setCalForm((f) => applyCalendarPatch(f, patch))}
-                        calendarOptions={visibleCalendarOptions}
-                        forceShowPicker={ownerUserId !== item.userId}
-                    />
                     <CalendarEventLinks item={liveItem} calendarOptions={calendarOptions} />
                     {((liveAttendees?.length ?? 0) > 0 || item.organizer) && (
                         <MeetingDetails
