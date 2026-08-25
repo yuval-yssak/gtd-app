@@ -48,3 +48,5 @@
 - [Spec header comments outlive inline edits](feedback_spec_header_comment_outlives_inline_edits.md) — e2e file-header flow summaries keep describing removed steps; they evade concept greps, so read the top of every touched spec.
 - [Grouped key-comparator reused on a flat list](feedback_grouped_comparator_reused_flat.md) — Unique-bucket-key comparators go asymmetric on sentinel-vs-sentinel once flattened; test cmp both directions and `dayjs(undefined)`.
 - ["Mirror the page" ignores view toggles](feedback_mirror_the_page_ignores_view_toggles.md) — Page-parity claims copy the flat `.sort()` and miss a `useSearch()`-defaulted grouped render branch (/waiting-for defaults to person).
+- [Empty state added, primary label left stale](feedback_empty_state_added_but_primary_label_stale.md) — The new "nothing here" message lands but the pinned primary still asserts "All X clear"; also check the message's verb names a real control.
+- [Repeat-click e2e loops race the transition gate](feedback_e2e_repeat_click_races_transition_gate.md) — `for (i<N) .first().click()` on `isMutating`-disabled rows can re-hit one row; assert the shrinking count per iteration.

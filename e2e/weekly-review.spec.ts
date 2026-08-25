@@ -178,6 +178,44 @@ test.describe('weekly review', () => {
         });
     });
 
+    test('deleting every external inbox shows an explicit empty state; adding one back re-arms the tick requirement', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-empty-${dayjs().valueOf()}@example.com`, async (page) => {
+            await page.goto('/weekly-review');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewInboxRow')).toHaveCount(3);
+            // Deleted defaults are never re-seeded (localStorage seed marker), so an all-deleted
+            // checklist is a lasting user-reachable state — it must read as intentional, not broken.
+            await page.getByTestId('manageInboxesButton').click();
+            // Await each removal landing before the next click — the dialog's useTransition gate
+            // disables the buttons only after the click, so back-to-back clicks race stale rows.
+            for (let remaining = 3; remaining > 0; remaining--) {
+                await expect(page.getByTestId('manageInboxRow')).toHaveCount(remaining);
+                await page.getByTestId('removeInboxButton').first().click();
+            }
+            await expect(page.getByTestId('manageInboxRow')).toHaveCount(0);
+            await page.getByTestId('manageInboxesDone').click();
+            await expect(page.getByTestId('emptyChecklistMessage')).toBeVisible();
+            await expect(page.getByTestId('reviewInboxRow')).toHaveCount(0);
+            await expect(page.getByTestId('stageContinue')).toBeEnabled();
+            // With no buckets the label must not claim "All inboxes clear" — nothing was ticked off.
+            await expect(page.getByTestId('stageContinue')).toHaveText('Continue');
+            // Not a one-way door: adding a bucket back must re-disable Continue (its fresh UUID has
+            // no tick), proving completion re-derives from the live list rather than sticking true.
+            await page.getByTestId('manageInboxesButton').click();
+            await page.getByTestId('newInboxNameInput').fill('Voicemail');
+            await page.getByTestId('addInboxButton').click();
+            await expect(page.getByTestId('manageInboxRow')).toHaveCount(1);
+            await page.getByTestId('manageInboxesDone').click();
+            await expect(page.getByTestId('emptyChecklistMessage')).toHaveCount(0);
+            await expect(page.getByTestId('stageContinue')).toBeDisabled();
+            await page.getByTestId('reviewInboxRow').click();
+            await expect(page.getByTestId('stageContinue')).toBeEnabled();
+            await expect(page.getByTestId('stageContinue')).toHaveText('All inboxes clear — continue');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clarify');
+        });
+    });
+
     test('decision buttons stay pinned at one screen position: long items scroll inside their card, empty-stage Continue lands in the same bar', async ({
         browser,
     }) => {
