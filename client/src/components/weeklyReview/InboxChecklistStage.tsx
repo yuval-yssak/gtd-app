@@ -3,7 +3,6 @@ import InboxIcon from '@mui/icons-material/Inbox';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
-import Chip from '@mui/material/Chip';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
@@ -30,14 +29,13 @@ interface InboxChecklistStageProps {
  * a tick-off row; the stage completes when everything is ticked (or is skipped wholesale).
  */
 export function InboxChecklistStage({ db, tickedInboxIds, onToggleTick, onStageFinished, travel }: InboxChecklistStageProps) {
-    // all* variants (not the hidden-filtered sets): the review runs on the ACTIVE account, and it
-    // must keep working even while that account is display-hidden — the filtered sets would show
-    // an empty checklist and a zero inbox count.
-    const { account, allItems, allReviewInboxes } = useAppData();
+    // allReviewInboxes (not the hidden-filtered set): the review runs on the ACTIVE account, and it
+    // must keep working even while that account is display-hidden — the filtered set would show
+    // an empty checklist.
+    const { account, allReviewInboxes } = useAppData();
     const [isManaging, setIsManaging] = useState(false);
 
     const myInboxes = allReviewInboxes.filter((inbox) => inbox.userId === account?.id);
-    const inboxItemCount = allItems.filter((item) => item.status === 'inbox' && item.userId === account?.id).length;
     const allTicked = isChecklistComplete(
         tickedInboxIds,
         myInboxes.map((inbox) => inbox._id),
@@ -58,7 +56,6 @@ export function InboxChecklistStage({ db, tickedInboxIds, onToggleTick, onStageF
                         <Box className={styles.rowLabel}>
                             <InboxIcon fontSize="small" color="primary" />
                             <Typography>GTD Inbox</Typography>
-                            <Chip size="small" label={`${inboxItemCount} to clarify next`} />
                         </Box>
                     }
                 />
