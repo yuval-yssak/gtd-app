@@ -40,6 +40,7 @@ import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
+import { compareNextActions } from '../../lib/compareNextActions';
 import { omitArchived, rankMergedOptionsByUsage } from '../../lib/entityUsage';
 import { filterItemsByQuery, itemContextTags, itemPersonRefIds, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
 import {
@@ -170,26 +171,6 @@ export function UnclarifiedWarning({ missingLabels }: { missingLabels: NonEmptyA
             <WarningAmberIcon fontSize="small" color="warning" data-testid="unclarifiedWarning" />
         </Tooltip>
     );
-}
-
-// Four-tier sort: focused-with-date (expectedBy asc), focused-no-date, other-with-date
-// (expectedBy asc), other-no-date. Focus is the primary partition, presence of an
-// expectedBy is the secondary partition within each focus group.
-function compareNextActions(a: StoredItem, b: StoredItem): number {
-    const aFocus = a.focus === true;
-    const bFocus = b.focus === true;
-    if (aFocus !== bFocus) {
-        return aFocus ? -1 : 1;
-    }
-    const aHasDate = Boolean(a.expectedBy);
-    const bHasDate = Boolean(b.expectedBy);
-    if (aHasDate !== bHasDate) {
-        return aHasDate ? -1 : 1;
-    }
-    if (!aHasDate) {
-        return 0;
-    }
-    return (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '');
 }
 
 // "Show tags" preference persists across visits. Defaults ON; only an explicit 'false' hides them.
