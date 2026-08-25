@@ -26,6 +26,79 @@
     gap: 0.75rem;
 }
 
+/* Collapsed header: one slim tappable strip replacing stepper + header + guidance. */
+.headerStrip {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.375rem;
+    text-align: left;
+}
+
+.stripProgress {
+    flex: 1;
+    border-radius: 0.25rem;
+}
+
+/* Title and counter must not shrink against the flexing progress bar on narrow viewports. */
+.stripLabel {
+    flex: none;
+    white-space: nowrap;
+}
+
+/* Mini review-wide stage dots — the expanded timeline's visual language, so the stage-scoped
+   counter/bar can't read as their legend. margin-left keeps them (and the chevron after them)
+   pinned right when an empty stage renders no counter/bar. */
+.stripDots {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: none;
+    margin-left: auto;
+}
+
+.stripDot {
+    width: 0.4rem;
+    height: 0.4rem;
+    border-radius: 50%;
+    border: 0.0625rem solid var(--mui-palette-action-disabled, rgba(0, 0, 0, 0.26));
+}
+
+.stripDotDone {
+    background-color: var(--mui-palette-primary-main, #1976d2);
+    border-color: var(--mui-palette-primary-main, #1976d2);
+}
+
+.stripDotCurrent {
+    /* Longhands (not the `border` shorthand) so stripDotDone's border-color survives the
+       cascade. A dot that is both done AND current — the common case: any empty stage, every
+       stage-end card — must not blend into the completed run: the content-box clip hollows the
+       fill (at 0.4rem the remaining center is sub-pixel, so what renders is a larger primary
+       RING vs the smaller solid "done" dots — the scale carries the distinction; the center
+       only becomes visible if the dot ever grows past ~0.6rem). */
+    border-width: 0.125rem;
+    border-style: solid;
+    border-color: var(--mui-palette-primary-main, #1976d2);
+    padding: 0.0625rem;
+    background-clip: content-box;
+    transform: scale(1.35);
+}
+
+.titleRow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.headerControls {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex: none;
+}
+
 .headerRow {
     display: flex;
     align-items: flex-start;

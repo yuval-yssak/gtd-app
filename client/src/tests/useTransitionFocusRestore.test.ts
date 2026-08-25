@@ -46,6 +46,15 @@ describe('resolveFocusTarget', () => {
         expect(resolveFocusTarget(lookup, 'revisitUndoDecision')).toEqual({ testId: 'clarifySaveNext' });
     });
 
+    it('a lost header-chrome toggle restores onto its partner, never the bar primary', () => {
+        // Expanding the strip unmounts it and mounts the collapse button (and vice versa) —
+        // falling to focusKeep here would arm a review decision from a cosmetic toggle.
+        const expanded = lookupOf([{ testId: 'collapseHeaderButton' }, { testId: 'focusKeep' }]);
+        expect(resolveFocusTarget(expanded, 'reviewHeaderStrip')).toEqual({ testId: 'collapseHeaderButton' });
+        const collapsed = lookupOf([{ testId: 'reviewHeaderStrip' }, { testId: 'focusKeep' }]);
+        expect(resolveFocusTarget(collapsed, 'collapseHeaderButton')).toEqual({ testId: 'reviewHeaderStrip' });
+    });
+
     it('a container sentinel (text-field focus) is never focused itself — the bar primary takes it', () => {
         // Escape from the title field records the card container as a sentinel; the container
         // survives by testid in the new view or not, but it can never TAKE focus.

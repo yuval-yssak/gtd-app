@@ -1,13 +1,20 @@
+import ExpandLessIcon from '@mui/icons-material/ExpandLess';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import ButtonBase from '@mui/material/ButtonBase';
+import IconButton from '@mui/material/IconButton';
 import LinearProgress from '@mui/material/LinearProgress';
 import Step from '@mui/material/Step';
 import StepButton from '@mui/material/StepButton';
 import Stepper from '@mui/material/Stepper';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
+import classNames from 'classnames';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import type { MyDB } from '../../types/MyDB';
 import { ClarifyStage } from './ClarifyStage';
@@ -52,6 +59,21 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     const stage = currentStage(flow);
     const today = dayjs().format('YYYY-MM-DD');
     const queue = stage ? flow.queues[stage.id] : undefined;
+    // Header collapse (screen real estate): the review STARTS with the full header (the checklist
+    // stage); every other view — items, stage-end cards, empty stages — defaults to the slim
+    // strip. The toggle is STICKY: expanding keeps the full header across items and stages until
+    // the user collapses it again (and vice versa).
+    const [isHeaderExpandedByUser, setIsHeaderExpandedByUser] = useState(false);
+    const hasStageActivity = queue !== undefined && (queue.decisions.length > 0 || queue.cursor > 0);
+    const isHeaderCollapsed = stage !== null && stage.kind !== 'checklist' && !isHeaderExpandedByUser;
+    const inboxIds = allReviewInboxes.filter((inbox) => inbox.userId === account?.id).map((inbox) => inbox._id);
+    // Review-wide position for the strip's mini dots — precomputed so the strip itself never
+    // touches review-wide state (only display data crosses its props).
+    const stageDots = REVIEW_STAGES.map((stageDefinition, index) => ({
+        stageId: stageDefinition.id,
+        isDone: isStageDone(flow, stageDefinition, inboxIds),
+        isCurrent: index === flow.stageIndex,
+    }));
 
     // On stage (re-)entry, rebuild the queue: undecided leftovers keep their place and anything
     // newly eligible is appended — so revisiting a stage via the timeline offers exactly the
@@ -106,12 +128,22 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
 
     return (
         <Box className={styles.wizardRoot} ref={wizardRootRef}>
-            <ReviewStepper
-                flow={flow}
-                inboxIds={allReviewInboxes.filter((inbox) => inbox.userId === account?.id).map((inbox) => inbox._id)}
-                onJump={(index) => onFlowChange((prev) => jumpToStage(prev, index))}
-            />
-            <WizardHeader flow={flow} stage={stage} queue={queue} onSkipStage={() => onFlowChange(skipStage)} />
+            {isHeaderCollapsed ? (
+                <CollapsedHeaderStrip stage={stage} queue={queue} stageDots={stageDots} onExpand={() => setIsHeaderExpandedByUser(true)} />
+            ) : (
+                <>
+                    <ReviewStepper flow={flow} inboxIds={inboxIds} onJump={(index) => onFlowChange((prev) => jumpToStage(prev, index))} />
+                    <WizardHeader
+                        flow={flow}
+                        stage={stage}
+                        queue={queue}
+                        onSkipStage={() => onFlowChange(skipStage)}
+                        hasStageActivity={hasStageActivity}
+                        canCollapse={stage.kind !== 'checklist'}
+                        onCollapse={() => setIsHeaderExpandedByUser(false)}
+                    />
+                </>
+            )}
             {stage.kind === 'checklist' && (
                 <InboxChecklistStage
                     db={db}
@@ -175,17 +207,86 @@ function isStageDone(flow: ReviewFlowState, stage: ReviewStageDefinition, inboxI
     return queue !== undefined && queue.pending.length === 0;
 }
 
+/** Item progress within the stage — label ("2 of 12") plus the matching percentage for a bar. */
+function stageItemProgress(queue: StageQueue | undefined): { label: string; value: number } | null {
+    if (!queue) {
+        return null;
+    }
+    const total = queue.decisions.length + queue.pending.length;
+    if (total === 0) {
+        return null;
+    }
+    return { label: `${queue.decisions.length} of ${total}`, value: (queue.decisions.length / total) * 100 };
+}
+
+/** Review-wide progress percentage — the full header's bar (the strip's bar is stage-scoped). */
+const reviewProgressValue = (flow: ReviewFlowState) => (flow.stageIndex / REVIEW_STAGES.length) * 100;
+
+interface StripStageDot {
+    stageId: ReviewStageId;
+    isDone: boolean;
+    isCurrent: boolean;
+}
+
+interface CollapsedHeaderStripProps {
+    stage: ReviewStageDefinition;
+    queue: StageQueue | undefined;
+    /** Review-wide position, precomputed by the wizard — one dot per stage. */
+    stageDots: StripStageDot[];
+    onExpand: () => void;
+}
+
+/**
+ * The slim one-line header shown once the user is working a stage. The counter and the bar next
+ * to it are STAGE-scoped and always agree — so neither reads as a legend for anything
+ * review-wide. Review-wide position appears only as the mini stage DOTS at the right end, the
+ * same visual language as the expanded timeline. Renders instead of — never alongside — the full
+ * header, so the shared testids stay unique.
+ */
+function CollapsedHeaderStrip({ stage, queue, stageDots, onExpand }: CollapsedHeaderStripProps) {
+    const itemProgress = stageItemProgress(queue);
+    const stageNumber = stageDots.findIndex((dot) => dot.isCurrent) + 1;
+    return (
+        <ButtonBase className={styles.headerStrip} onClick={onExpand} aria-expanded={false} aria-label="Expand review header" data-testid="reviewHeaderStrip">
+            <Typography variant="subtitle1" className={classNames(styles.stageTitle, styles.stripLabel)} data-testid="reviewStageTitle">
+                {stage.title}
+            </Typography>
+            {itemProgress && (
+                <>
+                    <Typography variant="caption" color="text.secondary" className={styles.stripLabel} data-testid="reviewStageCounter">
+                        {itemProgress.label}
+                    </Typography>
+                    <LinearProgress variant="determinate" value={itemProgress.value} className={styles.stripProgress} />
+                </>
+            )}
+            <Box role="img" aria-label={`Stage ${stageNumber} of ${stageDots.length}`} className={styles.stripDots} data-testid="stripStageDots">
+                {stageDots.map((dot) => (
+                    <span
+                        key={dot.stageId}
+                        className={classNames(styles.stripDot, { [styles.stripDotDone]: dot.isDone, [styles.stripDotCurrent]: dot.isCurrent })}
+                    />
+                ))}
+            </Box>
+            <ExpandMoreIcon fontSize="small" color="disabled" />
+        </ButtonBase>
+    );
+}
+
 interface WizardHeaderProps {
     flow: ReviewFlowState;
     stage: ReviewStageDefinition;
     queue: StageQueue | undefined;
     onSkipStage: () => void;
+    /** Whether the user has acted in this stage — folds the guidance line into the ⓘ tooltip. */
+    hasStageActivity: boolean;
+    /** Every stage but the review-start checklist can collapse to the strip. */
+    canCollapse: boolean;
+    onCollapse: () => void;
 }
 
-function WizardHeader({ flow, stage, queue, onSkipStage }: WizardHeaderProps) {
+function WizardHeader({ flow, stage, queue, onSkipStage, hasStageActivity, canCollapse, onCollapse }: WizardHeaderProps) {
     const stageNumber = flow.stageIndex + 1;
-    const itemProgress =
-        queue && queue.decisions.length + queue.pending.length > 0 ? `${queue.decisions.length} of ${queue.decisions.length + queue.pending.length}` : null;
+    const itemProgress = stageItemProgress(queue)?.label ?? null;
 
     return (
         <Box className={styles.header}>
@@ -195,18 +296,39 @@ function WizardHeader({ flow, stage, queue, onSkipStage }: WizardHeaderProps) {
                         Stage {stageNumber} of {REVIEW_STAGES.length}
                         {itemProgress ? ` · ${itemProgress}` : ''}
                     </Typography>
-                    <Typography variant="h5" className={styles.stageTitle} data-testid="reviewStageTitle">
-                        {stage.title}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                        {stage.guidance}
-                    </Typography>
+                    <Box className={styles.titleRow}>
+                        <Typography variant="h5" className={styles.stageTitle} data-testid="reviewStageTitle">
+                            {stage.title}
+                        </Typography>
+                        {hasStageActivity && (
+                            <Tooltip title={stage.guidance}>
+                                {/* A real button, not a bare SVG: MUI's Tooltip shows on focus and
+                                    touch only for an interactive child — an icon alone would make
+                                    the guidance hover-only (see RoutineIndicator). */}
+                                <IconButton size="small" aria-label="Stage guidance" data-testid="stageGuidanceInfo">
+                                    <InfoOutlinedIcon fontSize="small" />
+                                </IconButton>
+                            </Tooltip>
+                        )}
+                    </Box>
+                    {!hasStageActivity && (
+                        <Typography variant="body2" color="text.secondary">
+                            {stage.guidance}
+                        </Typography>
+                    )}
                 </Box>
-                <Button color="inherit" size="small" onClick={onSkipStage} data-testid="skipStageButton">
-                    Skip stage →
-                </Button>
+                <Box className={styles.headerControls}>
+                    <Button color="inherit" size="small" onClick={onSkipStage} data-testid="skipStageButton">
+                        Skip stage →
+                    </Button>
+                    {canCollapse && (
+                        <IconButton size="small" onClick={onCollapse} aria-label="Collapse review header" data-testid="collapseHeaderButton">
+                            <ExpandLessIcon fontSize="small" />
+                        </IconButton>
+                    )}
+                </Box>
             </Box>
-            <LinearProgress variant="determinate" value={(flow.stageIndex / REVIEW_STAGES.length) * 100} className={styles.progressBar} />
+            <LinearProgress variant="determinate" value={reviewProgressValue(flow)} className={styles.progressBar} />
         </Box>
     );
 }

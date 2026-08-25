@@ -16,19 +16,29 @@ export interface FocusControlLookup<T> {
 }
 
 /**
+ * Header-chrome toggles that swap for one another: expanding the collapsed strip unmounts it and
+ * mounts the collapse button (and vice versa). A lost toggle restores onto its partner so focus
+ * stays in the header — falling through to the bar primary would arm a review DECISION on the
+ * next Space press from what was a purely cosmetic toggle.
+ */
+const PARTNER_CONTROL_TEST_IDS: Readonly<Record<string, string>> = {
+    reviewHeaderStrip: 'collapseHeaderButton',
+    collapseHeaderButton: 'reviewHeaderStrip',
+};
+
+/**
  * Which control should receive focus after the one the user was on left the DOM: the same-testid
- * control in the new view when it exists and can take focus (e.g. the next item's ▶), otherwise
- * the bar's primary action (e.g. ▶ walked onto the end card, whose primary is Continue).
+ * control in the new view when it exists and can take focus (e.g. the next item's ▶), then a
+ * partnered chrome toggle (strip ↔ collapse button), otherwise the bar's primary action (e.g. ▶
+ * walked onto the end card, whose primary is Continue).
  */
 export function resolveFocusTarget<T>(lookup: FocusControlLookup<T>, lostTestId: string): T | null {
-    const exact = lookup.byTestId(lostTestId);
-    if (exact !== null && lookup.canFocus(exact)) {
-        return exact;
-    }
-    const primary = PRIMARY_ACTION_TEST_IDS.map((testId) => lookup.byTestId(testId)).find(
-        (control): control is NonNullable<typeof control> => control !== null && lookup.canFocus(control),
-    );
-    return primary ?? null;
+    const partnerTestId = PARTNER_CONTROL_TEST_IDS[lostTestId];
+    const candidateTestIds = [lostTestId, ...(partnerTestId ? [partnerTestId] : []), ...PRIMARY_ACTION_TEST_IDS];
+    const target = candidateTestIds
+        .map((testId) => lookup.byTestId(testId))
+        .find((control): control is NonNullable<typeof control> => control !== null && lookup.canFocus(control));
+    return target ?? null;
 }
 
 const domLookup = (root: HTMLElement): FocusControlLookup<HTMLElement> => ({

@@ -95,12 +95,14 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Next Actions — all reviewed!');
             await page.getByTestId('stageContinue').click();
 
-            // Stage 5 — waiting for: skip the whole stage via the header control.
+            // Stage 5 — waiting for: skip the whole stage via the header control. Skip lives in
+            // the full header, which is one strip-tap away past the review start.
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await page.getByTestId('reviewHeaderStrip').click();
             await page.getByTestId('skipStageButton').click();
 
-            // Stage 6 — tickler: empty. The header's Skip control persisted across the stage swap
-            // (it never unmounts), so focus simply stays on it — no restoration involved.
+            // Stage 6 — tickler: empty. The expand is sticky, so the full header persists across
+            // the swap and its Skip control simply keeps focus — no restoration involved.
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
             await expect(page.getByTestId('skipStageButton')).toBeFocused();
             await page.getByTestId('stageContinue').click();
@@ -326,6 +328,97 @@ test.describe('weekly review', () => {
             await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Focus later');
             await page.getByTestId('focusKeep').click();
             await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Plain undated');
+        });
+    });
+
+    test('header shows full only at review start; the strip everywhere else, with a sticky expand toggle', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-collapse-${dayjs().valueOf()}@example.com`, async (page) => {
+            const first = await gtd.collect(page, 'First action');
+            await gtd.clarifyToNextAction(page, first, { expectedBy: dayjs().add(7, 'day').format('YYYY-MM-DD') });
+            const second = await gtd.collect(page, 'Second action');
+            await gtd.clarifyToNextAction(page, second, { expectedBy: dayjs().add(8, 'day').format('YYYY-MM-DD') });
+            const third = await gtd.collect(page, 'Third action');
+            await gtd.clarifyToNextAction(page, third, { expectedBy: dayjs().add(9, 'day').format('YYYY-MM-DD') });
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            // Review start (checklist stage): full header with the guidance in full text.
+            await page.goto('/weekly-review');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clear all inboxes');
+            await expect(page.getByTestId('reviewStepper')).toBeVisible();
+            await expect(page.getByText('Empty every capture bucket', { exact: false })).toBeVisible();
+            await expect(page.getByTestId('reviewHeaderStrip')).toHaveCount(0);
+
+            // Everything past the start defaults to the strip — even an EMPTY stage's card.
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clarify');
+            await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
+            await expect(page.getByTestId('reviewStepper')).toHaveCount(0);
+            // Empty stage: no counter and no bar — a 0% bar would falsely imply work pending.
+            // The review-wide mini dots still show (they're what carries overall position).
+            await expect(page.getByTestId('reviewStageCounter')).toHaveCount(0);
+            await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveCount(0);
+            await expect(page.getByTestId('stripStageDots')).toHaveAttribute('aria-label', 'Stage 2 of 8');
+            // The current stage here is ALSO done (empty queue) — its dot must still carry the
+            // "you are here" style, not blend into the completed run.
+            await expect(page.getByTestId('stripStageDots').locator('span').nth(1)).toHaveClass(/stripDotCurrent/);
+
+            // A stage with items: strip with the item counter, no full guidance showing.
+            await page.getByTestId('stageTravelNext').click();
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
+            await expect(page.getByTestId('reviewStageCounter')).toHaveText('0 of 3');
+            // The strip's bar is STAGE-scoped — it agrees with the counter, so the "x of y" can't
+            // read as a legend for the review-wide bar (which lives in the full header only).
+            // Review-wide position rides in the mini stage dots instead: one dot per stage.
+            await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+            await expect(page.getByTestId('stripStageDots')).toHaveAttribute('aria-label', 'Stage 4 of 8');
+            expect(await page.getByTestId('stripStageDots').locator('span').count()).toBe(8);
+            await expect(page.getByText('Still the right next step? Mark done, defer, or re-clarify.')).toHaveCount(0);
+
+            // Tapping the strip expands the full header. No action taken yet, so the guidance
+            // still gets its one full showing here.
+            await page.getByTestId('reviewHeaderStrip').click();
+            await expect(page.getByTestId('reviewStepper')).toBeVisible();
+            await expect(page.getByTestId('skipStageButton')).toBeVisible();
+            await expect(page.getByText('Still the right next step? Mark done, defer, or re-clarify.')).toBeVisible();
+            // The clicked strip unmounted — focus lands on its PARTNER toggle, never on the bar
+            // primary (which would arm a review decision on the next Space press).
+            await expect(page.getByTestId('collapseHeaderButton')).toBeFocused();
+
+            // The expand is STICKY: deciding an item keeps the full header, with the guidance now
+            // folded into the ⓘ tooltip (its full showing is once per stage).
+            await page.getByTestId('focusKeep').click();
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 3');
+            await expect(page.getByTestId('reviewStepper')).toBeVisible();
+            await expect(page.getByTestId('reviewHeaderStrip')).toHaveCount(0);
+            await expect(page.getByTestId('stageGuidanceInfo')).toBeVisible();
+            // The ⓘ actually carries the guidance text — an empty tooltip title would pass a bare
+            // visibility check while silently deleting the coaching copy.
+            await page.getByTestId('stageGuidanceInfo').hover();
+            await expect(page.getByRole('tooltip')).toContainText('Still the right next step?');
+
+            // Sticky across STAGES too: traveling on keeps the expanded header.
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await expect(page.getByTestId('reviewStepper')).toBeVisible();
+            await expect(page.getByTestId('reviewHeaderStrip')).toHaveCount(0);
+            await page.getByTestId('stageTravelPrev').click();
+
+            // Collapsing is sticky the other way: the strip holds through a decision AND onto the
+            // stage-end card (a collapse control never renders there — nothing to collapse).
+            await page.getByTestId('collapseHeaderButton').click();
+            await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
+            await expect(page.getByTestId('reviewHeaderStrip')).toBeFocused();
+            await page.getByTestId('focusKeep').click();
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 3');
+            await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
+            await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '67');
+            await page.getByTestId('focusKeep').click();
+            await expect(page.getByTestId('stageEmptyCard')).toBeVisible();
+            await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
+            await expect(page.getByTestId('reviewStepper')).toHaveCount(0);
         });
     });
 
@@ -722,7 +815,9 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('stageTravelNext')).toBeEnabled();
 
             // Capture a fresh thought from another stage, then revisit Clarify via the timeline:
-            // the revisit queue holds exactly the new undecided item.
+            // the revisit queue holds exactly the new undecided item. Past the review start the
+            // timeline lives behind the strip — expand once; the expand is sticky from here on.
+            await page.getByTestId('reviewHeaderStrip').click();
             await page.getByTestId('reviewStepperStep').nth(6).click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Someday / Maybe');
             await page.getByTestId('quickCaptureFab').click();
