@@ -27,7 +27,8 @@ export function groupingKeyFor(item: StoredItem): string {
 
 /**
  * Comparator within a single day's bucket. All-day events sort before timed events; ties broken
- * by title (all-day) or `timeStart` (timed). Used directly by `Array.prototype.sort`.
+ * by title (all-day) or `timeStart` (timed); undated pairs (the No-date bucket) order by title,
+ * dated before undated in mixed pairs. Used directly by `Array.prototype.sort`.
  *
  * Timed events are compared as parsed instants, NOT raw strings: `timeStart` is stored
  * inconsistently — GCal-synced items as UTC (`…Z`), in-app items as floating local (no offset).
@@ -39,6 +40,12 @@ export function compareWithinDay(a: StoredItem, b: StoredItem): number {
     const bAllDay = b.allDay === true;
     if (aAllDay !== bAllDay) return aAllDay ? -1 : 1;
     if (aAllDay && bAllDay) return a.title.localeCompare(b.title);
+    // Undated timed items (the No-date bucket): dayjs(undefined) parses to "now", which is
+    // nondeterministic — order them by title instead, dated before undated in mixed pairs.
+    if (!a.timeStart || !b.timeStart) {
+        if (!a.timeStart && !b.timeStart) return a.title.localeCompare(b.title);
+        return a.timeStart ? -1 : 1;
+    }
     return dayjs(a.timeStart).valueOf() - dayjs(b.timeStart).valueOf();
 }
 
@@ -61,8 +68,21 @@ export function groupCalendarItemsByDay(items: readonly StoredItem[]): Record<st
     }, {});
 }
 
+/**
+ * Flat comparator producing exactly the order the calendar route renders: day buckets ascending
+ * (No-date last), then the within-day rules. Lets a flat list (e.g. the weekly-review calendar
+ * stage) walk items in the same sequence the page presents them.
+ */
+export function compareCalendarItems(a: StoredItem, b: StoredItem): number {
+    const dayOrder = compareDayKeys(groupingKeyFor(a), groupingKeyFor(b));
+    return dayOrder !== 0 ? dayOrder : compareWithinDay(a, b);
+}
+
 /** Day-key comparator: ISO dates ascending; the No-date sentinel sorts last. */
 function compareDayKeys(a: string, b: string): number {
+    // Symmetry on the sentinel: compareCalendarItems feeds this pairs of FLAT items, so two
+    // No-date keys meet here — returning 1 for both directions would make the sort unstable.
+    if (a === b) return 0;
     if (a === NO_DATE_KEY) return 1;
     if (b === NO_DATE_KEY) return -1;
     return a.localeCompare(b);

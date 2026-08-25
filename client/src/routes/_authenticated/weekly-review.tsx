@@ -32,6 +32,7 @@ import { WeeklyReviewWizard } from '../../components/weeklyReview/WeeklyReviewWi
 import { useAppData } from '../../contexts/AppDataProvider';
 import { seedDefaultReviewInboxesIfEmpty } from '../../db/reviewInboxMutations';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
+import { personNameMap } from '../../lib/waitingForGroups';
 import styles from './-weekly-review.module.css';
 
 // Lazy: pulls canvas-confetti out of the main chunk — the celebration renders once per review.
@@ -54,7 +55,7 @@ function WeeklyReviewPage() {
     const { db } = Route.useRouteContext();
     const { stage: urlStageId } = Route.useSearch();
     const navigate = useNavigate();
-    const { account, items, refreshReviewInboxes, isInitialSyncing } = useAppData();
+    const { account, items, allPeople, refreshReviewInboxes, isInitialSyncing } = useAppData();
     const [phase, setPhase] = useState<PagePhase>({ kind: 'loading' });
     // The latest flow across every onFlowChange call, updated synchronously — functional updaters
     // resolve against THIS, not the render-captured phase. Two same-tick commits (the deferred
@@ -132,7 +133,10 @@ function WeeklyReviewPage() {
             // Known staleness window: `items` is the render-closure snapshot, so an arrival
             // created by the very decision that completes the flow may not be visible yet —
             // the failure mode is a skipped sweep (next review catches it), never corruption.
-            const arrivals = unreviewedStageArrivals(flow, items, dayjs().format('YYYY-MM-DD'));
+            const arrivals = unreviewedStageArrivals(flow, items, {
+                todayIso: dayjs().format('YYYY-MM-DD'),
+                personNameById: personNameMap(allPeople),
+            });
             if (hasAtLeastOne(arrivals)) {
                 setPhase({ kind: 'sweep', flow, arrivals });
                 syncStageToUrl(undefined);

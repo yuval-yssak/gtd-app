@@ -1,5 +1,7 @@
 import { compareNextActions } from '../../lib/compareNextActions';
+import { flattenByPersonGroups } from '../../lib/waitingForGroups';
 import type { StoredItem } from '../../types/MyDB';
+import { compareCalendarItems } from '../calendarRouteSort';
 
 /**
  * Pure model of the weekly-review wizard: stage definitions, per-stage item eligibility, and the
@@ -41,38 +43,53 @@ export const REVIEW_STAGES: ReadonlyArray<ReviewStageDefinition> = [
     },
 ];
 
-const undatedLast = (value: string | undefined) => value ?? '9999-12-31';
+/** Reference data eligibility reads besides the items themselves — kept as inputs so it stays pure. */
+export interface StageEligibilityContext {
+    /** YYYY-MM-DD — passed in (never read from the clock here). */
+    todayIso: string;
+    /** Person id → display name; drives the waitingFor stage's person-grouped page order. */
+    personNameById: Record<string, string>;
+}
 
 /**
- * The items a stage reviews, in presentation order. `todayIso` is a YYYY-MM-DD date — passed in
- * (never read from the clock here) so eligibility is a pure function of its inputs.
+ * The items a stage reviews, in presentation order — each stage walks its items in the EXACT
+ * order its own list page renders them (in that page's default view), so the review reads like
+ * scanning that page top to bottom.
  */
-export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<StoredItem>, todayIso: string): StoredItem[] {
+export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<StoredItem>, context: StageEligibilityContext): StoredItem[] {
+    const { todayIso, personNameById } = context;
     switch (stageId) {
         case 'clearInboxes':
             return [];
         case 'clarify':
         case 'finalSweep':
-            return items.filter((item) => item.status === 'inbox').sort((a, b) => a.createdTs.localeCompare(b.createdTs));
+            // Newest-first (LIFO), matching the /inbox page.
+            return items.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
         case 'calendar':
             // "Undone" = still status:calendar — a completed entry became done. Past AND future
             // both qualify (per design: only done-ness excludes an entry, not its date).
-            return items.filter((item) => item.status === 'calendar').sort((a, b) => undatedLast(a.timeStart).localeCompare(undatedLast(b.timeStart)));
+            // compareCalendarItems is the /calendar page's rendered order flattened.
+            return items.filter((item) => item.status === 'calendar').sort(compareCalendarItems);
         case 'nextActions':
-            // Same comparator as the Next Actions page so the review walks items in the exact
-            // order the user sees them there (focus first, then expectedBy tiers).
+            // Same comparator as the Next Actions page (focus first, then expectedBy tiers).
             return items.filter((item) => item.status === 'nextAction' && !isTicklerHidden(item, todayIso)).sort(compareNextActions);
         case 'waitingFor':
-            return items
-                .filter((item) => item.status === 'waitingFor' && !isTicklerHidden(item, todayIso))
-                .sort((a, b) => undatedLast(a.expectedBy).localeCompare(undatedLast(b.expectedBy)));
+            // The /waiting-for page's default view: expectedBy ascending (undated first, '' sorts
+            // before any date), then grouped by person A→Z with Unassigned last, flattened.
+            return flattenByPersonGroups(
+                items
+                    .filter((item) => item.status === 'waitingFor' && !isTicklerHidden(item, todayIso))
+                    .sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '')),
+                personNameById,
+            );
         case 'tickler':
             // Mirrors the /tickler page: only nextAction + waitingFor participate in the tickler.
             return items
                 .filter((item) => (item.status === 'nextAction' || item.status === 'waitingFor') && isTicklerHidden(item, todayIso))
-                .sort((a, b) => undatedLast(a.ignoreBefore).localeCompare(undatedLast(b.ignoreBefore)));
+                .sort((a, b) => (a.ignoreBefore ?? '').localeCompare(b.ignoreBefore ?? ''));
         case 'somedayMaybe':
-            return items.filter((item) => item.status === 'somedayMaybe').sort((a, b) => a.createdTs.localeCompare(b.createdTs));
+            // Newest-first, matching the /someday page.
+            return items.filter((item) => item.status === 'somedayMaybe').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
     }
 }
 
@@ -458,14 +475,14 @@ const SWEPT_STAGES: ReadonlyArray<ReviewStageDefinition> = REVIEW_STAGES.filter(
  * completion stats already call them out as skipped. Returned in stage order, so the earliest
  * stale stage leads.
  */
-export function unreviewedStageArrivals(state: ReviewFlowState, items: ReadonlyArray<StoredItem>, todayIso: string): StageArrival[] {
+export function unreviewedStageArrivals(state: ReviewFlowState, items: ReadonlyArray<StoredItem>, context: StageEligibilityContext): StageArrival[] {
     const settledIds = focusStageDecidedIds(state);
     return SWEPT_STAGES.flatMap((stage) => {
         const queue = state.queues[stage.id];
         if (!queue) {
             return [];
         }
-        const count = stageArrivalCount(queue, stageEligibleItems(stage.id, items, todayIso), settledIds);
+        const count = stageArrivalCount(queue, stageEligibleItems(stage.id, items, context), settledIds);
         return count > 0 ? [{ stageId: stage.id, title: stage.title, count }] : [];
     });
 }

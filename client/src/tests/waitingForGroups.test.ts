@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { groupByWaitingForPerson, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../lib/waitingForGroups';
+import { flattenByPersonGroups, groupByWaitingForPerson, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../lib/waitingForGroups';
 import type { StoredItem } from '../types/MyDB';
 
 const mkItem = (overrides: Partial<StoredItem> & { _id: string }): StoredItem => ({
@@ -29,6 +29,27 @@ describe('groupByWaitingForPerson', () => {
         const items = [mkItem({ _id: '1' })];
         const groups = groupByWaitingForPerson(items);
         expect(groups[UNASSIGNED_GROUP_KEY]?.map((i) => i._id)).toEqual(['1']);
+    });
+});
+
+describe('flattenByPersonGroups', () => {
+    it('flattens in group order (A→Z, Unassigned last), keeping the input item order within each group', () => {
+        const items = [
+            mkItem({ _id: 'zoe1', waitingForPersonId: 'p-zoe' }),
+            mkItem({ _id: 'none1' }),
+            mkItem({ _id: 'alice1', waitingForPersonId: 'p-alice' }),
+            mkItem({ _id: 'zoe2', waitingForPersonId: 'p-zoe' }),
+        ];
+        const flat = flattenByPersonGroups(items, { 'p-zoe': 'Zoe', 'p-alice': 'Alice' });
+        expect(flat.map((i) => i._id)).toEqual(['alice1', 'zoe1', 'zoe2', 'none1']);
+    });
+
+    it('resolves an unknown person id to "Unknown" for ordering and does not mutate its input', () => {
+        const items = [mkItem({ _id: 'mystery', waitingForPersonId: 'p-gone' }), mkItem({ _id: 'bob1', waitingForPersonId: 'p-bob' })];
+        const inputOrder = items.map((i) => i._id);
+        // "Bob" < "Unknown" alphabetically, so the resolvable group leads.
+        expect(flattenByPersonGroups(items, { 'p-bob': 'Bob' }).map((i) => i._id)).toEqual(['bob1', 'mystery']);
+        expect(items.map((i) => i._id)).toEqual(inputOrder);
     });
 });
 

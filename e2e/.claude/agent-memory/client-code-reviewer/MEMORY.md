@@ -46,3 +46,5 @@
 - [Text folded into a hover-only tooltip](feedback_text_folded_into_hover_only_tooltip.md) — Bare-SVG Tooltip children aren't focusable, so space-saving "folds" delete the text on phones; `toBeVisible()` passes with an empty title.
 - [Removed fixed row leaves a degenerate empty state](feedback_removed_row_leaves_degenerate_empty_state.md) — Deleting an always-present row makes the dynamic remainder vacuously complete at zero; check the manage dialog can reach zero permanently.
 - [Spec header comments outlive inline edits](feedback_spec_header_comment_outlives_inline_edits.md) — e2e file-header flow summaries keep describing removed steps; they evade concept greps, so read the top of every touched spec.
+- [Grouped key-comparator reused on a flat list](feedback_grouped_comparator_reused_flat.md) — Unique-bucket-key comparators go asymmetric on sentinel-vs-sentinel once flattened; test cmp both directions and `dayjs(undefined)`.
+- ["Mirror the page" ignores view toggles](feedback_mirror_the_page_ignores_view_toggles.md) — Page-parity claims copy the flat `.sort()` and miss a `useSearch()`-defaulted grouped render branch (/waiting-for defaults to person).

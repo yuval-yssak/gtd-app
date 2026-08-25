@@ -329,6 +329,26 @@ test.describe('weekly review', () => {
         });
     });
 
+    test('clarify stage walks inbox items newest-first (LIFO), matching the inbox page', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-clarify-order-${dayjs().valueOf()}@example.com`, async (page) => {
+            // Each collect is a separate round-trip, so createdTs values are distinct — the older
+            // capture lands first and must come up SECOND in the walk.
+            await gtd.collect(page, 'Older thought');
+            await gtd.collect(page, 'Newer thought');
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await page.goto('/weekly-review?stage=clarify');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clarify');
+
+            const clarifyStage = page.getByTestId('clarifyStage');
+            await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Newer thought');
+            await clarifyStage.getByRole('button', { name: 'Done', exact: true }).click();
+            await page.getByTestId('clarifySaveNext').click();
+            await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Older thought');
+        });
+    });
+
     test('header shows full only at review start; the strip everywhere else, with a sticky expand toggle', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-collapse-${dayjs().valueOf()}@example.com`, async (page) => {
             const first = await gtd.collect(page, 'First action');

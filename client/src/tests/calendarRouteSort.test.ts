@@ -4,7 +4,14 @@
  */
 import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
-import { compareWithinDay, groupCalendarItemsByDay, groupingKeyFor, isMultiDayAllDay, NO_DATE_KEY } from '../components/calendarRouteSort';
+import {
+    compareCalendarItems,
+    compareWithinDay,
+    groupCalendarItemsByDay,
+    groupingKeyFor,
+    isMultiDayAllDay,
+    NO_DATE_KEY,
+} from '../components/calendarRouteSort';
 import type { StoredItem } from '../types/MyDB';
 
 function makeItem(overrides: Partial<StoredItem> = {}): StoredItem {
@@ -74,6 +81,39 @@ describe('compareWithinDay', () => {
         expect(expectedSign).not.toBe(0);
         expect(Math.sign(compareWithinDay(chore, meet))).toBe(expectedSign);
         expect(Math.sign(compareWithinDay(meet, chore))).toBe(-expectedSign);
+    });
+});
+
+describe('compareCalendarItems', () => {
+    it('flattens to the page order: day buckets ascending, No-date last, within-day rules applied', () => {
+        const earlierDay = makeItem({ _id: 'earlierDay', timeStart: '2026-05-23T10:00:00.000Z' });
+        const laterDayAllDay = makeItem({ _id: 'laterDayAllDay', allDay: true, timeStart: '2026-05-24', timeEnd: '2026-05-25' });
+        const laterDayTimed = makeItem({ _id: 'laterDayTimed', timeStart: '2026-05-24T10:00:00.000Z' });
+        const noDate = makeItem({ _id: 'noDate' });
+        const sorted = [noDate, laterDayTimed, laterDayAllDay, earlierDay].sort(compareCalendarItems);
+        expect(sorted.map((item) => item._id)).toEqual(['earlierDay', 'laterDayAllDay', 'laterDayTimed', 'noDate']);
+    });
+
+    it('flattens to exactly the sequence groupCalendarItemsByDay renders', () => {
+        // The invariant the weekly-review calendar stage rests on: the flat comparator and the
+        // page's group-then-sort pipeline must never desync.
+        const items = [
+            makeItem({ _id: 'undatedB', title: 'Beta' }),
+            makeItem({ _id: 'timed', timeStart: '2026-05-24T10:00:00.000Z' }),
+            makeItem({ _id: 'undatedA', title: 'Alpha' }),
+            makeItem({ _id: 'allDay', allDay: true, timeStart: '2026-05-24', timeEnd: '2026-05-25' }),
+        ];
+        expect([...items].sort(compareCalendarItems)).toEqual(Object.values(groupCalendarItemsByDay(items)).flat());
+    });
+
+    it('is symmetric for a No-date pair — deterministic title order, not 1 both ways', () => {
+        // Regression: compareDayKeys returned 1 for BOTH directions on two No-date keys (an
+        // unreachable pair while it only sorted unique bucket keys) — flat sorting made it real.
+        const apple = makeItem({ _id: 'apple', title: 'Apple' });
+        const zebra = makeItem({ _id: 'zebra', title: 'Zebra' });
+        expect(compareCalendarItems(apple, zebra)).toBeLessThan(0);
+        expect(compareCalendarItems(zebra, apple)).toBeGreaterThan(0);
+        expect(compareCalendarItems(apple, apple)).toBe(0);
     });
 });
 

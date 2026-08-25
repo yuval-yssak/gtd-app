@@ -32,30 +32,33 @@ import {
 import type { StoredItem } from '../types/MyDB';
 
 const TODAY = '2026-08-23';
+const CTX = { todayIso: TODAY, personNameById: { 'p-alice': 'Alice', 'p-bob': 'Bob' } };
 
 function makeItem(overrides: Partial<StoredItem> & { _id: string; status: StoredItem['status'] }): StoredItem {
     return { userId: 'user-1', title: overrides._id, createdTs: '2026-01-01T00:00:00.000Z', updatedTs: '2026-01-01T00:00:00.000Z', ...overrides };
 }
 
 describe('stageEligibleItems', () => {
-    it('clarify and finalSweep take inbox items oldest-first', () => {
+    it('clarify and finalSweep take inbox items newest-first (LIFO), matching the inbox page', () => {
         const items = [
-            makeItem({ _id: 'b', status: 'inbox', createdTs: '2026-02-01T00:00:00.000Z' }),
             makeItem({ _id: 'a', status: 'inbox', createdTs: '2026-01-01T00:00:00.000Z' }),
+            makeItem({ _id: 'b', status: 'inbox', createdTs: '2026-02-01T00:00:00.000Z' }),
             makeItem({ _id: 'x', status: 'nextAction' }),
         ];
-        expect(stageEligibleItems('clarify', items, TODAY).map((item) => item._id)).toEqual(['a', 'b']);
-        expect(stageEligibleItems('finalSweep', items, TODAY).map((item) => item._id)).toEqual(['a', 'b']);
+        expect(stageEligibleItems('clarify', items, CTX).map((item) => item._id)).toEqual(['b', 'a']);
+        expect(stageEligibleItems('finalSweep', items, CTX).map((item) => item._id)).toEqual(['b', 'a']);
     });
 
-    it('calendar takes every still-calendar item — past AND future — ordered by start, undated last', () => {
+    it('calendar takes every still-calendar item — past AND future — in the calendar-page order (all-day leads its day, undated last)', () => {
         const items = [
             makeItem({ _id: 'future', status: 'calendar', timeStart: '2026-09-01T10:00:00.000Z' }),
+            // Same day as 'future' but all-day → the page renders it first within the day bucket.
+            makeItem({ _id: 'futureAllDay', status: 'calendar', allDay: true, timeStart: '2026-09-01', timeEnd: '2026-09-02' }),
             makeItem({ _id: 'past', status: 'calendar', timeStart: '2026-08-01T10:00:00.000Z' }),
             makeItem({ _id: 'undated', status: 'calendar' }),
             makeItem({ _id: 'completed', status: 'done', timeStart: '2026-08-01T10:00:00.000Z' }),
         ];
-        expect(stageEligibleItems('calendar', items, TODAY).map((item) => item._id)).toEqual(['past', 'future', 'undated']);
+        expect(stageEligibleItems('calendar', items, CTX).map((item) => item._id)).toEqual(['past', 'futureAllDay', 'future', 'undated']);
     });
 
     it('nextActions excludes tickler-hidden items; tickler takes exactly those', () => {
@@ -68,8 +71,8 @@ describe('stageEligibleItems', () => {
             makeItem({ _id: 'snoozedFocus', status: 'nextAction', focus: true, ignoreBefore: '2026-09-15' }),
         ];
         // ignoreBefore === today is visible (the tickler gate is strict >), matching /next-actions.
-        expect(stageEligibleItems('nextActions', items, TODAY).map((item) => item._id)).toEqual(['visible', 'boundary']);
-        expect(stageEligibleItems('tickler', items, TODAY).map((item) => item._id)).toEqual(['snoozedWait', 'snoozed', 'snoozedFocus']);
+        expect(stageEligibleItems('nextActions', items, CTX).map((item) => item._id)).toEqual(['visible', 'boundary']);
+        expect(stageEligibleItems('tickler', items, CTX).map((item) => item._id)).toEqual(['snoozedWait', 'snoozed', 'snoozedFocus']);
     });
 
     it('nextActions mirrors the Next Actions page order: focus first, then expectedBy tiers', () => {
@@ -80,7 +83,7 @@ describe('stageEligibleItems', () => {
             makeItem({ _id: 'focusDated', status: 'nextAction', focus: true, expectedBy: '2026-09-20' }),
             makeItem({ _id: 'focusSooner', status: 'nextAction', focus: true, expectedBy: '2026-08-25' }),
         ];
-        expect(stageEligibleItems('nextActions', items, TODAY).map((item) => item._id)).toEqual([
+        expect(stageEligibleItems('nextActions', items, CTX).map((item) => item._id)).toEqual([
             'focusSooner',
             'focusDated',
             'focusUndated',
@@ -89,19 +92,30 @@ describe('stageEligibleItems', () => {
         ]);
     });
 
-    it('waitingFor orders by expectedBy with undated last and respects the tickler gate', () => {
+    it('waitingFor mirrors the page default: person groups A→Z, Unassigned last, expectedBy (undated first) within each group', () => {
         const items = [
-            makeItem({ _id: 'later', status: 'waitingFor', expectedBy: '2026-09-10' }),
-            makeItem({ _id: 'soon', status: 'waitingFor', expectedBy: '2026-08-25' }),
-            makeItem({ _id: 'undated', status: 'waitingFor' }),
-            makeItem({ _id: 'hidden', status: 'waitingFor', ignoreBefore: '2026-12-01' }),
+            makeItem({ _id: 'bobLater', status: 'waitingFor', waitingForPersonId: 'p-bob', expectedBy: '2026-09-10' }),
+            makeItem({ _id: 'unassignedSoon', status: 'waitingFor', expectedBy: '2026-08-25' }),
+            makeItem({ _id: 'aliceUndated', status: 'waitingFor', waitingForPersonId: 'p-alice' }),
+            makeItem({ _id: 'bobSoon', status: 'waitingFor', waitingForPersonId: 'p-bob', expectedBy: '2026-08-25' }),
+            makeItem({ _id: 'unassignedUndated', status: 'waitingFor' }),
+            makeItem({ _id: 'hidden', status: 'waitingFor', waitingForPersonId: 'p-alice', ignoreBefore: '2026-12-01' }),
         ];
-        expect(stageEligibleItems('waitingFor', items, TODAY).map((item) => item._id)).toEqual(['soon', 'later', 'undated']);
+        expect(stageEligibleItems('waitingFor', items, CTX).map((item) => item._id)).toEqual([
+            'aliceUndated',
+            'bobSoon',
+            'bobLater',
+            'unassignedUndated',
+            'unassignedSoon',
+        ]);
     });
 
-    it('somedayMaybe takes all somedayMaybe items regardless of tickler', () => {
-        const items = [makeItem({ _id: 'parked', status: 'somedayMaybe', ignoreBefore: '2027-01-01' }), makeItem({ _id: 'plain', status: 'somedayMaybe' })];
-        expect(stageEligibleItems('somedayMaybe', items, TODAY)).toHaveLength(2);
+    it('somedayMaybe takes all somedayMaybe items regardless of tickler, newest-first like the someday page', () => {
+        const items = [
+            makeItem({ _id: 'parked', status: 'somedayMaybe', ignoreBefore: '2027-01-01', createdTs: '2026-01-01T00:00:00.000Z' }),
+            makeItem({ _id: 'plain', status: 'somedayMaybe', createdTs: '2026-02-01T00:00:00.000Z' }),
+        ];
+        expect(stageEligibleItems('somedayMaybe', items, CTX).map((item) => item._id)).toEqual(['plain', 'parked']);
     });
 });
 
@@ -330,7 +344,7 @@ describe('stage queue', () => {
         const base = startReviewFlow('2026-08-23T00:00:00.000Z');
         // nextActions fully reviewed; waitingFor visited while empty — 'wf1' arrived after.
         const flow = withStageQueue(withStageQueue(base, 'nextActions', completeCurrentItem(buildStageQueue(['na1']))), 'waitingFor', buildStageQueue([]));
-        expect(unreviewedStageArrivals(flow, [nextAction, waiting], TODAY)).toEqual([{ stageId: 'waitingFor', title: 'Waiting For', count: 1 }]);
+        expect(unreviewedStageArrivals(flow, [nextAction, waiting], CTX)).toEqual([{ stageId: 'waitingFor', title: 'Waiting For', count: 1 }]);
     });
 
     it('sweep ignores skipped-but-offered pending ids and stages never visited', () => {
@@ -338,7 +352,7 @@ describe('stage queue', () => {
         const waiting = makeItem({ _id: 'wf1', status: 'waitingFor' });
         // 'wf1' was offered (still pending after a skip); nextActions was bypassed wholesale (no queue).
         const flow = withStageQueue(startReviewFlow('2026-08-23T00:00:00.000Z'), 'waitingFor', skipCurrentItem(buildStageQueue(['wf1'])));
-        expect(unreviewedStageArrivals(flow, [nextAction, waiting], TODAY)).toEqual([]);
+        expect(unreviewedStageArrivals(flow, [nextAction, waiting], CTX)).toEqual([]);
     });
 
     it('sweep never second-guesses a focus-stage decision: a review-snoozed item is not a tickler arrival', () => {
@@ -346,7 +360,7 @@ describe('stage queue', () => {
         const snoozed = makeItem({ _id: 'x', status: 'nextAction', ignoreBefore: '2026-12-01' });
         const base = startReviewFlow('2026-08-23T00:00:00.000Z');
         const flow = withStageQueue(withStageQueue(base, 'nextActions', completeCurrentItem(buildStageQueue(['x']))), 'tickler', buildStageQueue([]));
-        expect(unreviewedStageArrivals(flow, [snoozed], TODAY)).toEqual([]);
+        expect(unreviewedStageArrivals(flow, [snoozed], CTX)).toEqual([]);
     });
 
     it('sweep counts a clarify-stage decision as an arrival for the list it landed in', () => {
@@ -354,14 +368,14 @@ describe('stage queue', () => {
         const clarified = makeItem({ _id: 'x', status: 'waitingFor' });
         const base = startReviewFlow('2026-08-23T00:00:00.000Z');
         const flow = withStageQueue(withStageQueue(base, 'finalSweep', completeCurrentItem(buildStageQueue(['x']))), 'waitingFor', buildStageQueue([]));
-        expect(unreviewedStageArrivals(flow, [clarified], TODAY)).toEqual([{ stageId: 'waitingFor', title: 'Waiting For', count: 1 }]);
+        expect(unreviewedStageArrivals(flow, [clarified], CTX)).toEqual([{ stageId: 'waitingFor', title: 'Waiting For', count: 1 }]);
     });
 
     it('sweep reports a late inbox capture once, under Final sweep — never doubled via Clarify', () => {
         const lateCapture = makeItem({ _id: 'late', status: 'inbox' });
         const base = startReviewFlow('2026-08-23T00:00:00.000Z');
         const flow = withStageQueue(withStageQueue(base, 'clarify', buildStageQueue([])), 'finalSweep', buildStageQueue([]));
-        expect(unreviewedStageArrivals(flow, [lateCapture], TODAY)).toEqual([{ stageId: 'finalSweep', title: 'Final sweep', count: 1 }]);
+        expect(unreviewedStageArrivals(flow, [lateCapture], CTX)).toEqual([{ stageId: 'finalSweep', title: 'Final sweep', count: 1 }]);
     });
 
     it('sweep returns arrivals in stage order so the earliest stale stage leads', () => {
@@ -369,7 +383,7 @@ describe('stage queue', () => {
         const waiting = makeItem({ _id: 'wf', status: 'waitingFor' });
         const base = startReviewFlow('2026-08-23T00:00:00.000Z');
         const flow = withStageQueue(withStageQueue(base, 'waitingFor', buildStageQueue([])), 'calendar', buildStageQueue([]));
-        expect(unreviewedStageArrivals(flow, [waiting, calItem], TODAY).map((arrival) => arrival.stageId)).toEqual(['calendar', 'waitingFor']);
+        expect(unreviewedStageArrivals(flow, [waiting, calItem], CTX).map((arrival) => arrival.stageId)).toEqual(['calendar', 'waitingFor']);
     });
 
     it('entry refresh keeps undecided leftovers, appends new arrivals, and never re-offers decided ids', () => {

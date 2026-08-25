@@ -28,7 +28,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
-import { groupByWaitingForPerson, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../../lib/waitingForGroups';
+import { groupByWaitingForPerson, personNameMap, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../../lib/waitingForGroups';
 import { parseWaitingForSearch } from '../../lib/waitingForUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-waiting-for.module.css';
@@ -54,9 +54,8 @@ function WaitingForPage() {
     // Ghosts are fading leftovers, not open work — the header count reflects live rows only.
     const liveWaitingCount = waitingItems.filter((item) => !isGhost(item)).length;
 
-    // Unfiltered allPeople: a visible item can be waiting on a hidden account's person — the group
-    // header must still resolve that name instead of falling back to "Unknown".
-    const personMap = Object.fromEntries(allPeople.map((p) => [p._id, p.name]));
+    // Unfiltered allPeople: see personNameMap — hidden accounts' names must still resolve.
+    const personMap = personNameMap(allPeople);
 
     // Group by person (or "Unassigned"), then order the groups A→Z by resolved name —
     // "Unassigned" sorts last since it isn't a real name.
