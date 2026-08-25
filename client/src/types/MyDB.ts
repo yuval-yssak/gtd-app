@@ -265,6 +265,10 @@ export interface StoredWeeklyReviewDraft {
     updatedTs: string;
     flow: {
         stageIndex: number;
+        // The resume stage's id. Authoritative on read — an id survives a stage-list reorder,
+        // where the raw ordinal would silently retarget. Optional: drafts written before the
+        // field existed carry only the ordinal.
+        stageId?: string;
         tickedInboxIds: string[];
         // decisions is the current shape (id + optional undo payload); the legacy optional fields
         // cover device-local drafts written by earlier builds (flat undoSnapshot, processedIds, or

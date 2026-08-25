@@ -416,6 +416,19 @@ describe('stage queue', () => {
 });
 
 describe('review flow', () => {
+    it('walks the stages in the designed order — Waiting For before Next Actions', () => {
+        expect(REVIEW_STAGES.map((stage) => stage.id)).toEqual([
+            'clearInboxes',
+            'clarify',
+            'calendar',
+            'waitingFor',
+            'nextActions',
+            'tickler',
+            'somedayMaybe',
+            'finalSweep',
+        ]);
+    });
+
     it('advances stage by stage to completion', () => {
         let flow = startReviewFlow('2026-08-23T09:00:00.000Z');
         expect(currentStage(flow)?.id).toBe('clearInboxes');
@@ -440,10 +453,10 @@ describe('review flow', () => {
     });
 
     it('a skipped stage returned to and worked through is no longer reported as skipped', () => {
-        // Skip Next Actions (index 3), jump back, decide an item — the payoff screen must report
+        // Skip Next Actions (index 4), jump back, decide an item — the payoff screen must report
         // the decisions, not the stale skip mark.
-        let flow = skipStage(jumpToStage(startReviewFlow('2026-08-23T09:00:00.000Z'), 3));
-        flow = jumpToStage(flow, 3);
+        let flow = skipStage(jumpToStage(startReviewFlow('2026-08-23T09:00:00.000Z'), 4));
+        flow = jumpToStage(flow, 4);
         flow = withStageQueue(flow, 'nextActions', completeCurrentItem(buildStageQueue(['a', 'b'])));
         const stat = reviewStats(flow).find((stage) => stage.stageId === 'nextActions');
         expect(stat).toMatchObject({ processedCount: 1, wasSkipped: false });

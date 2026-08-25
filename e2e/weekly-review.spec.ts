@@ -74,7 +74,13 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('stageContinue')).toBeFocused();
             await page.keyboard.press('Enter');
 
-            // Stage 4 — next actions: solo card hosts the FULL editor; a skip walks to the END
+            // Stage 4 — waiting for: also empty — Continue held focus again, so another Enter
+            // advances.
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await expect(page.getByTestId('stageContinue')).toBeFocused();
+            await page.keyboard.press('Enter');
+
+            // Stage 5 — next actions: solo card hosts the FULL editor; a skip walks to the END
             // (never back around), and ◀ recovers it.
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
             const focusStage = page.getByTestId('focusStage');
@@ -94,21 +100,18 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Next Actions — all reviewed!');
             await page.getByTestId('stageContinue').click();
 
-            // Stage 5 — waiting for: skip the whole stage via the header control. Skip lives in
+            // Stage 6 — tickler: skip the whole stage via the header control. Skip lives in
             // the full header, which is one strip-tap away past the review start.
-            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
             await page.getByTestId('reviewHeaderStrip').click();
             await page.getByTestId('skipStageButton').click();
 
-            // Stage 6 — tickler: empty. The expand is sticky, so the full header persists across
-            // the swap and its Skip control simply keeps focus — no restoration involved.
-            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
-            await expect(page.getByTestId('skipStageButton')).toBeFocused();
-            await page.getByTestId('stageContinue').click();
-
-            // Stage 7 — someday/maybe: trash the parked item. Capture a fresh thought mid-review
-            // through the global FAB — it must land in the final sweep.
+            // Stage 7 — someday/maybe: the expand is sticky, so the full header persists across
+            // the swap and its Skip control simply keeps focus — no restoration involved. Trash
+            // the parked item. Capture a fresh thought mid-review through the global FAB — it
+            // must land in the final sweep.
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Someday / Maybe');
+            await expect(page.getByTestId('skipStageButton')).toBeFocused();
             await page.getByTestId('quickCaptureFab').click();
             await page.getByTestId('quickCaptureInput').fill('Mid-review idea');
             await page.getByTestId('quickCaptureInput').press('Enter');
@@ -296,9 +299,9 @@ test.describe('weekly review', () => {
             const barOnEmpty = await page.getByTestId('stageActionBar').boundingBox();
             expect(barOnEmpty?.y).toBeCloseTo(barOnFirstItem.y, 0);
 
-            // And across a stage switch (Waiting For, empty): same position again.
+            // And across a stage switch (Tickler, empty): same position again.
             await page.getByTestId('stageContinue').click();
-            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
             const barOnNextStage = await page.getByTestId('stageActionBar').boundingBox();
             expect(barOnNextStage?.y).toBeCloseTo(barOnFirstItem.y, 0);
 
@@ -422,6 +425,7 @@ test.describe('weekly review', () => {
             // A stage with items: strip with the item counter, no full guidance showing.
             await page.getByTestId('stageTravelNext').click();
             await page.getByTestId('stageTravelNext').click();
+            await page.getByTestId('stageTravelNext').click();
             await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
             await expect(page.getByTestId('reviewStageCounter')).toHaveText('0 of 3');
@@ -429,7 +433,7 @@ test.describe('weekly review', () => {
             // read as a legend for the review-wide bar (which lives in the full header only).
             // Review-wide position rides in the mini stage dots instead: one dot per stage.
             await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
-            await expect(page.getByTestId('stripStageDots')).toHaveAttribute('aria-label', 'Stage 4 of 8');
+            await expect(page.getByTestId('stripStageDots')).toHaveAttribute('aria-label', 'Stage 5 of 8');
             expect(await page.getByTestId('stripStageDots').locator('span').count()).toBe(8);
             await expect(page.getByText('Still the right next step? Mark done, defer, or re-clarify.')).toHaveCount(0);
 
@@ -457,7 +461,7 @@ test.describe('weekly review', () => {
 
             // Sticky across STAGES too: traveling on keeps the expanded header.
             await page.getByTestId('stageTravelNext').click();
-            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
             await expect(page.getByTestId('reviewStepper')).toBeVisible();
             await expect(page.getByTestId('reviewHeaderStrip')).toHaveCount(0);
             await page.getByTestId('stageTravelPrev').click();
@@ -519,6 +523,8 @@ test.describe('weekly review', () => {
             await page.getByTestId('startReviewButton').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
             await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
+            await page.getByTestId('stageContinue').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
             await page.getByTestId('stageContinue').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Someday / Maybe');
@@ -545,6 +551,8 @@ test.describe('weekly review', () => {
 
             // Walking forward from the revisit re-runs the completion check — clean now, so the
             // remaining empty stages lead straight into the celebration.
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
+            await page.getByTestId('stageContinue').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
             await page.getByTestId('stageContinue').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Someday / Maybe');
@@ -564,6 +572,8 @@ test.describe('weekly review', () => {
             await page.goto('/weekly-review?stage=waitingFor');
             await page.getByTestId('startReviewButton').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
             await page.getByTestId('stageContinue').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
             await page.getByTestId('stageContinue').click();
@@ -847,8 +857,8 @@ test.describe('weekly review', () => {
             await page.goto('/weekly-review');
             await page.getByTestId('startReviewButton').click();
 
-            // Free forward jump straight to Next Actions (stage index 3) — no skip marks, URL follows.
-            await page.getByTestId('reviewStepperStep').nth(3).click();
+            // Free forward jump straight to Next Actions (stage index 4) — no skip marks, URL follows.
+            await page.getByTestId('reviewStepperStep').nth(4).click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
             await expect(page).toHaveURL(/stage=nextActions/);
 
@@ -885,7 +895,8 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('clarifyStage').getByRole('textbox', { name: 'Title' })).toHaveValue('Mid-jump thought');
 
             // Back to Next Actions: both items were decided this review — nothing re-offers.
-            await page.getByTestId('reviewStepperStep').nth(3).click();
+            await page.getByTestId('reviewStepperStep').nth(4).click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
             await expect(page.getByTestId('stageEmptyCard')).toBeVisible();
             await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 2');
 

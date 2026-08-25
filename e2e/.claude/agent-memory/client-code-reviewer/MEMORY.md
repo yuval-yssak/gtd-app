@@ -50,3 +50,5 @@
 - ["Mirror the page" ignores view toggles](feedback_mirror_the_page_ignores_view_toggles.md) — Page-parity claims copy the flat `.sort()` and miss a `useSearch()`-defaulted grouped render branch (/waiting-for defaults to person).
 - [Empty state added, primary label left stale](feedback_empty_state_added_but_primary_label_stale.md) — The new "nothing here" message lands but the pinned primary still asserts "All X clear"; also check the message's verb names a real control.
 - [Repeat-click e2e loops race the transition gate](feedback_e2e_repeat_click_races_transition_gate.md) — `for (i<N) .first().click()` on `isMutating`-disabled rows can re-hit one row; assert the shrinking count per iteration.
+- [Reordered list breaks persisted ordinals](feedback_reordered_list_breaks_persisted_ordinals.md) — "All consumers are id-keyed" misses draft `stageIndex`; a `.length` clamp no-ops on a permutation, so mid-flight users resume on the swapped stage.
+- [Duplicated order declarations drift](feedback_duplicated_order_declarations_drift.md) — Id tuple + parallel `ReadonlyArray<Def>` encode order twice; permutations and omissions type-check, stranding the index lookup at -1.

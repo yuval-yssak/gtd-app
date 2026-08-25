@@ -1,7 +1,7 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { deleteWeeklyReviewDraft, getWeeklyReviewDraft, saveWeeklyReviewDraft, weeklyReviewDraftKey } from '../components/weeklyReview/reviewDraftHelpers';
-import { REVIEW_STAGES, startReviewFlow, withStageQueue } from '../components/weeklyReview/reviewFlowState';
+import { REVIEW_STAGES, stageIndexOf, startReviewFlow, withStageQueue } from '../components/weeklyReview/reviewFlowState';
 import type { MyDB } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -139,6 +139,37 @@ describe('weekly review draft persistence', () => {
         const flow = await getWeeklyReviewDraft(db, USER_ID);
 
         expect(flow?.queues.nextActions).toEqual({ pending: [], cursor: 0, decisions: [{ itemId: 'x', undo: { snapshot: undoSnapshot } }, { itemId: 'y' }] });
+    });
+
+    it('resumes by stage ID, not ordinal: a draft saved under a different stage order lands on the same stage', async () => {
+        await db.put('drafts', {
+            key: weeklyReviewDraftKey(USER_ID),
+            kind: 'weeklyReview',
+            userId: USER_ID,
+            updatedTs: '2026-08-23T09:00:00.000Z',
+            // A stale ordinal from a build with a different stage order (0 can never be
+            // nextActions' slot) — it must lose to the id, or the user resumes on the wrong stage.
+            flow: { stageIndex: 0, stageId: 'nextActions', tickedInboxIds: [], queues: {}, skippedStageIds: [], startedTs: '2026-08-23T09:00:00.000Z' },
+        });
+
+        const flow = await getWeeklyReviewDraft(db, USER_ID);
+
+        expect(flow?.stageIndex).toBe(stageIndexOf('nextActions'));
+        expect(flow?.stageIndex).not.toBe(0);
+    });
+
+    it('falls back to the clamped ordinal when the stored stageId is unknown to this build', async () => {
+        await db.put('drafts', {
+            key: weeklyReviewDraftKey(USER_ID),
+            kind: 'weeklyReview',
+            userId: USER_ID,
+            updatedTs: '2026-08-23T09:00:00.000Z',
+            flow: { stageIndex: 99, stageId: 'retiredStage', tickedInboxIds: [], queues: {}, skippedStageIds: [], startedTs: '2026-08-23T09:00:00.000Z' },
+        });
+
+        const flow = await getWeeklyReviewDraft(db, USER_ID);
+
+        expect(flow?.stageIndex).toBe(REVIEW_STAGES.length - 1);
     });
 
     it('clamps an out-of-range stageIndex so resume never lands past the last stage', async () => {

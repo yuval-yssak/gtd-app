@@ -9,20 +9,23 @@ import { compareCalendarItems } from '../calendarRouteSort';
  * linear and ends). Kept free of React and IDB so every transition is unit-testable.
  */
 
-export const REVIEW_STAGE_IDS = ['clearInboxes', 'clarify', 'calendar', 'nextActions', 'waitingFor', 'tickler', 'somedayMaybe', 'finalSweep'] as const;
-export type ReviewStageId = (typeof REVIEW_STAGE_IDS)[number];
-
 export type ReviewStageKind = 'checklist' | 'clarify' | 'focus';
 
-export interface ReviewStageDefinition {
-    id: ReviewStageId;
+/** Structural constraint for the stage-list literal below; `ReviewStageDefinition` re-narrows `id` to the derived union. */
+interface ReviewStageShape {
+    id: string;
     kind: ReviewStageKind;
     title: string;
     /** One-line coaching text shown under the stage title. */
     guidance: string;
 }
 
-export const REVIEW_STAGES: ReadonlyArray<ReviewStageDefinition> = [
+/**
+ * The SINGLE source of stage identity and walk order — ids, the id union, and every index derive
+ * from this list. The order is deliberate (and pinned by test): Waiting For precedes Next Actions
+ * so items blocked on others are checked — and nudged or unblocked — before scanning your own list.
+ */
+export const REVIEW_STAGES = [
     {
         id: 'clearInboxes',
         kind: 'checklist',
@@ -31,8 +34,8 @@ export const REVIEW_STAGES: ReadonlyArray<ReviewStageDefinition> = [
     },
     { id: 'clarify', kind: 'clarify', title: 'Clarify', guidance: 'Decide what each captured item is and what to do about it — one at a time.' },
     { id: 'calendar', kind: 'focus', title: 'Calendar', guidance: 'Undone calendar entries, past and future — mark done, reschedule, or capture follow-ups.' },
-    { id: 'nextActions', kind: 'focus', title: 'Next Actions', guidance: 'Still the right next step? Mark done, defer, or re-clarify.' },
     { id: 'waitingFor', kind: 'focus', title: 'Waiting For', guidance: 'Has it arrived? Does someone need a nudge?' },
+    { id: 'nextActions', kind: 'focus', title: 'Next Actions', guidance: 'Still the right next step? Mark done, defer, or re-clarify.' },
     { id: 'tickler', kind: 'focus', title: 'Tickler', guidance: 'Snoozed items — is the wake-up date still right, or is it time to release one?' },
     { id: 'somedayMaybe', kind: 'focus', title: 'Someday / Maybe', guidance: 'Anything here ready to become real? Anything to let go of?' },
     {
@@ -41,7 +44,11 @@ export const REVIEW_STAGES: ReadonlyArray<ReviewStageDefinition> = [
         title: 'Final sweep',
         guidance: 'Reviewing generates new thoughts — clarify everything that landed in the inbox on the way.',
     },
-];
+] as const satisfies ReadonlyArray<ReviewStageShape>;
+
+export type ReviewStageId = (typeof REVIEW_STAGES)[number]['id'];
+export type ReviewStageDefinition = (typeof REVIEW_STAGES)[number];
+export const REVIEW_STAGE_IDS: ReadonlyArray<ReviewStageId> = REVIEW_STAGES.map((stage) => stage.id);
 
 /** Reference data eligibility reads besides the items themselves — kept as inputs so it stays pure. */
 export interface StageEligibilityContext {

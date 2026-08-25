@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { MyDB, StoredWeeklyReviewDraft } from '../../types/MyDB';
-import { isReviewStageId, REVIEW_STAGES, type ReviewFlowState, type ReviewStageId, type StageDecision, type StageQueue } from './reviewFlowState';
+import { isReviewStageId, REVIEW_STAGES, type ReviewFlowState, type ReviewStageId, type StageDecision, type StageQueue, stageIndexOf } from './reviewFlowState';
 
 /** Device-local persistence for an in-progress weekly review — same drafts store the inbox capture field uses. */
 
@@ -15,6 +15,10 @@ export async function getWeeklyReviewDraft(db: IDBPDatabase<MyDB>, userId: strin
 }
 
 export async function saveWeeklyReviewDraft(db: IDBPDatabase<MyDB>, userId: string, flow: ReviewFlowState): Promise<void> {
+    // The id is what a resume resolves; the ordinal is only a fallback for drafts read by an
+    // older build. A mid-flow draft always sits on a real stage, but type-wise the index access
+    // can miss — omit the field rather than store undefined.
+    const currentStage = REVIEW_STAGES[flow.stageIndex];
     await db.put('drafts', {
         key: weeklyReviewDraftKey(userId),
         kind: 'weeklyReview',
@@ -22,6 +26,7 @@ export async function saveWeeklyReviewDraft(db: IDBPDatabase<MyDB>, userId: stri
         updatedTs: dayjs().toISOString(),
         flow: {
             stageIndex: flow.stageIndex,
+            ...(currentStage ? { stageId: currentStage.id } : {}),
             tickedInboxIds: flow.tickedInboxIds,
             queues: flow.queues,
             skippedStageIds: flow.skippedStageIds,
@@ -36,8 +41,9 @@ export async function deleteWeeklyReviewDraft(db: IDBPDatabase<MyDB>, userId: st
 
 /**
  * The stored shape is structurally identical to ReviewFlowState but string-keyed (MyDB stays free
- * of component imports). Unknown stage ids — a draft written by a build with a different stage
- * list — are dropped rather than resumed into a stage that no longer exists.
+ * of component imports). Unknown stage ids in queues/skips — a draft written by a build with a
+ * different stage list — are dropped rather than resumed into a stage that no longer exists; an
+ * unknown resume stageId instead falls back to the stored ordinal (see resumeStageIndex).
  */
 function flowFromDraft(draft: StoredWeeklyReviewDraft): ReviewFlowState {
     const queues: Partial<Record<ReviewStageId, StageQueue>> = {};
@@ -53,15 +59,27 @@ function flowFromDraft(draft: StoredWeeklyReviewDraft): ReviewFlowState {
         }
     }
     return {
-        // Clamp into the current stage range: a draft from a build with a different stage list
-        // must resume inside it — an index past the end reads as "complete" and renders a blank
-        // wizard with no controls (and no draft write ever heals it).
-        stageIndex: Math.min(Math.max(draft.flow.stageIndex, 0), REVIEW_STAGES.length - 1),
+        stageIndex: resumeStageIndex(draft),
         tickedInboxIds: draft.flow.tickedInboxIds,
         queues,
         skippedStageIds: draft.flow.skippedStageIds.filter(isReviewStageId),
         startedTs: draft.flow.startedTs,
     };
+}
+
+/**
+ * Resolves the resume position by stage ID first — an id survives a stage-list reorder, where the
+ * raw ordinal would silently land on whichever stage now occupies that slot. The ordinal is the
+ * fallback for drafts written before `stageId` existed (or naming a stage this build dropped),
+ * clamped into the current range: an index past the end reads as "complete" and renders a blank
+ * wizard with no controls (and no draft write ever heals it).
+ */
+function resumeStageIndex(draft: StoredWeeklyReviewDraft): number {
+    const { stageId, stageIndex } = draft.flow;
+    if (stageId !== undefined && isReviewStageId(stageId)) {
+        return stageIndexOf(stageId);
+    }
+    return Math.min(Math.max(stageIndex, 0), REVIEW_STAGES.length - 1);
 }
 
 type StoredDraftQueue = NonNullable<StoredWeeklyReviewDraft['flow']['queues'][string]>;
