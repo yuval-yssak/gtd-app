@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updateItem } from '../../db/itemMutations';
 import type { MyDB } from '../../types/MyDB';
-import { removeDecision, requeueAtCursor, requeueReadiness, type StageDecision, type StageQueue, undoDecision } from './reviewFlowState';
+import { excludeFromLiveAppend, removeDecision, requeueAtCursor, requeueReadiness, type StageDecision, type StageQueue, undoDecision } from './reviewFlowState';
 
 interface DecisionUndoHost {
     db: IDBPDatabase<MyDB>;
@@ -23,8 +23,10 @@ interface DecisionUndoHost {
  * restore write lands (still inside the click's own render closure); only the requeue is
  * deferred, until the restored row is visible in the shared items snapshot — requeueing against
  * the stale snapshot would let the wizard's mid-stage reconcile drop the id as ineligible (its
- * status still reads as the decided one), and mid-stage reconcile never re-adds. If the stage
- * unmounts mid-undo (stepper jump, browser back), no queue change is applied at all: the stale
+ * status still reads as the decided one). During the gap the id is parked on the live-append
+ * exclusion list, so the reconcile can't re-offer it at the END of the walk before the requeue
+ * places it at the cursor. If the stage unmounts mid-undo (stepper jump, browser back), no queue
+ * change is applied at all: the stale
  * closure's `onQueueChange` would resurrect the old stage index, so instead the decision simply
  * stays in the history with the data already restored, and clicking Undo again on re-entry
  * completes it idempotently. Nothing is ever silently lost.
@@ -79,7 +81,7 @@ export function useDecisionUndo({ db, onQueueChange, onUndone, onUndoFailed }: D
             if (!isMountedRef.current) {
                 return;
             }
-            onQueueChange((liveQueue) => removeDecision(liveQueue, decision.itemId));
+            onQueueChange((liveQueue) => excludeFromLiveAppend(removeDecision(liveQueue, decision.itemId), decision.itemId));
             onUndone();
             setAwaitedRequeue({ itemId: decision.itemId, restoredTs: restored.updatedTs });
             await refreshItems();

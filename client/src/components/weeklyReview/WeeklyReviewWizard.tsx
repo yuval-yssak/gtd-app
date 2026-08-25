@@ -55,9 +55,10 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
 
     // On stage (re-)entry, rebuild the queue: undecided leftovers keep their place and anything
     // newly eligible is appended — so revisiting a stage via the timeline offers exactly the
-    // not-yet-decided items. WITHIN a stage only drop-reconcile runs (ids that stopped qualifying
-    // vanish; nothing is added under the user). Both helpers return the same reference when
-    // nothing changed, so this effect settles.
+    // not-yet-decided items. WITHIN a stage the reconcile drops ids that stopped qualifying AND
+    // live-appends new arrivals to the end of the walk (per design: the "n of m" total grows,
+    // only entry resets the cursor). Both helpers return the same reference when nothing changed,
+    // so this effect settles.
     const enteredStageIdRef = useRef<ReviewStageId | null>(null);
     useEffect(() => {
         if (!stage || stage.kind === 'checklist') {
@@ -67,8 +68,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
         const isEntry = enteredStageIdRef.current !== stage.id;
         enteredStageIdRef.current = stage.id;
         const eligibleIds = stageEligibleItems(stage.id, items, today).map((item) => item._id);
-        const refresh = (queue: StageQueue | undefined) =>
-            isEntry || !queue ? refreshQueueOnEntry(queue, eligibleIds) : reconcileQueue(queue, new Set(eligibleIds));
+        const refresh = (queue: StageQueue | undefined) => (isEntry || !queue ? refreshQueueOnEntry(queue, eligibleIds) : reconcileQueue(queue, eligibleIds));
         if (refresh(flow.queues[stage.id]) !== flow.queues[stage.id]) {
             // Recompute against the LATEST flow inside the updater: another commit (e.g. the
             // deferred undo requeue) may have landed since this render, and both helpers are

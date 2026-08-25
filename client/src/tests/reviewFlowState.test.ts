@@ -7,6 +7,7 @@ import {
     currentStage,
     decidedItemIds,
     dropCurrentItem,
+    excludeFromLiveAppend,
     isChecklistComplete,
     isFlowComplete,
     jumpToStage,
@@ -25,6 +26,7 @@ import {
     stepBack,
     toggleInboxTick,
     undoDecision,
+    unreviewedStageArrivals,
     withStageQueue,
 } from '../components/weeklyReview/reviewFlowState';
 import type { StoredItem } from '../types/MyDB';
@@ -62,10 +64,29 @@ describe('stageEligibleItems', () => {
             makeItem({ _id: 'boundary', status: 'nextAction', ignoreBefore: TODAY }),
             makeItem({ _id: 'snoozed', status: 'nextAction', ignoreBefore: '2026-09-15' }),
             makeItem({ _id: 'snoozedWait', status: 'waitingFor', ignoreBefore: '2026-09-01' }),
+            // Focus does NOT override the tickler gate — a snoozed focus item stays hidden.
+            makeItem({ _id: 'snoozedFocus', status: 'nextAction', focus: true, ignoreBefore: '2026-09-15' }),
         ];
         // ignoreBefore === today is visible (the tickler gate is strict >), matching /next-actions.
         expect(stageEligibleItems('nextActions', items, TODAY).map((item) => item._id)).toEqual(['visible', 'boundary']);
-        expect(stageEligibleItems('tickler', items, TODAY).map((item) => item._id)).toEqual(['snoozedWait', 'snoozed']);
+        expect(stageEligibleItems('tickler', items, TODAY).map((item) => item._id)).toEqual(['snoozedWait', 'snoozed', 'snoozedFocus']);
+    });
+
+    it('nextActions mirrors the Next Actions page order: focus first, then expectedBy tiers', () => {
+        const items = [
+            makeItem({ _id: 'plainUndated', status: 'nextAction' }),
+            makeItem({ _id: 'plainDated', status: 'nextAction', expectedBy: '2026-09-10' }),
+            makeItem({ _id: 'focusUndated', status: 'nextAction', focus: true }),
+            makeItem({ _id: 'focusDated', status: 'nextAction', focus: true, expectedBy: '2026-09-20' }),
+            makeItem({ _id: 'focusSooner', status: 'nextAction', focus: true, expectedBy: '2026-08-25' }),
+        ];
+        expect(stageEligibleItems('nextActions', items, TODAY).map((item) => item._id)).toEqual([
+            'focusSooner',
+            'focusDated',
+            'focusUndated',
+            'plainDated',
+            'plainUndated',
+        ]);
     });
 
     it('waitingFor orders by expectedBy with undated last and respects the tickler gate', () => {
@@ -159,9 +180,18 @@ describe('stage queue', () => {
         expect(withoutDecision).toEqual({ pending: ['b'], cursor: 0, decisions: [] });
         expect(removeDecision(decided, 'nope')).toBe(decided);
         expect(requeueAtCursor(withoutDecision, 'a').pending).toEqual(['a', 'b']);
-        // Already pending, or (re-)decided in the meantime — a late deferred requeue must no-op.
+        // Already at the cursor, or (re-)decided in the meantime — a late deferred requeue must no-op.
         expect(requeueAtCursor(withoutDecision, 'b')).toBe(withoutDecision);
         expect(requeueAtCursor(decided, 'a')).toBe(decided);
+    });
+
+    it('requeueAtCursor moves a live-appended id to the cursor instead of duplicating it', () => {
+        // The reconcile raced the undo's deferred phase 2 and already appended 'a' at the end of
+        // the walk — the requeue must surface it as the current item, once.
+        const midWalk = { pending: ['b', 'c', 'a'], cursor: 1, decisions: [] };
+        const requeued = requeueAtCursor(midWalk, 'a');
+        expect(requeued.pending).toEqual(['b', 'a', 'c']);
+        expect(currentQueueItemId(requeued)).toBe('a');
     });
 
     it('requeueAtCursor clamps a past-the-end cursor so the requeued item is current, not beyond it', () => {
@@ -192,8 +222,8 @@ describe('stage queue', () => {
     it('drop removes the current item WITHOUT recording a decision — the blocked-item escape', () => {
         // Unlike a skip (which leaves the item in the walk), drop is what the mid-reassign bar uses.
         const singleton = buildStageQueue(['blocked']);
-        expect(dropCurrentItem(singleton)).toEqual({ pending: [], cursor: 0, decisions: [] });
-        expect(dropCurrentItem(buildStageQueue(['blocked', 'next']))).toEqual({ pending: ['next'], cursor: 0, decisions: [] });
+        expect(dropCurrentItem(singleton)).toEqual({ pending: [], cursor: 0, decisions: [], droppedIds: ['blocked'] });
+        expect(dropCurrentItem(buildStageQueue(['blocked', 'next']))).toEqual({ pending: ['next'], cursor: 0, decisions: [], droppedIds: ['blocked'] });
         expect(dropCurrentItem(buildStageQueue([]))).toEqual(buildStageQueue([]));
         // Past the end there is nothing to drop.
         const ended = skipCurrentItem(buildStageQueue(['only']));
@@ -214,24 +244,132 @@ describe('stage queue', () => {
 
     it('a blocked drop at the end of the walk leaves ◀ pointing at the last skipped item', () => {
         const dropped = dropCurrentItem(skipCurrentItem(buildStageQueue(['a', 'b'])));
-        expect(dropped).toEqual({ pending: ['a'], cursor: 1, decisions: [] });
+        expect(dropped).toEqual({ pending: ['a'], cursor: 1, decisions: [], droppedIds: ['b'] });
         expect(currentQueueItemId(stepBack(dropped))).toBe('a');
     });
 
     it('reconcile drops ids no longer eligible and preserves reference when unchanged', () => {
         const queue = buildStageQueue(['a', 'b', 'c']);
-        const reconciled = reconcileQueue(queue, new Set(['a', 'c']));
+        const reconciled = reconcileQueue(queue, ['a', 'c']);
         expect(reconciled.pending).toEqual(['a', 'c']);
-        expect(reconcileQueue(queue, new Set(['a', 'b', 'c']))).toBe(queue);
+        expect(reconcileQueue(queue, ['a', 'b', 'c'])).toBe(queue);
     });
 
     it('reconcile keeps the cursor on the same item when earlier ids vanish, and clamps when the tail does', () => {
         const midWalk = skipCurrentItem(skipCurrentItem(buildStageQueue(['a', 'b', 'c']))); // on 'c'
-        const droppedEarlier = reconcileQueue(midWalk, new Set(['b', 'c']));
+        const droppedEarlier = reconcileQueue(midWalk, ['b', 'c']);
         expect(currentQueueItemId(droppedEarlier)).toBe('c');
-        const droppedCurrent = reconcileQueue(midWalk, new Set(['a', 'b']));
+        const droppedCurrent = reconcileQueue(midWalk, ['a', 'b']);
         expect(currentQueueItemId(droppedCurrent)).toBeNull(); // cursor clamped past the shortened end
         expect(droppedCurrent.cursor).toBe(2);
+    });
+
+    it('reconcile live-appends new arrivals at the end of the walk without moving the cursor', () => {
+        const midWalk = skipCurrentItem(buildStageQueue(['a', 'b'])); // on 'b'
+        const grown = reconcileQueue(midWalk, ['a', 'b', 'c']);
+        expect(grown.pending).toEqual(['a', 'b', 'c']);
+        expect(currentQueueItemId(grown)).toBe('b'); // still on the same item; 'c' waits its turn
+    });
+
+    it('reconcile never re-offers an id dropped from this visit, but a stage re-entry does', () => {
+        const dropped = dropCurrentItem(buildStageQueue(['a', 'b'])); // 'a' dropped (blocked escape hatch)
+        expect(dropped.pending).toEqual(['b']);
+        // Still eligible — mid-stage the reconcile must NOT put it back…
+        expect(reconcileQueue(dropped, ['a', 'b'])).toBe(dropped);
+        // …but re-entering the stage consciously re-offers it and clears the drop list.
+        const reentered = refreshQueueOnEntry(dropped, ['a', 'b']);
+        expect(reentered.pending).toEqual(['b', 'a']);
+        expect(reconcileQueue(reentered, ['a', 'b'])).toBe(reentered);
+    });
+
+    it('undo gap: an excluded id survives the reconcile at its cursor destination, not the end', () => {
+        // Phase 1 of a snapshot undo: decision removed, id parked on the exclusion list.
+        const decided = completeCurrentItem(skipCurrentItem(buildStageQueue(['a', 'b']))); // 'b' decided, on end card
+        const midUndo = excludeFromLiveAppend(removeDecision(decided, 'b'), 'b');
+        // The restored item is eligible again — the racing reconcile must not append it.
+        expect(reconcileQueue(midUndo, ['a', 'b'])).toBe(midUndo);
+        // Phase 2 places it at the cursor and lifts the exclusion.
+        const requeued = requeueAtCursor(midUndo, 'b');
+        expect(currentQueueItemId(requeued)).toBe('b');
+        expect(requeued.droppedIds).toEqual([]);
+    });
+
+    it('a drop survives subsequent decisions — the reconcile must not re-offer it mid-stage', () => {
+        const afterDecision = completeCurrentItem(dropCurrentItem(buildStageQueue(['blocked', 'b'])));
+        expect(afterDecision.droppedIds).toEqual(['blocked']);
+        expect(reconcileQueue(afterDecision, ['blocked', 'b'])).toBe(afterDecision);
+    });
+
+    it('an undo-gap exclusion survives a concurrent decision on another item', () => {
+        const decided = completeCurrentItem(buildStageQueue(['a', 'b', 'c'])); // 'a' decided
+        const midUndo = excludeFromLiveAppend(removeDecision(decided, 'a'), 'a');
+        const afterNextDecision = completeCurrentItem(midUndo); // 'b' decided during the gap
+        expect(afterNextDecision.droppedIds).toEqual(['a']);
+        expect(reconcileQueue(afterNextDecision, ['a', 'c'])).toBe(afterNextDecision);
+    });
+
+    it('entry refresh returns the same reference for an unchanged queue that carries an empty droppedIds array', () => {
+        // This identity is what lets the wizard's queue effect settle — pin it for the
+        // droppedIds-present shape too.
+        const queue = { pending: ['a'], cursor: 0, decisions: [], droppedIds: [] };
+        expect(refreshQueueOnEntry(queue, ['a'])).toBe(queue);
+        expect(reconcileQueue(queue, ['a'])).toBe(queue);
+    });
+
+    it('reconcile hands a newcomer to a user parked on the stage-end card, but never re-offers decided ids', () => {
+        // Everything decided — the user sits on the end card (cursor === pending.length === 0).
+        const atEnd = completeCurrentItem(buildStageQueue(['a']));
+        const grown = reconcileQueue(atEnd, ['a', 'b']);
+        expect(grown.pending).toEqual(['b']); // 'a' was decided — not re-offered
+        expect(currentQueueItemId(grown)).toBe('b'); // the end card flips to the arrival
+    });
+
+    it('sweep counts eligible items a visited stage never queued nor decided', () => {
+        const nextAction = makeItem({ _id: 'na1', status: 'nextAction' });
+        const waiting = makeItem({ _id: 'wf1', status: 'waitingFor' });
+        const base = startReviewFlow('2026-08-23T00:00:00.000Z');
+        // nextActions fully reviewed; waitingFor visited while empty — 'wf1' arrived after.
+        const flow = withStageQueue(withStageQueue(base, 'nextActions', completeCurrentItem(buildStageQueue(['na1']))), 'waitingFor', buildStageQueue([]));
+        expect(unreviewedStageArrivals(flow, [nextAction, waiting], TODAY)).toEqual([{ stageId: 'waitingFor', title: 'Waiting For', count: 1 }]);
+    });
+
+    it('sweep ignores skipped-but-offered pending ids and stages never visited', () => {
+        const nextAction = makeItem({ _id: 'na1', status: 'nextAction' });
+        const waiting = makeItem({ _id: 'wf1', status: 'waitingFor' });
+        // 'wf1' was offered (still pending after a skip); nextActions was bypassed wholesale (no queue).
+        const flow = withStageQueue(startReviewFlow('2026-08-23T00:00:00.000Z'), 'waitingFor', skipCurrentItem(buildStageQueue(['wf1'])));
+        expect(unreviewedStageArrivals(flow, [nextAction, waiting], TODAY)).toEqual([]);
+    });
+
+    it('sweep never second-guesses a focus-stage decision: a review-snoozed item is not a tickler arrival', () => {
+        // 'x' was decided in the nextActions stage — the decision snoozed it into the tickler.
+        const snoozed = makeItem({ _id: 'x', status: 'nextAction', ignoreBefore: '2026-12-01' });
+        const base = startReviewFlow('2026-08-23T00:00:00.000Z');
+        const flow = withStageQueue(withStageQueue(base, 'nextActions', completeCurrentItem(buildStageQueue(['x']))), 'tickler', buildStageQueue([]));
+        expect(unreviewedStageArrivals(flow, [snoozed], TODAY)).toEqual([]);
+    });
+
+    it('sweep counts a clarify-stage decision as an arrival for the list it landed in', () => {
+        // Final sweep clarified 'x' into waitingFor — the entry was never reviewed in its list.
+        const clarified = makeItem({ _id: 'x', status: 'waitingFor' });
+        const base = startReviewFlow('2026-08-23T00:00:00.000Z');
+        const flow = withStageQueue(withStageQueue(base, 'finalSweep', completeCurrentItem(buildStageQueue(['x']))), 'waitingFor', buildStageQueue([]));
+        expect(unreviewedStageArrivals(flow, [clarified], TODAY)).toEqual([{ stageId: 'waitingFor', title: 'Waiting For', count: 1 }]);
+    });
+
+    it('sweep reports a late inbox capture once, under Final sweep — never doubled via Clarify', () => {
+        const lateCapture = makeItem({ _id: 'late', status: 'inbox' });
+        const base = startReviewFlow('2026-08-23T00:00:00.000Z');
+        const flow = withStageQueue(withStageQueue(base, 'clarify', buildStageQueue([])), 'finalSweep', buildStageQueue([]));
+        expect(unreviewedStageArrivals(flow, [lateCapture], TODAY)).toEqual([{ stageId: 'finalSweep', title: 'Final sweep', count: 1 }]);
+    });
+
+    it('sweep returns arrivals in stage order so the earliest stale stage leads', () => {
+        const calItem = makeItem({ _id: 'cal', status: 'calendar', timeStart: '2026-09-01T10:00:00.000Z' });
+        const waiting = makeItem({ _id: 'wf', status: 'waitingFor' });
+        const base = startReviewFlow('2026-08-23T00:00:00.000Z');
+        const flow = withStageQueue(withStageQueue(base, 'waitingFor', buildStageQueue([])), 'calendar', buildStageQueue([]));
+        expect(unreviewedStageArrivals(flow, [waiting, calItem], TODAY).map((arrival) => arrival.stageId)).toEqual(['calendar', 'waitingFor']);
     });
 
     it('entry refresh keeps undecided leftovers, appends new arrivals, and never re-offers decided ids', () => {

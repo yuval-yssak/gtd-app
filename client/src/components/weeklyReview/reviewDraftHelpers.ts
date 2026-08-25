@@ -47,6 +47,8 @@ function flowFromDraft(draft: StoredWeeklyReviewDraft): ReviewFlowState {
             // IGNORED: stage entry always restarts the walk at the first undecided item, and
             // honouring it here would only flash that item for a frame before the wizard's entry
             // effect resets it. Pre-cursor drafts (which rotated the pending list) land here too.
+            // `droppedIds` is deliberately not restored for the same reason: resume is a stage
+            // re-entry, which clears the per-visit drop list and re-offers dropped items anyway.
             queues[stageId] = { pending: queue.pending, cursor: 0, decisions: coerceDraftDecisions(queue) };
         }
     }

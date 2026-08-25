@@ -23,12 +23,15 @@ import {
     type ReviewFlowState,
     type ReviewFlowUpdater,
     type ReviewStageId,
+    type StageArrival,
     stageIndexOf,
     startReviewFlow,
+    unreviewedStageArrivals,
 } from '../../components/weeklyReview/reviewFlowState';
 import { WeeklyReviewWizard } from '../../components/weeklyReview/WeeklyReviewWizard';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { seedDefaultReviewInboxesIfEmpty } from '../../db/reviewInboxMutations';
+import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import styles from './-weekly-review.module.css';
 
 // Lazy: pulls canvas-confetti out of the main chunk — the celebration renders once per review.
@@ -44,13 +47,14 @@ type PagePhase =
     | { kind: 'loading' }
     | { kind: 'idle'; resumableFlow: ReviewFlowState | null }
     | { kind: 'active'; flow: ReviewFlowState }
+    | { kind: 'sweep'; flow: ReviewFlowState; arrivals: NonEmptyArray<StageArrival> }
     | { kind: 'celebrating'; flow: ReviewFlowState };
 
 function WeeklyReviewPage() {
     const { db } = Route.useRouteContext();
     const { stage: urlStageId } = Route.useSearch();
     const navigate = useNavigate();
-    const { account, refreshReviewInboxes, isInitialSyncing } = useAppData();
+    const { account, items, refreshReviewInboxes, isInitialSyncing } = useAppData();
     const [phase, setPhase] = useState<PagePhase>({ kind: 'loading' });
     // The latest flow across every onFlowChange call, updated synchronously — functional updaters
     // resolve against THIS, not the render-captured phase. Two same-tick commits (the deferred
@@ -107,7 +111,7 @@ function WeeklyReviewPage() {
             commitFlow(update);
             return;
         }
-        const base = latestFlowRef.current ?? (phase.kind === 'active' || phase.kind === 'celebrating' ? phase.flow : null);
+        const base = latestFlowRef.current ?? (phase.kind === 'active' || phase.kind === 'sweep' || phase.kind === 'celebrating' ? phase.flow : null);
         if (!base) {
             // Functional updates only make sense against a live review; nothing to compose with.
             console.warn('[weekly-review] dropped a flow update — no active review to apply it to');
@@ -122,16 +126,36 @@ function WeeklyReviewPage() {
         }
         latestFlowRef.current = flow;
         if (isFlowComplete(flow)) {
-            setPhase({ kind: 'celebrating', flow });
-            setLastCompletedTs(account.id, dayjs().toISOString());
-            void deleteWeeklyReviewDraft(db, account.id);
-            syncStageToUrl(undefined);
+            // Pre-celebration sweep: reviewing generates new items — a stage already worked
+            // through may have gained arrivals the user never saw. Offer a revisit before
+            // declaring the review done; the draft stays alive until the actual celebration.
+            // Known staleness window: `items` is the render-closure snapshot, so an arrival
+            // created by the very decision that completes the flow may not be visible yet —
+            // the failure mode is a skipped sweep (next review catches it), never corruption.
+            const arrivals = unreviewedStageArrivals(flow, items, dayjs().format('YYYY-MM-DD'));
+            if (hasAtLeastOne(arrivals)) {
+                setPhase({ kind: 'sweep', flow, arrivals });
+                syncStageToUrl(undefined);
+                void saveWeeklyReviewDraft(db, account.id, flow).catch((err) => console.warn('[weekly-review] failed to persist progress', err));
+                return;
+            }
+            celebrate(flow);
             return;
         }
         setPhase({ kind: 'active', flow });
         syncStageToUrl(currentStage(flow)?.id);
         // Fire-and-forget persistence — the draft is a convenience, never the source of truth.
         void saveWeeklyReviewDraft(db, account.id, flow).catch((err) => console.warn('[weekly-review] failed to persist progress', err));
+    }
+
+    function celebrate(flow: ReviewFlowState) {
+        if (!account) {
+            return;
+        }
+        setPhase({ kind: 'celebrating', flow });
+        setLastCompletedTs(account.id, dayjs().toISOString());
+        void deleteWeeklyReviewDraft(db, account.id);
+        syncStageToUrl(undefined);
     }
 
     /** Resume/start honour a deep-linked ?stage by jumping the flow there before activating. */
@@ -190,6 +214,19 @@ function WeeklyReviewPage() {
         );
     }
 
+    if (phase.kind === 'sweep') {
+        return (
+            <SweepScreen
+                arrivals={phase.arrivals}
+                // Jump into a stage with arrivals; entering it live-appends them to its queue.
+                // Walking forward from there re-runs the completion check, so the sweep repeats
+                // until clean (or the user finishes anyway).
+                onReviewStage={(stageId) => onFlowChange((prev) => jumpToStage(prev, stageIndexOf(stageId)))}
+                onFinishAnyway={() => celebrate(phase.flow)}
+            />
+        );
+    }
+
     if (phase.kind === 'active') {
         return <WeeklyReviewWizard db={db} flow={phase.flow} onFlowChange={onFlowChange} />;
     }
@@ -204,6 +241,49 @@ function WeeklyReviewPage() {
             onResume={activateFlow}
             onStartOver={() => void onStartOver()}
         />
+    );
+}
+
+interface SweepScreenProps {
+    arrivals: NonEmptyArray<StageArrival>;
+    onReviewStage: (stageId: ReviewStageId) => void;
+    onFinishAnyway: () => void;
+}
+
+/** Pre-celebration catch: stages already reviewed gained new items — offer a revisit before finishing. */
+function SweepScreen({ arrivals, onReviewStage, onFinishAnyway }: SweepScreenProps) {
+    return (
+        <Box className={styles.introWrapper}>
+            <Paper elevation={2} className={styles.introCard} data-testid="sweepScreen">
+                <Typography variant="h4" className={styles.introTitle}>
+                    Almost done…
+                </Typography>
+                <Typography variant="body1" color="text.secondary">
+                    Reviewing generated new items in lists you already went through:
+                </Typography>
+                <Box>
+                    {arrivals.map((arrival) => (
+                        <Button key={arrival.stageId} color="inherit" size="small" onClick={() => onReviewStage(arrival.stageId)} data-testid="sweepStageRow">
+                            {arrival.title} — {arrival.count} new {arrival.count === 1 ? 'item' : 'items'}
+                        </Button>
+                    ))}
+                </Box>
+                <Box className={styles.introActions}>
+                    <Button
+                        variant="contained"
+                        size="large"
+                        startIcon={<PlayArrowIcon />}
+                        onClick={() => onReviewStage(arrivals[0].stageId)}
+                        data-testid="sweepReviewButton"
+                    >
+                        Review them
+                    </Button>
+                    <Button color="inherit" onClick={onFinishAnyway} data-testid="sweepFinishButton">
+                        Finish anyway
+                    </Button>
+                </Box>
+            </Paper>
+        </Box>
     );
 }
 

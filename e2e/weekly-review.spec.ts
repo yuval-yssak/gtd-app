@@ -304,6 +304,143 @@ test.describe('weekly review', () => {
         });
     });
 
+    test('next-actions stage walks items in the Next Actions page order (focus first, then expectedBy)', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-na-order-${dayjs().valueOf()}@example.com`, async (page) => {
+            // Created oldest-first as plain → focus-later → focus-soon, so createdTs order would
+            // present 'Plain undated' first — the page comparator must present 'Focus soon' first.
+            const plain = await gtd.collect(page, 'Plain undated');
+            await gtd.clarifyToNextAction(page, plain, {});
+            const focusLater = await gtd.collect(page, 'Focus later');
+            await gtd.clarifyToNextAction(page, focusLater, { focus: true, expectedBy: '2026-12-01' });
+            const focusSoon = await gtd.collect(page, 'Focus soon');
+            await gtd.clarifyToNextAction(page, focusSoon, { focus: true, expectedBy: '2026-09-01' });
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await page.goto('/weekly-review?stage=nextActions');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
+
+            const focusStage = page.getByTestId('focusStage');
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Focus soon');
+            await page.getByTestId('focusKeep').click();
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Focus later');
+            await page.getByTestId('focusKeep').click();
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Plain undated');
+        });
+    });
+
+    test('items that become eligible mid-stage join the walk live: the total grows and the arrival is offered', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-live-append-${dayjs().valueOf()}@example.com`, async (page) => {
+            const first = await gtd.collect(page, 'First thought');
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await page.goto('/weekly-review?stage=clarify');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clarify');
+            const clarifyStage = page.getByTestId('clarifyStage');
+            await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('First thought');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+
+            // A capture made WHILE the stage is open joins the walk immediately — the total grows,
+            // the current item stays put, and the arrival waits its turn at the end.
+            await page.getByTestId('quickCaptureFab').click();
+            await page.getByTestId('quickCaptureInput').fill('Fresh arrival');
+            await page.getByTestId('quickCaptureInput').press('Enter');
+            await page.getByTestId('quickCaptureClose').click();
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 2');
+            await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('First thought');
+
+            await clarifyStage.getByRole('button', { name: 'Done', exact: true }).click();
+            await page.getByTestId('clarifySaveNext').click();
+            await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Fresh arrival');
+
+            await gtd.flush(page);
+            const items = await gtd.listItems(page);
+            expect(items.find((i) => i._id === first._id)?.status).toBe('done');
+        });
+    });
+
+    test('pre-celebration sweep: a finished stage that gained items re-offers them before the review ends', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-${dayjs().valueOf()}@example.com`, async (page) => {
+            await gtd.collect(page, 'Waiting seed');
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            // Visit Waiting For while it is empty, then walk forward to the final sweep.
+            await page.goto('/weekly-review?stage=waitingFor');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Someday / Maybe');
+            await page.getByTestId('stageContinue').click();
+
+            // Final sweep: clarifying the capture INTO Waiting For plants an unseen item in a
+            // stage that was already reviewed.
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Final sweep');
+            const sweepStage = page.getByTestId('clarifyStage');
+            await expect(sweepStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Waiting seed');
+            await sweepStage.getByRole('button', { name: 'Waiting For' }).click();
+            await page.getByTestId('clarifySaveNext').click();
+            await page.getByTestId('stageContinue').click();
+
+            // Instead of the celebration: the sweep names the stale stage and re-offers it.
+            await expect(page.getByTestId('sweepScreen')).toBeVisible();
+            await expect(page.getByTestId('sweepStageRow')).toHaveText('Waiting For — 1 new item');
+            await page.getByTestId('sweepReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            await expect(page.getByTestId('focusStage').getByRole('textbox', { name: 'Title' })).toHaveValue('Waiting seed');
+            await page.getByTestId('focusKeep').click();
+            await page.getByTestId('stageContinue').click();
+
+            // Walking forward from the revisit re-runs the completion check — clean now, so the
+            // remaining empty stages lead straight into the celebration.
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Someday / Maybe');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Final sweep');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewCelebration')).toBeVisible();
+        });
+    });
+
+    test('pre-celebration sweep: "Finish anyway" celebrates over the arrivals and deletes the draft', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-finish-${dayjs().valueOf()}@example.com`, async (page) => {
+            await gtd.collect(page, 'Skipped arrival');
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            // Same shape as the sweep test: plant a waitingFor arrival behind a finished stage.
+            await page.goto('/weekly-review?stage=waitingFor');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Tickler');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Someday / Maybe');
+            await page.getByTestId('stageContinue').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Final sweep');
+            const sweepStage = page.getByTestId('clarifyStage');
+            await sweepStage.getByRole('button', { name: 'Waiting For' }).click();
+            await page.getByTestId('clarifySaveNext').click();
+            await page.getByTestId('stageContinue').click();
+
+            // Finishing anyway is a conscious skip: celebration renders, and the draft is gone —
+            // a fresh visit offers Start, not Resume.
+            await expect(page.getByTestId('sweepScreen')).toBeVisible();
+            await page.getByTestId('sweepFinishButton').click();
+            await expect(page.getByTestId('reviewCelebration')).toBeVisible();
+            await page.getByTestId('celebrationDone').click();
+            await expect(page).toHaveURL(/\/inbox/);
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+            await page.goto('/weekly-review');
+            await expect(page.getByTestId('startReviewButton')).toBeVisible();
+            await expect(page.getByTestId('resumeReviewButton')).toHaveCount(0);
+            await expect(page.getByTestId('lastCompletedLabel')).toBeVisible();
+        });
+    });
+
     test('a mid-reassign item gets a working escape hatch: the pinned bar drops it past a single-item queue', async ({ browser }) => {
         const ts = dayjs().valueOf();
         const emailA = `wr-blocked-a-${ts}@example.com`;
@@ -396,10 +533,12 @@ test.describe('weekly review', () => {
 
     test('back arrow revisits decisions with one-click undo; text edits flip the primary to "Save & next"', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-undo-${dayjs().valueOf()}@example.com`, async (page) => {
+            // Distinct expectedBy dates pin the walk order: undated same-tier items tie under the
+            // Next Actions page comparator and would come up in arbitrary (IDB key) order.
             const first = await gtd.collect(page, 'First action');
-            await gtd.clarifyToNextAction(page, first, {});
+            await gtd.clarifyToNextAction(page, first, { expectedBy: dayjs().add(7, 'day').format('YYYY-MM-DD') });
             const second = await gtd.collect(page, 'Second action');
-            await gtd.clarifyToNextAction(page, second, {});
+            await gtd.clarifyToNextAction(page, second, { expectedBy: dayjs().add(8, 'day').format('YYYY-MM-DD') });
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
             await page.goto('/weekly-review?stage=nextActions');
@@ -548,10 +687,12 @@ test.describe('weekly review', () => {
 
     test('timeline stepper: free jumps sync the URL, revisits offer undecided + new items, inline edit saves', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-timeline-${dayjs().valueOf()}@example.com`, async (page) => {
+            // Distinct expectedBy dates pin the walk order: undated same-tier items tie under the
+            // Next Actions page comparator and would come up in arbitrary (IDB key) order.
             const first = await gtd.collect(page, 'First action');
-            await gtd.clarifyToNextAction(page, first, {});
+            await gtd.clarifyToNextAction(page, first, { expectedBy: dayjs().add(7, 'day').format('YYYY-MM-DD') });
             const second = await gtd.collect(page, 'Second action');
-            await gtd.clarifyToNextAction(page, second, {});
+            await gtd.clarifyToNextAction(page, second, { expectedBy: dayjs().add(8, 'day').format('YYYY-MM-DD') });
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
             await page.goto('/weekly-review');

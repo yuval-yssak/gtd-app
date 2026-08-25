@@ -1,3 +1,4 @@
+import { compareNextActions } from '../../lib/compareNextActions';
 import type { StoredItem } from '../../types/MyDB';
 
 /**
@@ -58,9 +59,9 @@ export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<
             // both qualify (per design: only done-ness excludes an entry, not its date).
             return items.filter((item) => item.status === 'calendar').sort((a, b) => undatedLast(a.timeStart).localeCompare(undatedLast(b.timeStart)));
         case 'nextActions':
-            return items
-                .filter((item) => item.status === 'nextAction' && !isTicklerHidden(item, todayIso))
-                .sort((a, b) => a.createdTs.localeCompare(b.createdTs));
+            // Same comparator as the Next Actions page so the review walks items in the exact
+            // order the user sees them there (focus first, then expectedBy tiers).
+            return items.filter((item) => item.status === 'nextAction' && !isTicklerHidden(item, todayIso)).sort(compareNextActions);
         case 'waitingFor':
             return items
                 .filter((item) => item.status === 'waitingFor' && !isTicklerHidden(item, todayIso))
@@ -116,6 +117,13 @@ export interface StageQueue {
      * can revisit each decision and offer its undo; ids alone still drive revisit dedupe.
      */
     decisions: StageDecision[];
+    /**
+     * Ids removed from THIS visit's walk without a decision (a blocked item dropped via the
+     * escape hatch, or an undo whose deferred requeue is still in flight). The live-append
+     * reconcile must not re-offer these mid-stage; a stage re-entry clears the list and offers
+     * them again. Optional: absent on queues persisted before the field existed.
+     */
+    droppedIds?: string[];
 }
 
 export function buildStageQueue(itemIds: ReadonlyArray<string>): StageQueue {
@@ -142,8 +150,8 @@ export function completeCurrentItem(queue: StageQueue, undo?: StageDecisionUndo)
         return queue;
     }
     return {
+        ...queue,
         pending: queue.pending.filter((_, index) => index !== queue.cursor),
-        cursor: queue.cursor,
         decisions: [...queue.decisions, { itemId: current, ...(undo ? { undo } : {}) }],
     };
 }
@@ -155,16 +163,48 @@ export function removeDecision(queue: StageQueue, itemId: string): StageQueue {
 }
 
 /**
+ * Marks an id as excluded from the live-append reconcile without recording a decision — phase 1
+ * of a snapshot undo parks the id here so the reconcile can't re-offer it at the END of the walk
+ * during the gap before the deferred requeue lands. Cleared by `requeueAtCursor` and on stage
+ * re-entry.
+ */
+export function excludeFromLiveAppend(queue: StageQueue, itemId: string): StageQueue {
+    const droppedIds = queue.droppedIds ?? [];
+    return droppedIds.includes(itemId) ? queue : { ...queue, droppedIds: [...droppedIds, itemId] };
+}
+
+/** Lifts an id off the live-append exclusion list; same reference when it was not on it. */
+function withoutLiveAppendExclusion(queue: StageQueue, itemId: string): StageQueue {
+    const droppedIds = (queue.droppedIds ?? []).filter((id) => id !== itemId);
+    return droppedIds.length === (queue.droppedIds ?? []).length ? queue : { ...queue, droppedIds };
+}
+
+/** Moves an id to the cursor slot — inserting it, or relocating it from elsewhere in pending. */
+function placeAtCursor(queue: StageQueue, itemId: string): StageQueue {
+    const existingIndex = queue.pending.indexOf(itemId);
+    const pendingWithout = existingIndex >= 0 ? queue.pending.filter((id) => id !== itemId) : queue.pending;
+    // Removing an id from BEFORE the cursor shifts the target slot one left; clamp past-the-end.
+    const removedBeforeCursor = existingIndex >= 0 && existingIndex < queue.cursor ? 1 : 0;
+    const cursor = Math.min(queue.cursor - removedBeforeCursor, pendingWithout.length);
+    return { ...queue, cursor, pending: [...pendingWithout.slice(0, cursor), itemId, ...pendingWithout.slice(cursor)] };
+}
+
+/**
  * Returns an undone id to the CURSOR position so the item renders as the current live item again
- * — phase 2 of a snapshot undo. No-op if the id is already queued or (re-)decided, so a late
- * deferred requeue can never duplicate it.
+ * — phase 2 of a snapshot undo. No-op if the id was (re-)decided in the meantime, so a late
+ * deferred requeue can never duplicate a decision. An id that is already pending but NOT at the
+ * cursor is MOVED there (a racing live-append may have queued it at the end first), and the id
+ * leaves the live-append exclusion list.
  */
 export function requeueAtCursor(queue: StageQueue, itemId: string): StageQueue {
-    if (queue.pending.includes(itemId) || decidedItemIds(queue).includes(itemId)) {
+    if (decidedItemIds(queue).includes(itemId)) {
         return queue;
     }
-    const cursor = Math.min(queue.cursor, queue.pending.length);
-    return { ...queue, cursor, pending: [...queue.pending.slice(0, cursor), itemId, ...queue.pending.slice(cursor)] };
+    const lifted = withoutLiveAppendExclusion(queue, itemId);
+    if (lifted === queue && queue.pending[queue.cursor] === itemId) {
+        return queue;
+    }
+    return placeAtCursor(lifted, itemId);
 }
 
 /**
@@ -217,10 +257,13 @@ export function stepBack(queue: StageQueue): StageQueue {
  * reviewed: a stage re-entry re-offers the item if it is still eligible.
  */
 export function dropCurrentItem(queue: StageQueue): StageQueue {
-    if (queue.pending[queue.cursor] === undefined) {
+    const current = queue.pending[queue.cursor];
+    if (current === undefined) {
         return queue;
     }
-    return { ...queue, pending: queue.pending.filter((_, index) => index !== queue.cursor) };
+    // Recorded in droppedIds so the live-append reconcile can't immediately re-offer the (still
+    // eligible) item it just escaped from — only a stage re-entry brings it back.
+    return { ...queue, pending: queue.pending.filter((_, index) => index !== queue.cursor), droppedIds: [...(queue.droppedIds ?? []), current] };
 }
 
 /** The stage-end card's per-stage wording — the skipped count always prefixes with `stageName`. */
@@ -246,41 +289,55 @@ export function stageEndTitle(labels: StageEndLabels, queue: StageQueue): string
 }
 
 /**
- * Mid-stage reconcile: drops queue entries that no longer qualify — the item was completed on
- * another device, or resumed state references ids that have since changed status. Intentionally
- * never ADDS newly-eligible items while the user is inside the stage: additions happen only at
- * stage (re-)entry via `refreshQueueOnEntry`, so the "12 of 34" total can't grow under the user.
+ * Shared filter+append core of the reconcile pair: keeps still-eligible pending ids in order,
+ * appends eligible ids that are neither queued, decided, nor in `excludedNewcomers`, and keeps
+ * the cursor on the same item. The clamp runs BEFORE appending, so an end-card cursor lands
+ * exactly on the first appended arrival. Same reference when nothing changed.
  */
-export function reconcileQueue(queue: StageQueue, eligibleIds: ReadonlySet<string>): StageQueue {
-    const pending = queue.pending.filter((id) => eligibleIds.has(id));
-    if (pending.length === queue.pending.length) {
+function mergeQueueWithEligible(queue: StageQueue, eligibleIds: ReadonlyArray<string>, excludedNewcomers: ReadonlySet<string>): StageQueue {
+    const eligible = new Set(eligibleIds);
+    const keptPending = queue.pending.filter((id) => eligible.has(id));
+    const alreadyQueued = new Set([...queue.pending, ...decidedItemIds(queue)]);
+    const newcomers = eligibleIds.filter((id) => !alreadyQueued.has(id) && !excludedNewcomers.has(id));
+    if (keptPending.length === queue.pending.length && newcomers.length === 0) {
         return queue;
     }
     // Keep the cursor on the same item (or its successor): shift it left by however many removed
-    // ids preceded it, clamped past-the-end when the tail vanished.
-    const removedBeforeCursor = queue.pending.slice(0, queue.cursor).filter((id) => !eligibleIds.has(id)).length;
-    return { ...queue, pending, cursor: Math.min(queue.cursor - removedBeforeCursor, pending.length) };
+    // ids preceded it.
+    const removedBeforeCursor = queue.pending.slice(0, queue.cursor).filter((id) => !eligible.has(id)).length;
+    const cursor = Math.min(queue.cursor - removedBeforeCursor, keptPending.length);
+    return { ...queue, pending: [...keptPending, ...newcomers], cursor };
+}
+
+/**
+ * Mid-stage reconcile: drops queue entries that no longer qualify — the item was completed on
+ * another device, or resumed state references ids that have since changed status — and APPENDS
+ * newly-eligible arrivals at the end of the walk (per design: items added while a stage is being
+ * reviewed join it live; the "12 of 34" total grows). Ids the user removed from this visit's walk
+ * without deciding (`droppedIds`) are never re-offered mid-stage. A user parked on the stage-end
+ * card is handed the first appended newcomer as the new current item.
+ */
+export function reconcileQueue(queue: StageQueue, eligibleIds: ReadonlyArray<string>): StageQueue {
+    return mergeQueueWithEligible(queue, eligibleIds, new Set(queue.droppedIds ?? []));
 }
 
 /**
  * Stage (re-)entry queue: still-eligible pending ids keep their order, then anything eligible
  * that has neither been decided nor queued yet is appended — so revisiting a stage offers exactly
  * the undecided leftovers plus new arrivals (e.g. captures made since the stage was first entered),
- * never items already decided this review. Entry always restarts the walk at the first undecided
- * item (cursor 0). Returns the same reference when nothing changed.
+ * never items already decided this review. Entry clears the per-visit `droppedIds` (dropped items
+ * are consciously re-offered) and always restarts the walk at the first undecided item (cursor 0).
+ * Returns the same reference when nothing changed.
  */
 export function refreshQueueOnEntry(queue: StageQueue | undefined, eligibleIds: ReadonlyArray<string>): StageQueue {
     if (!queue) {
         return buildStageQueue(eligibleIds);
     }
-    const eligible = new Set(eligibleIds);
-    const alreadyQueued = new Set([...queue.pending, ...decidedItemIds(queue)]);
-    const keptPending = queue.pending.filter((id) => eligible.has(id));
-    const newcomers = eligibleIds.filter((id) => !alreadyQueued.has(id));
-    if (queue.cursor === 0 && keptPending.length === queue.pending.length && newcomers.length === 0) {
+    const merged = mergeQueueWithEligible(queue, eligibleIds, new Set());
+    if (merged === queue && queue.cursor === 0 && (queue.droppedIds?.length ?? 0) === 0) {
         return queue;
     }
-    return { ...queue, cursor: 0, pending: [...keptPending, ...newcomers] };
+    return { ...merged, cursor: 0, droppedIds: [] };
 }
 
 // ── Whole-flow state ─────────────────────────────────────────────────────────
@@ -359,6 +416,61 @@ export function toggleInboxTick(state: ReviewFlowState, inboxId: string): Review
 
 export function withStageQueue(state: ReviewFlowState, stageId: ReviewStageId, queue: StageQueue): ReviewFlowState {
     return { ...state, queues: { ...state.queues, [stageId]: queue } };
+}
+
+export interface StageArrival {
+    stageId: ReviewStageId;
+    title: string;
+    count: number;
+}
+
+/**
+ * Ids decided in FOCUS stages this review. A focus decision (snooze, release, done) consciously
+ * chose the item's new list placement, so re-offering it in the sweep would second-guess the
+ * user's seconds-old decision. A CLARIFY decision is different: it determined what the item IS,
+ * but the resulting list entry was never reviewed in its list's context — so clarify-decided ids
+ * deliberately stay eligible as arrivals for the focus stage they landed in.
+ */
+function focusStageDecidedIds(state: ReviewFlowState): Set<string> {
+    return new Set(
+        REVIEW_STAGES.filter((stage) => stage.kind === 'focus').flatMap((stage) => {
+            const queue = state.queues[stage.id];
+            return queue ? decidedItemIds(queue) : [];
+        }),
+    );
+}
+
+/** Eligible items a visited stage never offered: not queued, not decided there, not dropped, not focus-decided elsewhere. */
+function stageArrivalCount(queue: StageQueue, eligible: ReadonlyArray<StoredItem>, settledIds: ReadonlySet<string>): number {
+    // droppedIds count as seen: a blocked item consciously dropped from the walk was offered —
+    // the sweep surfaces only items the user never saw in this stage.
+    const seenIds = new Set([...queue.pending, ...decidedItemIds(queue), ...(queue.droppedIds ?? [])]);
+    return eligible.filter((item) => !seenIds.has(item._id) && !settledIds.has(item._id)).length;
+}
+
+// The `clarify` stage is excluded from the sweep scan: it shares the inbox eligibility with
+// finalSweep, which is by definition the review's inbox catcher — scanning both would report
+// every late capture twice and jump the user back to stage 2 for it.
+const SWEPT_STAGES: ReadonlyArray<ReviewStageDefinition> = REVIEW_STAGES.filter((stage) => stage.kind === 'focus' || stage.id === 'finalSweep');
+
+/**
+ * Pre-celebration sweep: stages the user already worked through that have since gained eligible
+ * items they never saw (a queued-but-skipped item was consciously offered and does not count).
+ * Stages without a queue were bypassed wholesale via timeline jumps; treating their entire
+ * content as "arrivals" would block every fast-forwarded review, so they are excluded — the
+ * completion stats already call them out as skipped. Returned in stage order, so the earliest
+ * stale stage leads.
+ */
+export function unreviewedStageArrivals(state: ReviewFlowState, items: ReadonlyArray<StoredItem>, todayIso: string): StageArrival[] {
+    const settledIds = focusStageDecidedIds(state);
+    return SWEPT_STAGES.flatMap((stage) => {
+        const queue = state.queues[stage.id];
+        if (!queue) {
+            return [];
+        }
+        const count = stageArrivalCount(queue, stageEligibleItems(stage.id, items, todayIso), settledIds);
+        return count > 0 ? [{ stageId: stage.id, title: stage.title, count }] : [];
+    });
 }
 
 /** Per-stage decision counts for the completion screen, in stage order. */
