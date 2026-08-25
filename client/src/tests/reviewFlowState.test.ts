@@ -451,11 +451,13 @@ describe('review flow', () => {
         expect(jumpToStage(flow, 99).stageIndex).toBe(REVIEW_STAGES.length - 1);
     });
 
-    it('isChecklistComplete requires the system row plus every listed bucket', () => {
-        expect(isChecklistComplete(['system', 'ri-1'], ['ri-1'])).toBe(true);
-        expect(isChecklistComplete(['ri-1'], ['ri-1'])).toBe(false);
+    it('isChecklistComplete requires every listed bucket and ignores stray ticks', () => {
+        expect(isChecklistComplete(['ri-1'], ['ri-1'])).toBe(true);
+        expect(isChecklistComplete([], ['ri-1'])).toBe(false);
+        // Drafts from before the system-inbox row was removed may still carry its sentinel tick.
         expect(isChecklistComplete(['system'], ['ri-1'])).toBe(false);
         expect(isChecklistComplete(['system'], [])).toBe(true);
+        expect(isChecklistComplete([], [])).toBe(true);
     });
 
     it('reviewStats reports per-stage decisions and wholesale skips, excluding the checklist stage', () => {

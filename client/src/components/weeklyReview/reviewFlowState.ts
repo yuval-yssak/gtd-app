@@ -401,12 +401,9 @@ export function stageIndexOf(stageId: ReviewStageId): number {
     return REVIEW_STAGES.findIndex((stage) => stage.id === stageId);
 }
 
-/** Sentinel id for the system inbox row in the ticked set — never collides with entity UUIDs. */
-export const SYSTEM_INBOX_TICK_ID = 'system';
-
-/** Whether the clearInboxes checklist is fully ticked: the system inbox plus every listed bucket. */
+/** Whether the clearInboxes checklist is fully ticked: every listed external bucket. */
 export function isChecklistComplete(tickedInboxIds: ReadonlyArray<string>, inboxIds: ReadonlyArray<string>): boolean {
-    return [SYSTEM_INBOX_TICK_ID, ...inboxIds].every((id) => tickedInboxIds.includes(id));
+    return inboxIds.every((id) => tickedInboxIds.includes(id));
 }
 
 export function toggleInboxTick(state: ReviewFlowState, inboxId: string): ReviewFlowState {

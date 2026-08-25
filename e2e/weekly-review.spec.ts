@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
-// Weekly Review wizard: guided multi-step flow — inbox checklist (system + seeded user-defined
+// Weekly Review wizard: guided multi-step flow — inbox checklist (seeded user-defined external
 // buckets), solo clarify, solo focus stages with a linear skip-past walk, whole-stage skip, quick capture
 // mid-review feeding the final sweep, and the confetti celebration at the end.
 
@@ -20,8 +20,8 @@ test.describe('weekly review', () => {
             await page.goto('/weekly-review');
             await page.getByTestId('startReviewButton').click();
 
-            // Stage 1 — checklist: system inbox + the three seeded starter buckets. The URL
-            // mirrors the stage from the first moment.
+            // Stage 1 — checklist: the three seeded starter buckets (the GTD inbox itself is not a
+            // row — clarifying it is the next stage). The URL mirrors the stage from the first moment.
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clear all inboxes');
             await expect(page).toHaveURL(/stage=clearInboxes/);
             await expect(page.getByTestId('reviewInboxRow')).toHaveCount(3);
@@ -34,7 +34,6 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clarify');
             await page.getByTestId('stageTravelPrev').click();
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Clear all inboxes');
-            await page.getByTestId('systemInboxTick').click();
             for (let i = 0; i < 3; i++) {
                 await page.getByTestId('reviewInboxRow').nth(i).click();
             }
@@ -162,7 +161,6 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('reviewInboxRow')).toHaveCount(3);
             // Advance past stage 1 so resume proves the STAGE was restored (stage 1 is also what a
             // broken fresh start would render — the tick alone wouldn't discriminate).
-            await page.getByTestId('systemInboxTick').click();
             for (let i = 0; i < 3; i++) {
                 await page.getByTestId('reviewInboxRow').nth(i).click();
             }

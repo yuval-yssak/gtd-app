@@ -12,12 +12,6 @@
     overflow-y: auto;
 }
 
-.rowLabel {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
 .manageButton {
     align-self: flex-start;
     margin-top: 0.75rem;

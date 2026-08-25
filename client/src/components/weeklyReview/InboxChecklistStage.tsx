@@ -1,5 +1,4 @@
 import EditIcon from '@mui/icons-material/Edit';
-import InboxIcon from '@mui/icons-material/Inbox';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
@@ -12,7 +11,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import type { MyDB } from '../../types/MyDB';
 import styles from './InboxChecklistStage.module.css';
 import { ManageInboxesDialog } from './ManageInboxesDialog';
-import { isChecklistComplete, SYSTEM_INBOX_TICK_ID } from './reviewFlowState';
+import { isChecklistComplete } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import layoutStyles from './stageLayout.module.css';
 
@@ -25,8 +24,9 @@ interface InboxChecklistStageProps {
 }
 
 /**
- * Stage 1 — clear every capture bucket. The system inbox plus each user-defined external inbox is
- * a tick-off row; the stage completes when everything is ticked (or is skipped wholesale).
+ * Stage 1 — clear every EXTERNAL capture bucket into the GTD inbox. Each user-defined inbox is a
+ * tick-off row; the stage completes when everything is ticked (or is skipped wholesale). The GTD
+ * inbox itself is deliberately absent — emptying it IS the next stage (Clarify).
  */
 export function InboxChecklistStage({ db, tickedInboxIds, onToggleTick, onStageFinished, travel }: InboxChecklistStageProps) {
     // allReviewInboxes (not the hidden-filtered set): the review runs on the ACTIVE account, and it
@@ -44,21 +44,6 @@ export function InboxChecklistStage({ db, tickedInboxIds, onToggleTick, onStageF
     return (
         <Box className={layoutStyles.stageRoot} data-testid="inboxChecklistStage">
             <Paper elevation={2} className={styles.checklistCard}>
-                <FormControlLabel
-                    control={
-                        <Checkbox
-                            checked={tickedInboxIds.includes(SYSTEM_INBOX_TICK_ID)}
-                            onChange={() => onToggleTick(SYSTEM_INBOX_TICK_ID)}
-                            data-testid="systemInboxTick"
-                        />
-                    }
-                    label={
-                        <Box className={styles.rowLabel}>
-                            <InboxIcon fontSize="small" color="primary" />
-                            <Typography>GTD Inbox</Typography>
-                        </Box>
-                    }
-                />
                 {myInboxes.map((inbox) => (
                     <FormControlLabel
                         key={inbox._id}
