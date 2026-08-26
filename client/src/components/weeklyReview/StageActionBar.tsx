@@ -3,7 +3,7 @@ import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArro
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
-import Tooltip from '@mui/material/Tooltip';
+import { DisabledCapableTooltip } from './DisabledCapableTooltip';
 import styles from './stageLayout.module.css';
 
 /**
@@ -67,13 +67,10 @@ interface TravelArrowProps {
 
 function TravelArrow({ label, testId, onNavigate, disabled, children }: TravelArrowProps) {
     return (
-        <Tooltip title={label}>
-            {/* span: MUI Tooltips need a focusable child even while the button is disabled */}
-            <span>
-                <IconButton size="small" onClick={onNavigate} disabled={disabled} aria-label={label} data-testid={testId}>
-                    {children}
-                </IconButton>
-            </span>
-        </Tooltip>
+        <DisabledCapableTooltip title={label}>
+            <IconButton size="small" onClick={onNavigate} disabled={disabled} aria-label={label} data-testid={testId}>
+                {children}
+            </IconButton>
+        </DisabledCapableTooltip>
     );
 }

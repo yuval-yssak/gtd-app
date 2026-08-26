@@ -93,6 +93,13 @@
     justify-content: flex-end;
 }
 
+/* Portaled variant: fills the host bar's content slot so `margin-right: auto` children (the
+ * weekly review's nav arrows) anchor to the slot's left edge while the buttons keep right. */
+.stretchedActions {
+    flex: 1;
+    min-width: 0;
+}
+
 /* Bottom meta row: created timestamp on the left, the copiable item id pushed right. */
 .metaRow {
     display: flex;

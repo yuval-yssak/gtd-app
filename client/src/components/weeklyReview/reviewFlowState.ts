@@ -242,6 +242,21 @@ export function undoDecision(queue: StageQueue, itemId: string): StageQueue {
     return withoutDecision === queue ? queue : requeueAtCursor(withoutDecision, itemId);
 }
 
+/** Armed by an "Undo decision": re-deciding the undone item resumes the revisit walk at `offset`. */
+export interface RevisitResume {
+    itemId: string;
+    offset: number;
+}
+
+/**
+ * Whether an armed revisit-resume applies to the decision about to be recorded: only when the
+ * live queue's current item IS the resumed item. Any other current item means the user moved on
+ * (skip, reconcile drop, a different decision) and the stored position no longer applies.
+ */
+export function shouldResumeRevisit(resume: RevisitResume | null, liveQueue: StageQueue): boolean {
+    return resume !== null && resume.itemId === currentQueueItemId(liveQueue);
+}
+
 /**
  * Whether a snapshot undo's deferred phase-2 requeue may run: `wait` until the shared items
  * snapshot shows the restored write, `abort` if the row vanished entirely (hard-deleted

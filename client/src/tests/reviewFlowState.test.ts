@@ -18,6 +18,7 @@ import {
     requeueAtCursor,
     requeueReadiness,
     reviewStats,
+    shouldResumeRevisit,
     skipCurrentItem,
     skipStage,
     stageEligibleItems,
@@ -186,6 +187,33 @@ describe('stage queue', () => {
         const decided = completeCurrentItem(buildStageQueue(['a']));
         const redecided = completeCurrentItem(undoDecision(decided, 'a'));
         expect(redecided).toEqual({ pending: [], cursor: 0, decisions: [{ itemId: 'a' }] });
+    });
+
+    it('undo at revisit offset n + re-decide keeps offset n on the same chronological slot (revisit-resume invariant)', () => {
+        // Decide a, b, c, d — the revisit walk indexes decisions from the newest: offset n shows
+        // decisions[length - n]. The stage hook restores offset n after an undo-at-n + re-decide;
+        // this pins the queue math that makes that restore land on the same "p of N" slot.
+        const allDecided = ['a', 'b', 'c', 'd'].reduce((queue, _id) => completeCurrentItem(queue, {}), buildStageQueue(['a', 'b', 'c', 'd']));
+        const offset = 3; // viewing 'b' — position "2 of 4"
+        const viewed = allDecided.decisions[allDecided.decisions.length - offset];
+        expect(viewed?.itemId).toBe('b');
+        const redecided = completeCurrentItem(undoDecision(allDecided, 'b'), {});
+        // The re-decision re-enters the history at its END...
+        expect(decidedItemIds(redecided)).toEqual(['a', 'c', 'd', 'b']);
+        // ...so the SAME offset shows the old position's chronological successor ('c', still
+        // labeled "2 of 4"), and offset+1 continues into the older, not-yet-revisited 'a'.
+        expect(redecided.decisions[redecided.decisions.length - offset]?.itemId).toBe('c');
+        expect(redecided.decisions[redecided.decisions.length - (offset + 1)]?.itemId).toBe('a');
+    });
+
+    it('shouldResumeRevisit applies only when the live cursor sits on the resumed item itself', () => {
+        const queue = buildStageQueue(['a', 'b']);
+        expect(shouldResumeRevisit({ itemId: 'a', offset: 1 }, queue)).toBe(true);
+        // Cursor moved on (skip, reconcile drop, another decision) — the stored position no longer applies.
+        expect(shouldResumeRevisit({ itemId: 'b', offset: 1 }, queue)).toBe(false);
+        expect(shouldResumeRevisit(null, queue)).toBe(false);
+        // Past the end (currentQueueItemId → null) never matches.
+        expect(shouldResumeRevisit({ itemId: 'a', offset: 1 }, skipCurrentItem(skipCurrentItem(queue)))).toBe(false);
     });
 
     it('the two-phase undo pieces: removeDecision leaves pending alone; requeueAtCursor never duplicates', () => {

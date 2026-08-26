@@ -58,8 +58,12 @@ export function useDecisionUndo({ db, onQueueChange, onUndone, onUndoFailed }: D
         setAwaitedRequeue(null);
         if (readiness === 'requeue') {
             onQueueChange((liveQueue) => requeueAtCursor(liveQueue, awaitedRequeue.itemId));
+            return;
         }
-    }, [allItems, awaitedRequeue, onQueueChange]);
+        // 'abort': the row vanished mid-undo (hard-deleted). The decision already left the
+        // history, but the item can never return to the walk — silence would read as success.
+        onUndoFailed('Could not undo — the item no longer exists on this device.');
+    }, [allItems, awaitedRequeue, onQueueChange, onUndoFailed]);
 
     async function undoDecisionNow(decision: StageDecision) {
         if (!decision.undo) {

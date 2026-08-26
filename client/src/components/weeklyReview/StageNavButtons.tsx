@@ -2,7 +2,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
-import Tooltip from '@mui/material/Tooltip';
+import { DisabledCapableTooltip } from './DisabledCapableTooltip';
 import styles from './stageLayout.module.css';
 
 /** The forward arrow's meaning is contextual (live queue: "skip"; revisit view: "toward the live queue"), so the caller names it. */
@@ -32,31 +32,26 @@ interface StageNavButtonsProps {
 export function StageNavButtons({ onBack, backDisabled, backLabel = 'Revisit previous decision', forward }: StageNavButtonsProps) {
     return (
         <Box className={styles.navArrows}>
-            <Tooltip title={backLabel}>
-                {/* span: MUI Tooltips need a focusable child even while the button is disabled */}
-                <span>
-                    {/* size="small" (34px) keeps the text buttons (36.5px) as the bar's height
-                        driver — a medium IconButton (40px) would nudge the pinned bar's top edge
-                        on stages whose bar has no arrows. */}
-                    <IconButton size="small" onClick={onBack} disabled={backDisabled} aria-label={backLabel} data-testid="stageNavBack">
-                        <ArrowBackIcon />
-                    </IconButton>
-                </span>
-            </Tooltip>
+            <DisabledCapableTooltip title={backLabel}>
+                {/* size="small" (34px) keeps the text buttons (36.5px) as the bar's height
+                    driver — a medium IconButton (40px) would nudge the pinned bar's top edge
+                    on stages whose bar has no arrows. */}
+                <IconButton size="small" onClick={onBack} disabled={backDisabled} aria-label={backLabel} data-testid="stageNavBack">
+                    <ArrowBackIcon />
+                </IconButton>
+            </DisabledCapableTooltip>
             {forward && (
-                <Tooltip title={forward.label}>
-                    <span>
-                        <IconButton
-                            size="small"
-                            onClick={forward.onForward}
-                            disabled={forward.disabled}
-                            aria-label={forward.label}
-                            data-testid={forward.testId ?? 'stageNavForward'}
-                        >
-                            <ArrowForwardIcon />
-                        </IconButton>
-                    </span>
-                </Tooltip>
+                <DisabledCapableTooltip title={forward.label}>
+                    <IconButton
+                        size="small"
+                        onClick={forward.onForward}
+                        disabled={forward.disabled}
+                        aria-label={forward.label}
+                        data-testid={forward.testId ?? 'stageNavForward'}
+                    >
+                        <ArrowForwardIcon />
+                    </IconButton>
+                </DisabledCapableTooltip>
             )}
         </Box>
     );

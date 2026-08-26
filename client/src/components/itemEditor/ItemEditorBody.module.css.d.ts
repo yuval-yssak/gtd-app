@@ -12,6 +12,7 @@ declare const styles: {
     readonly sectionLabel: string;
     readonly statusChips: string;
     readonly statusLabel: string;
+    readonly stretchedActions: string;
     readonly tabs: string;
 };
 export = styles;

@@ -709,7 +709,15 @@ test.describe('weekly review', () => {
             // label is the only user-visible signal distinguishing un-skip from decision revisit.
             const focusStage = page.getByTestId('focusStage');
             const titleField = () => focusStage.getByRole('textbox', { name: 'Title' });
+            // The ◀ anchors to the LEFT edge of the pinned bar's content slot on every view (live
+            // item, stage-end card, revisit card) — its x position must never shift between them.
+            const backArrowX = async () => {
+                const box = await page.getByTestId('stageNavBack').boundingBox();
+                if (!box) throw new Error('expected the back arrow to be laid out');
+                return box.x;
+            };
             await expect(titleField()).toHaveValue('First action');
+            const liveBackX = await backArrowX();
             await page.getByTestId('stageNavForward').click();
             await expect(titleField()).toHaveValue('Second action');
             // The clicked ▶ was remounted with the new item's action row — focus stays on it, so
@@ -718,6 +726,7 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('stageNavBack')).toHaveAttribute('aria-label', 'Back to the skipped item');
             await page.getByTestId('stageNavForward').click();
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Next Actions — 2 skipped');
+            expect(Math.abs((await backArrowX()) - liveBackX)).toBeLessThanOrEqual(1);
             await page.getByTestId('stageNavBack').click();
             await expect(titleField()).toHaveValue('Second action');
             await page.getByTestId('stageNavBack').click();
@@ -750,6 +759,7 @@ test.describe('weekly review', () => {
             // Revisiting the newest decision: full editor on the done item, with one-click undo.
             const revisit = page.getByTestId('revisitDecisionCard');
             await expect(page.getByTestId('revisitPositionLabel')).toHaveText('Already reviewed · 2 of 2');
+            expect(Math.abs((await backArrowX()) - liveBackX)).toBeLessThanOrEqual(1);
             // Entering the revisit view is STAGE-LOCAL state (the wizard never re-renders, and the
             // revisit action row portals another child commit later) — the DOM-observer restore
             // must still land focus on the revisit view's own ◀.
@@ -775,22 +785,38 @@ test.describe('weekly review', () => {
             await expect(titleField()).toHaveValue('First action edited');
             await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 2');
 
-            // Manual-fix path: decide First untouched again, revisit it, and flip its status chip —
-            // the revisit Save commits in place (the decision stands, nothing is undone) and the
-            // post-save close returns to the live queue.
+            // Undo + immediate re-decide RESUMES the revisit walk at the same position ("1 of 1")
+            // instead of forgetting it and landing on the live queue / stage end.
             await expect(page.getByTestId('focusKeep')).toHaveText('Looks good'); // remount reset the text acknowledgement
             await page.getByTestId('focusKeep').click();
-            await expect(titleField()).toHaveValue('Second action');
-            await page.getByTestId('stageNavBack').click();
             const revisitAgain = page.getByTestId('revisitDecisionCard');
             await expect(page.getByTestId('revisitPositionLabel')).toHaveText('Already reviewed · 1 of 1');
+            await expect(revisitAgain.getByRole('textbox', { name: 'Title' })).toHaveValue('First action edited');
+            expect(Math.abs((await backArrowX()) - liveBackX)).toBeLessThanOrEqual(1); // resumed view included
+
+            // The resume must also survive the SAVE-HANDSHAKE decision path: its recordDecision
+            // runs from a post-await close whose render closure is stale, so the resumed-item
+            // check has to read the LIVE queue (regression guard). Undo again, flip a status chip
+            // (structural edit → explicit save), "Save & next" — same "1 of 1" slot again.
+            await page.getByTestId('revisitUndoDecision').click();
+            await expect(titleField()).toHaveValue('First action edited');
+            await focusStage.getByRole('button', { name: 'Someday / Maybe' }).click();
+            await expect(page.getByTestId('focusKeep')).toHaveText('Save & next');
+            await page.getByTestId('focusKeep').click();
+            await expect(page.getByTestId('revisitPositionLabel')).toHaveText('Already reviewed · 1 of 1');
+            await expect(revisitAgain.getByRole('textbox', { name: 'Title' })).toHaveValue('First action edited');
+            await expect.poll(async () => (await gtd.listItems(page)).find((i) => i._id === first._id)?.status).toBe('somedayMaybe');
+
+            // Manual-fix path continues right here: flip the re-decided item's status chip back —
+            // the revisit Save commits in place (the decision stands, nothing is undone) and the
+            // post-save close returns to the live queue.
             await expect(page.getByTestId('stageNavBack')).toBeDisabled(); // oldest decision — nowhere further back
             await expect(page.getByTestId('revisitSave')).toBeDisabled(); // nothing edited yet
-            await revisitAgain.getByRole('button', { name: 'Someday / Maybe' }).click();
+            await revisitAgain.getByRole('button', { name: 'Next Action' }).click();
             await page.getByTestId('revisitSave').click();
             await expect(titleField()).toHaveValue('Second action');
             await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
-            await expect.poll(async () => (await gtd.listItems(page)).find((i) => i._id === first._id)?.status).toBe('somedayMaybe');
+            await expect.poll(async () => (await gtd.listItems(page)).find((i) => i._id === first._id)?.status).toBe('nextAction');
 
             // ▶ from a revisit walks forward, landing back on the live queue from the newest decision.
             await page.getByTestId('stageNavBack').click();
@@ -802,7 +828,7 @@ test.describe('weekly review', () => {
             const items = await gtd.listItems(page);
             const firstFinal = items.find((i) => i._id === first._id);
             expect(firstFinal?.title).toBe('First action edited');
-            expect(firstFinal?.status).toBe('somedayMaybe');
+            expect(firstFinal?.status).toBe('nextAction');
             expect(items.find((i) => i._id === second._id)?.status).toBe('nextAction');
         });
     });
@@ -826,10 +852,20 @@ test.describe('weekly review', () => {
 
             // The decision is revisitable but NOT undoable: clarify-to-routine is a compound write
             // (new routine + seeded items + the capture trashed) — a bare snapshot restore would
-            // resurrect the capture while leaving the created routine alive as a duplicate.
+            // resurrect the capture while leaving the created routine alive as a duplicate. The
+            // Undo button stays rendered (disabled) so the bar's buttons never shift position.
             await page.getByTestId('stageNavBack').click();
             await expect(page.getByTestId('revisitPositionLabel')).toHaveText('Already reviewed · 1 of 1');
-            await expect(page.getByTestId('revisitUndoDecision')).toHaveCount(0);
+            await expect(page.getByTestId('revisitUndoDecision')).toBeDisabled();
+            // The disabled button still explains itself. Hover its span wrapper (the tooltip's
+            // listener target) — the disabled button itself has pointer-events: none, so hovering
+            // it directly would fail Playwright's actionability check. Retried as one block: the
+            // portaled action row can remount right after the hover, swallowing the mouseenter
+            // without ever opening the tooltip.
+            await expect(async () => {
+                await page.getByTestId('revisitUndoWrapper').hover();
+                await expect(page.getByRole('tooltip')).toHaveText('This decision changed more than a snapshot can restore', { timeout: 1500 });
+            }).toPass();
 
             // The routine survives; the capture stayed consumed.
             await gtd.flush(page);

@@ -15,6 +15,7 @@ import Divider from '@mui/material/Divider';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
+import classNames from 'classnames';
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
@@ -931,9 +932,14 @@ export function ItemEditorBody({
             </Button>
         </>
     );
-    const actionsRow =
-        chrome === 'dialog' ? <DialogActions sx={{ px: 0 }}>{actionButtons}</DialogActions> : <Box className={styles.inlineActions}>{actionButtons}</Box>;
     const actionsPlacement = resolveActionsPlacement(actionsContainer);
+    // Portaled rows stretch across the host bar's content slot — see .stretchedActions.
+    const actionsRow =
+        chrome === 'dialog' ? (
+            <DialogActions sx={{ px: 0 }}>{actionButtons}</DialogActions>
+        ) : (
+            <Box className={classNames(styles.inlineActions, { [styles.stretchedActions]: actionsPlacement.kind === 'portal' })}>{actionButtons}</Box>
+        );
 
     return (
         <Box className={bodyClassFor(chrome)}>

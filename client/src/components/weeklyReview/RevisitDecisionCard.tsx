@@ -8,6 +8,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
 import type { MyDB } from '../../types/MyDB';
 import { ItemEditorBody } from '../itemEditor/ItemEditorBody';
+import { DisabledCapableTooltip } from './DisabledCapableTooltip';
 import type { StageDecision } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageNavButtons } from './StageNavButtons';
@@ -32,8 +33,8 @@ interface RevisitDecisionCardProps {
 
 /**
  * Back-arrow view over one already-made decision: the full editor opens on the item (manual fixes
- * save in place), and "Undo decision" — offered exactly when the decision recorded an undo —
- * restores the pre-decision snapshot and requeues the item. Routine-generated items and
+ * save in place), and "Undo decision" — always rendered, disabled when the decision recorded no
+ * undo — restores the pre-decision snapshot and requeues the item. Routine-generated items and
  * clarify-to-routine record none (see StageDecision.undo).
  */
 export function RevisitDecisionCard({
@@ -107,11 +108,22 @@ export function RevisitDecisionCard({
                                 is a state change, not a router navigation, so the unsaved-changes
                                 guard would never prompt and the edit would silently drop. */}
                             <StageNavButtons {...navProps(api.isDirty || api.isSaving)} />
-                            {decision.undo && (
-                                <Button color="inherit" onClick={onUndoDecision} disabled={isUndoing || api.isSaving} data-testid="revisitUndoDecision">
+                            {/* Always rendered — disabled (with the reason) when the decision
+                                recorded no undo — so the bar's buttons never shift position while
+                                stepping through the history. */}
+                            <DisabledCapableTooltip
+                                title={decision.undo ? '' : 'This decision changed more than a snapshot can restore'}
+                                wrapperTestId="revisitUndoWrapper"
+                            >
+                                <Button
+                                    color="inherit"
+                                    onClick={onUndoDecision}
+                                    disabled={!decision.undo || isUndoing || api.isSaving}
+                                    data-testid="revisitUndoDecision"
+                                >
                                     Undo decision
                                 </Button>
-                            )}
+                            </DisabledCapableTooltip>
                             {/* Manual-fix path: structural edits (e.g. flipping a wrong Done's status
                                 chip) commit here; text edits autosave and need no explicit save.
                                 Note: a manual save does NOT refresh the decision's undo snapshot —

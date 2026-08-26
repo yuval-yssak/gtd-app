@@ -1,7 +1,16 @@
 import type { IDBPDatabase } from 'idb';
 import { useRef, useState } from 'react';
 import type { MyDB } from '../../types/MyDB';
-import { completeCurrentItem, dropCurrentItem, type StageDecisionUndo, type StageQueue, skipCurrentItem, stepBack } from './reviewFlowState';
+import {
+    completeCurrentItem,
+    dropCurrentItem,
+    type RevisitResume,
+    type StageDecisionUndo,
+    type StageQueue,
+    shouldResumeRevisit,
+    skipCurrentItem,
+    stepBack,
+} from './reviewFlowState';
 import { useDecisionUndo } from './useDecisionUndo';
 
 interface StageDecisionNavigationHost {
@@ -32,15 +41,51 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
     const pendingSaveUndoRef = useRef<StageDecisionUndo | undefined>(undefined);
     // How far back the user is looking: 0 = live queue, n = the n-th most recent decision.
     const [backOffset, setBackOffset] = useState(0);
-    const { undoDecisionNow, isUndoing } = useDecisionUndo({ db, onQueueChange, onUndone: () => setBackOffset(0), onUndoFailed });
+    // Armed when Undo exits to the live queue (the requeued item must render live to be
+    // re-decided): re-deciding THAT item returns the walk to the same chronological revisit
+    // position — same "p of N" label, ◀ continues into older decisions — instead of forgetting
+    // the position and landing at the stage end. Any other move in between (skip, ◀, a blocked
+    // drop, a failed undo) abandons the resume.
+    const resumeRevisitRef = useRef<RevisitResume | null>(null);
+    const { undoDecisionNow, isUndoing } = useDecisionUndo({
+        db,
+        onQueueChange,
+        onUndone: () => setBackOffset(0),
+        onUndoFailed: (message) => {
+            resumeRevisitRef.current = null;
+            onUndoFailed(message);
+        },
+    });
 
     /** Records a decision on the current item. `undo` absent = not reversible (see StageDecision). */
-    const recordDecision = (undo?: StageDecisionUndo) => onQueueChange((liveQueue) => completeCurrentItem(liveQueue, undo));
+    const recordDecision = (undo?: StageDecisionUndo) => {
+        const resume = resumeRevisitRef.current;
+        resumeRevisitRef.current = null;
+        // `let` + resolve-inside-the-updater: the render-captured `queue` can be several async
+        // ticks stale when this runs from the save handshake's post-await close (the in-flight
+        // transition holds the old closure), so the resumed-item check must read the LIVE queue.
+        // Load-bearing: onQueueChange invokes the updater synchronously (weekly-review.tsx applies
+        // it inline against latestFlowRef), so `didResume` is set before the check below.
+        let didResume = false;
+        onQueueChange((liveQueue) => {
+            didResume = shouldResumeRevisit(resume, liveQueue);
+            return completeCurrentItem(liveQueue, undo);
+        });
+        // The re-decided entry re-enters the history at its END, so the stored offset now points
+        // at the old position's chronological successor — exactly the same "p of N" slot.
+        if (resume && didResume) {
+            setBackOffset(resume.offset);
+        }
+    };
     /** Steps past the current item, leaving it undecided — the ▶ arrow and Escape-close behavior. */
-    const skip = () => onQueueChange(skipCurrentItem);
+    const skip = () => {
+        resumeRevisitRef.current = null;
+        onQueueChange(skipCurrentItem);
+    };
 
     /** ◀ on the live queue: first step back through this walk's skipped items, then into the decisions. */
     function goBack() {
+        resumeRevisitRef.current = null;
         // The branch reads the render-captured cursor, but the mutation is functional and
         // stepBack no-ops at 0 — a same-tick cursor change costs at most one dead click, never a
         // step below the start.
@@ -65,7 +110,11 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
               canGoBack: revisitOffset < queue.decisions.length,
               onGoBack: () => setBackOffset(revisitOffset + 1),
               onGoForward: () => setBackOffset(revisitOffset - 1),
-              onUndoDecision: () => void undoDecisionNow(revisited),
+              onUndoDecision: () => {
+                  // Captured BEFORE the undo resets the walk to the live queue (onUndone).
+                  resumeRevisitRef.current = { itemId: revisited.itemId, offset: revisitOffset };
+                  void undoDecisionNow(revisited);
+              },
               isUndoing,
               onExit: () => setBackOffset(0),
           }
@@ -117,7 +166,14 @@ export function useStageDecisionNavigation({ db, queue, onQueueChange, onUndoFai
         onBack: goBack,
         backDisabled: !canGoBack,
         backLabel,
-        forward: { onForward: () => onQueueChange(dropCurrentItem), label: 'Skip blocked item', testId },
+        forward: {
+            onForward: () => {
+                resumeRevisitRef.current = null;
+                onQueueChange(dropCurrentItem);
+            },
+            label: 'Skip blocked item',
+            testId,
+        },
     });
 
     return { revisitProps, goBack, canGoBack, skip, recordDecision, armExplicitSave, markSaveCommitted, closeAsDecisionOrSkip, liveNavProps, blockedNavProps };
