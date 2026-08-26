@@ -41,6 +41,7 @@ import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { useRoutineEditor } from '../../components/routineEditor/useRoutineEditor';
+import { PauseRoutineConfirmDialog } from '../../components/routines/PauseRoutineConfirmDialog';
 import { RoutineWeekGrid } from '../../components/routines/RoutineWeekGrid';
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -425,32 +426,7 @@ function RoutinesPage() {
                     </Button>
                 </DialogActions>
             </Dialog>
-            <Dialog open={routineToPause !== null} onClose={() => setRoutineToPause(null)} maxWidth="sm" fullWidth>
-                <DialogTitle>Pause routine?</DialogTitle>
-                <DialogContent>
-                    <DialogContentText>
-                        {routineToPause ? <>Pause "{routineToPause.title}"?</> : null}
-                        <br />
-                        <br />
-                        Future open items will be trashed. Past-due items are left alone.
-                        {routineToPause?.routineType === 'calendar' && (
-                            <>
-                                <br />
-                                The recurring event on Google Calendar will stop at today; past occurrences stay.
-                            </>
-                        )}
-                        <br />
-                        <br />
-                        To resume, edit the routine and set a new start date.
-                    </DialogContentText>
-                </DialogContent>
-                <DialogActions>
-                    <Button onClick={() => setRoutineToPause(null)}>Cancel</Button>
-                    <Button variant="contained" onClick={() => void onConfirmPause()}>
-                        Pause
-                    </Button>
-                </DialogActions>
-            </Dialog>
+            <PauseRoutineConfirmDialog routine={routineToPause} onCancel={() => setRoutineToPause(null)} onConfirm={() => void onConfirmPause()} />
         </Box>
     );
 }

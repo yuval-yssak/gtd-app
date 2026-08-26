@@ -52,3 +52,5 @@
 - [Repeat-click e2e loops race the transition gate](feedback_e2e_repeat_click_races_transition_gate.md) — `for (i<N) .first().click()` on `isMutating`-disabled rows can re-hit one row; assert the shrinking count per iteration.
 - [Reordered list breaks persisted ordinals](feedback_reordered_list_breaks_persisted_ordinals.md) — "All consumers are id-keyed" misses draft `stageIndex`; a `.length` clamp no-ops on a permutation, so mid-flight users resume on the swapped stage.
 - [Duplicated order declarations drift](feedback_duplicated_order_declarations_drift.md) — Id tuple + parallel `ReadonlyArray<Def>` encode order twice; permutations and omissions type-check, stranding the index lookup at -1.
+- [Collapsed pseudo-entry re-enters the queue](feedback_collapsed_pseudo_entry_reenters_queue.md) — `routine:<id>` entries stay derivable after the decision retires them (pause leaves past items); decided ≠ ineligible for pseudo-ids.
+- [New card variant ships without a component test](feedback_new_card_variant_ships_without_component_test.md) — weeklyReview `*Card`/`*Banner` land with pure-state tests only; every `?? null` / missing-entity fallback is uncovered.

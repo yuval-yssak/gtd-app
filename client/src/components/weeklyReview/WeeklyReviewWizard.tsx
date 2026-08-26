@@ -35,7 +35,7 @@ import {
     refreshQueueOnEntry,
     type StageQueue,
     skipStage,
-    stageEligibleItems,
+    stageEligibleEntryIds,
     toggleInboxTick,
     withStageQueue,
 } from './reviewFlowState';
@@ -52,7 +52,7 @@ interface WeeklyReviewWizardProps {
 
 /** Guided multi-step weekly review. One stage at a time, one item at a time inside each stage. */
 export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizardProps) {
-    const { account, items, allPeople, allReviewInboxes } = useAppData();
+    const { account, items, routines, allPeople, allReviewInboxes } = useAppData();
     // Item advances and stage changes unmount the focused button — restore keyboard focus onto
     // its equivalent in the new view instead of letting it fall to <body>.
     const wizardRootRef = useRef<HTMLDivElement | null>(null);
@@ -92,7 +92,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
         }
         const isEntry = enteredStageIdRef.current !== stage.id;
         enteredStageIdRef.current = stage.id;
-        const eligibleIds = stageEligibleItems(stage.id, items, { todayIso: today, personNameById }).map((item) => item._id);
+        const eligibleIds = stageEligibleEntryIds(stage.id, items, { todayIso: today, personNameById, routines });
         const refresh = (queue: StageQueue | undefined) => (isEntry || !queue ? refreshQueueOnEntry(queue, eligibleIds) : reconcileQueue(queue, eligibleIds));
         if (refresh(flow.queues[stage.id]) !== flow.queues[stage.id]) {
             // Recompute against the LATEST flow inside the updater: another commit (e.g. the
@@ -100,7 +100,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
             // idempotent, so composing here can never clobber it.
             onFlowChange((prev) => withStageQueue(prev, stage.id, refresh(prev.queues[stage.id])));
         }
-    }, [stage, items, today, personNameById, flow, onFlowChange]);
+    }, [stage, items, routines, today, personNameById, flow, onFlowChange]);
 
     if (!stage) {
         return null;

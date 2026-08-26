@@ -6,10 +6,11 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
+import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { MyDB } from '../../types/MyDB';
 import { ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { DisabledCapableTooltip } from './DisabledCapableTooltip';
-import type { StageDecision } from './reviewFlowState';
+import { routineIdOfEntry, type StageDecision } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageNavButtons } from './StageNavButtons';
 import styles from './stageLayout.module.css';
@@ -49,7 +50,8 @@ export function RevisitDecisionCard({
     onExit,
     travel,
 }: RevisitDecisionCardProps) {
-    const { allItems, people, workContexts, refreshItems } = useAppData();
+    // `routines` (visible accounts) matches the wizard's queue producer — see FocusStage.
+    const { allItems, routines, people, workContexts, refreshItems } = useAppData();
     const { isPending } = usePendingReassign();
     // Portal target for the editor's action row — state (not a ref) so ItemEditorBody re-renders
     // and portals the buttons in once the pinned bar element mounts.
@@ -60,29 +62,50 @@ export function RevisitDecisionCard({
     const [isEditorLocked, setIsEditorLocked] = useState(false);
     const lockedTravel = isEditorLocked ? { ...travel, prevDisabled: true, nextDisabled: true } : travel;
 
-    const item = allItems.find((candidate) => candidate._id === decision.itemId) ?? null;
+    const revisitedRoutineId = routineIdOfEntry(decision.itemId);
+    const item = revisitedRoutineId ? null : (allItems.find((candidate) => candidate._id === decision.itemId) ?? null);
     const navProps = (disabled: boolean) => ({
         onBack: onGoBack,
         backDisabled: !canGoBack || disabled,
         forward: { onForward: onGoForward, disabled, label: 'Forward' },
     });
 
+    // A collapsed calendar-routine entry has no item editor — the revisit view is a read-only
+    // summary; its "Looks good" was a no-write decision, so Undo is a bare requeue.
+    if (revisitedRoutineId) {
+        const routine = routines.find((candidate) => candidate._id === revisitedRoutineId) ?? null;
+        return (
+            <RevisitSummaryShell
+                travel={travel}
+                actions={
+                    <>
+                        <StageNavButtons {...navProps(false)} />
+                        <Button color="inherit" onClick={onUndoDecision} disabled={!decision.undo || !routine || isUndoing} data-testid="revisitUndoDecision">
+                            Undo decision
+                        </Button>
+                    </>
+                }
+            >
+                <Typography variant="overline" color="text.secondary" data-testid="revisitPositionLabel">
+                    Already reviewed · {position.index} of {position.total}
+                </Typography>
+                <Typography variant="h6">{routine ? routine.title : 'This routine no longer exists on this device.'}</Typography>
+                {routine && (
+                    <Typography variant="body2" color="text.secondary">
+                        {formatRoutineSchedule(routine)}
+                    </Typography>
+                )}
+            </RevisitSummaryShell>
+        );
+    }
+
     // The editor renders (and portals) nothing for a hard-deleted item or one whose reassign is
     // in flight — the bar then owns the arrows so navigation always survives.
     if (!item || isPending('item', item._id)) {
         return (
-            <Box className={styles.stageRoot} data-testid="revisitDecisionCard">
-                <Box className={styles.centeredArea}>
-                    <Paper elevation={1} className={styles.editorCard}>
-                        <Typography variant="body1">
-                            {item ? 'This item is moving to another account.' : 'This item no longer exists on this device.'}
-                        </Typography>
-                    </Paper>
-                </Box>
-                <StageActionBar travel={travel}>
-                    <StageNavButtons {...navProps(false)} />
-                </StageActionBar>
-            </Box>
+            <RevisitSummaryShell travel={travel} actions={<StageNavButtons {...navProps(false)} />}>
+                <Typography variant="body1">{item ? 'This item is moving to another account.' : 'This item no longer exists on this device.'}</Typography>
+            </RevisitSummaryShell>
         );
     }
 
@@ -137,6 +160,27 @@ export function RevisitDecisionCard({
                 />
             </Paper>
             <StageActionBar onBarMounted={setActionsBarEl} travel={lockedTravel} />
+        </Box>
+    );
+}
+
+interface RevisitSummaryShellProps {
+    travel: StageTravel;
+    /** Bar-owned actions — the read-only branches have no editor to portal buttons from. */
+    actions: React.ReactNode;
+    children: React.ReactNode;
+}
+
+/** Shared shell of the read-only revisit branches (routine entry, missing item): centered summary card + pinned bar. */
+function RevisitSummaryShell({ travel, actions, children }: RevisitSummaryShellProps) {
+    return (
+        <Box className={styles.stageRoot} data-testid="revisitDecisionCard">
+            <Box className={styles.centeredArea}>
+                <Paper elevation={1} className={styles.editorCard}>
+                    {children}
+                </Paper>
+            </Box>
+            <StageActionBar travel={travel}>{actions}</StageActionBar>
         </Box>
     );
 }

@@ -1,0 +1,29 @@
+/* Header row: repeat icon + title, with the open-page affordance at the end. */
+.titleRow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.titleIcon {
+    color: var(--mui-palette-primary-main);
+    flex-shrink: 0;
+}
+
+/* Meta block under the title: schedule, occurrence summary, location / meeting link. */
+.metaList {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-top: 0.5rem;
+}
+
+.metaRow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.notes {
+    margin-top: 1rem;
+}

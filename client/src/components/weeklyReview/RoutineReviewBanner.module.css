@@ -1,0 +1,22 @@
+/* Prominent routine strip above the review editor — the chip inside the editor is easy to miss,
+ * and the review's whole point here is "this one repeats; review the pattern, not the copy". */
+.banner {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 1rem;
+    border-radius: 0.5rem;
+    color: var(--mui-palette-primary-main);
+    background-color: rgba(var(--mui-palette-primary-mainChannel) / 0.08);
+    text-align: left;
+}
+
+/* Exception variant: the occurrence deviates from the pattern — warn-tinted so it reads apart
+ * from the regular routine strip. */
+.exception {
+    color: var(--mui-palette-warning-dark);
+    background-color: rgba(var(--mui-palette-warning-mainChannel) / 0.12);
+}

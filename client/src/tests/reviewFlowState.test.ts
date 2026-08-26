@@ -18,9 +18,12 @@ import {
     requeueAtCursor,
     requeueReadiness,
     reviewStats,
+    routineEntryId,
+    routineIdOfEntry,
     shouldResumeRevisit,
     skipCurrentItem,
     skipStage,
+    stageEligibleEntryIds,
     stageEligibleItems,
     stageEndTitle,
     startReviewFlow,
@@ -30,13 +33,27 @@ import {
     unreviewedStageArrivals,
     withStageQueue,
 } from '../components/weeklyReview/reviewFlowState';
-import type { StoredItem } from '../types/MyDB';
+import type { StoredItem, StoredRoutine } from '../types/MyDB';
 
 const TODAY = '2026-08-23';
-const CTX = { todayIso: TODAY, personNameById: { 'p-alice': 'Alice', 'p-bob': 'Bob' } };
+const CTX = { todayIso: TODAY, personNameById: { 'p-alice': 'Alice', 'p-bob': 'Bob' }, routines: [] };
 
 function makeItem(overrides: Partial<StoredItem> & { _id: string; status: StoredItem['status'] }): StoredItem {
     return { userId: 'user-1', title: overrides._id, createdTs: '2026-01-01T00:00:00.000Z', updatedTs: '2026-01-01T00:00:00.000Z', ...overrides };
+}
+
+function makeCalendarRoutine(overrides: Partial<StoredRoutine> & { _id: string }): StoredRoutine {
+    return {
+        userId: 'user-1',
+        title: overrides._id,
+        routineType: 'calendar',
+        rrule: 'FREQ=WEEKLY;BYDAY=TH',
+        template: {},
+        active: true,
+        createdTs: '2026-01-01T00:00:00.000Z',
+        updatedTs: '2026-01-01T00:00:00.000Z',
+        ...overrides,
+    };
 }
 
 describe('stageEligibleItems', () => {
@@ -523,5 +540,111 @@ describe('review flow', () => {
         expect(stats.some((stage) => stage.stageId === 'clearInboxes')).toBe(false);
         expect(stats.find((stage) => stage.stageId === 'clarify')).toMatchObject({ processedCount: 3, wasSkipped: false });
         expect(stats.find((stage) => stage.stageId === 'calendar')).toMatchObject({ processedCount: 0, wasSkipped: true });
+    });
+});
+
+describe('stageEligibleEntryIds — calendar routine collapse', () => {
+    const routine = makeCalendarRoutine({ _id: 'r1' });
+    const occurrences = [
+        makeItem({ _id: 'occ1', status: 'calendar', routineId: 'r1', timeStart: '2026-08-27T18:00:00.000Z' }),
+        makeItem({ _id: 'occ2', status: 'calendar', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' }),
+    ];
+    const solo = makeItem({ _id: 'solo', status: 'calendar', timeStart: '2026-08-30T10:00:00.000Z' });
+
+    it('collapses all of a routine occurrences into ONE routine entry, placed at its first occurrence position', () => {
+        const entryIds = stageEligibleEntryIds('calendar', [...occurrences, solo], { ...CTX, routines: [routine] });
+        expect(entryIds).toEqual([routineEntryId('r1'), 'solo']);
+    });
+
+    it('keeps a modified exception as its own entry — only pattern-following occurrences collapse', () => {
+        const withException = makeCalendarRoutine({
+            _id: 'r1',
+            routineExceptions: [{ date: '2026-09-03', type: 'modified', itemId: 'occ2', newTimeStart: '2026-09-04T09:00:00.000Z' }],
+        });
+        const entryIds = stageEligibleEntryIds('calendar', [...occurrences, solo], { ...CTX, routines: [withException] });
+        expect(entryIds).toEqual([routineEntryId('r1'), 'solo', 'occ2']);
+    });
+
+    it('a skipped exception does not un-collapse anything (it has no live item)', () => {
+        const withSkip = makeCalendarRoutine({ _id: 'r1', routineExceptions: [{ date: '2026-09-03', type: 'skipped' }] });
+        const entryIds = stageEligibleEntryIds('calendar', occurrences, { ...CTX, routines: [withSkip] });
+        expect(entryIds).toEqual([routineEntryId('r1')]);
+    });
+
+    it('items whose routine is unknown on this device stay individual', () => {
+        expect(stageEligibleEntryIds('calendar', [...occurrences, solo], CTX)).toEqual(['occ1', 'solo', 'occ2']);
+    });
+
+    it('non-calendar stages pass item ids through unchanged — a nextAction routine item is never collapsed', () => {
+        const routineNextAction = makeItem({ _id: 'na1', status: 'nextAction', routineId: 'r1' });
+        expect(stageEligibleEntryIds('nextActions', [routineNextAction], { ...CTX, routines: [routine] })).toEqual(['na1']);
+    });
+
+    it('routineIdOfEntry round-trips entry ids and rejects plain item ids', () => {
+        expect(routineIdOfEntry(routineEntryId('r1'))).toBe('r1');
+        expect(routineIdOfEntry('occ1')).toBeNull();
+    });
+
+    it('sweep counts a routine as ONE seen entry — new occurrences of a reviewed routine are not arrivals', () => {
+        const base = startReviewFlow('2026-08-23T00:00:00.000Z');
+        // The calendar stage reviewed the collapsed routine entry; a third occurrence generated since.
+        const flow = withStageQueue(base, 'calendar', completeCurrentItem(buildStageQueue([routineEntryId('r1')])));
+        const lateOccurrence = makeItem({ _id: 'occ3', status: 'calendar', routineId: 'r1', timeStart: '2026-09-10T18:00:00.000Z' });
+        expect(unreviewedStageArrivals(flow, [...occurrences, lateOccurrence], { ...CTX, routines: [routine] })).toEqual([]);
+    });
+
+    it('sweep still reports a NEW routine the calendar stage never offered', () => {
+        const base = startReviewFlow('2026-08-23T00:00:00.000Z');
+        const flow = withStageQueue(base, 'calendar', completeCurrentItem(buildStageQueue([routineEntryId('r1')])));
+        const otherOccurrence = makeItem({ _id: 'other1', status: 'calendar', routineId: 'r2', timeStart: '2026-09-05T08:00:00.000Z' });
+        const routines = [routine, makeCalendarRoutine({ _id: 'r2' })];
+        expect(unreviewedStageArrivals(flow, [...occurrences, otherOccurrence], { ...CTX, routines })).toEqual([
+            { stageId: 'calendar', title: 'Calendar', count: 1 },
+        ]);
+    });
+});
+
+describe('stageEligibleEntryIds — routine lifecycle edges', () => {
+    it('a PAUSED routine never collapses — its surviving past-due occurrences review as plain items', () => {
+        const paused = makeCalendarRoutine({ _id: 'r1', active: false });
+        const leftover = makeItem({ _id: 'past1', status: 'calendar', routineId: 'r1', timeStart: '2026-08-10T18:00:00.000Z' });
+        expect(stageEligibleEntryIds('calendar', [leftover], { ...CTX, routines: [paused] })).toEqual(['past1']);
+    });
+
+    it('two interleaved routines each collapse at their OWN first-occurrence position', () => {
+        const items = [
+            makeItem({ _id: 'r1-a', status: 'calendar', routineId: 'r1', timeStart: '2026-08-27T18:00:00.000Z' }),
+            makeItem({ _id: 'r2-a', status: 'calendar', routineId: 'r2', timeStart: '2026-08-28T06:00:00.000Z' }),
+            makeItem({ _id: 'r1-b', status: 'calendar', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' }),
+            makeItem({ _id: 'r2-b', status: 'calendar', routineId: 'r2', timeStart: '2026-09-04T06:00:00.000Z' }),
+        ];
+        const routines = [makeCalendarRoutine({ _id: 'r1' }), makeCalendarRoutine({ _id: 'r2' })];
+        expect(stageEligibleEntryIds('calendar', items, { ...CTX, routines })).toEqual([routineEntryId('r1'), routineEntryId('r2')]);
+    });
+
+    it('a modified exception WITHOUT an itemId un-collapses nothing', () => {
+        const routine = makeCalendarRoutine({ _id: 'r1', routineExceptions: [{ date: '2026-09-03', type: 'modified' }] });
+        const occurrence = makeItem({ _id: 'occ1', status: 'calendar', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' });
+        expect(stageEligibleEntryIds('calendar', [occurrence], { ...CTX, routines: [routine] })).toEqual([routineEntryId('r1')]);
+    });
+
+    it('routineIdOfEntry on a bare prefix yields the empty string — matching no routine, never a crash', () => {
+        expect(routineIdOfEntry('routine:')).toBe('');
+    });
+
+    it('mid-stage reconcile swaps a vanished routine entry for its surviving item ids', () => {
+        // The routine row was deleted (e.g. on another device) while its items survived: the
+        // pseudo-entry drops out and the plain item ids append to the walk.
+        const queue = buildStageQueue([routineEntryId('r1')]);
+        const reconciled = reconcileQueue(queue, ['occ1', 'occ2']);
+        expect(reconciled.pending).toEqual(['occ1', 'occ2']);
+    });
+
+    it('a routine entry round-trips the no-write undo exactly like an item id', () => {
+        const decided = completeCurrentItem(buildStageQueue([routineEntryId('r1'), 'solo']), {});
+        expect(decidedItemIds(decided)).toEqual([routineEntryId('r1')]);
+        const undone = undoDecision(decided, routineEntryId('r1'));
+        expect(currentQueueItemId(undone)).toBe(routineEntryId('r1'));
+        expect(decidedItemIds(undone)).toEqual([]);
     });
 });

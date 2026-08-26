@@ -1,6 +1,6 @@
 import { compareNextActions } from '../../lib/compareNextActions';
 import { flattenByPersonGroups } from '../../lib/waitingForGroups';
-import type { StoredItem } from '../../types/MyDB';
+import type { StoredItem, StoredRoutine } from '../../types/MyDB';
 import { compareCalendarItems } from '../calendarRouteSort';
 
 /**
@@ -56,6 +56,71 @@ export interface StageEligibilityContext {
     todayIso: string;
     /** Person id → display name; drives the waitingFor stage's person-grouped page order. */
     personNameById: Record<string, string>;
+    /** Drives the calendar stage's routine collapse — occurrences of one routine review as ONE entry. */
+    routines: ReadonlyArray<StoredRoutine>;
+}
+
+// ── Queue entries ────────────────────────────────────────────────────────────
+//
+// A stage queue holds ENTRY ids. For most entries the id IS a StoredItem._id; the calendar stage
+// additionally collapses all generated occurrences of one routine into a single `routine:<id>`
+// pseudo-entry, so a daily routine reviews as one card instead of ~60.
+
+// Collision-proof: item and routine _ids are crypto.randomUUID() on both client and server, so
+// no real item id can ever start with this prefix.
+const ROUTINE_ENTRY_PREFIX = 'routine:';
+
+export function routineEntryId(routineId: string): string {
+    return `${ROUTINE_ENTRY_PREFIX}${routineId}`;
+}
+
+/** The routine id inside a `routine:` pseudo-entry id, or null for a plain item entry. */
+export function routineIdOfEntry(entryId: string): string | null {
+    return entryId.startsWith(ROUTINE_ENTRY_PREFIX) ? entryId.slice(ROUTINE_ENTRY_PREFIX.length) : null;
+}
+
+/**
+ * Whether this item is an occurrence individually modified away from its routine's pattern (a
+ * `modified` routine exception — e.g. one meeting moved to another time). Exceptions deviate from
+ * the rrule, so the calendar stage reviews them as their OWN card instead of collapsing them.
+ */
+export function isModifiedExceptionItem(routine: StoredRoutine, itemId: string): boolean {
+    return (routine.routineExceptions ?? []).some((exception) => exception.type === 'modified' && exception.itemId === itemId);
+}
+
+/**
+ * The calendar stage's collapse: each routine's generated occurrences become ONE `routine:` entry
+ * at the position of its first occurrence in the page order. Modified exceptions and items whose
+ * routine is unknown on this device stay individual.
+ */
+function collapseCalendarRoutines(sortedItems: ReadonlyArray<StoredItem>, routines: ReadonlyArray<StoredRoutine>): string[] {
+    const routineById = new Map(routines.map((routine) => [routine._id, routine]));
+    const seenRoutineIds = new Set<string>();
+    return sortedItems.flatMap((item) => {
+        const routine = item.routineId === undefined ? undefined : routineById.get(item.routineId);
+        // A PAUSED routine has no live pattern to review — its surviving past-due occurrences are
+        // ordinary leftovers the user disposes of individually, so they never collapse.
+        if (!routine?.active || isModifiedExceptionItem(routine, item._id)) {
+            return [item._id];
+        }
+        if (seenRoutineIds.has(routine._id)) {
+            return [];
+        }
+        seenRoutineIds.add(routine._id);
+        return [routineEntryId(routine._id)];
+    });
+}
+
+/**
+ * The entry ids a stage queues, in presentation order — item ids everywhere except the calendar
+ * stage, where a routine's occurrences collapse into a single `routine:` entry.
+ */
+export function stageEligibleEntryIds(stageId: ReviewStageId, items: ReadonlyArray<StoredItem>, context: StageEligibilityContext): string[] {
+    const eligible = stageEligibleItems(stageId, items, context);
+    if (stageId !== 'calendar') {
+        return eligible.map((item) => item._id);
+    }
+    return collapseCalendarRoutines(eligible, context.routines);
 }
 
 /**
@@ -476,12 +541,12 @@ function focusStageDecidedIds(state: ReviewFlowState): Set<string> {
     );
 }
 
-/** Eligible items a visited stage never offered: not queued, not decided there, not dropped, not focus-decided elsewhere. */
-function stageArrivalCount(queue: StageQueue, eligible: ReadonlyArray<StoredItem>, settledIds: ReadonlySet<string>): number {
+/** Eligible entries a visited stage never offered: not queued, not decided there, not dropped, not focus-decided elsewhere. */
+function stageArrivalCount(queue: StageQueue, eligibleEntryIds: ReadonlyArray<string>, settledIds: ReadonlySet<string>): number {
     // droppedIds count as seen: a blocked item consciously dropped from the walk was offered —
-    // the sweep surfaces only items the user never saw in this stage.
+    // the sweep surfaces only entries the user never saw in this stage.
     const seenIds = new Set([...queue.pending, ...decidedItemIds(queue), ...(queue.droppedIds ?? [])]);
-    return eligible.filter((item) => !seenIds.has(item._id) && !settledIds.has(item._id)).length;
+    return eligibleEntryIds.filter((id) => !seenIds.has(id) && !settledIds.has(id)).length;
 }
 
 // The `clarify` stage is excluded from the sweep scan: it shares the inbox eligibility with
@@ -504,7 +569,7 @@ export function unreviewedStageArrivals(state: ReviewFlowState, items: ReadonlyA
         if (!queue) {
             return [];
         }
-        const count = stageArrivalCount(queue, stageEligibleItems(stage.id, items, context), settledIds);
+        const count = stageArrivalCount(queue, stageEligibleEntryIds(stage.id, items, context), settledIds);
         return count > 0 ? [{ stageId: stage.id, title: stage.title, count }] : [];
     });
 }

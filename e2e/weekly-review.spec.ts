@@ -6,6 +6,8 @@ import { gtd } from './helpers/gtd';
 // Weekly Review wizard: guided multi-step flow — inbox checklist (seeded user-defined external
 // buckets), solo clarify, solo focus stages with a linear skip-past walk, whole-stage skip, quick capture
 // mid-review feeding the final sweep, and the confetti celebration at the end.
+// Calendar routines collapse into ONE routine card per series (with pause/edit actions); modified
+// exceptions and routine-generated next actions review individually under a routine banner.
 
 test.describe('weekly review', () => {
     test('full guided review: checklist → solo stages → mid-review capture → celebration', async ({ browser }) => {
@@ -939,6 +941,117 @@ test.describe('weekly review', () => {
             await gtd.flush(page);
             const items = await gtd.listItems(page);
             expect(items.find((i) => i._id === second._id)?.status).toBe('somedayMaybe');
+        });
+    });
+
+    test('calendar routines review ONCE as a routine card; pause/undo work; exceptions and nextAction routine items carry a banner', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-routines-${dayjs().valueOf()}@example.com`, async (page) => {
+            // Two calendar routines: a DAILY 06:00 one (always the earliest occurrence, so its card
+            // leads the walk deterministically) and a weekly Thursday one.
+            const gymRoutine = await gtd.createRoutine(page, {
+                title: 'Morning gym',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                startDate: dayjs().format('YYYY-MM-DD'),
+                calendarItemTemplate: { timeOfDay: '06:00', duration: 30 },
+                template: {},
+                active: true,
+            });
+            await gtd.generateCalendarItemsToHorizon(page, gymRoutine._id);
+            const poolRoutine = await gtd.createRoutine(page, {
+                title: 'Pool with Elena',
+                routineType: 'calendar',
+                rrule: 'FREQ=WEEKLY;BYDAY=TH',
+                startDate: dayjs().format('YYYY-MM-DD'),
+                calendarItemTemplate: { timeOfDay: '18:00', duration: 60 },
+                template: { notes: 'Bring a towel' },
+                active: true,
+            });
+            await gtd.generateCalendarItemsToHorizon(page, poolRoutine._id);
+            // A DAILY nextAction routine materializes its single open item due today — so it lands
+            // in the Next Actions stage (not the tickler) regardless of what weekday the run hits.
+            await gtd.createRoutine(page, { title: 'Water plants', routineType: 'nextAction', rrule: 'FREQ=DAILY', template: {}, active: true });
+            await gtd.materializePendingNextActionRoutines(page);
+            // Mark the SECOND pool occurrence as a modified exception — it must review as its own card.
+            const poolOccurrences = (await gtd.listItems(page))
+                .filter((item) => item.routineId === poolRoutine._id)
+                .sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''));
+            const exception = poolOccurrences[1];
+            if (!exception) throw new Error('expected at least two generated pool occurrences');
+            await gtd.updateRoutine(page, {
+                ...poolRoutine,
+                routineExceptions: [
+                    { date: (exception.timeStart ?? '').slice(0, 10), type: 'modified', itemId: exception._id, newTimeStart: exception.timeStart },
+                ],
+            });
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await page.goto('/weekly-review');
+            await page.getByTestId('startReviewButton').click();
+            // Travel arrows are free jumps — go straight to the calendar stage.
+            await page.getByTestId('stageTravelNext').click();
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Calendar');
+
+            // Each series is ONE entry (plus the exception): "0 of 3", not one per occurrence.
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 3');
+            const routineCard = page.getByTestId('routineReviewCard');
+            await expect(routineCard.getByTestId('routineCardOverline')).toContainText('reviewed once for all its occurrences');
+            await expect(routineCard.getByTestId('routineCardTitle')).toHaveText('Morning gym');
+
+            // Full routine actions, destructive branch: pause-confirm trashes the series' items
+            // and decides the entry irreversibly.
+            await page.getByTestId('routineCardPause').click();
+            await page.getByTestId('pauseRoutineConfirm').click();
+            await expect(routineCard.getByTestId('routineCardTitle')).toHaveText('Pool with Elena');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 3');
+
+            // The weekly routine's card: schedule, occurrence count (minus the exception), notes.
+            await expect(routineCard.getByTestId('routineCardSchedule')).toContainText('Every Thu at 18:00');
+            await expect(routineCard.getByTestId('routineCardOccurrences')).toContainText(`${poolOccurrences.length - 1} occurrences`);
+            await expect(routineCard.getByTestId('routineCardNotes')).toContainText('Bring a towel');
+            // Edit opens the routine dialog; Escape closes it without deciding.
+            await page.getByTestId('routineCardEdit').click();
+            await expect(page.getByRole('dialog').getByTestId('routineEditorSaveButton')).toBeVisible();
+            await page.keyboard.press('Escape');
+            await expect(page.getByTestId('routineEditorSaveButton')).toHaveCount(0);
+
+            // "Looks good" decides the series; next up is the exception — its OWN editor card,
+            // labeled as an exception to the routine.
+            await page.getByTestId('routineCardLooksGood').click();
+            await expect(page.getByTestId('reviewRoutineExceptionBanner')).toContainText('Exception to routine');
+
+            // ◀ revisits the routine decision as a read-only summary; Undo (a bare requeue —
+            // "Looks good" wrote nothing) makes the routine card the live entry again.
+            await page.getByTestId('stageNavBack').click();
+            const revisitCard = page.getByTestId('revisitDecisionCard');
+            await expect(revisitCard).toContainText('Pool with Elena');
+            await expect(revisitCard).toContainText('Every Thu at 18:00');
+            await page.getByTestId('revisitUndoDecision').click();
+            await expect(routineCard.getByTestId('routineCardTitle')).toHaveText('Pool with Elena');
+            // Re-deciding the undone entry RESUMES the revisit walk at the same position (by
+            // design) — ▶ returns to the live queue, where the exception is the current entry.
+            await page.getByTestId('routineCardLooksGood').click();
+            await expect(page.getByTestId('revisitDecisionCard')).toContainText('Pool with Elena');
+            await page.getByTestId('stageNavForward').click();
+            await expect(page.getByTestId('reviewRoutineExceptionBanner')).toBeVisible();
+            await page.getByTestId('focusKeep').click();
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+
+            // Next Actions: the routine-generated item reviews individually, with the routine banner.
+            await page.getByTestId('stageTravelNext').click();
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
+            await expect(page.getByTestId('focusStage').getByRole('textbox', { name: 'Title' })).toHaveValue('Water plants');
+            await expect(page.getByTestId('reviewRoutineBanner')).toContainText('Routine · Every day');
+
+            // The pause really landed: every gym occurrence is trashed.
+            await gtd.flush(page);
+            const gymItems = (await gtd.listItems(page)).filter((item) => item.routineId === gymRoutine._id);
+            expect(gymItems.length).toBeGreaterThan(0);
+            for (const item of gymItems) {
+                expect(item.status).toBe('trash');
+            }
         });
     });
 });

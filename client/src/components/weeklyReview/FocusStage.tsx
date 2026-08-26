@@ -2,6 +2,7 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Paper from '@mui/material/Paper';
 import Snackbar from '@mui/material/Snackbar';
+import Typography from '@mui/material/Typography';
 import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -10,7 +11,17 @@ import { clarifyToDone, clarifyToTrash, FROM_GMAIL_READONLY_MESSAGE, releaseFrom
 import type { MyDB } from '../../types/MyDB';
 import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { RevisitDecisionCard } from './RevisitDecisionCard';
-import { currentQueueItemId, type ReviewStageDefinition, type StageDecisionUndo, type StageQueue, stageEndTitle } from './reviewFlowState';
+import { RoutineReviewBanner } from './RoutineReviewBanner';
+import { RoutineReviewCard } from './RoutineReviewCard';
+import {
+    currentQueueItemId,
+    isModifiedExceptionItem,
+    type ReviewStageDefinition,
+    routineIdOfEntry,
+    type StageDecisionUndo,
+    type StageQueue,
+    stageEndTitle,
+} from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
 import { StageEmptyCard } from './StageEmptyCard';
 import { StageNavButtons } from './StageNavButtons';
@@ -36,7 +47,10 @@ interface FocusStageProps {
  * back to skipped items and then revisits past decisions (with one-click undo).
  */
 export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, travel }: FocusStageProps) {
-    const { allItems, people, workContexts, refreshItems } = useAppData();
+    // `routines` (visible accounts), not `allRoutines`: the wizard QUEUES entries from the visible
+    // set, so the stage must resolve them from the same set — an allRoutines lookup could render a
+    // card for an entry the reconcile is about to drop.
+    const { allItems, routines, people, workContexts, refreshItems } = useAppData();
     const { isPending } = usePendingReassign();
     const [toast, setToast] = useState('');
     // Portal target for the editor's action row — state (not a ref) so ItemEditorBody re-renders
@@ -54,6 +68,29 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     }
 
     const currentId = currentQueueItemId(queue);
+    // A `routine:` pseudo-entry (calendar stage collapse) reviews the whole series as one card.
+    const entryRoutineId = currentId ? routineIdOfEntry(currentId) : null;
+    if (entryRoutineId) {
+        const entryRoutine = routines.find((routine) => routine._id === entryRoutineId);
+        if (!entryRoutine) {
+            // Routine vanished (deleted on another device) — the reconcile effect drops the entry
+            // on the routines change it just observed. Keep the bar mounted (with the drop escape
+            // hatch) so the walk is never controlless if that commit is dropped.
+            return (
+                <Box className={styles.stageRoot} data-testid="focusStage">
+                    <Box className={styles.centeredArea}>
+                        <Paper elevation={1} className={styles.editorCard}>
+                            <Typography variant="body1">This routine no longer exists on this device.</Typography>
+                        </Paper>
+                    </Box>
+                    <StageActionBar travel={travel}>
+                        <StageNavButtons {...nav.blockedNavProps('focusBlockedSkip')} />
+                    </StageActionBar>
+                </Box>
+            );
+        }
+        return <RoutineReviewCard routine={entryRoutine} db={db} nav={nav} travel={travel} />;
+    }
     const currentItem = currentId ? (allItems.find((item) => item._id === currentId) ?? null) : null;
 
     if (!currentId || !currentItem) {
@@ -130,9 +167,15 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
         </>
     );
 
+    // Routine-generated items get a prominent strip above the editor ("review the pattern, not
+    // the copy"); a calendar occurrence individually moved off the pattern is labeled an exception.
+    const itemRoutine = currentItem.routineId ? routines.find((routine) => routine._id === currentItem.routineId) : undefined;
+    const isExceptionItem = Boolean(itemRoutine && isModifiedExceptionItem(itemRoutine, currentItem._id));
+
     return (
         <Box className={styles.stageRoot} data-testid="focusStage">
             <Paper elevation={3} className={styles.editorCard}>
+                {currentItem.routineId && <RoutineReviewBanner routine={itemRoutine} isException={isExceptionItem} routineId={currentItem.routineId} />}
                 <ItemEditorBody
                     key={currentItem._id}
                     item={currentItem}
