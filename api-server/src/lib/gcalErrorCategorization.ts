@@ -9,9 +9,15 @@ import type { OpFailureReason } from '../types/entities.js';
  * Buckets:
  *  - `scope_missing`   → token revoked / invalid_grant / lost write scope. Panel asks the user to
  *                        re-consent.
- *  - `terminal`        → 404/410 (event gone), 403 (uninvited / attendee mutation rejected). No
- *                        retry will help; panel shows Dismiss only. EXCEPT rate-limit 403s — see
- *                        `isRateLimit403` — which are retryable and bucket as transient_exhausted.
+ *  - `terminal`        → 404/410 (event gone), 403 (uninvited / attendee mutation rejected), 400
+ *                        (Google rejected the request itself — e.g. cancelling an instance that
+ *                        fell outside the recurrence after an UNTIL cap; replaying the identical
+ *                        request can never succeed). No retry will help; panel shows Dismiss only.
+ *                        Note the second consumer: `rsvpReplay` treats terminal as "revert the
+ *                        local responseStatus" — intentional for 400, a malformed RSVP patch
+ *                        won't self-heal and reverting the chip is the honest UX.
+ *                        EXCEPT rate-limit 403s — see `isRateLimit403` — which are retryable and
+ *                        bucket as transient_exhausted.
  *  - `calendar_missing`→ 404 on the calendar resource itself. Panel asks the user to pick a calendar.
  *                        Currently differentiated from generic 404 only by caller intent — callers
  *                        that want this discrimination must categorize before invoking this helper,
@@ -32,7 +38,7 @@ export function categorizeGCalError(err: unknown): OpFailureReason {
         return 'transient_exhausted';
     }
     const { code } = err;
-    if (code === 404 || code === 410) {
+    if (code === 400 || code === 404 || code === 410) {
         return 'terminal';
     }
     if (code === 403) {

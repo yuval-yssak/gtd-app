@@ -24,6 +24,7 @@ import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
 import { markOpFailed } from './opFailure.js';
 import { buildCalendarInstanceEventId, normalizeMasterEventId, regenerateFutureRoutineItems } from './routineItemRegeneration.js';
+import { extractUntilFromRrule } from './rruleHelpers.js';
 import { hasAtLeastOne } from './typeUtils.js';
 
 type ProviderFactory = (integration: CalendarIntegrationInterface, userId: string) => CalendarProvider;
@@ -391,13 +392,17 @@ async function pushRoutineInstanceCancellation(
     if (!routine.active) {
         return;
     }
+    const originalDate = resolveOriginalDate(routine, snapshot);
+    if (isBeyondUntilCap(routine, originalDate)) {
+        console.log(`[gcal-pushback] skipping instance cancellation beyond UNTIL cap | routineId=${routine._id} originalDate=${originalDate}`);
+        return;
+    }
     const link: CalendarLink = { integrationId: routine.calendarIntegrationId, configId: routine.calendarSyncConfigId };
     // Heal targets the routine — see pushRoutineInstanceOverride.
     const ctx = await resolvePushContext(link, userId, buildProvider, { entityType: 'routine', entityId: routine._id });
     if (!ctx) {
         return;
     }
-    const originalDate = resolveOriginalDate(routine, snapshot);
     const { provider, config, integration } = ctx;
     const calendarEventId = routine.calendarEventId;
     console.log(
@@ -419,6 +424,19 @@ async function pushRoutineInstanceCancellation(
         await stampItemLastPushed(userId, snapshot._id);
     }
     return;
+}
+
+/**
+ * True when the occurrence falls past the routine's rrule UNTIL cap. Same rationale as the
+ * paused-routine skip in `pushRoutineInstanceCancellation`, for the UNTIL-cap-via-edit path:
+ * capping the routine's rrule already rewrote the GCal master with UNTIL, removing every
+ * occurrence past the cap — Google answers a cancellation PATCH for such an instance with a
+ * permanent 400. Day-granularity comparison is deliberately conservative: a mid-day UNTIL with
+ * a same-day occurrence still pushes and surfaces as terminal rather than being skipped.
+ */
+function isBeyondUntilCap(routine: RoutineInterface, originalDate: string): boolean {
+    const untilIso = extractUntilFromRrule(routine.rrule);
+    return untilIso !== null && dayjs.utc(originalDate).isAfter(dayjs.utc(untilIso), 'day');
 }
 
 /**

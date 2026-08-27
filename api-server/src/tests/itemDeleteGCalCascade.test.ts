@@ -162,6 +162,154 @@ describe('item-delete cascades to GCal via maybePushToGCal', () => {
         expect(firstCall).toContain('gcal-master-1');
     });
 
+    it('skips instance cancellation for occurrences beyond the routine UNTIL cap, still cancels at the cap', async () => {
+        // Capping a routine's rrule rewrites the GCal master with UNTIL, which removes every
+        // occurrence past the cap — a cancellation PATCH for such an instance gets a permanent
+        // 400 from Google. The regen that trims beyond-cap items must therefore not push
+        // per-instance cancellations for them.
+        await seedCalendarIntegration();
+        const routine: RoutineInterface = {
+            _id: 'routine-capped',
+            user: userId,
+            title: 'Daily check',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY;UNTIL=20260901T235959Z',
+            template: {},
+            active: true,
+            createdTs: '2026-08-01T00:00:00Z',
+            updatedTs: '2026-08-01T00:00:00Z',
+            calendarEventId: 'gcal-master-capped',
+            calendarIntegrationId: integrationId,
+            calendarSyncConfigId: configId,
+        } as RoutineInterface;
+        await routinesDAO.insertOne(routine);
+        const beyondCap: ItemInterface = {
+            _id: 'item-beyond-cap',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily check',
+            routineId: 'routine-capped',
+            timeStart: '2026-09-08T15:00:00',
+            timeEnd: '2026-09-08T15:10:00',
+            createdTs: '2026-08-01T00:00:00Z',
+            updatedTs: '2026-08-01T00:00:00Z',
+        };
+        const atCap: ItemInterface = { ...beyondCap, _id: 'item-at-cap', timeStart: '2026-09-01T15:00:00', timeEnd: '2026-09-01T15:10:00' };
+        await itemsDAO.insertOne(beyondCap);
+        await itemsDAO.insertOne(atCap);
+        const cancelInstance = vi.fn().mockResolvedValue(undefined);
+        const buildProvider = () => fakeProviderWithCancelInstance(cancelInstance);
+
+        const beyondOp = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'item-beyond-cap', snapshot: null },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(beyondOp, buildProvider);
+        expect(cancelInstance).not.toHaveBeenCalled();
+
+        // Boundary: an occurrence ON the UNTIL day still exists on the master — it must cancel.
+        const atCapOp = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'item-at-cap', snapshot: null },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(atCapOp, buildProvider);
+        expect(cancelInstance).toHaveBeenCalledTimes(1);
+    });
+
+    it('still cancels a far-future occurrence when the routine rrule carries no UNTIL', async () => {
+        // Pins the guard's null branch: an uncapped rrule must never trigger the skip, however
+        // far out the occurrence is — only an explicit UNTIL proves the master dropped it.
+        await seedCalendarIntegration();
+        const routine: RoutineInterface = {
+            _id: 'routine-uncapped',
+            user: userId,
+            title: 'Daily check',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            createdTs: '2026-08-01T00:00:00Z',
+            updatedTs: '2026-08-01T00:00:00Z',
+            calendarEventId: 'gcal-master-uncapped',
+            calendarIntegrationId: integrationId,
+            calendarSyncConfigId: configId,
+        } as RoutineInterface;
+        await routinesDAO.insertOne(routine);
+        const farFuture: ItemInterface = {
+            _id: 'item-far-future',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily check',
+            routineId: 'routine-uncapped',
+            timeStart: '2027-06-08T15:00:00',
+            timeEnd: '2027-06-08T15:10:00',
+            createdTs: '2026-08-01T00:00:00Z',
+            updatedTs: '2026-08-01T00:00:00Z',
+        };
+        await itemsDAO.insertOne(farFuture);
+        const cancelInstance = vi.fn().mockResolvedValue(undefined);
+        const buildProvider = () => fakeProviderWithCancelInstance(cancelInstance);
+
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'item-far-future', snapshot: null },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(op, buildProvider);
+        expect(cancelInstance).toHaveBeenCalledTimes(1);
+    });
+
+    it('judges the UNTIL cap by the exception original date, not the moved timeStart', async () => {
+        // A moved instance carries its rrule truth on the routine's `modified` exception — its
+        // `timeStart` is the NEW date. An item moved beyond the cap whose original occurrence sits
+        // AT the cap still exists on the master, so its deletion must cancel, not skip.
+        await seedCalendarIntegration();
+        const routine: RoutineInterface = {
+            _id: 'routine-capped-moved',
+            user: userId,
+            title: 'Daily check',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY;UNTIL=20260901T235959Z',
+            template: {},
+            active: true,
+            createdTs: '2026-08-01T00:00:00Z',
+            updatedTs: '2026-08-01T00:00:00Z',
+            calendarEventId: 'gcal-master-capped-moved',
+            calendarIntegrationId: integrationId,
+            calendarSyncConfigId: configId,
+            routineExceptions: [{ date: '2026-09-01', type: 'modified', itemId: 'item-moved', newTimeStart: '2026-09-08T15:00:00' }],
+        } as RoutineInterface;
+        await routinesDAO.insertOne(routine);
+        const moved: ItemInterface = {
+            _id: 'item-moved',
+            user: userId,
+            status: 'calendar',
+            title: 'Daily check',
+            routineId: 'routine-capped-moved',
+            timeStart: '2026-09-08T15:00:00',
+            timeEnd: '2026-09-08T15:10:00',
+            createdTs: '2026-08-01T00:00:00Z',
+            updatedTs: '2026-08-01T00:00:00Z',
+        };
+        await itemsDAO.insertOne(moved);
+        const cancelInstance = vi.fn().mockResolvedValue(undefined);
+        const buildProvider = () => fakeProviderWithCancelInstance(cancelInstance);
+
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'delete', entityId: 'item-moved', snapshot: null },
+            { deviceId: 'api:tok-1' },
+        );
+        await calendarPushback.maybePushToGCal(op, buildProvider);
+        expect(cancelInstance).toHaveBeenCalledTimes(1);
+        // The provider receives the rrule original date, not the moved-to date.
+        const [call] = cancelInstance.mock.calls;
+        if (!call) throw new Error('expected one cancelRecurringInstance call');
+        expect(call).toContain('2026-09-01');
+    });
+
     it('no-ops when the item had no calendar linkage (inbox-only delete)', async () => {
         const inbox: ItemInterface = {
             _id: 'item-inbox-1',

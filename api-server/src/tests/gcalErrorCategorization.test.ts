@@ -20,6 +20,23 @@ describe('categorizeGCalError', () => {
         expect(categorizeGCalError(gcalErr(403))).toBe('terminal');
     });
 
+    it('classifies 400 as terminal (Google rejected the request itself — replay can never succeed)', () => {
+        // Observed shape: cancellation PATCH for an instance beyond the master's UNTIL cap
+        // returns 400 "Bad Request". Bucketing it transient_exhausted rendered a misleading
+        // "Couldn't reach Google Calendar — please retry" with a Retry that loops forever.
+        expect(categorizeGCalError(gcalErr(400, 'Bad Request'))).toBe('terminal');
+    });
+
+    it('classifies a 400 carrying invalid_grant as scope_missing, not terminal', () => {
+        // Google's token endpoint returns 400 for a revoked refresh token. The invalid_grant check
+        // MUST precede the numeric-code switch — now that bare 400 is terminal, inverting the order
+        // would render a revoked integration Dismiss-only with no Reconnect affordance.
+        expect(categorizeGCalError(Object.assign(new Error('Bad Request'), { code: 400, response: { data: { error: 'invalid_grant' } } }))).toBe(
+            'scope_missing',
+        );
+        expect(categorizeGCalError(Object.assign(new Error('Bad Request: invalid_grant'), { code: 400 }))).toBe('scope_missing');
+    });
+
     it('classifies a 403 rate-limit error as transient_exhausted via the structured errors[].reason', () => {
         // Google's short-window per-user write quota is a 403 (not 429). Bucketing it terminal
         // rendered a burst-trash failure Dismiss-only — the 2026-08-19 silent-cancellation incident.
@@ -60,6 +77,7 @@ describe('categorizeGCalError', () => {
 
     it('classifies an unknown numeric code as transient_exhausted', () => {
         // Some 4xx code we did not call out explicitly — Retry is the safer guess than Dismiss.
+        // (400 does NOT take this fallback — it is explicitly bucketed terminal above.)
         expect(categorizeGCalError(gcalErr(418))).toBe('transient_exhausted');
     });
 });
