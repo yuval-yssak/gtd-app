@@ -54,3 +54,4 @@
 - [Duplicated order declarations drift](feedback_duplicated_order_declarations_drift.md) — Id tuple + parallel `ReadonlyArray<Def>` encode order twice; permutations and omissions type-check, stranding the index lookup at -1.
 - [Collapsed pseudo-entry re-enters the queue](feedback_collapsed_pseudo_entry_reenters_queue.md) — `routine:<id>` entries stay derivable after the decision retires them (pause leaves past items); decided ≠ ineligible for pseudo-ids.
 - [New card variant ships without a component test](feedback_new_card_variant_ships_without_component_test.md) — weeklyReview `*Card`/`*Banner` land with pure-state tests only; every `?? null` / missing-entity fallback is uncovered.
+- [Counter semantics change leaves the paired bar uncovered](feedback_counter_semantics_change_leaves_paired_bar_uncovered.md) — Redefining a "n of m" numerator also moves the LinearProgress `value`; every existing `aria-valuenow` assertion sits where the new term is 0.

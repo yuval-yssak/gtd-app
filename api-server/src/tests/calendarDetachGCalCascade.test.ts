@@ -312,7 +312,7 @@ describe('calendar → active-status transition cascades to GCal event removal',
         await itemsDAO.insertOne(calendarItem());
         const deleteEvent = vi.fn().mockResolvedValue(undefined);
 
-        const ops = await applyAndPublishOperations(
+        const { ops } = await applyAndPublishOperations(
             userId,
             [{ entityType: 'item', opType: 'update', entityId: 'item-cal-1', snapshot: detachedSnapshot('nextAction') }],
             { deviceId: 'device-abc' },

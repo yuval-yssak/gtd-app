@@ -564,6 +564,16 @@ function isPoisonedWatermark(existingUpdatedTs: string): boolean {
 }
 
 /**
+ * The one LWW rule, named: the incoming snapshot wins when its `updatedTs` is newer than — or
+ * TIED with — the stored row's (ISO-string compare). Tie → incoming wins, which converges across
+ * devices because every device replays the same totally-ordered `(ts, _id)` op log. Mirror of the
+ * server's `incomingWinsLww` in `api-server/src/lib/applyEntityOp.ts` — change both together.
+ */
+function incomingWinsLww(existingUpdatedTs: string, incomingUpdatedTs: string): boolean {
+    return existingUpdatedTs <= incomingUpdatedTs;
+}
+
+/**
  * `pullUserId` is the user whose cursor is being advanced (i.e. the user the server scoped this
  * pull to). Used to scope deletes: a delete op only removes the local row when it still belongs
  * to that user. Without this guard, a cross-account reassign emits two ops with the same entityId
@@ -598,7 +608,7 @@ async function applyEntityOp<Name extends EntityStoreName>(db: IDBPDatabase<MyDB
     // Wire-data trust boundary: the remapped server snapshot is cast to this store's value type —
     // the same trust the previous per-entity helpers placed in `e as StoredItem` etc.
     const incoming = remapUser(op.snapshot as Record<string, unknown> & { user: string }) as unknown as MyDB[Name]['value'] & { updatedTs: string };
-    if (!existing || existing.updatedTs <= incoming.updatedTs || isPoisonedWatermark(existing.updatedTs)) {
+    if (!existing || incomingWinsLww(existing.updatedTs, incoming.updatedTs) || isPoisonedWatermark(existing.updatedTs)) {
         await tx.store.put(incoming);
         console.log(
             `[debug-gcal-sync][client] applyEntityOp put | type=${op.entityType} id=${op.entityId} existingTs=${existing?.updatedTs ?? 'none'} incomingTs=${incoming.updatedTs}`,

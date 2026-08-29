@@ -9,6 +9,10 @@ import { accountSchema, defineTool, idSchema, registerOne, requestOptsFromArgs }
  * referencing it). The pre-flight checks scope union and rejects 403 with no partial writes;
  * Zod validation also runs up-front so structural errors fail the whole batch.
  *
+ * The server stamps `snapshot.updatedTs` itself (a caller-echoed value carries no ordering
+ * meaning and a stale one would silently lose last-write-wins) and returns the authoritative
+ * value in the per-op `results` array, alongside `applyStatus` and a web `url`.
+ *
  * Item hard-delete is NOT permitted here — the server rejects {entityType:'item', opType:'delete'}
  * with 400 because a hard delete is unrecoverable. To dispose of an item use `gtd_trash_item`
  * (recoverable soft-delete). `opType:'delete'` remains valid for routine/person/workContext ops.
@@ -18,7 +22,12 @@ const batch = defineTool({
     name: 'gtd_batch',
     description:
         'Submit a heterogeneous batch of primitive ops atomically. Each op is {entityType, opType, entityId, snapshot}. ' +
-        'snapshot is a full entity object (or null for delete). The server re-stamps snapshot.user before persisting. ' +
+        'snapshot is a full entity object (or null for delete). The server re-stamps snapshot.user AND snapshot.updatedTs ' +
+        '(server-assigned on every write — a caller-supplied updatedTs is ignored) before persisting. The response carries ' +
+        'per-op results: {entityType, entityId, opType, applyStatus, updatedTs, url}. applyStatus "applied" means the write ' +
+        'landed; "skipped_missing" means an update targeted a row that no longer exists (not resurrected); "skipped_stale" ' +
+        'means it lost last-write-wins; "skipped_duplicate_key" means it hit a unique index owned by another row. ' +
+        'updatedTs is non-null ONLY for an applied non-delete op — never treat the echo of a skipped op as current state. ' +
         'Atomic w.r.t. validation and scope; NOT atomic w.r.t. mid-flight Mongo failures (same caveat as /sync/push). ' +
         'Note: item hard-delete is rejected ({entityType:"item", opType:"delete"} → 400) because it is unrecoverable — ' +
         'use gtd_trash_item to dispose of an item (recoverable soft-delete). opType:"delete" is still valid for ' +

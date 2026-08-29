@@ -147,7 +147,7 @@ The full item shape is `ItemInterface` in `api-server/src/types/entities.ts`. Th
 | `updatedTs` | string | Server-assigned on every write. Conflict-resolution anchor. |
 | `externalId` | string? | Caller-provided dedupe key. Unique per `(user, externalId)`. |
 
-GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `waitingForPersonId`, calendar linkage) are now **writable** through `PATCH /v1/items/:id` and `POST /v1/operations/batch` — subject to the status×field matrix (e.g. `expectedBy` / `ignoreBefore` are valid on `nextAction` / `waitingFor` / `somedayMaybe` / `done` / `trash`; `timeStart`/`timeEnd` only on `calendar` / `done` / `trash`; `waitingForPersonId` is optional even on `waitingFor`). Server-managed fields (`routineId`, `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `externalId`) remain off-limits — caller-supplied values are rejected with `400 forbidden_field`.
+GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `waitingForPersonId`, calendar linkage) are now **writable** through `PATCH /v1/items/:id` and `POST /v1/operations/batch` — subject to the status×field matrix (e.g. `expectedBy` / `ignoreBefore` are valid on `nextAction` / `waitingFor` / `somedayMaybe` / `done` / `trash`; `timeStart`/`timeEnd` only on `calendar` / `done` / `trash`; `waitingForPersonId` is optional even on `waitingFor`). Server-managed fields remain off-limits. `PATCH /v1/items/:id` rejects them with `400 forbidden_field` (`_id`, `user`, `createdTs`, `updatedTs`, `routineId`, `contentHash`, `externalId`, and the sync anchors `lastPushedToGCalTs` / `lastSyncedFromGCalTs` / `lastSyncedNotes`). `POST /v1/operations/batch` takes full snapshots, so its rules differ: server-managed sync-integrity anchors absent from the public read projections (items: `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `calendarInstanceEventId`, `cancelledByGCal`, the four `lastKnownCalendar*` markers; routines: the three sync anchors plus `retiredByGCal`, `calendarRebasedEventId`, and the `lastKnownCalendar*` markers — full list in the batch section) are rejected with `400 forbidden_field`; `updatedTs` and `user` are **silently server-overwritten** (callers echo them back from reads); `routineId` and `externalId` stay accepted (trash-replay and create-dedupe flows legitimately carry them).
 
 ## Endpoints
 
@@ -457,7 +457,12 @@ Submit an array of primitive ops in one request. Use this when an integration ne
 }
 ```
 
-Each op carries `entityType`, `opType` (`create` / `update` / `delete`), `entityId`, and a full `snapshot` (or `null` for delete). The server re-stamps `snapshot.user` to the calling token's user before persisting.
+Each op carries `entityType`, `opType` (`create` / `update` / `delete`), `entityId`, and a full `snapshot` (or `null` for delete). Before persisting, the server re-stamps `snapshot.user` to the calling token's user and **overwrites `snapshot.updatedTs` with server time** — the public surface has no meaningful client clock, and a stale echoed `updatedTs` would silently lose last-write-wins on every device. (`updatedTs` must still be present and a valid ISO datetime to pass schema validation; its value is simply ignored.) `createdTs` stays caller-supplied but is capped at server time.
+
+Snapshot restrictions:
+
+- Server-managed sync-integrity fields are rejected with `400 forbidden_field` — the set is every anchor field the public read projections never expose (so echoing a read back can never trip it): items — `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `calendarInstanceEventId`, `cancelledByGCal`, and the four `lastKnownCalendar*` relink markers; routines — `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `retiredByGCal`, `calendarRebasedEventId`, and the four `lastKnownCalendar*` markers. Note this is a narrower guarantee than the per-entity routes' closed allowlists: publicly-readable server-managed routine fields (`routineExceptions`, `lastGeneratedDate`, `splitFromRoutineId`) remain writable on this full-snapshot surface (as on `/sync/push`), while `PATCH` rejects them.
+- `snapshot._id`, when present, must equal the op's `entityId` — a mismatch is rejected with `400 invalid_op_shape`.
 
 > **Item hard-delete is not permitted here.** An op of `{ entityType: 'item', opType: 'delete' }` is rejected with `400 invalid_op_shape` because a hard delete physically removes the row and is unrecoverable. To dispose of an item use [`POST /v1/items/:id/trash`](#post-v1itemsidtrash--soft-delete-recoverable) — a recoverable soft-delete. `opType: 'delete'` remains valid for `routine`, `person`, and `workContext` ops (their deletes hydrate a pre-delete snapshot into the op log for cascade replay).
 
@@ -469,7 +474,27 @@ Each op carries `entityType`, `opType` (`create` / `update` / `delete`), `entity
 
 **Limits.** 500 ops per request (returns `400 too_many_ops` over). Batch counts as a single write against the per-token rate limit.
 
-**Response** — `200 OK` with `{ ok: true, count: <number-of-ops> }` on success, or one of the structured error shapes above.
+**Response** — `200 OK` on success, or one of the structured error shapes above:
+
+```json
+{
+    "ok": true,
+    "count": 2,
+    "results": [
+        { "entityType": "workContext", "entityId": "uuid-1", "opType": "create", "applyStatus": "applied", "updatedTs": "2026-08-27T12:00:00.000Z" },
+        { "entityType": "item",        "entityId": "uuid-2", "opType": "update", "applyStatus": "skipped_missing", "updatedTs": null }
+    ]
+}
+```
+
+`results` is index-aligned with the submitted `ops`. `updatedTs` is the authoritative server-stamped value **only when the write landed** — it is `null` for deletes and for every `skipped_*` status (the stored row was not written, so there is no new timestamp to report; never treat a skipped op's echo as current state). `applyStatus` is one of:
+
+| `applyStatus` | Meaning |
+|---|---|
+| `applied` | The write landed. |
+| `skipped_missing` | An `update` targeted a row that no longer exists — the op was quarantined, not applied (the row is **not** resurrected). |
+| `skipped_stale` | The snapshot lost last-write-wins to a newer stored row. |
+| `skipped_duplicate_key` | The write hit a unique index (e.g. a calendar-item event-id collision) and was dropped. |
 
 ---
 

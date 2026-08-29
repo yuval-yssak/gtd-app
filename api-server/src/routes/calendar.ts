@@ -3783,10 +3783,14 @@ function hasGCalOwnedRoutineDelta(existing: RoutineInterface, event: CalendarEve
  */
 async function applyGCalOwnedRoutineDeltaOnly(existing: RoutineInterface, event: CalendarEvent, ctx: SyncContext): Promise<void> {
     const routineId = existing._id;
-    // Anchor `updatedTs` on `event.updated`, NOT ctx.now, so a future structural-newer event whose
-    // `event.updated` falls between `existing.updatedTs` and `ctx.now` is not locked out by this
-    // older-webhook fast-path bumping the local clock past the real GCal-side timestamp.
-    const setOps: Record<string, unknown> = { updatedTs: event.updated };
+    // Stamp `updatedTs: ctx.now`, NOT `event.updated`. The structural gate anchors on
+    // `lastSyncedFromGCalTs` (which this fast-path never writes), so bumping the local clock cannot
+    // lock out a future structural event. `event.updated` (seconds-truncated) can be OLDER than the
+    // routine's `updatedTs` on other devices — fanning out a backwards `updatedTs` made their `<=`
+    // LWW gates reject the op, leaving those devices permanently divergent on the GCal-owned fields.
+    // Notes-LWW (`resolveInboundNotes`) and the gone-master guard now see this write as a local
+    // touch at ctx.now — the same window any local edit would open.
+    const setOps: Record<string, unknown> = { updatedTs: ctx.now };
     const unsetOps: Record<string, ''> = {};
     for (const key of GCAL_OWNED_ROUTINE_KEYS) {
         const value = event[key];

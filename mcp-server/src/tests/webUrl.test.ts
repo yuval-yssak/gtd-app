@@ -87,13 +87,55 @@ describe('decorateWithUrls', () => {
         expect(result).toEqual({ people: [{ _id: 'p1', url: `${STAGING}/person/p1` }] });
     });
 
-    it('leaves unknown tools (work contexts, person delete, batch) untouched', () => {
+    it('leaves unknown tools (work contexts, person delete) untouched', () => {
         const workContextResult = decorateWithUrls('gtd_create_work_context', { _id: 'w1', name: 'near a phone' }, STAGING);
         expect(workContextResult).toEqual({ _id: 'w1', name: 'near a phone' });
         const deleteResult = decorateWithUrls('gtd_delete_person', { ok: true }, STAGING);
         expect(deleteResult).toEqual({ ok: true });
-        const batchResult = decorateWithUrls('gtd_batch', { ok: true, count: 3 }, STAGING);
-        expect(batchResult).toEqual({ ok: true, count: 3 });
+    });
+
+    it('stamps a url onto each linkable per-op result of a gtd_batch response, keyed by its own entityType', () => {
+        const batchResult = decorateWithUrls(
+            'gtd_batch',
+            {
+                ok: true,
+                count: 4,
+                results: [
+                    { entityType: 'item', entityId: 'i1', opType: 'create', applyStatus: 'applied', updatedTs: 't' },
+                    { entityType: 'routine', entityId: 'r1', opType: 'update', applyStatus: 'applied', updatedTs: 't' },
+                    { entityType: 'person', entityId: 'p1', opType: 'update', applyStatus: 'applied', updatedTs: 't' },
+                    // workContext has a list-only page — no url.
+                    { entityType: 'workContext', entityId: 'w1', opType: 'create', applyStatus: 'applied', updatedTs: 't' },
+                ],
+            },
+            STAGING,
+        );
+        expect(batchResult).toEqual({
+            ok: true,
+            count: 4,
+            results: [
+                { entityType: 'item', entityId: 'i1', opType: 'create', applyStatus: 'applied', updatedTs: 't', url: `${STAGING}/item/i1` },
+                { entityType: 'routine', entityId: 'r1', opType: 'update', applyStatus: 'applied', updatedTs: 't', url: `${STAGING}/routine/r1` },
+                { entityType: 'person', entityId: 'p1', opType: 'update', applyStatus: 'applied', updatedTs: 't', url: `${STAGING}/person/p1` },
+                { entityType: 'workContext', entityId: 'w1', opType: 'create', applyStatus: 'applied', updatedTs: 't' },
+            ],
+        });
+    });
+
+    it('stamps no url on a batch delete result (the row is gone) and passes legacy {ok, count} through', () => {
+        const withDelete = decorateWithUrls(
+            'gtd_batch',
+            { ok: true, count: 1, results: [{ entityType: 'routine', entityId: 'r1', opType: 'delete', applyStatus: 'applied', updatedTs: null }] },
+            STAGING,
+        );
+        expect(withDelete).toEqual({
+            ok: true,
+            count: 1,
+            results: [{ entityType: 'routine', entityId: 'r1', opType: 'delete', applyStatus: 'applied', updatedTs: null }],
+        });
+        // A server that has not yet shipped `results` (legacy shape) passes through untouched.
+        const legacy = decorateWithUrls('gtd_batch', { ok: true, count: 3 }, STAGING);
+        expect(legacy).toEqual({ ok: true, count: 3 });
     });
 
     it('is a no-op when the web base is null (custom env with no override)', () => {

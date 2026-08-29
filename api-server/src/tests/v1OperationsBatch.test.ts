@@ -4,6 +4,7 @@
  * Zod-validation + persistence. Tests pin: scope-union 403 atomicity, Zod 400 atomicity, happy
  * paths across heterogeneous ops, and that the operations log records every op. */
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
+import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
@@ -85,7 +86,13 @@ describe('POST /v1/operations/batch', () => {
             }),
         );
         expect(res.status).toBe(200);
-        expect((await res.json()) as { ok: boolean; count: number }).toEqual({ ok: true, count: 3 });
+        const body = (await res.json()) as { ok: boolean; count: number; results: { entityId: string; applyStatus: string; updatedTs: string | null }[] };
+        expect(body.ok).toBe(true);
+        expect(body.count).toBe(3);
+        expect(body.results.map((r) => r.entityId)).toEqual(['wc-1', 'it-1', 'p-1']);
+        for (const result of body.results) {
+            expect(result.applyStatus).toBe('applied');
+        }
 
         // Every entity persisted under the calling user.
         expect(await workContextsDAO.findByOwnerAndId('wc-1', userId)).not.toBeNull();
@@ -254,5 +261,190 @@ describe('POST /v1/operations/batch', () => {
         // PHASE-3 FIX: this test should be updated to expect a 4xx and Bob's row preserved when
         // `replaceById` becomes user-scoped. Until then, the batch endpoint inherits the same
         // hole that exists on /sync/push and the per-entity write routes.
+    });
+
+    it('server-stamps updatedTs: an update echoing a stale updatedTs still lands and reads back as server time', async () => {
+        // The incident this pins: an MCP caller echoed `updatedTs` from an earlier read (or a
+        // mis-derived local date). Pre-fix the stale value flowed into LWW verbatim, so the edit
+        // silently lost to the existing row on every device. The public surface now overwrites
+        // `updatedTs` with server time on every write.
+        const userId = await login();
+        const token = await tokenWith(userId, ['items.capture', 'items.write']);
+        const seeded = { _id: 'it-stale', user: userId, status: 'inbox' as const, title: 'original', createdTs: NOW, updatedTs: dayjs().toISOString() };
+        await itemsDAO.insertOne(seeded);
+
+        const staleEcho = { ...seeded, title: 'edited via batch', updatedTs: NOW };
+        const beforeRequest = dayjs().toISOString();
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops: [{ entityType: 'item', opType: 'update', entityId: 'it-stale', snapshot: staleEcho }] }),
+            }),
+        );
+        expect(res.status).toBe(200);
+
+        const stored = await itemsDAO.findByOwnerAndId('it-stale', userId);
+        expect(stored?.title).toBe('edited via batch');
+        expect(dayjs(stored!.updatedTs).isBefore(beforeRequest)).toBe(false);
+        // The response's per-op result carries the authoritative server-stamped timestamp.
+        const { results } = (await res.json()) as { results: { entityId: string; applyStatus: string; updatedTs: string | null }[] };
+        expect(results).toHaveLength(1);
+        const [result] = results;
+        if (!result) throw new Error('expected one batch result');
+        expect(result.applyStatus).toBe('applied');
+        expect(result.updatedTs).toBe(stored!.updatedTs);
+        // Op log carries the same authoritative timestamp — other devices' LWW gates accept it.
+        const logged = await operationsDAO.findArray({ user: userId, entityId: 'it-stale' });
+        expect(logged).toHaveLength(1);
+        expect((logged[0]!.snapshot as { updatedTs: string }).updatedTs).toBe(stored!.updatedTs);
+    });
+
+    it('rejects internal sync-anchor fields with 400 forbidden_field and writes nothing', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['items.capture', 'routines.write']);
+        const ops = [
+            { entityType: 'item', opType: 'create', entityId: 'it-ok', snapshot: itemSnapshot(userId, 'it-ok') },
+            {
+                entityType: 'routine',
+                opType: 'update',
+                entityId: 'r-forged',
+                snapshot: { _id: 'r-forged', user: userId, lastSyncedFromGCalTs: NOW },
+            },
+        ];
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops }),
+            }),
+        );
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('forbidden_field');
+        // Batch-atomic: the valid sibling op was not persisted either.
+        expect(await itemsDAO.findByOwnerAndId('it-ok', userId)).toBeNull();
+
+        const itemForged = [
+            { entityType: 'item', opType: 'create', entityId: 'it-hash', snapshot: { ...itemSnapshot(userId, 'it-hash'), contentHash: 'deadbeef' } },
+        ];
+        const res2 = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops: itemForged }),
+            }),
+        );
+        expect(res2.status).toBe(400);
+        expect(((await res2.json()) as { code: string }).code).toBe('forbidden_field');
+    });
+
+    it('rejects a snapshot._id that diverges from entityId with 400 (Mongo _id is immutable)', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['items.capture']);
+        const ops = [{ entityType: 'item', opType: 'create', entityId: 'it-a', snapshot: itemSnapshot(userId, 'it-b') }];
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops }),
+            }),
+        );
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('invalid_op_shape');
+        expect(await itemsDAO.findByOwnerAndId('it-a', userId)).toBeNull();
+        expect(await itemsDAO.findByOwnerAndId('it-b', userId)).toBeNull();
+    });
+
+    it("reports applyStatus 'skipped_missing' for an update whose row is gone, while applying the rest", async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['items.capture', 'items.write']);
+        const ops = [
+            { entityType: 'item', opType: 'create', entityId: 'it-live', snapshot: itemSnapshot(userId, 'it-live') },
+            { entityType: 'item', opType: 'update', entityId: 'it-ghost', snapshot: itemSnapshot(userId, 'it-ghost') },
+        ];
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const { results } = (await res.json()) as { results: { entityId: string; applyStatus: string }[] };
+        expect(results.find((r) => r.entityId === 'it-live')?.applyStatus).toBe('applied');
+        // The quarantined update did NOT resurrect the missing row, and the caller can see it.
+        expect(results.find((r) => r.entityId === 'it-ghost')?.applyStatus).toBe('skipped_missing');
+        // A skipped op reports no timestamp — its snapshot describes the ATTEMPTED write, not the row.
+        expect(results.find((r) => r.entityId === 'it-ghost')?.updatedTs).toBeNull();
+        expect(await itemsDAO.findByOwnerAndId('it-ghost', userId)).toBeNull();
+    });
+
+    it('reports updatedTs: null for a delete op — the hydrated pre-delete snapshot is not the persisted value', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['contexts.write']);
+        await workContextsDAO.insertOne({ _id: 'wc-del', user: userId, name: 'to delete', createdTs: NOW, updatedTs: NOW });
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops: [{ entityType: 'workContext', opType: 'delete', entityId: 'wc-del', snapshot: null }] }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const { results } = (await res.json()) as { results: { applyStatus: string; updatedTs: string | null }[] };
+        const [result] = results;
+        if (!result) throw new Error('expected one batch result');
+        expect(result.applyStatus).toBe('applied');
+        expect(result.updatedTs).toBeNull();
+        expect(await workContextsDAO.findByOwnerAndId('wc-del', userId)).toBeNull();
+    });
+
+    it('reports updatedTs: null when the op lost LWW — the row was not written', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['items.write']);
+        // Far-future stored row: the server-stamped incoming updatedTs loses LWW.
+        await itemsDAO.insertOne({ ...itemSnapshot(userId, 'it-future'), updatedTs: '2099-01-01T00:00:00.000Z' });
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ops: [
+                        { entityType: 'item', opType: 'update', entityId: 'it-future', snapshot: { ...itemSnapshot(userId, 'it-future'), title: 'attempted' } },
+                    ],
+                }),
+            }),
+        );
+        expect(res.status).toBe(200);
+        const { results } = (await res.json()) as { results: { applyStatus: string; updatedTs: string | null }[] };
+        const [result] = results;
+        if (!result) throw new Error('expected one batch result');
+        expect(result.applyStatus).toBe('skipped_stale');
+        // Reporting the attempted timestamp here would be a stale-echo bug in reverse — the
+        // stored row still carries its own (future) updatedTs and title.
+        expect(result.updatedTs).toBeNull();
+        expect((await itemsDAO.findByOwnerAndId('it-future', userId))?.title).toBe('t-it-future');
+    });
+
+    it.each([
+        ['item', 'calendarInstanceEventId', 'evt_x_20260519T120000Z'],
+        ['item', 'cancelledByGCal', true],
+        ['item', 'lastKnownCalendarEventId', 'evt-old'],
+        ['routine', 'retiredByGCal', true],
+        ['routine', 'calendarRebasedEventId', 'evt_R20260101'],
+        ['routine', 'lastKnownCalendarAccountEmail', 'x@example.com'],
+    ] as const)('rejects server-managed %s snapshot field %s with 400 forbidden_field', async (entityType, field, value) => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['items.capture', 'items.write', 'routines.write']);
+        const base = entityType === 'item' ? itemSnapshot(userId, 'e-forged') : { _id: 'e-forged', user: userId, updatedTs: NOW };
+        const res = await app.fetch(
+            new Request('http://localhost:4000/v1/operations/batch', {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ops: [{ entityType, opType: 'update', entityId: 'e-forged', snapshot: { ...base, [field]: value } }] }),
+            }),
+        );
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('forbidden_field');
     });
 });

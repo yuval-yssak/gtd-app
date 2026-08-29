@@ -6,13 +6,13 @@
  *
  * `item`, `routine` and `person` get a link: the web app has per-entity routes for them
  * (`/item/<id>`, `/routine/<id>`, `/person/<id>`). Work contexts have a list-only page, so a
- * per-entity URL would be misleading — they're intentionally skipped. `gtd_batch` returns
- * `{ ok, count }` with no entity to stamp; the model is told (via server instructions) to build
- * batch links from the `entityId`s it submitted.
+ * per-entity URL would be misleading — they're intentionally skipped.
  *
- * Three response shapes are handled: `one` (a bare entity), `list` (an `{ items|routines: [] }`
- * envelope), and `pair` — the `{ head, tail }` composite returned by `gtd_split_routine`, which
- * creates two linkable routines at once.
+ * Four response shapes are handled: `one` (a bare entity), `list` (an `{ items|routines: [] }`
+ * envelope), `pair` — the `{ head, tail }` composite returned by `gtd_split_routine`, which
+ * creates two linkable routines at once — and `batch`, the `{ ok, count, results: [] }` envelope
+ * of `gtd_batch`, where each per-op result is stamped from its own `entityType`/`entityId`
+ * (delete ops get no url — the row is gone).
  */
 
 /** Web-app path prefix per linkable entity. Keyed by the tool's entity domain. */
@@ -21,10 +21,12 @@ type LinkableEntity = keyof typeof PATH_BY_ENTITY;
 
 /**
  * Maps each tool name to the entity it returns and the response shape, so we stamp the right
- * objects and never touch a non-linkable entity or a status-only payload (batch, delete). Tools
+ * objects and never touch a non-linkable entity or a status-only payload (delete). Tools
  * absent from this map are passed through untouched.
  */
-const SHAPE_BY_TOOL: Record<string, { entity: LinkableEntity; shape: 'one' | 'list' | 'pair' }> = {
+type ToolShape = { entity: LinkableEntity; shape: 'one' | 'list' | 'pair' } | { shape: 'batch' };
+
+const SHAPE_BY_TOOL: Record<string, ToolShape> = {
     gtd_capture: { entity: 'item', shape: 'one' },
     gtd_get_item: { entity: 'item', shape: 'one' },
     gtd_update_item: { entity: 'item', shape: 'one' },
@@ -43,6 +45,8 @@ const SHAPE_BY_TOOL: Record<string, { entity: LinkableEntity; shape: 'one' | 'li
     gtd_get_person: { entity: 'person', shape: 'one' },
     gtd_update_person: { entity: 'person', shape: 'one' },
     gtd_list_people: { entity: 'person', shape: 'list' },
+    // Batch returns per-op results (not entities); each is stamped from its own entityType.
+    gtd_batch: { shape: 'batch' },
 };
 
 /** The array property holding the entities in a list response (mirrors the v1 API envelopes). */
@@ -57,6 +61,9 @@ export function decorateWithUrls(toolName: string, result: unknown, webBase: str
     const spec = SHAPE_BY_TOOL[toolName];
     if (!webBase || !spec) {
         return result;
+    }
+    if (spec.shape === 'batch') {
+        return stampBatchResults(result, webBase);
     }
     if (spec.shape === 'one') {
         return stampOne(result, spec.entity, webBase);
@@ -101,6 +108,37 @@ function stampList(envelope: unknown, kind: LinkableEntity, webBase: string): un
         return envelope;
     }
     return { ...envelope, [listKey]: list.map((entity) => stampOne(entity, kind, webBase)) };
+}
+
+/** Stamps `url` onto each per-op result of the `gtd_batch` response envelope. */
+function stampBatchResults(envelope: unknown, webBase: string): unknown {
+    if (!isRecord(envelope)) {
+        return envelope;
+    }
+    // Bracket access required by `noPropertyAccessFromIndexSignature` on the Record type;
+    // suppress Biome's dot-notation preference, which would conflict with tsc.
+    // biome-ignore lint/complexity/useLiteralKeys: see above.
+    const results = envelope['results'];
+    if (!Array.isArray(results)) {
+        return envelope;
+    }
+    return { ...envelope, results: results.map((result) => stampBatchResult(result, webBase)) };
+}
+
+function stampBatchResult(result: unknown, webBase: string): unknown {
+    if (!isRecord(result)) {
+        return result;
+    }
+    const { entityType, entityId, opType } = result;
+    // Deletes have no page to link; workContext has a list-only page (see header comment).
+    if (opType === 'delete' || typeof entityId !== 'string' || entityId.length === 0 || !isLinkableEntity(entityType)) {
+        return result;
+    }
+    return { ...result, url: `${webBase}${PATH_BY_ENTITY[entityType]}/${entityId}` };
+}
+
+function isLinkableEntity(value: unknown): value is LinkableEntity {
+    return typeof value === 'string' && value in PATH_BY_ENTITY;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

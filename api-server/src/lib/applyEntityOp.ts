@@ -33,6 +33,20 @@ import {
 export type ApplyEntityOpOutcome = 'applied' | 'skipped_missing' | 'skipped_stale' | 'skipped_duplicate_key';
 
 /**
+ * The one LWW rule, named: the incoming snapshot wins when its `updatedTs` is newer than — or
+ * TIED with — the stored row's (ISO-string compare). Tie → incoming wins ("last arriver"), which
+ * is deterministic across devices because every device replays the same totally-ordered
+ * `(ts, _id)` op log (compound pull cursor) — server row and every replica converge on the final
+ * op of the tie group. A content-level deterministic tie-break independent of arrival order
+ * would need a persisted per-row op watermark (entity field + client IDB schema) — an explicit
+ * follow-up, out of scope here. Mirrored client-side in `client/src/db/syncHelpers.ts`
+ * (`incomingWinsLww`); change both together.
+ */
+export function incomingWinsLww(existingUpdatedTs: string, incomingUpdatedTs: string): boolean {
+    return existingUpdatedTs <= incomingUpdatedTs;
+}
+
+/**
  * Persists a single op to its target collection. Last-write-wins on (updatedTs); deletes are
  * scoped by user to ensure a crafted op can't reach across users.
  *
@@ -66,7 +80,7 @@ async function applyEntitySnapshotOp<T extends EntitySnapshot>(
         console.warn(`[apply-op] skipped update for missing ${entityId}: deleted or superseded; not resurrecting`);
         return 'skipped_missing';
     }
-    if (!existing || existing.updatedTs <= snapshot.updatedTs) {
+    if (!existing || incomingWinsLww(existing.updatedTs, snapshot.updatedTs)) {
         try {
             await dao.replaceById(entityId, snapshot);
         } catch (err) {
@@ -165,7 +179,7 @@ async function hydrateDetachOne(userId: string, op: OperationInterface): Promise
     }
     // Mirror the LWW gate in applyEntitySnapshotOp: a stale op that will not replace the row
     // must not cancel the GCal event of the (newer) state that stays in place.
-    if (existing.updatedTs > incoming.updatedTs) {
+    if (!incomingWinsLww(existing.updatedTs, incoming.updatedTs)) {
         return;
     }
     const hasGCalPresence = Boolean(existing.calendarEventId) || Boolean(existing.routineId && existing.timeStart);

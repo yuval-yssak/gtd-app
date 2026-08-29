@@ -115,7 +115,7 @@ async function seedAll(integrationOverrides?: Partial<CalendarIntegrationInterfa
  * stay tightly focused on the assertions instead of wiring `applyAndPublishOperations` plumbing.
  */
 async function pushRsvpOp(itemId: string, responseStatus: 'accepted' | 'declined' | 'tentative'): Promise<string> {
-    const ops = await applyAndPublishOperations(
+    const { ops } = await applyAndPublishOperations(
         USER_ID,
         [
             {

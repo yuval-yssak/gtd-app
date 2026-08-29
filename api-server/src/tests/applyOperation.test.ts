@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { incomingWinsLww } from '../lib/applyEntityOp.js';
 import { applyAndPublishOperation, applyAndPublishOperations, OperationValidationError } from '../lib/applyOperation.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
@@ -160,6 +161,36 @@ describe('applyAndPublishOperation — updatedTs clamping', () => {
         expect(op.detachedCalendar).toBeUndefined();
     });
 
+    it('equal updatedTs: the tie goes to the incoming op in BOTH the apply gate and the detach gate', async () => {
+        // Tie semantics, named and pinned: `incomingWinsLww` uses `<=`, so a snapshot tied with
+        // the stored row replaces it — and the calendar-detach hydrator must agree, or a tied
+        // detach op would move the row out of `calendar` while stranding the GCal event live.
+        const now = '2026-05-08T12:00:00.000Z';
+        const tieTs = '2026-05-08T11:00:00.000Z';
+        await itemsDAO.insertOne(
+            baseInboxItem({
+                status: 'calendar',
+                timeStart: '2026-05-10T09:00:00+03:00',
+                timeEnd: '2026-05-10T09:30:00+03:00',
+                calendarEventId: 'evt-tie',
+                calendarIntegrationId: 'int-1',
+                updatedTs: tieTs,
+            }),
+        );
+
+        const tiedDetach = baseInboxItem({ status: 'nextAction', updatedTs: tieTs });
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'update', entityId: 'item-1', snapshot: tiedDetach },
+            { deviceId: 'device-abc', now },
+        );
+
+        // Apply gate: tie → incoming wins.
+        expect((await itemsDAO.findByOwnerAndId('item-1', userId))?.status).toBe('nextAction');
+        // Detach gate: agrees with the apply gate, capturing the pre-update calendar row.
+        expect(op.detachedCalendar).toMatchObject({ calendarEventId: 'evt-tie' });
+    });
+
     it('leaves a past updatedTs untouched — offline history must keep losing LWW to newer edits', async () => {
         const now = '2026-05-08T12:00:00.000Z';
         const offlineEdit = baseInboxItem({ updatedTs: '2026-05-01T09:00:00.000Z' });
@@ -175,7 +206,7 @@ describe('applyAndPublishOperation — updatedTs clamping', () => {
 
     it('clamps future updatedTs in the batch path too', async () => {
         const now = '2026-05-08T12:00:00.000Z';
-        const ops = await applyAndPublishOperations(
+        const { ops } = await applyAndPublishOperations(
             userId,
             [
                 { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: baseInboxItem({ updatedTs: '2027-01-01T00:00:00.000Z' }) },
@@ -188,6 +219,64 @@ describe('applyAndPublishOperation — updatedTs clamping', () => {
         // The non-poisoned sibling keeps its own timestamp.
         expect((ops[1]!.snapshot as ItemInterface).updatedTs).toBe('2026-05-08T11:00:00.000Z');
         expect((await itemsDAO.findByOwnerAndId('item-1', userId))?.updatedTs).toBe(now);
+    });
+});
+
+describe('applyAndPublishOperation — serverStampUpdatedTs (public batch surface)', () => {
+    it('overwrites a PAST updatedTs with server now in both the collection row and the op log', async () => {
+        // The public surface has no meaningful client clock: a caller echoing a stale
+        // `updatedTs` from an earlier read would silently lose LWW on every device. Unlike the
+        // sync path (where a past updatedTs is offline history and stays untouched — see the
+        // clamp block above), the flag makes the server the timestamp authority.
+        const now = '2026-05-08T12:00:00.000Z';
+        const staleEcho = baseInboxItem({ updatedTs: '2026-05-01T09:00:00.000Z' });
+
+        const op = await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: staleEcho },
+            { deviceId: 'api:tok-1', now, serverStampUpdatedTs: true },
+        );
+
+        expect((op.snapshot as ItemInterface).updatedTs).toBe(now);
+        expect((await itemsDAO.findByOwnerAndId('item-1', userId))?.updatedTs).toBe(now);
+    });
+
+    it('future-clamps createdTs but leaves a past createdTs caller-supplied', async () => {
+        const now = '2026-05-08T12:00:00.000Z';
+        const forgedCreate = baseInboxItem({ createdTs: '2027-01-01T00:00:00.000Z', updatedTs: '2026-05-01T09:00:00.000Z' });
+        await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: forgedCreate },
+            { deviceId: 'api:tok-1', now, serverStampUpdatedTs: true },
+        );
+        expect((await itemsDAO.findByOwnerAndId('item-1', userId))?.createdTs).toBe(now);
+
+        // Past createdTs is display metadata (the MCP echoes the true original) — untouched.
+        const honestCreate = baseInboxItem({ _id: 'item-2', createdTs: '2026-01-01T00:00:00.000Z', updatedTs: '2026-05-01T09:00:00.000Z' });
+        await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'create', entityId: 'item-2', snapshot: honestCreate },
+            { deviceId: 'api:tok-1', now, serverStampUpdatedTs: true },
+        );
+        expect((await itemsDAO.findByOwnerAndId('item-2', userId))?.createdTs).toBe('2026-01-01T00:00:00.000Z');
+    });
+
+    it('stamps every snapshot in the batch path', async () => {
+        const now = '2026-05-08T12:00:00.000Z';
+        const { ops } = await applyAndPublishOperations(
+            userId,
+            [
+                { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: baseInboxItem({ updatedTs: '2026-05-01T09:00:00.000Z' }) },
+                { entityType: 'item', opType: 'create', entityId: 'item-2', snapshot: baseInboxItem({ _id: 'item-2', updatedTs: '2027-01-01T00:00:00.000Z' }) },
+            ],
+            { deviceId: 'api:tok-1', now, serverStampUpdatedTs: true },
+        );
+
+        for (const op of ops) {
+            expect((op.snapshot as ItemInterface).updatedTs).toBe(now);
+        }
+        expect((await itemsDAO.findByOwnerAndId('item-1', userId))?.updatedTs).toBe(now);
+        expect((await itemsDAO.findByOwnerAndId('item-2', userId))?.updatedTs).toBe(now);
     });
 });
 
@@ -221,7 +310,7 @@ describe('applyAndPublishOperation — strict-mode validation', () => {
 
 describe('applyAndPublishOperations — batch', () => {
     it('persists multiple ops and stamps the same ts on each', async () => {
-        const ops = await applyAndPublishOperations(
+        const { ops } = await applyAndPublishOperations(
             userId,
             [
                 { entityType: 'item', opType: 'create', entityId: 'item-1', snapshot: baseInboxItem({ _id: 'item-1' }) },
@@ -361,7 +450,7 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
 
     it('batch path quarantines a missing-row update while applying the rest of the batch', async () => {
         await itemsDAO.insertOne(baseInboxItem({ _id: 'still-here', title: 'kept', updatedTs: '2026-01-01T00:00:00Z' }));
-        const ops = await applyAndPublishOperations(
+        const { ops } = await applyAndPublishOperations(
             userId,
             [
                 { entityType: 'item', opType: 'update', entityId: 'gone-item', snapshot: baseInboxItem({ _id: 'gone-item' }) },
@@ -435,5 +524,13 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
         const stale = await itemsDAO.findByOwnerAndId('stale-item', userId);
         expect(stale?.status).toBe('inbox');
         expect(await db.collection('items').countDocuments({ user: userId, calendarInstanceEventId: 'evt_abc_20260803T071500Z' })).toBe(1);
+    });
+});
+
+describe('incomingWinsLww — the shared LWW comparator', () => {
+    it('newer incoming wins, older incoming loses, tie goes to incoming', () => {
+        expect(incomingWinsLww('2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z')).toBe(true);
+        expect(incomingWinsLww('2026-01-02T00:00:00.000Z', '2026-01-01T00:00:00.000Z')).toBe(false);
+        expect(incomingWinsLww('2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')).toBe(true);
     });
 });

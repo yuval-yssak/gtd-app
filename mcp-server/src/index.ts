@@ -24,9 +24,9 @@ import { registerWorkContextTools } from './tools/workContexts.js';
 const SERVER_INSTRUCTIONS = [
     'After creating or editing an item, routine or person, the tool response includes a `url` field — a direct',
     'web-app link to that entity. Always show the user this `url` at the end of your reply so they can jump straight to it.',
-    'The `gtd_batch` tool returns only `{ ok, count }` with no entity, so it carries no `url`; when a batch creates or',
-    'updates items/routines, construct the link yourself from each op as `<web-app-origin>/item/<entityId>` or',
-    '`<web-app-origin>/routine/<entityId>` (infer the origin from a `url` returned by any other tool in the session).',
+    'The `gtd_batch` tool returns per-op `results`, each carrying the server-stamped `updatedTs`, an `applyStatus`, and',
+    'a `url` for item/routine/person writes — surface those `url`s the same way, and check `applyStatus` instead of',
+    'assuming every op landed (`skipped_missing` = the target row no longer exists).',
     'When creating or updating a person, put contact details in the dedicated `email` and `phone` fields — never bury',
     'them in `notes`.',
     'Every `notes` field (on items, routines and people) is rendered as Markdown in the web app. Always write links there',

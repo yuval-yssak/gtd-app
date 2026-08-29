@@ -3,7 +3,7 @@ import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
 import type { EntitySnapshot, EntityType, OperationInterface, OpType, RsvpOpPayload } from '../types/entities.js';
-import { applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
+import { type ApplyEntityOpOutcome, applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
 import { maybeCascadeReferenceRemoval } from './referenceCascades.js';
@@ -49,6 +49,20 @@ export interface ApplyOptions {
      * `crossUserReferences` instead. No effect for item/routine deletes (cascade already no-ops).
      */
     suppressReferenceCascade?: boolean;
+    /**
+     * Overwrite caller-supplied `snapshot.updatedTs` with server now (and future-clamp `createdTs`),
+     * matching the per-entity /v1 routes' "server-assigned on every write" contract. Public batch
+     * surface ONLY. NEVER set on `/sync/push`: a first-party client's `updatedTs` is meaningful
+     * offline history that must keep losing LWW to newer edits (see the "leaves a past updatedTs
+     * untouched" test in applyOperation.test.ts).
+     */
+    serverStampUpdatedTs?: boolean;
+}
+
+/** Return shape of `applyAndPublishOperations`: persisted ops + index-aligned apply outcomes. */
+export interface ApplyOperationsResult {
+    ops: OperationInterface[];
+    outcomes: ApplyEntityOpOutcome[];
 }
 
 /**
@@ -86,10 +100,33 @@ function clampUpdatedTs(snapshot: EntitySnapshot, now: string): EntitySnapshot {
     return { ...snapshot, updatedTs: now };
 }
 
+/** Returns `ts` capped at `now` (ISO string compare). */
+function clampFutureTs(ts: string, now: string): string {
+    return ts <= now ? ts : now;
+}
+
 /** Server-side provenance stamped onto every persisted op: which device wrote it, and when. */
 export interface OpStamp {
     deviceId: string;
     now: string;
+    /** See `ApplyOptions.serverStampUpdatedTs`. */
+    serverStampUpdatedTs?: boolean;
+}
+
+/**
+ * Ownership + timestamp authority applied to every snapshot. `user` is always re-stamped (defense
+ * in depth behind the misroute guard). `updatedTs` is either future-clamped (sync path — client
+ * time is meaningful offline history) or fully server-stamped (public batch path — caller time
+ * carries no ordering meaning and a stale value would silently lose LWW; `createdTs` is
+ * future-clamped there too, but otherwise stays caller-supplied: it is display metadata, not a
+ * conflict anchor, and the MCP echoes the true original value).
+ */
+function stampSnapshot(snapshot: EntitySnapshot, userId: string, stamp: OpStamp): EntitySnapshot {
+    const owned = { ...snapshot, user: userId };
+    if (!stamp.serverStampUpdatedTs) {
+        return clampUpdatedTs(owned, stamp.now);
+    }
+    return { ...owned, updatedTs: stamp.now, createdTs: clampFutureTs(owned.createdTs, stamp.now) };
 }
 
 /**
@@ -109,7 +146,7 @@ export function toServerOperation(userId: string, raw: RawOperation, stamp: OpSt
         entityType: raw.entityType,
         entityId: raw.entityId,
         opType: raw.opType,
-        snapshot: raw.snapshot ? clampUpdatedTs({ ...raw.snapshot, user: userId } as EntitySnapshot, now) : null,
+        snapshot: raw.snapshot ? stampSnapshot(raw.snapshot, userId, stamp) : null,
         ...(raw.gcalMeta ? { gcalMeta: raw.gcalMeta } : {}),
         ...(raw.rsvp ? { rsvp: raw.rsvp } : {}),
     };
@@ -154,7 +191,7 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
 
     // Step 2 — server-authoritative op.
     const now = opts.now ?? dayjs().toISOString();
-    const op = toServerOperation(userId, raw, { deviceId: opts.deviceId, now });
+    const op = toServerOperation(userId, raw, { deviceId: opts.deviceId, now, ...(opts.serverStampUpdatedTs ? { serverStampUpdatedTs: true } : {}) });
 
     // Step 3 — delete-op snapshot hydration. Mutates op.snapshot in place so the downstream
     // notify fan-out (GCal pushback, person/workContext reference cascades) has the pre-delete
@@ -248,10 +285,13 @@ async function runReferenceCascades(ops: OperationInterface[]): Promise<void> {
  *
  * Strict mode (post-flip): the first failing op aborts the whole batch — returned as
  * `OperationValidationError`. No partial application: nothing is persisted on failure.
+ *
+ * Returns the persisted ops plus an index-aligned `outcomes` array (what `applyEntityOp`
+ * reported per op) so the public batch route can surface per-op apply status.
  */
-export async function applyAndPublishOperations(userId: string, raws: RawOperation[], opts: ApplyOptions): Promise<OperationInterface[]> {
+export async function applyAndPublishOperations(userId: string, raws: RawOperation[], opts: ApplyOptions): Promise<ApplyOperationsResult> {
     if (!raws.length) {
-        return [];
+        return { ops: [], outcomes: [] };
     }
 
     // Validate all up front so strict-mode rejects the whole batch atomically.
@@ -289,7 +329,9 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     }
 
     const now = opts.now ?? dayjs().toISOString();
-    const ops: OperationInterface[] = raws.map((raw) => toServerOperation(userId, raw, { deviceId: opts.deviceId, now }));
+    const ops: OperationInterface[] = raws.map((raw) =>
+        toServerOperation(userId, raw, { deviceId: opts.deviceId, now, ...(opts.serverStampUpdatedTs ? { serverStampUpdatedTs: true } : {}) }),
+    );
 
     // Hydrate delete-op snapshots before the apply Promise.all races against the deletion.
     // Covers items / routines / people / workContexts; needed so the downstream fan-out has the
@@ -300,7 +342,7 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     // the pre-update row must be captured before the Promise.all below overwrites it.
     await hydrateCalendarDetachSnapshots(userId, ops);
 
-    const [, ...outcomes] = await Promise.all([operationsDAO.insertMany(ops), ...ops.map((op) => applyEntityOp(userId, op))]);
+    const [, outcomes] = await Promise.all([operationsDAO.insertMany(ops), Promise.all(ops.map((op) => applyEntityOp(userId, op)))]);
 
     // Quarantine skipped-missing ops (see the single-op path). Rows were already inserted by the
     // parallel insertMany above, so the markers are written back with an update; the in-memory op
@@ -332,5 +374,5 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
         await runReferenceCascades(appliedOps);
     }
 
-    return ops;
+    return { ops, outcomes };
 }

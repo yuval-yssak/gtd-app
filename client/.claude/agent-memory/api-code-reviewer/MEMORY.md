@@ -6,3 +6,5 @@
 - [Test DB ppid isolation](project_test_db_ppid_isolation.md) — test DBs namespaced by process.ppid under NODE_ENV=test for concurrent runs; sync-audit config has no teardown so it leaks namespaced DBs
 - [Boot-migration review checklist](feedback_boot_migration_review_checklist.md) — loaders/*Migration.ts: check bridge-removal deploy safety, $addToSet-then-$pull ordering, stale operator-name comments
 - [Legacy marker "safe wipe" reopens dup bug](feedback_legacy_marker_safe_wipe_reopens_dup.md) — GCal reconnect repair wipes markers stamped before accountEmail shipped → re-mints gtd* clone; transitional gap, $ne matches missing fields
+- [Batch denylist drifts from PATCH allowlist](feedback_public_batch_vs_per_entity_allowlist_drift.md) — snapshot-endpoint denylists are open-by-default; diff schema vs allowlist vs denylist, don't trust "mirrors X" comments
+- [op.snapshot is not the stored row](feedback_op_snapshot_is_not_the_stored_row.md) — response fields read off op.snapshot are the attempted write; wrong on skipped_* outcomes and hydrated delete/detach snapshots

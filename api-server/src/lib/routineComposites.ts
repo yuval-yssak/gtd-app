@@ -177,7 +177,8 @@ async function deleteFutureCalendarItemsForRoutine(ctx: CompositeContext, routin
         entityId: item._id ?? '',
         snapshot: null,
     }));
-    return applyAndPublishOperations(ctx.userId, ops, { deviceId: `api:${ctx.tokenId}`, strict: true });
+    const { ops: deleteOps } = await applyAndPublishOperations(ctx.userId, ops, { deviceId: `api:${ctx.tokenId}`, strict: true });
+    return deleteOps;
 }
 
 function isFutureOpen(item: ItemInterface, fromDate: string): boolean {

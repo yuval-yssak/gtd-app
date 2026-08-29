@@ -101,10 +101,15 @@ describe('cross-surface parity: /sync/push vs /v1/operations/batch', () => {
         const v1Row = await workContextsDAO.findByOwnerAndId(v1Id, userId);
         expect(syncRow).not.toBeNull();
         expect(v1Row).not.toBeNull();
-        // Strip _id to compare the structural shape.
-        const { _id: _s1, ...syncFields } = syncRow!;
-        const { _id: _s2, ...v1Fields } = v1Row!;
+        // Strip _id to compare the structural shape — and updatedTs, the one DELIBERATE
+        // divergence: /sync/push preserves the client clock (offline history) while the public
+        // batch surface server-stamps it (see `serverStampUpdatedTs` in applyOperation.ts).
+        const { _id: _s1, updatedTs: syncUpdatedTs, ...syncFields } = syncRow!;
+        const { _id: _s2, updatedTs: v1UpdatedTs, ...v1Fields } = v1Row!;
         expect(syncFields).toEqual(v1Fields);
+        expect(syncUpdatedTs).toBe(ts);
+        expect(dayjs(v1UpdatedTs).isBefore(ts)).toBe(false);
+        expect(dayjs(v1UpdatedTs).isAfter(dayjs())).toBe(false);
 
         // 4. Operations-log parity: both ops have the same entityType/opType, the v1 op's
         //    deviceId is `api:<tokenId>` while the sync op's is `dev-sync`. Snapshot shape is
@@ -121,11 +126,12 @@ describe('cross-surface parity: /sync/push vs /v1/operations/batch', () => {
         expect(syncOp.user).toBe(v1Op.user);
         expect(syncOp.deviceId).toBe('dev-sync');
         expect(v1Op.deviceId.startsWith('api:')).toBe(true);
-        // Snapshot parity (modulo _id) — same shared apply pipeline ⇒ same ambient stamping.
+        // Snapshot parity (modulo _id and the server-stamped updatedTs) — same shared apply
+        // pipeline ⇒ same ambient stamping.
         const ssyncSnap = (syncOp.snapshot ?? {}) as Record<string, unknown>;
         const sv1Snap = (v1Op.snapshot ?? {}) as Record<string, unknown>;
-        const { _id: _ss, ...ssRest } = ssyncSnap as Record<string, unknown> & { _id?: string };
-        const { _id: _vs, ...vsRest } = sv1Snap as Record<string, unknown> & { _id?: string };
+        const { _id: _ss, updatedTs: _su, ...ssRest } = ssyncSnap as Record<string, unknown> & { _id?: string; updatedTs?: string };
+        const { _id: _vs, updatedTs: _vu, ...vsRest } = sv1Snap as Record<string, unknown> & { _id?: string; updatedTs?: string };
         expect(ssRest).toEqual(vsRest);
     });
 
@@ -158,9 +164,14 @@ describe('cross-surface parity: /sync/push vs /v1/operations/batch', () => {
         const v1Row = await db.collection('items').findOne({ _id: v1Id } as never);
         expect(syncRow).not.toBeNull();
         expect(v1Row).not.toBeNull();
-        const { _id: _s, ...sSync } = syncRow as Record<string, unknown> & { _id: string };
-        const { _id: _v, ...sV1 } = v1Row as Record<string, unknown> & { _id: string };
+        // updatedTs is the one deliberate divergence: /sync/push keeps the client clock,
+        // the public batch surface server-stamps it (serverStampUpdatedTs).
+        const { _id: _s, updatedTs: syncUpdatedTs, ...sSync } = syncRow as Record<string, unknown> & { _id: string; updatedTs: string };
+        const { _id: _v, updatedTs: v1UpdatedTs, ...sV1 } = v1Row as Record<string, unknown> & { _id: string; updatedTs: string };
         expect(sSync).toEqual(sV1);
+        expect(syncUpdatedTs).toBe(ts);
+        expect(dayjs(v1UpdatedTs).isBefore(ts)).toBe(false);
+        expect(dayjs(v1UpdatedTs).isAfter(dayjs())).toBe(false);
     });
 
     it('the same routine.create snapshot persists identically across surfaces', async () => {
@@ -202,9 +213,14 @@ describe('cross-surface parity: /sync/push vs /v1/operations/batch', () => {
         const v1Row = await db.collection('routines').findOne({ _id: v1Id } as never);
         expect(syncRow).not.toBeNull();
         expect(v1Row).not.toBeNull();
-        const { _id: _s, ...sSync } = syncRow as Record<string, unknown> & { _id: string };
-        const { _id: _v, ...sV1 } = v1Row as Record<string, unknown> & { _id: string };
+        // updatedTs is the one deliberate divergence: /sync/push keeps the client clock,
+        // the public batch surface server-stamps it (serverStampUpdatedTs).
+        const { _id: _s, updatedTs: syncUpdatedTs, ...sSync } = syncRow as Record<string, unknown> & { _id: string; updatedTs: string };
+        const { _id: _v, updatedTs: v1UpdatedTs, ...sV1 } = v1Row as Record<string, unknown> & { _id: string; updatedTs: string };
         expect(sSync).toEqual(sV1);
+        expect(syncUpdatedTs).toBe(ts);
+        expect(dayjs(v1UpdatedTs).isBefore(ts)).toBe(false);
+        expect(dayjs(v1UpdatedTs).isAfter(dayjs())).toBe(false);
     });
 
     it('an invalid op (Zod-failing snapshot) is rejected by both surfaces with structurally similar errors', async () => {

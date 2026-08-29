@@ -6392,6 +6392,82 @@ describe('POST /calendar/integrations/:id/sync — Phase 1c field-level merge', 
         const acceptedAttendee = item?.attendees?.find((a) => a.self);
         expect(acceptedAttendee?.responseStatus).toBe('accepted');
     });
+
+    it('GCal-owned routine delta from an older webhook stamps updatedTs at sync time, not the backwards event.updated', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+
+        // Routine last synced from GCal at gcalAnchor; local updatedTs is newer (T2). The webhook
+        // replays an OLDER master (event.updated < gcalAnchor) carrying only an attendee delta →
+        // the GCal-owned-only fast-path. Pre-fix it stamped `updatedTs: event.updated` — a
+        // backwards move that every other device's `<=` LWW gate rejects, so the fanned-out op
+        // silently diverged. The row must instead advance to the sync clock.
+        const olderEventUpdated = '2025-12-31T00:00:00.000Z';
+        const gcalAnchor = '2026-01-01T00:00:00.000Z';
+        const localUpdatedTs = '2026-02-01T00:00:00.000Z';
+        // 09:00 Jerusalem / 30-minute duration → matches makeRoutine's default template (no structural diff).
+        const masterTimeStart = '2025-06-09T09:00:00+03:00';
+        const masterTimeEnd = '2025-06-09T09:30:00+03:00';
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                _id: 'routine-gcal-owned-delta',
+                calendarEventId: 'gcal-master-owned-delta',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                lastSyncedFromGCalTs: gcalAnchor,
+                updatedTs: localUpdatedTs,
+                attendees: [{ email: 'stale@example.com', responseStatus: 'needsAction' }],
+            }),
+        );
+
+        const masterEvent = {
+            id: 'gcal-master-owned-delta',
+            title: 'Standup',
+            timeStart: masterTimeStart,
+            timeEnd: masterTimeEnd,
+            updated: olderEventUpdated,
+            status: 'confirmed' as const,
+            recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO'],
+            attendees: [{ email: 'fresh@example.com', responseStatus: 'accepted' }],
+        };
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({ events: [masterEvent], nextSyncToken: 'tok-owned-delta' });
+
+        const beforeSync = dayjs().toISOString();
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        const routine = await routinesDAO.findByOwnerAndId('routine-gcal-owned-delta', userId);
+        // GCal-owned delta applied…
+        expect(routine?.attendees).toEqual([{ email: 'fresh@example.com', responseStatus: 'accepted' }]);
+        // …with updatedTs advanced to the sync clock — never moved backwards to event.updated.
+        // (This is the one assertion that discriminates the fix; the rest of the test is a
+        // forward-guard on surrounding invariants.)
+        expect(dayjs(routine?.updatedTs).isBefore(beforeSync)).toBe(false);
+        // The GCal-side anchor is untouched by this fast-path.
+        expect(routine?.lastSyncedFromGCalTs).toBe(gcalAnchor);
+        // The fanned-out op snapshot matches the stored row, so other devices' LWW gates accept it.
+        const ops = await operationsDAO.findArray({ entityId: 'routine-gcal-owned-delta', entityType: 'routine' });
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one routine op');
+        expect((op.snapshot as RoutineInterface).updatedTs).toBe(routine?.updatedTs);
+
+        // No lock-out (forward-guard, invariant under the stamp change): a later structural
+        // webhook whose event.updated is newer than the anchor (but older than the ctx.now just
+        // stamped) still applies, because the structural gate compares against
+        // lastSyncedFromGCalTs, not updatedTs.
+        const structuralEventUpdated = '2026-03-01T00:00:00.000Z';
+        // The first sync stored a syncToken, so the second sync takes the incremental path.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue({
+            events: [{ ...masterEvent, title: 'Standup renamed', updated: structuralEventUpdated }],
+            nextSyncToken: 'tok-owned-delta-2',
+        });
+        const res2 = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res2.status).toBe(200);
+        const renamed = await routinesDAO.findByOwnerAndId('routine-gcal-owned-delta', userId);
+        expect(renamed?.title).toBe('Standup renamed');
+    });
 });
 
 // ─── POST /calendar/integrations/:id/link-routine/:routineId ─────────────

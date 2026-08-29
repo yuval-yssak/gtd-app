@@ -426,6 +426,25 @@ describe('pullFromServer — item ops', () => {
         expect(item?.updatedTs).toBe('2025-06-01T00:00:00.000Z');
     });
 
+    it('update op with EQUAL updatedTs replaces the local version (tie goes to the incoming snapshot)', async () => {
+        // Pins the `<=` in incomingWinsLww (mirrored server-side in applyEntityOp.ts): ties
+        // converge across devices because every device replays the same ordered op log, so the
+        // final op of a tie group wins everywhere.
+        const tieTs = '2025-06-01T00:00:00.000Z';
+        await db.put('items', { ...makeItem('item-tie', tieTs), title: 'local copy' });
+
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'item', entityId: 'item-tie', opType: 'update', snapshot: { ...serverItem('item-tie', tieTs), title: 'server copy' } }],
+            serverTs: tieTs,
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const item = await db.get('items', 'item-tie');
+        expect(item?.title).toBe('server copy');
+    });
+
     it('delete op removes the item from IndexedDB', async () => {
         await db.put('items', makeItem('item-13'));
 
