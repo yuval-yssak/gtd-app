@@ -37,6 +37,7 @@ import {
     skipStage,
     stageEligibleEntryIds,
     toggleInboxTick,
+    walkedEntryCount,
     withStageQueue,
 } from './reviewFlowState';
 import type { StageTravel } from './StageActionBar';
@@ -67,7 +68,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     // strip. The toggle is STICKY: expanding keeps the full header across items and stages until
     // the user collapses it again (and vice versa).
     const [isHeaderExpandedByUser, setIsHeaderExpandedByUser] = useState(false);
-    const hasStageActivity = queue !== undefined && (queue.decisions.length > 0 || queue.cursor > 0);
+    const hasStageActivity = queue !== undefined && walkedEntryCount(queue) > 0;
     const isHeaderCollapsed = stage !== null && stage.kind !== 'checklist' && !isHeaderExpandedByUser;
     const inboxIds = allReviewInboxes.filter((inbox) => inbox.userId === account?.id).map((inbox) => inbox._id);
     // Review-wide position for the strip's mini dots — precomputed so the strip itself never
@@ -210,7 +211,11 @@ function isStageDone(flow: ReviewFlowState, stage: ReviewStageDefinition, inboxI
     return queue !== undefined && queue.pending.length === 0;
 }
 
-/** Item progress within the stage — label ("2 of 12") plus the matching percentage for a bar. */
+/**
+ * Item progress within the stage — label ("2 of 12") plus the matching percentage for a bar.
+ * Counts POSITION in the walk (decided + skipped-past), not decisions alone: ▶-skipping must
+ * move the counter too, or an all-skips walk would read "0 of 12" right up to the end card.
+ */
 function stageItemProgress(queue: StageQueue | undefined): { label: string; value: number } | null {
     if (!queue) {
         return null;
@@ -219,7 +224,8 @@ function stageItemProgress(queue: StageQueue | undefined): { label: string; valu
     if (total === 0) {
         return null;
     }
-    return { label: `${queue.decisions.length} of ${total}`, value: (queue.decisions.length / total) * 100 };
+    const walked = walkedEntryCount(queue);
+    return { label: `${walked} of ${total}`, value: (walked / total) * 100 };
 }
 
 /** Review-wide progress percentage — the full header's bar (the strip's bar is stage-scoped). */

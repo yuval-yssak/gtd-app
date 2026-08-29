@@ -230,6 +230,16 @@ export function currentQueueItemId(queue: StageQueue): string | null {
 }
 
 /**
+ * How far into the stage's walk the user is: entries walked past, whether decided OR ▶-skipped.
+ * Drives the header's "n of m" counter — a pure decided count would sit at 0 through an
+ * all-skips walk even as the user nears the end. Never exceeds the queue total: `cursor` is
+ * clamped to `pending.length` everywhere it moves.
+ */
+export function walkedEntryCount(queue: StageQueue): number {
+    return queue.decisions.length + queue.cursor;
+}
+
+/**
  * A decision was made on the current item — it leaves the queue for good (unless undone). The
  * cursor stays put, so it now points at the next undecided item (or past the end).
  */

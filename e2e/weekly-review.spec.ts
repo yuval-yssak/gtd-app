@@ -52,17 +52,21 @@ test.describe('weekly review', () => {
             await page.getByTestId('copyItemIdButton').click();
             expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(loose._id);
             // Escape must NOT consume the item as a review decision — it steps PAST it: the walk
-            // is linear, so the single item lands on the end card with the skip called out and the
-            // processed counter still 0. ◀ steps back to it. Escape is pressed from INSIDE the
-            // title field (which has no testid of its own): the recorded disconnection sentinel is
-            // the card container, so focus still lands on the end card's primary, not <body>.
+            // is linear, so the single item lands on the end card with the skip called out. The
+            // counter tracks POSITION (decided + skipped-past), so the skip reads "1 of 1"; the
+            // no-decision pin is the end card's "1 skipped". ◀ steps back to it. Escape is pressed
+            // from INSIDE the title field (which has no testid of its own): the recorded
+            // disconnection sentinel is the card container, so focus still lands on the end
+            // card's primary, not <body>.
             await clarifyStage.getByRole('textbox', { name: 'Title' }).click();
             await page.keyboard.press('Escape');
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Inbox — 1 skipped');
             await expect(page.getByTestId('stageContinue')).toBeFocused();
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
             await page.getByTestId('stageNavBack').click();
             await expect(clarifyStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Loose thought');
+            // ◀ un-walks the skip: the position counter steps back with the cursor.
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 1');
             await clarifyStage.getByRole('button', { name: 'Done', exact: true }).click();
             await page.getByTestId('clarifySaveNext').click();
             // Focus survives the transition: the clicked primary unmounted with the editor, so
@@ -477,6 +481,13 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 3');
             await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
             await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '67');
+            // The bar shares the counter's numerator: a ▶ skip must move BOTH, not just the text
+            // (every other bar assertion sits at cursor 0, where the old decided-only numerator
+            // coincides). ◀ returns to the last item so the walk finishes with a decision below.
+            await page.getByTestId('stageNavForward').click();
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('3 of 3');
+            await expect(page.getByTestId('reviewHeaderStrip').getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+            await page.getByTestId('stageNavBack').click();
             await page.getByTestId('focusKeep').click();
             await expect(page.getByTestId('stageEmptyCard')).toBeVisible();
             await expect(page.getByTestId('reviewHeaderStrip')).toBeVisible();
@@ -745,11 +756,12 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('stageNavBack')).toHaveAttribute('aria-label', 'Revisit previous decision');
 
             // Escape after the first item's autosave flush must STEP PAST (skip), not register as
-            // a decision — the stale flush's onSaved once corrupted the saved marker this way. The
-            // counter pins it: still 1 decided of 2.
+            // a decision — the stale flush's onSaved once corrupted the saved marker this way.
+            // The position counter moves to "2 of 2" (1 decided + 1 skipped-past); the end card's
+            // "1 skipped" pins that no decision was recorded.
             await page.keyboard.press('Escape');
             await expect(page.getByTestId('stageEmptyCard')).toContainText('Next Actions — 1 skipped');
-            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('2 of 2');
             await page.getByTestId('stageNavBack').click();
             await expect(titleField()).toHaveValue('Second action');
 

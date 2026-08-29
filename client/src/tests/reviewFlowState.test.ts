@@ -31,6 +31,7 @@ import {
     toggleInboxTick,
     undoDecision,
     unreviewedStageArrivals,
+    walkedEntryCount,
     withStageQueue,
 } from '../components/weeklyReview/reviewFlowState';
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
@@ -165,6 +166,17 @@ describe('stage queue', () => {
         expect(atEnd.cursor).toBe(3);
         expect(currentQueueItemId(atEnd)).toBeNull(); // the stage-end card, not 'a' again
         expect(skipCurrentItem(atEnd)).toBe(atEnd); // same reference — nowhere further to go
+    });
+
+    it('walkedEntryCount counts decided AND skipped-past entries — the "n of m" position, not a decided tally', () => {
+        const queue = buildStageQueue(['a', 'b', 'c']);
+        expect(walkedEntryCount(queue)).toBe(0);
+        // A ▶ skip moves the position exactly like a decision does; ◀ steps it back.
+        expect(walkedEntryCount(skipCurrentItem(queue))).toBe(1);
+        expect(walkedEntryCount(completeCurrentItem(skipCurrentItem(queue)))).toBe(2);
+        expect(walkedEntryCount(stepBack(skipCurrentItem(queue)))).toBe(0);
+        // An all-skips walk reaches "3 of 3" at the end card — the original bug pinned this at 0.
+        expect(walkedEntryCount(skipCurrentItem(skipCurrentItem(skipCurrentItem(queue))))).toBe(3);
     });
 
     it('stepBack reverses skips one at a time and no-ops at the start', () => {
