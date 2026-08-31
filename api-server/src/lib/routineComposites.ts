@@ -6,6 +6,7 @@ import type { ItemInterface, OperationInterface, RoutineInterface } from '../typ
 import { applyAndPublishOperation, applyAndPublishOperations, type RawOperation } from './applyOperation.js';
 import { ensureFirstRoutineItem } from './routineItemGeneration.js';
 import { addUntilToRrule } from './routineSplitUtils.js';
+import { userLocalDate } from './userTimezone.js';
 
 /**
  * Server-side orchestrators for the routine pause / resume / split composite gestures. Each
@@ -44,7 +45,8 @@ export async function pauseRoutine(ctx: CompositeContext, routineId: string): Pr
         return { ok: false, status: 404, code: 'not_found', message: 'routine not found' };
     }
     const now = dayjs().toISOString();
-    const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
+    // User-local today — "future" is judged against the user's calendar day, not the server's.
+    const todayStr = await userLocalDate(ctx.userId);
     await trashFutureOpenItemsForRoutine(ctx, routineId, todayStr, now);
     return updateRoutine(ctx, routine, { active: false }, now);
 }
@@ -60,7 +62,8 @@ export async function resumeRoutine(ctx: CompositeContext, routineId: string): P
         return { ok: false, status: 404, code: 'not_found', message: 'routine not found' };
     }
     const now = dayjs().toISOString();
-    const tomorrow = dayjs().startOf('day').add(1, 'day').format('YYYY-MM-DD');
+    // User-local tomorrow — a resume near midnight must restart the series on the user's next day.
+    const tomorrow = await userLocalDate(ctx.userId, 1);
     const result = await updateRoutine(ctx, routine, { active: true, startDate: tomorrow }, now);
     // Materialize the first nextAction item against the resumed routine. Pause has already
     // trashed any future-dated open items, so without this the resumed series produces nothing

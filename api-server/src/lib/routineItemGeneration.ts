@@ -5,6 +5,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 import { applyAndPublishOperation } from './applyOperation.js';
 import { computeNextOccurrence, RruleExhaustedError } from './rruleHelpers.js';
+import { localDateInTimezone, resolveUserTimezone, userLocalDate } from './userTimezone.js';
 
 dayjs.extend(utc);
 
@@ -68,8 +69,9 @@ export function buildRoutineItemSnapshot(routine: RoutineInterface, expectedBy: 
  *   - an open (non-done/non-trash) item already exists for the routine — preserves the "at most
  *     one open item" invariant when called against an already-bootstrapped routine.
  *
- * Anchors at UTC-midnight of `max(today, routine.startDate)` and uses `includeAnchor=true` so a
- * daily/interval rule lands on the anchor itself rather than skipping to tomorrow.
+ * Anchors at UTC-midnight of `max(user-local today, routine.startDate)` and uses
+ * `includeAnchor=true` so a daily/interval rule lands on the anchor itself rather than skipping
+ * to tomorrow.
  *
  * Errors:
  *   - `RruleExhaustedError` — the rrule has no future occurrence; deactivates the routine.
@@ -89,7 +91,7 @@ export async function ensureFirstRoutineItem(
     if (await hasOpenItem(ctx.userId, routine._id, opts?.ignoreCalendarHistory === true)) {
         return;
     }
-    const anchor = computeFirstAnchor(routine.startDate);
+    const anchor = computeFirstAnchor(routine.startDate, await userLocalDate(ctx.userId));
     try {
         const next = computeNextOccurrence(routine.rrule, anchor, true);
         const expectedBy = dayjs.utc(next).format('YYYY-MM-DD');
@@ -104,15 +106,16 @@ export async function ensureFirstRoutineItem(
  * when the routine is not a nextAction routine or is inactive — the caller checks both already,
  * but this guard keeps the contract symmetric with `ensureFirstRoutineItem`.
  *
- * Anchors at `max(disposalDate, routine.startDate)` and uses `includeAnchor=false` (strict-after)
- * so a same-day disposal advances to the next occurrence — same semantics as the client's
- * `createNextRoutineItem`.
+ * Anchors at the disposal instant's user-local calendar date, `max`-ed with `routine.startDate`,
+ * and uses `includeAnchor=false` (strict-after) so a same-day disposal advances to the next
+ * occurrence — same semantics as the client's `createNextRoutineItem`.
  */
 export async function advanceRoutineAfterDisposal(ctx: RoutineItemGenerationContext, routine: RoutineInterface, disposalDate: Date): Promise<void> {
     if (routine.routineType !== 'nextAction' || !routine.active) {
         return;
     }
-    const anchor = computeDisposalAnchor(disposalDate, routine.startDate);
+    const disposalLocalDate = localDateInTimezone(await resolveUserTimezone(ctx.userId), disposalDate);
+    const anchor = computeDisposalAnchor(disposalLocalDate, routine.startDate);
     try {
         const next = computeNextOccurrence(routine.rrule, anchor, false);
         const expectedBy = dayjs.utc(next).format('YYYY-MM-DD');
@@ -127,12 +130,12 @@ export async function advanceRoutineAfterDisposal(ctx: RoutineItemGenerationCont
 // recompute — schedule edits now always win over manual date tweaks (agreed semantics).
 
 /**
- * The first-item anchor: UTC-midnight of `max(today, routine.startDate)`. Constructed on the
- * user's local calendar date — see `createFirstRoutineItem` in the client helpers for the
- * timezone reasoning. Without a startDate, anchor at today.
+ * The first-item anchor: UTC-midnight of `max(localToday, routine.startDate)`. `localToday` is the
+ * user's local calendar date (via `resolveUserTimezone`) — see `createFirstRoutineItem` in the
+ * client helpers for the floating-date reasoning. Without a startDate, anchor at localToday.
  */
-function computeFirstAnchor(startDate: string | undefined): Date {
-    const todayAsUtcDay = dayjs.utc(dayjs().format('YYYY-MM-DD')).toDate();
+function computeFirstAnchor(startDate: string | undefined, localToday: string): Date {
+    const todayAsUtcDay = dayjs.utc(localToday).toDate();
     if (!startDate) {
         return todayAsUtcDay;
     }
@@ -141,16 +144,20 @@ function computeFirstAnchor(startDate: string | undefined): Date {
 }
 
 /**
- * The disposal anchor: `max(disposalDate, routine.startDate)`. Mirrors `createNextRoutineItem` —
- * a future-start-date routine never produces an item with expectedBy before its startDate, even
- * when an earlier-generated item is disposed of before that date.
+ * The disposal anchor: UTC-midnight of `max(disposalLocalDate, routine.startDate)`, where
+ * `disposalLocalDate` is the disposal instant's calendar date in the user's timezone. Anchoring on
+ * the floating local date (not the raw timestamp) keeps the strict-after advance aligned with the
+ * user's day: a late-evening disposal still counts as "today" locally even when UTC has already
+ * rolled over. Mirrors `createNextRoutineItem` — a future-start-date routine never produces an
+ * item with expectedBy before its startDate.
  */
-function computeDisposalAnchor(disposalDate: Date, startDate: string | undefined): Date {
+function computeDisposalAnchor(disposalLocalDate: string, startDate: string | undefined): Date {
+    const disposalAsUtcDay = dayjs.utc(disposalLocalDate).toDate();
     if (!startDate) {
-        return disposalDate;
+        return disposalAsUtcDay;
     }
     const startAsUtc = dayjs.utc(startDate).toDate();
-    return startAsUtc > disposalDate ? startAsUtc : disposalDate;
+    return startAsUtc > disposalAsUtcDay ? startAsUtc : disposalAsUtcDay;
 }
 
 /**

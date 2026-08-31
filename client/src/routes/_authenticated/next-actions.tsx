@@ -40,7 +40,9 @@ import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
+import { useTodayIso } from '../../hooks/useTodayIso';
 import { compareNextActions } from '../../lib/compareNextActions';
+import { getTodayIso } from '../../lib/dayClock';
 import { omitArchived, rankMergedOptionsByUsage } from '../../lib/entityUsage';
 import { filterItemsByQuery, itemContextTags, itemPersonRefIds, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
 import {
@@ -53,6 +55,7 @@ import {
 } from '../../lib/mergedFilterOptions';
 import { missingClarifications } from '../../lib/missingClarifications';
 import { type NextActionsUrlState, parseNextActionsSearch, TIME_FILTER_OPTIONS } from '../../lib/nextActionsUrlParams';
+import { isTicklerHidden } from '../../lib/ticklerVisibility';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import type { EnergyLevel, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import styles from './-next-actions.module.css';
@@ -69,16 +72,21 @@ const energyColors: Record<EnergyLevel, 'default' | 'success' | 'warning' | 'err
     high: 'error',
 };
 
-/** Same-name id groups the context/person URL filters expand to in the merged multi-account view
- *  (see mergeFilterOptionsByName). Absent groups fall back to exact single-id matching. */
+/** Match context for the row filters: same-name id groups the context/person URL filters expand
+ *  to in the merged multi-account view (see mergeFilterOptionsByName; absent groups fall back to
+ *  exact single-id matching), plus the day the tickler boundary is judged against. */
 export interface FilterIdGroups {
     contextIds?: ReadonlySet<string> | undefined;
     personIds?: ReadonlySet<string> | undefined;
+    /** Local calendar date for the ignoreBefore cutoff. Callers inside memoized render paths must
+     *  pass the `useTodayIso()` value (and depend on it) so the filter rolls at local midnight
+     *  instead of caching yesterday's day. Defaults to the shared day clock's snapshot. */
+    todayIso?: string | undefined;
 }
 
 export function matchesFilters(item: StoredItem, filters: NextActionsUrlState, groups: FilterIdGroups = {}): boolean {
-    const today = dayjs().format('YYYY-MM-DD');
-    if (item.ignoreBefore && item.ignoreBefore > today) {
+    const today = groups.todayIso ?? getTodayIso();
+    if (isTicklerHidden(item, today)) {
         return false;
     }
     if (filters.energy && item.energy !== filters.energy) {
@@ -305,9 +313,11 @@ function NextActionsPage() {
         () => resolveSelectedFilterOption(urlFilters.person, mergedPersonOptions, allPeople),
         [urlFilters.person, mergedPersonOptions, allPeople],
     );
+    // Subscribes to the shared day clock — the memoized filter passes below roll at local midnight.
+    const todayIso = useTodayIso();
     const filterGroups = useMemo<FilterIdGroups>(
-        () => ({ contextIds: selectedContext?.ids, personIds: selectedPerson?.ids }),
-        [selectedContext, selectedPerson],
+        () => ({ contextIds: selectedContext?.ids, personIds: selectedPerson?.ids, todayIso }),
+        [selectedContext, selectedPerson, todayIso],
     );
 
     // Deferred query: typing re-filters in an interruptible background render (see useListSearch).
@@ -324,13 +334,17 @@ function NextActionsPage() {
     // filterOptionsToReferenced. Rows are collapsed to the most-used chips by MergedFilterChipRow.
     const usage = useEntityUsage();
     const referencedContextIds = useMemo(() => {
-        const pool = visibleNextActions.filter((item) => matchesFilters(item, { ...urlFilters, context: undefined }, { personIds: selectedPerson?.ids }));
+        const pool = visibleNextActions.filter((item) =>
+            matchesFilters(item, { ...urlFilters, context: undefined }, { personIds: selectedPerson?.ids, todayIso }),
+        );
         return new Set(filterItemsByQuery(pool, deferredQuery).flatMap((item) => item.workContextIds ?? []));
-    }, [visibleNextActions, urlFilters, selectedPerson, deferredQuery]);
+    }, [visibleNextActions, urlFilters, selectedPerson, deferredQuery, todayIso]);
     const referencedPersonIds = useMemo(() => {
-        const pool = visibleNextActions.filter((item) => matchesFilters(item, { ...urlFilters, person: undefined }, { contextIds: selectedContext?.ids }));
+        const pool = visibleNextActions.filter((item) =>
+            matchesFilters(item, { ...urlFilters, person: undefined }, { contextIds: selectedContext?.ids, todayIso }),
+        );
         return new Set(filterItemsByQuery(pool, deferredQuery).flatMap(itemPersonRefIds));
-    }, [visibleNextActions, urlFilters, selectedContext, deferredQuery]);
+    }, [visibleNextActions, urlFilters, selectedContext, deferredQuery, todayIso]);
     const liveContextOptions = useMemo(
         () => filterOptionsToReferenced(mergedContextOptions, referencedContextIds, selectedContext?.option),
         [mergedContextOptions, referencedContextIds, selectedContext],

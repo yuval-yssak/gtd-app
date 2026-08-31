@@ -75,13 +75,16 @@ export async function createNextRoutineItem(db: IDBPDatabase<MyDB>, userId: stri
     if (!routine.active) {
         return;
     }
-    // Anchor to the later of completionDate and startDate so a future-start-date routine never
-    // produces an item with expectedBy before its startDate. Parse startDate as UTC to avoid a
-    // local-TZ shift that would otherwise move the anchor back a day.
+    // Anchor at UTC-midnight of the completion's LOCAL calendar date (the floating-date scheme —
+    // see createFirstRoutineItem below), max-ed with startDate so a future-start-date routine
+    // never produces an item with expectedBy before its startDate. Anchoring on the raw timestamp
+    // and formatting locally (the old scheme) drifted a day for users whose local evening had
+    // already crossed the UTC boundary — a late-night completion regenerated the item for "today".
+    const completionAsUtcDay = dayjs.utc(dayjs(completionDate).format('YYYY-MM-DD')).toDate();
     const startAsUtc = routine.startDate ? dayjs.utc(routine.startDate).toDate() : null;
-    const anchor = startAsUtc && startAsUtc > completionDate ? startAsUtc : completionDate;
+    const anchor = startAsUtc && startAsUtc > completionAsUtcDay ? startAsUtc : completionAsUtcDay;
     const nextDueDate = computeNextOccurrence(routine.rrule, anchor);
-    const expectedBy = dayjs(nextDueDate).format('YYYY-MM-DD');
+    const expectedBy = dayjs.utc(nextDueDate).format('YYYY-MM-DD');
     await persistRoutineItem(db, userId, routine, expectedBy);
 }
 

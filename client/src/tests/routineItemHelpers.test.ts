@@ -49,7 +49,7 @@ describe('createNextRoutineItem', () => {
 
     it('sets ignoreBefore equal to expectedBy (tickler until due date)', async () => {
         const routine = buildRoutine();
-        await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-01'));
+        await createNextRoutineItem(db, USER_ID, routine, dayjs('2025-06-01T12:00:00').toDate());
 
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         expect(items).toHaveLength(1);
@@ -63,9 +63,11 @@ describe('createNextRoutineItem', () => {
     });
 
     it('computes expectedBy from rrule and completion date', async () => {
-        // Every 3 days — completing on June 1 should yield June 4
+        // Every 3 days — completing on June 1 should yield June 4. Local-midday instant: the
+        // local and UTC calendar dates agree in every real timezone, so the fixture (unlike the
+        // old `new Date('2025-06-01')` UTC-midnight form) asserts the same date everywhere.
         const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=3' });
-        await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-01'));
+        await createNextRoutineItem(db, USER_ID, routine, dayjs('2025-06-01T12:00:00').toDate());
 
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         if (!hasAtLeastOne(items)) {
@@ -73,6 +75,21 @@ describe('createNextRoutineItem', () => {
         }
         expect(items[0].expectedBy).toBe('2025-06-04');
         expect(items[0].ignoreBefore).toBe('2025-06-04');
+    });
+
+    it('anchors on the completion LOCAL calendar day — a late-evening completion never regenerates for today', async () => {
+        // 21:00 local wall-clock. In a negative-offset timezone this instant is already the next
+        // day in UTC — the old raw-timestamp anchor produced the user's "today" again, re-showing
+        // the task they just completed. The local-date anchor advances to the next LOCAL day.
+        const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=1' });
+        await createNextRoutineItem(db, USER_ID, routine, dayjs('2025-06-01T21:00:00').toDate());
+
+        const items = await db.getAllFromIndex('items', 'userId', USER_ID);
+        if (!hasAtLeastOne(items)) {
+            throw new Error('No items found');
+        }
+        expect(items[0].expectedBy).toBe('2025-06-02');
+        expect(items[0].ignoreBefore).toBe('2025-06-02');
     });
 
     it('copies template fields onto the generated item', async () => {
@@ -86,7 +103,7 @@ describe('createNextRoutineItem', () => {
                 notes: 'Test notes',
             },
         });
-        await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-01'));
+        await createNextRoutineItem(db, USER_ID, routine, dayjs('2025-06-01T12:00:00').toDate());
 
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         if (!hasAtLeastOne(items)) {
@@ -103,7 +120,7 @@ describe('createNextRoutineItem', () => {
 
     it('queues a sync operation for the created item', async () => {
         const routine = buildRoutine();
-        await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-01'));
+        await createNextRoutineItem(db, USER_ID, routine, dayjs('2025-06-01T12:00:00').toDate());
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(1);

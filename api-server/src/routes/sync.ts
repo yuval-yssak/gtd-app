@@ -15,11 +15,20 @@ import { type ReassignParams, reassignEntity } from '../lib/reassignEntity.js';
 import { addSseConnection, notifyUserViaSse, removeSseConnection } from '../lib/sseConnections.js';
 import { reapStaleDevices } from '../lib/staleDevices.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
+import { isValidIanaTimezone } from '../lib/userTimezone.js';
 import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import { stripDisallowedStatusFields } from '../schemas/operations/index.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import { deviceSyncStateId, type EntitySnapshot, type EntityType, MAX_OP_ID, type OpType, type RsvpOpPayload } from '../types/entities.js';
+import {
+    type DeviceSyncStateInterface,
+    deviceSyncStateId,
+    type EntitySnapshot,
+    type EntityType,
+    MAX_OP_ID,
+    type OpType,
+    type RsvpOpPayload,
+} from '../types/entities.js';
 import { syncIssuesRoutes } from './syncIssues.js';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
@@ -98,13 +107,31 @@ async function isDeviceRegistered(deviceId: string, userId: string): Promise<boo
  * Callers must then answer 409 bootstrapRequired instead of the ops payload: re-creating the row
  * at the stale cursor would re-register the device inside a purge gap (the original data-loss bug).
  */
-async function recordPullCursorOnExistingRow(deviceId: string, userId: string, cursor: { lastSyncedTs: string; lastSyncedId: string }): Promise<boolean> {
+async function recordPullCursorOnExistingRow(
+    deviceId: string,
+    userId: string,
+    cursor: { lastSyncedTs: string; lastSyncedId: string },
+    timezone?: string,
+): Promise<boolean> {
     const result = await deviceSyncStateDAO.updateOne(
         { _id: deviceSyncStateId(deviceId, userId) },
-        { $set: { ...cursor, deviceId, user: userId } },
+        { $set: { ...cursor, deviceId, user: userId, ...timezoneReportFields(timezone) } },
         { upsert: false },
     );
     return result.matchedCount > 0;
+}
+
+/**
+ * `$set` fragment recording a device's timezone report. Empty when the report is absent or not a
+ * real IANA name (raw client-supplied param) — an invalid report must not erase a prior good one.
+ * Bootstrap and pull are the only report sites; /sync/push deliberately isn't one (a Service
+ * Worker background flush can push without pulling, but the next foreground pull refreshes it).
+ */
+function timezoneReportFields(timezone: string | undefined): Partial<DeviceSyncStateInterface> {
+    if (!timezone || !isValidIanaTimezone(timezone)) {
+        return {};
+    }
+    return { timezone, timezoneReportedTs: dayjs().toISOString() };
 }
 
 /**
@@ -139,6 +166,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // Client-derived display label ("Chrome on macOS") for the connected-devices list. Length-capped
         // server-side — it's a raw user-agent derivative, not a validated field.
         const deviceLabel = c.req.query('deviceLabel')?.trim().slice(0, 80);
+        const timezone = c.req.query('timezone');
         // One serverTs for both the response body and the deviceSyncState row, so the recorded
         // floor exactly matches what the client claims it has after consuming this response.
         const serverTs = dayjs().toISOString();
@@ -174,6 +202,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
                         user: user.id,
                         lastSeenTs: serverTs,
                         ...(deviceLabel ? { autoLabel: deviceLabel } : {}),
+                        ...timezoneReportFields(timezone),
                     },
                 },
                 { upsert: true },
@@ -338,10 +367,15 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             // not advance the purge floor past ops the client never committed. Old clients send
             // neither — `ackedId ?? sinceId` resolves to '' so their floor sits at the start of the
             // boundary ms, keeping every same-ms op until they upgrade.
-            const rowStillExists = await recordPullCursorOnExistingRow(deviceId, user.id, {
-                lastSyncedTs: ackedTs ?? since,
-                lastSyncedId: ackedId ?? sinceId,
-            });
+            const rowStillExists = await recordPullCursorOnExistingRow(
+                deviceId,
+                user.id,
+                {
+                    lastSyncedTs: ackedTs ?? since,
+                    lastSyncedId: ackedId ?? sinceId,
+                },
+                c.req.query('timezone'),
+            );
             // Mid-request reap race: a concurrent pull's stale-device sweep removed the row between
             // the top-of-handler registration check and this write. Return 409 INSTEAD of the ops
             // payload — the client must discard this response and bootstrap.

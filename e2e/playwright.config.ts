@@ -23,7 +23,11 @@ export default defineConfig({
     },
     webServer: [
         {
-            command: 'cd ../api-server && npm run dev', // paths are relative to this config file in e2e/
+            // TZ=UTC pins the API server to Cloud Run's clock environment, so the timezone-pipeline
+            // specs exercise the same server-local-vs-user-local split production has. Note
+            // reuseExistingServer below: a dev server already running keeps ITS timezone — restart
+            // it under TZ=UTC when working on the timezone specs. (Paths are relative to e2e/.)
+            command: 'cd ../api-server && TZ=UTC npm run dev',
             url: 'http://localhost:4000/sync/config',
             reuseExistingServer: true,
             stdout: 'ignore',

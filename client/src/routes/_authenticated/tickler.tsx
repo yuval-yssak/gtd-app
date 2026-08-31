@@ -14,7 +14,6 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute } from '@tanstack/react-router';
-import dayjs from 'dayjs';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
@@ -26,7 +25,9 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { releaseFromTickler } from '../../db/itemMutations';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { useTodayIso } from '../../hooks/useTodayIso';
 import { ticklerDayLabel } from '../../lib/ticklerDayLabel';
+import { isTicklerHidden, participatesInTickler } from '../../lib/ticklerVisibility';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-tickler.module.css';
 
@@ -43,10 +44,13 @@ function TicklerPage() {
     useListScrollRestoration();
     const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
 
-    const today = dayjs().format('YYYY-MM-DD');
-    // ignoreBefore only applies to nextAction and waitingFor items — calendar items ignore it
+    // Shared day clock: at local midnight the day's rows drop off the tickler without a reload.
+    const today = useTodayIso();
+    // ignoreBefore applies to the TICKLER_STATUSES (calendar items ignore it). This page is the
+    // ONE place a snoozed item stays reachable — its active list hides it via the same
+    // isTicklerHidden predicate — so both sides share the status set and predicate.
     const ticklerItems = itemsWithGhosts
-        .filter((item) => (item.status === 'nextAction' || item.status === 'waitingFor') && item.ignoreBefore !== undefined && item.ignoreBefore > today)
+        .filter((item) => participatesInTickler(item) && isTicklerHidden(item, today))
         .sort((a, b) => (a.ignoreBefore ?? '').localeCompare(b.ignoreBefore ?? ''));
 
     // Ghosts are fading leftovers, not snoozed work — the header count reflects live rows only.

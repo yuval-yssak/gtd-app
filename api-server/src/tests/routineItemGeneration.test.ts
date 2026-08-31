@@ -14,10 +14,12 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
+import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
-import { pauseRoutine } from '../lib/routineComposites.js';
-import { buildRoutineItemSnapshot } from '../lib/routineItemGeneration.js';
+import { pauseRoutine, resumeRoutine } from '../lib/routineComposites.js';
+import { propagateRoutineEditToItems } from '../lib/routineEditPropagation.js';
+import { advanceRoutineAfterDisposal, buildRoutineItemSnapshot, ensureFirstRoutineItem } from '../lib/routineItemGeneration.js';
 import { regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
@@ -53,6 +55,7 @@ beforeEach(async () => {
         db.collection('routines').deleteMany({}),
         db.collection('items').deleteMany({}),
         db.collection('operations').deleteMany({}),
+        db.collection('deviceSyncState').deleteMany({}),
     ]);
     __resetDefaultStoreForTests();
     vi.restoreAllMocks();
@@ -206,10 +209,9 @@ describe('POST /v1/routines — bootstrap first item', () => {
         expect(items).toHaveLength(1);
         const first = items[0]!;
         // For FREQ=DAILY with includeAnchor=true and anchor=today (since past start is clamped),
-        // the first occurrence is today. `computeFirstAnchor` uses the server's LOCAL calendar
-        // date (intentional, per its docstring), so we mirror that here — using `dayjs.utc()`
-        // would make this test fail on dev machines where local date diverges from UTC.
-        const today = dayjs().format('YYYY-MM-DD');
+        // the first occurrence is today. With no device timezone report seeded, the user's local
+        // day resolves to the UTC fallback (see resolveUserTimezone) — so assert against UTC.
+        const today = dayjs.utc().format('YYYY-MM-DD');
         expect(first.expectedBy).toBe(today);
         // expectedBy must not be before today.
         expect(first.expectedBy! >= today).toBe(true);
@@ -221,7 +223,8 @@ describe('POST /v1/routines — bootstrap first item', () => {
         const routine = await createRoutineViaApi(token, { rrule: 'FREQ=DAILY' });
         const items = await getItemsForRoutine(userId, routine._id);
         expect(items).toHaveLength(1);
-        const today = dayjs().format('YYYY-MM-DD');
+        // No timezone report seeded → the anchor falls back to the UTC calendar day.
+        const today = dayjs.utc().format('YYYY-MM-DD');
         expect(items[0]!.expectedBy).toBe(today);
     });
 
@@ -267,7 +270,7 @@ describe('PATCH /v1/routines/:id — re-stamp first item on startDate change', (
         const userId = await login();
         const token = await tokenWith(userId, ['routines.write']);
         const routine = await createRoutineViaApi(token, { rrule: 'FREQ=MONTHLY' });
-        const today = dayjs().format('YYYY-MM-DD');
+        const today = dayjs.utc().format('YYYY-MM-DD');
         const before = await getItemsForRoutine(userId, routine._id);
         expect(before[0]!.expectedBy).toBe(today);
 
@@ -820,5 +823,236 @@ describe('regenerateFutureRoutineItems — idempotency & delta reconciliation', 
         const trashed = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'trash' });
         expect(trashed.length).toBeGreaterThan(0);
         expect(trashed.every((i) => i.calendarInstanceEventId === undefined)).toBe(true);
+    });
+});
+
+// ── Timezone-aware stamping ──────────────────────────────────────────────────
+// The tickler boundary is the USER's local midnight: expectedBy/ignoreBefore must land on the
+// user's calendar day (per the device-reported timezone), not the server's UTC day.
+//
+// The clock is PINNED to 10:30Z — the one hour of the day when BOTH fixture zones disagree with
+// UTC: Kiritimati (UTC+14) already reads tomorrow and Pago Pago (UTC-11) still reads yesterday.
+// Pinning + literal-date assertions keep every test discriminating: an expectation derived from
+// the same live clock the code reads would pass with the timezone resolution broken whenever the
+// fixture zone happened to agree with UTC (which Kiritimati does 11 hours a day).
+
+describe('timezone-aware generation', () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        vi.setSystemTime(new Date('2026-08-30T10:30:00.000Z'));
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const genCtx = (userId: string) => ({ userId, deviceId: 'server' });
+
+    async function reportTimezone(userId: string, deviceId: string, timezone: string, reportedTs: string) {
+        await deviceSyncStateDAO.upsert({
+            _id: `${deviceId}::${userId}`,
+            deviceId,
+            user: userId,
+            lastSyncedTs: dayjs(0).toISOString(),
+            lastSyncedId: '',
+            lastSeenTs: dayjs().toISOString(),
+            timezone,
+            timezoneReportedTs: reportedTs,
+        });
+    }
+
+    async function seedDailyRoutine(userId: string, _id: string, overrides: Partial<RoutineInterface> = {}): Promise<RoutineInterface> {
+        const now = dayjs().toISOString();
+        const routine: RoutineInterface = {
+            _id,
+            user: userId,
+            title: 'tz routine',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            createdTs: now,
+            updatedTs: now,
+            ...overrides,
+        };
+        await routinesDAO.insertOne(routine);
+        return routine;
+    }
+
+    it('bootstrap stamps expectedBy on the user-local day — UTC+14 already reads tomorrow', async () => {
+        await reportTimezone('u-tz-ahead', 'dev', 'Pacific/Kiritimati', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-ahead', 'r-tz-ahead');
+
+        await ensureFirstRoutineItem(genCtx('u-tz-ahead'), routine);
+
+        const items = await getItemsForRoutine('u-tz-ahead', 'r-tz-ahead');
+        expect(items).toHaveLength(1);
+        expect(items[0]!.expectedBy).toBe('2026-08-31'); // Kiritimati local date at 10:30Z
+        expect(items[0]!.ignoreBefore).toBe('2026-08-31');
+    });
+
+    it('bootstrap stamps expectedBy on the user-local day — UTC-11 still reads yesterday', async () => {
+        await reportTimezone('u-tz-behind', 'dev', 'Pacific/Pago_Pago', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-behind', 'r-tz-behind');
+
+        await ensureFirstRoutineItem(genCtx('u-tz-behind'), routine);
+
+        const items = await getItemsForRoutine('u-tz-behind', 'r-tz-behind');
+        expect(items[0]!.expectedBy).toBe('2026-08-29'); // Pago Pago local date at 10:30Z
+    });
+
+    it('the most recently reporting device decides the timezone', async () => {
+        await reportTimezone('u-tz-two', 'dev-old', 'Pacific/Pago_Pago', dayjs().subtract(1, 'day').toISOString());
+        await reportTimezone('u-tz-two', 'dev-new', 'Pacific/Kiritimati', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-two', 'r-tz-two');
+
+        await ensureFirstRoutineItem(genCtx('u-tz-two'), routine);
+
+        const items = await getItemsForRoutine('u-tz-two', 'r-tz-two');
+        expect(items[0]!.expectedBy).toBe('2026-08-31'); // Kiritimati wins, not Pago Pago's 08-29
+    });
+
+    it('disposal anchors on the LOCAL date, not the disposal instant', async () => {
+        // Kiritimati already reads Aug 31 at 10:30Z. Anchoring on the raw instant (UTC Aug 30)
+        // would regenerate for Aug 31 — the day the user is already living in — re-showing the
+        // task they just completed. Anchoring on the local date advances to Sep 1.
+        await reportTimezone('u-tz-disposal', 'dev', 'Pacific/Kiritimati', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-disposal', 'r-tz-disposal');
+
+        await advanceRoutineAfterDisposal(genCtx('u-tz-disposal'), routine, new Date());
+
+        const items = await getItemsForRoutine('u-tz-disposal', 'r-tz-disposal');
+        expect(items).toHaveLength(1);
+        expect(items[0]!.expectedBy).toBe('2026-09-01');
+    });
+
+    it('pause judges "future" against the user-local day — a locally past-due item survives', async () => {
+        // Kiritimati local today is Aug 31, so an item expected Aug 30 is PAST-DUE for the user
+        // and must survive the pause (the invariant is forward-looking). Under a UTC cutoff the
+        // same item reads as due "today" (Aug 30 >= Aug 30) and would be wrongly trashed.
+        await reportTimezone('u-tz-pause', 'dev', 'Pacific/Kiritimati', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-pause', 'r-tz-pause');
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'i-tz-pause',
+            user: 'u-tz-pause',
+            status: 'nextAction',
+            title: 'tz routine',
+            routineId: routine._id,
+            expectedBy: '2026-08-30',
+            ignoreBefore: '2026-08-30',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const result = await pauseRoutine({ userId: 'u-tz-pause', tokenId: 'test-token' }, routine._id);
+        expect(result.ok).toBe(true);
+
+        const item = await itemsDAO.findByOwnerAndId('i-tz-pause', 'u-tz-pause');
+        expect(item?.status).toBe('nextAction');
+        const stored = await routinesDAO.findByOwnerAndId(routine._id, 'u-tz-pause');
+        expect(stored?.active).toBe(false);
+    });
+
+    it('resume stamps startDate on the user-local tomorrow', async () => {
+        await reportTimezone('u-tz-resume', 'dev', 'Pacific/Kiritimati', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-resume', 'r-tz-resume', { active: false });
+
+        const result = await resumeRoutine({ userId: 'u-tz-resume', tokenId: 'test-token' }, routine._id);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) throw new Error('resume failed');
+        expect(result.routine.startDate).toBe('2026-09-01'); // local tomorrow, not UTC's Aug 31
+    });
+
+    it('BYDAY weekday math runs on the user-local weekday, not the UTC weekday', async () => {
+        // The subtlest consequence of the floating-date scheme: at 10:30Z it is Sunday Aug 30 in
+        // UTC but already MONDAY Aug 31 on Kiritimati. For FREQ=WEEKLY;BYDAY=SU with
+        // includeAnchor=true, a UTC anchor lands on the anchor itself (2026-08-30); the correct
+        // local anchor has just missed Sunday and must jump a week to 2026-09-06.
+        await reportTimezone('u-tz-byday', 'dev', 'Pacific/Kiritimati', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-byday', 'r-tz-byday', { rrule: 'FREQ=WEEKLY;BYDAY=SU' });
+
+        await ensureFirstRoutineItem(genCtx('u-tz-byday'), routine);
+
+        const items = await getItemsForRoutine('u-tz-byday', 'r-tz-byday');
+        expect(items).toHaveLength(1);
+        expect(items[0]!.expectedBy).toBe('2026-09-06');
+        expect(items[0]!.ignoreBefore).toBe('2026-09-06');
+    });
+
+    it('edit-propagation schedule recompute restamps the open item on the user-local day', async () => {
+        // The one converted path with no tz coverage elsewhere: a schedule-shaped routine edit
+        // recomputes the open item's expectedBy/ignoreBefore via userLocalDate. Under Kiritimati
+        // the first DAILY;INTERVAL=2 occurrence is local today 2026-08-31; a UTC recompute would
+        // stamp 2026-08-30.
+        await reportTimezone('u-tz-edit', 'dev', 'Pacific/Kiritimati', dayjs().toISOString());
+        const previous = await seedDailyRoutine('u-tz-edit', 'r-tz-edit');
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'i-tz-edit',
+            user: 'u-tz-edit',
+            status: 'nextAction',
+            title: 'tz routine',
+            routineId: previous._id,
+            expectedBy: '2026-08-20',
+            ignoreBefore: '2026-08-20',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const next: RoutineInterface = { ...previous, rrule: 'FREQ=DAILY;INTERVAL=2', updatedTs: now };
+        await propagateRoutineEditToItems(genCtx('u-tz-edit'), previous, next);
+
+        const item = await itemsDAO.findByOwnerAndId('i-tz-edit', 'u-tz-edit');
+        expect(item?.expectedBy).toBe('2026-08-31');
+        expect(item?.ignoreBefore).toBe('2026-08-31');
+    });
+
+    it('a garbage stored timezone degrades to UTC-day stamps instead of crashing generation', async () => {
+        // F1 regression: dayjs().tz('Not/AZone') throws RangeError, and the tz resolution runs
+        // BEFORE the never-fail try in both generators. The reportTimezone helper writes the row
+        // directly, bypassing the route validation — the exact shape of a manual mongosh edit or
+        // an ICU upgrade retiring an alias that validated at report time.
+        await reportTimezone('u-tz-bad', 'dev', 'Not/AZone', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-bad', 'r-tz-bad');
+
+        await ensureFirstRoutineItem(genCtx('u-tz-bad'), routine);
+        const [first] = await getItemsForRoutine('u-tz-bad', 'r-tz-bad');
+        if (!first?._id) throw new Error('expected the bootstrap item');
+        expect(first.expectedBy).toBe('2026-08-30'); // UTC day at 10:30Z — not a throw, not local
+
+        // Dispose it and advance — the second converted path must survive the same row.
+        await itemsDAO.replaceById(first._id, { ...first, status: 'done', updatedTs: dayjs().toISOString() });
+        await advanceRoutineAfterDisposal(genCtx('u-tz-bad'), routine, new Date());
+        const items = await getItemsForRoutine('u-tz-bad', 'r-tz-bad');
+        const created = items.find((i) => i._id !== first._id);
+        expect(created?.expectedBy).toBe('2026-08-31'); // strict-after UTC Aug 30
+    });
+
+    it('a garbage stored timezone does not 500 pause — the composite has no error handling of its own', async () => {
+        // Unlike the generators (which swallow errors), pauseRoutine/resumeRoutine would surface a
+        // RangeError straight to the route handler — the resolver's UTC fallback is their only guard.
+        await reportTimezone('u-tz-bad-pause', 'dev', 'Not/AZone', dayjs().toISOString());
+        const routine = await seedDailyRoutine('u-tz-bad-pause', 'r-tz-bad-pause');
+        const now = dayjs().toISOString();
+        await itemsDAO.insertOne({
+            _id: 'i-tz-bad-pause',
+            user: 'u-tz-bad-pause',
+            status: 'nextAction',
+            title: 'tz routine',
+            routineId: routine._id,
+            expectedBy: '2026-08-31',
+            ignoreBefore: '2026-08-31',
+            createdTs: now,
+            updatedTs: now,
+        });
+
+        const result = await pauseRoutine({ userId: 'u-tz-bad-pause', tokenId: 'test-token' }, routine._id);
+        expect(result.ok).toBe(true);
+
+        // UTC-day cutoff (2026-08-30): the Aug 31 item is "future" and gets trashed by the pause.
+        const item = await itemsDAO.findByOwnerAndId('i-tz-bad-pause', 'u-tz-bad-pause');
+        expect(item?.status).toBe('trash');
     });
 });

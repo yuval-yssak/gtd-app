@@ -84,13 +84,17 @@ async function push(sessionCookie: string, deviceId: string, ops: ReturnType<typ
     return authenticatedRequest(app, { method: 'POST', path: '/sync/push', sessionCookie, body: { deviceId, ops } });
 }
 
-async function pull(sessionCookie: string, opts: { since?: string; sinceId?: string; ackedTs?: string; ackedId?: string; deviceId?: string } = {}) {
+async function pull(
+    sessionCookie: string,
+    opts: { since?: string; sinceId?: string; ackedTs?: string; ackedId?: string; deviceId?: string; timezone?: string } = {},
+) {
     const params = new URLSearchParams();
     if (opts.since !== undefined) params.set('since', opts.since);
     if (opts.sinceId !== undefined) params.set('sinceId', opts.sinceId);
     if (opts.ackedTs !== undefined) params.set('ackedTs', opts.ackedTs);
     if (opts.ackedId !== undefined) params.set('ackedId', opts.ackedId);
     if (opts.deviceId !== undefined) params.set('deviceId', opts.deviceId);
+    if (opts.timezone !== undefined) params.set('timezone', opts.timezone);
     const query = params.toString() ? `?${params}` : '';
     return authenticatedRequest(app, { method: 'GET', path: `/sync/pull${query}`, sessionCookie });
 }
@@ -1481,5 +1485,66 @@ describe('GET /sync/events', () => {
 
         // Cancel the stream to avoid leaving an open SSE connection in the test runner
         await reader.cancel();
+    });
+});
+
+// ─── Timezone reporting ─────────────────────────────────────────────────────
+// The client reports its IANA timezone on bootstrap and pull so server-side routine-item
+// generation can stamp expectedBy/ignoreBefore on the USER's calendar day (local-midnight tickler
+// boundary) — see lib/userTimezone.ts.
+
+describe('Timezone reporting', () => {
+    it('bootstrap with ?timezone= records timezone + timezoneReportedTs on the device row', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+
+        const res = await authenticatedRequest(app, {
+            method: 'GET',
+            path: '/sync/bootstrap?deviceId=dev-tz&timezone=Asia%2FJerusalem',
+            sessionCookie: cookie,
+        });
+        expect(res.status).toBe(200);
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
+        expect(state?.timezone).toBe('Asia/Jerusalem');
+        // A real instant, not merely "some string" — '' would satisfy a typeof check.
+        expect(dayjs(String(state?.timezoneReportedTs)).isValid()).toBe(true);
+    });
+
+    it('pull with ?timezone= refreshes the report on the existing row', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-tz', userId);
+
+        const res = await pull(cookie, { deviceId: 'dev-tz', timezone: 'America/New_York' });
+        expect(res.status).toBe(200);
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
+        expect(state?.timezone).toBe('America/New_York');
+    });
+
+    it('an invalid timezone report is ignored and never erases a prior good one', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-tz', userId);
+
+        await pull(cookie, { deviceId: 'dev-tz', timezone: 'Asia/Jerusalem' });
+        const bad = await pull(cookie, { deviceId: 'dev-tz', timezone: 'Not/AZone' });
+        expect(bad.status).toBe(200);
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
+        expect(state?.timezone).toBe('Asia/Jerusalem');
+    });
+
+    it('a pull without ?timezone= keeps the previously reported timezone', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-tz', userId);
+
+        await pull(cookie, { deviceId: 'dev-tz', timezone: 'Asia/Jerusalem' });
+        await pull(cookie, { deviceId: 'dev-tz' });
+
+        const state = await db.collection('deviceSyncState').findOne({ _id: `dev-tz::${userId}` });
+        expect(state?.timezone).toBe('Asia/Jerusalem');
     });
 });

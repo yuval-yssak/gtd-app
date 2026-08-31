@@ -52,7 +52,8 @@ describe('createNextRoutineItem — startDate', () => {
     it('uses startDate as the search anchor when completionDate precedes it', async () => {
         const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=1', startDate: '2025-07-01' });
         // Completion date is before startDate — the next occurrence should snap forward to startDate.
-        await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-15'));
+        // Local-midday instants keep these fixtures timezone-independent (local and UTC dates agree).
+        await createNextRoutineItem(db, USER_ID, routine, dayjs('2025-06-15T12:00:00').toDate());
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         if (!hasAtLeastOne(items)) throw new Error('No items');
         // First occurrence strictly after 2025-07-01 for DAILY is 2025-07-02.
@@ -61,7 +62,7 @@ describe('createNextRoutineItem — startDate', () => {
 
     it('falls back to completionDate when it is already after startDate', async () => {
         const routine = buildRoutine({ rrule: 'FREQ=DAILY;INTERVAL=1', startDate: '2025-06-01' });
-        await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-15'));
+        await createNextRoutineItem(db, USER_ID, routine, dayjs('2025-06-15T12:00:00').toDate());
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         if (!hasAtLeastOne(items)) throw new Error('No items');
         expect(items[0].expectedBy).toBe('2025-06-16');
@@ -69,7 +70,7 @@ describe('createNextRoutineItem — startDate', () => {
 
     it('paused routine: generates no item (early return)', async () => {
         const routine = buildRoutine({ active: false });
-        await createNextRoutineItem(db, USER_ID, routine, new Date('2025-06-15'));
+        await createNextRoutineItem(db, USER_ID, routine, dayjs('2025-06-15T12:00:00').toDate());
         const items = await db.getAllFromIndex('items', 'userId', USER_ID);
         expect(items).toHaveLength(0);
     });

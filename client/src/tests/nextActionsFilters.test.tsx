@@ -1,5 +1,7 @@
+import dayjs from 'dayjs';
 import { isValidElement, type ReactElement } from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { __resetDayClockForTests, subscribeToDayChange } from '../lib/dayClock';
 import { FocusIndicator, matchesFilters, UnclarifiedWarning } from '../routes/_authenticated/next-actions';
 import type { StoredItem } from '../types/MyDB';
 
@@ -52,6 +54,30 @@ describe('matchesFilters', () => {
     it('hides ticklered items until their ignoreBefore date, regardless of filters', () => {
         expect(matchesFilters(item({ ignoreBefore: '2999-01-01' }), {})).toBe(false);
         expect(matchesFilters(item({ ignoreBefore: '2000-01-01' }), {})).toBe(true);
+    });
+
+    it('judges the tickler boundary against the supplied todayIso — the item appears ON its day, not after', () => {
+        const snoozed = item({ ignoreBefore: '2026-06-02' });
+        expect(matchesFilters(snoozed, {}, { todayIso: '2026-06-01' })).toBe(false);
+        expect(matchesFilters(snoozed, {}, { todayIso: '2026-06-02' })).toBe(true);
+        expect(matchesFilters(snoozed, {}, { todayIso: '2026-06-03' })).toBe(true);
+    });
+
+    it('the default todayIso reads the shared day clock — a midnight roll flips the same call', () => {
+        vi.useFakeTimers();
+        try {
+            vi.setSystemTime(dayjs('2026-08-29T23:59:00').toDate());
+            __resetDayClockForTests();
+            const snoozed = item({ ignoreBefore: '2026-08-30' });
+            expect(matchesFilters(snoozed, {})).toBe(false);
+
+            subscribeToDayChange(vi.fn());
+            vi.advanceTimersByTime(2 * 60 * 1000);
+            expect(matchesFilters(snoozed, {})).toBe(true);
+        } finally {
+            __resetDayClockForTests();
+            vi.useRealTimers();
+        }
     });
 });
 

@@ -9,6 +9,11 @@ import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
 import { hasAtLeastOne } from './typeUtils.js';
 
+// NOTE on "today": the `dayjs().startOf('day')` cutoffs in this module are server-local BY DESIGN,
+// not an oversight — calendar items key off `timeStart` (wall-clock event times), never the
+// tickler boundary. The user-local-day convention (`lib/userTimezone.ts`) applies only to
+// nextAction `expectedBy`/`ignoreBefore` stamping.
+
 /**
  * Extracts the GCal-owned slice (organizer/creator/attendees/responseStatus/eventType) from either
  * the routine master or a per-instance exception override. Per RFC 5545 each modified instance is

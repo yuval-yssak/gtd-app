@@ -31,6 +31,7 @@ import {
 import { WeeklyReviewWizard } from '../../components/weeklyReview/WeeklyReviewWizard';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { seedDefaultReviewInboxesIfEmpty } from '../../db/reviewInboxMutations';
+import { getTodayIso } from '../../lib/dayClock';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import { personNameMap } from '../../lib/waitingForGroups';
 import styles from './-weekly-review.module.css';
@@ -134,7 +135,9 @@ function WeeklyReviewPage() {
             // created by the very decision that completes the flow may not be visible yet —
             // the failure mode is a skipped sweep (next review catches it), never corruption.
             const arrivals = unreviewedStageArrivals(flow, items, {
-                todayIso: dayjs().format('YYYY-MM-DD'),
+                // Shared day clock (fresh here — event-time, not render-cached) so every tickler
+                // boundary in the app reads one day source.
+                todayIso: getTodayIso(),
                 personNameById: personNameMap(allPeople),
                 routines,
             });

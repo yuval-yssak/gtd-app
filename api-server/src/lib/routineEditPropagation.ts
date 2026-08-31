@@ -10,6 +10,7 @@ import { propagateRoutineContentToItems, regenerateFutureRoutineItems, trashFutu
 import { computeFirstOccurrenceDate, mergeRoutineEditIntoOpenItem } from './routineOpenItemMerge.js';
 import { isCalendarScheduleChanged, isNextActionScheduleChanged } from './rruleCanonical.js';
 import { RruleExhaustedError } from './rruleHelpers.js';
+import { userLocalDate } from './userTimezone.js';
 
 /**
  * Server-side twin of the client editor's routine-edit → item propagation (Phase 2 in
@@ -104,7 +105,8 @@ async function recomputeOpenItemSchedule(
 ): Promise<RoutineInterface> {
     const base = state.contentMerged ?? state.openItem;
     try {
-        const expectedBy = computeFirstOccurrenceDate(routine, dayjs().format('YYYY-MM-DD'));
+        // User-local today (not server-UTC) — the tickler boundary is the user's local midnight.
+        const expectedBy = computeFirstOccurrenceDate(routine, await userLocalDate(ctx.userId));
         if (expectedBy === state.openItem.expectedBy && state.openItem.ignoreBefore === expectedBy && !state.contentMerged) {
             return routine;
         }

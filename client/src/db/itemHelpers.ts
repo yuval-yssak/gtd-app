@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { isTicklerHidden } from '../lib/ticklerVisibility';
 import type { EnergyLevel, MyDB, StoredItem } from '../types/MyDB';
 
 export async function getItemsByUser(db: IDBPDatabase<MyDB>, userId: string): Promise<StoredItem[]> {
@@ -46,13 +47,15 @@ export interface NextActionFilters {
 }
 
 export async function getActiveNextActions(db: IDBPDatabase<MyDB>, userId: string, filters: NextActionFilters = {}): Promise<StoredItem[]> {
+    // Fresh dayjs() rather than the shared day clock: these helpers are per-call (devTools/tests),
+    // never render-cached, so recomputing is always correct — same local-midnight boundary either way.
     const today = dayjs().format('YYYY-MM-DD');
     const all = await db.getAllFromIndex('items', 'userId', userId);
 
     return all.filter((item) => {
         if (item.status !== 'nextAction') return false;
         // ignoreBefore hides the item until that date passes (tickler pattern)
-        if (item.ignoreBefore && item.ignoreBefore > today) return false;
+        if (isTicklerHidden(item, today)) return false;
         if (filters.energy && item.energy !== filters.energy) return false;
         if (filters.maxMinutes !== undefined && (item.time === undefined || item.time > filters.maxMinutes)) return false;
         if (filters.focus !== undefined && item.focus !== filters.focus) return false;

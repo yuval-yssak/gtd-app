@@ -89,3 +89,6 @@
 - [Fire-and-forget cascades need waitFor in tests](feedback_fire_and_forget_cascade_assertions_need_waitfor.md) — sync→op-driven refactors leave bare assertions passing on microtask luck; probe with an injected delay.
 - [New synced entity wedges old clients](project_new_synced_entity_wedges_old_clients.md) — server-side EntityType widening emits ops old client builds can't dispatch; applyServerOp's throw halted the whole pull loop pre-cursor-advance.
 - [Parity pin tests for inherited gaps](feedback_parity_pin_tests_for_known_gaps.md) — new entity inheriting a known defect: pin current behaviour + comment it should flip; validate the pin by simulating the future fix.
+- [TZ fixture tests are wall-clock vacuous](project_timezone_fixture_tests_wallclock_vacuous.md) — UTC+14/UTC-11 fixtures agree with UTC 10-13h/day; 3 of 4 new tz tests passed under a stashed bug. Pin the clock.
+- [Timezone reporter/consumer split](project_user_timezone_reporter_consumer_split.md) — only /sync writes the tz, only /v1+reassign reads it; API-only users permanently UTC; poison-row guard must live in the resolver (5 callers don't catch).
+- [Recency resolvers need a tie-break key](feedback_resolver_fallback_needs_tiebreak.md) — sort-by-timestamp over N rows flaps with Mongo's unordered find() on same-ms ties; demand a secondary `_id` sort + a twice-asserted test.

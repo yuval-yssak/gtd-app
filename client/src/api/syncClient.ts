@@ -49,6 +49,20 @@ function throwForStatus(res: Response, context: string): never {
     throw new Error(`${context} ${res.status}`);
 }
 
+/**
+ * `timezone` query fragment reported on bootstrap and pull, so server-side routine-item
+ * generation stamps dates on the user's local calendar day (see `resolveUserTimezone` on the
+ * server). Spread into URLSearchParams — empty when the environment can't resolve an IANA name.
+ */
+function timezoneReportParam(): Record<string, string> {
+    try {
+        const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        return timeZone ? { timezone: timeZone } : {};
+    } catch {
+        return {};
+    }
+}
+
 export async function pushSyncOps(deviceId: string, ops: SyncOperation[]): Promise<void> {
     const res = await fetch(`${API_SERVER}/sync/push`, {
         method: 'POST',
@@ -65,7 +79,7 @@ export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Pr
     // it the floor could drop below ops this device still needs (sync race).
     // deviceLabel ("Chrome on macOS") rides along so the row is displayable in Settings →
     // Connected devices; bootstrap is the row's sole creation path, so this is the one chance.
-    const params = new URLSearchParams({ deviceId });
+    const params = new URLSearchParams({ deviceId, ...timezoneReportParam() });
     if (deviceLabel) {
         params.set('deviceLabel', deviceLabel);
     }
@@ -83,7 +97,7 @@ export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Pr
 // from `(since, sinceId)` so a lost or partial response never advances the floor past ops the client
 // never committed. In steady state callers pass the ack pair equal to the since pair.
 export async function fetchSyncOps(since: string, sinceId: string, ackedTs: string, ackedId: string, deviceId: string): Promise<PullPayload> {
-    const params = new URLSearchParams({ since, sinceId, ackedTs, ackedId, deviceId });
+    const params = new URLSearchParams({ since, sinceId, ackedTs, ackedId, deviceId, ...timezoneReportParam() });
     const res = await fetch(`${API_SERVER}/sync/pull?${params}`, {
         credentials: 'include',
         headers: { [DEVICE_ID_HEADER]: deviceId },

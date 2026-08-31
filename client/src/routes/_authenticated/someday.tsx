@@ -34,8 +34,10 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
+import { useTodayIso } from '../../hooks/useTodayIso';
 import { filterItemsByQuery, sortItems } from '../../lib/itemSearch';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
+import { isTicklerHidden } from '../../lib/ticklerVisibility';
 import styles from './-someday.module.css';
 
 export const Route = createFileRoute('/_authenticated/someday')({
@@ -57,9 +59,17 @@ function SomedayPage() {
     const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/someday', search: { q: query || undefined }, replace: true }), [navigate]);
     const search = useListSearch({ urlQuery: q ?? '', writeUrlQuery });
 
+    // Shared day clock so a snoozed item surfaces here at local midnight without a reload.
+    const todayIso = useTodayIso();
+
     // Deferred query: typing re-filters in an interruptible background render (see useListSearch).
     const { deferredQuery } = search;
-    const parkedItems = useMemo(() => itemsWithGhosts.filter((item) => item.status === 'somedayMaybe'), [itemsWithGhosts]);
+    // Tickler pattern: a snoozed somedayMaybe item lives on /tickler alone until its date —
+    // previously this page never filtered on ignoreBefore, contradicting docs/DATA_MODEL.md.
+    const parkedItems = useMemo(
+        () => itemsWithGhosts.filter((item) => item.status === 'somedayMaybe' && !isTicklerHidden(item, todayIso)),
+        [itemsWithGhosts, todayIso],
+    );
     const somedayItems = useMemo(() => sortItems(filterItemsByQuery(parkedItems, deferredQuery), 'createdTs', 'desc'), [parkedItems, deferredQuery]);
 
     // Lookup map so each row doesn't rescan the routines array for its indicator title.

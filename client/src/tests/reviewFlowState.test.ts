@@ -80,18 +80,20 @@ describe('stageEligibleItems', () => {
         expect(stageEligibleItems('calendar', items, CTX).map((item) => item._id)).toEqual(['past', 'futureAllDay', 'future', 'undated']);
     });
 
-    it('nextActions excludes tickler-hidden items; tickler takes exactly those', () => {
+    it('nextActions excludes tickler-hidden items; tickler takes exactly those (all three statuses)', () => {
         const items = [
             makeItem({ _id: 'visible', status: 'nextAction' }),
             makeItem({ _id: 'boundary', status: 'nextAction', ignoreBefore: TODAY }),
             makeItem({ _id: 'snoozed', status: 'nextAction', ignoreBefore: '2026-09-15' }),
             makeItem({ _id: 'snoozedWait', status: 'waitingFor', ignoreBefore: '2026-09-01' }),
+            // somedayMaybe participates in the tickler too — mirror of the /tickler page status set.
+            makeItem({ _id: 'snoozedPark', status: 'somedayMaybe', ignoreBefore: '2026-09-20' }),
             // Focus does NOT override the tickler gate — a snoozed focus item stays hidden.
             makeItem({ _id: 'snoozedFocus', status: 'nextAction', focus: true, ignoreBefore: '2026-09-15' }),
         ];
         // ignoreBefore === today is visible (the tickler gate is strict >), matching /next-actions.
         expect(stageEligibleItems('nextActions', items, CTX).map((item) => item._id)).toEqual(['visible', 'boundary']);
-        expect(stageEligibleItems('tickler', items, CTX).map((item) => item._id)).toEqual(['snoozedWait', 'snoozed', 'snoozedFocus']);
+        expect(stageEligibleItems('tickler', items, CTX).map((item) => item._id)).toEqual(['snoozedWait', 'snoozed', 'snoozedFocus', 'snoozedPark']);
     });
 
     it('nextActions mirrors the Next Actions page order: focus first, then expectedBy tiers', () => {
@@ -129,12 +131,15 @@ describe('stageEligibleItems', () => {
         ]);
     });
 
-    it('somedayMaybe takes all somedayMaybe items regardless of tickler, newest-first like the someday page', () => {
+    it('somedayMaybe excludes tickler-hidden items (they belong to the tickler stage), newest-first like the someday page', () => {
         const items = [
             makeItem({ _id: 'parked', status: 'somedayMaybe', ignoreBefore: '2027-01-01', createdTs: '2026-01-01T00:00:00.000Z' }),
             makeItem({ _id: 'plain', status: 'somedayMaybe', createdTs: '2026-02-01T00:00:00.000Z' }),
+            makeItem({ _id: 'due', status: 'somedayMaybe', ignoreBefore: TODAY, createdTs: '2026-01-15T00:00:00.000Z' }),
         ];
-        expect(stageEligibleItems('somedayMaybe', items, CTX).map((item) => item._id)).toEqual(['plain', 'parked']);
+        // 'parked' is snoozed → reviewed by the tickler stage instead; 'due' surfaced today.
+        expect(stageEligibleItems('somedayMaybe', items, CTX).map((item) => item._id)).toEqual(['plain', 'due']);
+        expect(stageEligibleItems('tickler', items, CTX).map((item) => item._id)).toEqual(['parked']);
     });
 });
 

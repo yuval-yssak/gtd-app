@@ -36,8 +36,15 @@ export async function closeContextQuietly(ctx: BrowserContext): Promise<void> {
     await Promise.race([ctx.close().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 5_000))]);
 }
 
-export async function withOneLoggedInDevice(browser: Browser, email: string, fn: (page: Page) => Promise<void>): Promise<void> {
-    const ctx = await browser.newContext();
+export async function withOneLoggedInDevice(
+    browser: Browser,
+    email: string,
+    fn: (page: Page) => Promise<void>,
+    // e.g. { timezoneId: 'Pacific/Kiritimati' } — the timezone-pipeline specs emulate a non-UTC
+    // browser against a TZ=UTC API server (Cloud Run parity).
+    contextOptions?: Parameters<Browser['newContext']>[0],
+): Promise<void> {
+    const ctx = await browser.newContext(contextOptions);
     try {
         const page = await loginAs(ctx, email);
         await fn(page);

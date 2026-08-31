@@ -578,6 +578,17 @@ export interface DeviceSyncStateInterface {
      * "Unknown device" for those.
      */
     autoLabel?: string;
+    /**
+     * IANA timezone (e.g. "Asia/Jerusalem") last reported by this device on /sync/bootstrap or
+     * /sync/pull. Server-side routine-item generation resolves the user's local calendar day from
+     * the most recently reporting device (see `resolveUserTimezone`), so `expectedBy`/`ignoreBefore`
+     * land on the user's local date — matching the client's local-midnight tickler boundary.
+     * When the account is active in two timezones at once, last-reporting-device-wins; the blast
+     * radius is a ±1-day stamp on server-generated items during the hours the zones disagree.
+     */
+    timezone?: string;
+    /** ISO datetime of the last `timezone` report — the recency key for `resolveUserTimezone`. */
+    timezoneReportedTs?: string;
 }
 
 /**

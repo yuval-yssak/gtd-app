@@ -55,3 +55,4 @@
 - [Collapsed pseudo-entry re-enters the queue](feedback_collapsed_pseudo_entry_reenters_queue.md) — `routine:<id>` entries stay derivable after the decision retires them (pause leaves past items); decided ≠ ineligible for pseudo-ids.
 - [New card variant ships without a component test](feedback_new_card_variant_ships_without_component_test.md) — weeklyReview `*Card`/`*Banner` land with pure-state tests only; every `?? null` / missing-entity fallback is uncovered.
 - [Counter semantics change leaves the paired bar uncovered](feedback_counter_semantics_change_leaves_paired_bar_uncovered.md) — Redefining a "n of m" numerator also moves the LinearProgress `value`; every existing `aria-valuenow` assertion sits where the new term is 0.
+- [Page filter change desyncs weekly-review stages](feedback_page_filter_change_desyncs_review_stages.md) — `stageEligibleItems` contracts to mirror each page exactly but is never updated; also hides a private duplicate predicate.

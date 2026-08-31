@@ -12,10 +12,10 @@ import Stepper from '@mui/material/Stepper';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import classNames from 'classnames';
-import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useTodayIso } from '../../hooks/useTodayIso';
 import { personNameMap } from '../../lib/waitingForGroups';
 import type { MyDB } from '../../types/MyDB';
 import { ClarifyStage } from './ClarifyStage';
@@ -59,7 +59,9 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     const wizardRootRef = useRef<HTMLDivElement | null>(null);
     useTransitionFocusRestore(wizardRootRef);
     const stage = currentStage(flow);
-    const today = dayjs().format('YYYY-MM-DD');
+    // Shared day clock (already an effect dep below): a review left open across midnight
+    // re-reconciles stage eligibility against the new day instead of a stale render-time date.
+    const today = useTodayIso();
     // Unfiltered allPeople, like /waiting-for: a queued item can wait on a hidden account's person.
     const personNameById = useMemo(() => personNameMap(allPeople), [allPeople]);
     const queue = stage ? flow.queues[stage.id] : undefined;

@@ -21,6 +21,9 @@ interface Props {
 /**
  * `Expected by` (deadline) + optional `Ignore before` (tickler) date inputs. Extracted so waitingFor
  * and somedayMaybe share the layout; waitingFor opts out of the tickler field via showIgnoreBefore.
+ * NOTE: hiding the field is UI-only — `ignoreBefore` remains valid on waitingFor items via the
+ * public API/MCP (the server's status→field matrix allows it), and /waiting-for + /tickler both
+ * honor it. Don't treat the waitingFor tickler filtering as unreachable code.
  */
 export function TicklerDateFields({ value, onChange, showIgnoreBefore = true }: Props) {
     return (

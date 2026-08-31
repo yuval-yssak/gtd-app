@@ -27,7 +27,7 @@ Every item has exactly one status at a time.
 
 ### Tickler pattern (`ignoreBefore`)
 
-A `nextAction`, `waitingFor`, or `somedayMaybe` item can carry an `ignoreBefore` date. The item is hidden from all active lists until that date arrives, then surfaces automatically. This is the GTD "tickler file" — a way to defer something without cluttering today's view.
+A `nextAction`, `waitingFor`, or `somedayMaybe` item can carry an `ignoreBefore` date. The item is hidden from all active lists (`/next-actions`, `/waiting-for`, `/someday`) until that date arrives, then surfaces automatically. This is the GTD "tickler file" — a way to defer something without cluttering today's view. While snoozed, the item stays reachable in exactly one place — the `/tickler` page, which lists all three statuses grouped by date and offers "release now". Global search deliberately still matches snoozed items: looking one up by name is an explicit act, not list clutter.
 
 > `ignoreBefore` is a separate field from the calendar `timeStart`/`timeEnd` pair to keep their semantics unambiguous.
 

@@ -28,6 +28,8 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
+import { useTodayIso } from '../../hooks/useTodayIso';
+import { isTicklerHidden } from '../../lib/ticklerVisibility';
 import { groupByWaitingForPerson, personNameMap, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../../lib/waitingForGroups';
 import { parseWaitingForSearch } from '../../lib/waitingForUrlParams';
 import type { StoredItem } from '../../types/MyDB';
@@ -48,8 +50,14 @@ function WaitingForPage() {
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
     useListScrollRestoration();
     const { itemsWithGhosts, isGhost, onGhostExited } = useListGhosts(items);
+    // Shared day clock so the overdue highlight rolls at local midnight without a reload.
+    const todayIso = useTodayIso();
 
-    const waitingItems = itemsWithGhosts.filter((item) => item.status === 'waitingFor').sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
+    const waitingItems = itemsWithGhosts
+        // Tickler pattern: a snoozed waitingFor item lives on /tickler alone until its date —
+        // previously it double-listed here, contradicting docs/DATA_MODEL.md.
+        .filter((item) => item.status === 'waitingFor' && !isTicklerHidden(item, todayIso))
+        .sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
 
     // Ghosts are fading leftovers, not open work — the header count reflects live rows only.
     const liveWaitingCount = waitingItems.filter((item) => !isGhost(item)).length;
@@ -72,7 +80,7 @@ function WaitingForPage() {
         await refreshItems();
     }
 
-    const isOverdue = (item: StoredItem) => item.expectedBy !== undefined && item.expectedBy < dayjs().format('YYYY-MM-DD');
+    const isOverdue = (item: StoredItem) => item.expectedBy !== undefined && item.expectedBy < todayIso;
 
     function renderItemList(rowItems: StoredItem[]) {
         return (

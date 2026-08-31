@@ -1,4 +1,5 @@
 import { compareNextActions } from '../../lib/compareNextActions';
+import { isTicklerHidden, participatesInTickler } from '../../lib/ticklerVisibility';
 import { flattenByPersonGroups } from '../../lib/waitingForGroups';
 import type { StoredItem, StoredRoutine } from '../../types/MyDB';
 import { compareCalendarItems } from '../calendarRouteSort';
@@ -155,18 +156,17 @@ export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<
                 personNameById,
             );
         case 'tickler':
-            // Mirrors the /tickler page: only nextAction + waitingFor participate in the tickler.
+            // Mirrors the /tickler page: every tickler-participating status, snoozed rows only.
             return items
-                .filter((item) => (item.status === 'nextAction' || item.status === 'waitingFor') && isTicklerHidden(item, todayIso))
+                .filter((item) => participatesInTickler(item) && isTicklerHidden(item, todayIso))
                 .sort((a, b) => (a.ignoreBefore ?? '').localeCompare(b.ignoreBefore ?? ''));
         case 'somedayMaybe':
-            // Newest-first, matching the /someday page.
-            return items.filter((item) => item.status === 'somedayMaybe').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+            // Newest-first, matching the /someday page (which hides tickler-snoozed items — they
+            // are reviewed by the tickler stage instead).
+            return items
+                .filter((item) => item.status === 'somedayMaybe' && !isTicklerHidden(item, todayIso))
+                .sort((a, b) => b.createdTs.localeCompare(a.createdTs));
     }
-}
-
-function isTicklerHidden(item: StoredItem, todayIso: string): boolean {
-    return item.ignoreBefore !== undefined && item.ignoreBefore > todayIso;
 }
 
 // ── Solo-item queue ──────────────────────────────────────────────────────────
