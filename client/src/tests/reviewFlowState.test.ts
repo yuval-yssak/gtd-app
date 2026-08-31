@@ -11,6 +11,7 @@ import {
     isChecklistComplete,
     isFlowComplete,
     jumpToStage,
+    normalizeCalendarQueue,
     REVIEW_STAGES,
     reconcileQueue,
     refreshQueueOnEntry,
@@ -663,5 +664,154 @@ describe('stageEligibleEntryIds — routine lifecycle edges', () => {
         const undone = undoDecision(decided, routineEntryId('r1'));
         expect(currentQueueItemId(undone)).toBe(routineEntryId('r1'));
         expect(decidedItemIds(undone)).toEqual([]);
+    });
+});
+
+describe('isModifiedExceptionItem — matching survives the inbound refresh', () => {
+    const occurrences = [
+        makeItem({ _id: 'occ1', status: 'calendar', routineId: 'r1', timeStart: '2026-08-27T18:00:00.000Z' }),
+        makeItem({ _id: 'occ2', status: 'calendar', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' }),
+    ];
+
+    it('GCal-owned per-instance mirrors on EVERY occurrence (attendees, organizer, RSVP…) do NOT break the collapse', () => {
+        const noisy = makeCalendarRoutine({
+            _id: 'r1',
+            routineExceptions: [
+                { date: '2026-08-27', type: 'modified', attendees: [], organizer: { email: 'boss@example.com' }, responseStatus: 'accepted' },
+                { date: '2026-09-03', type: 'modified', creator: { email: 'boss@example.com' }, eventType: 'default' },
+            ],
+        });
+        expect(stageEligibleEntryIds('calendar', occurrences, { ...CTX, routines: [noisy] })).toEqual([routineEntryId('r1')]);
+    });
+
+    it('a title override matches by occurrence date when itemId is absent (the inbound refresh drops it)', () => {
+        const renamed = makeCalendarRoutine({ _id: 'r1', routineExceptions: [{ date: '2026-09-03', type: 'modified', title: 'Renamed occurrence' }] });
+        expect(stageEligibleEntryIds('calendar', occurrences, { ...CTX, routines: [renamed] })).toEqual([routineEntryId('r1'), 'occ2']);
+    });
+
+    it('a time-moved override matches the relocated item VERBATIM — production shapes carry a GCal offset on both sides', () => {
+        // The inbound path assigns `timeStart = newTimeStart` verbatim, so the strings are equal.
+        const moved = makeCalendarRoutine({
+            _id: 'r1',
+            routineExceptions: [{ date: '2026-09-03', type: 'modified', newTimeStart: '2026-09-04T09:00:00+03:00' }],
+        });
+        const relocated = makeItem({ _id: 'occ2', status: 'calendar', routineId: 'r1', timeStart: '2026-09-04T09:00:00+03:00' });
+        const [occ1] = occurrences;
+        if (!occ1) throw new Error('expected the fixture occurrence');
+        expect(stageEligibleEntryIds('calendar', [occ1, relocated], { ...CTX, routines: [moved] })).toEqual([routineEntryId('r1'), 'occ2']);
+    });
+
+    it('a floating-local item still matches an offset-carrying newTimeStart by date — never by browser-zone instant math', () => {
+        const moved = makeCalendarRoutine({
+            _id: 'r1',
+            routineExceptions: [{ date: '2026-09-03', type: 'modified', newTimeStart: '2026-09-04T09:00:00+03:00' }],
+        });
+        const floating = makeItem({ _id: 'occ2', status: 'calendar', routineId: 'r1', timeStart: '2026-09-04T09:00:00' });
+        expect(stageEligibleEntryIds('calendar', [floating], { ...CTX, routines: [moved] })).toEqual(['occ2']);
+    });
+
+    it('a time-moved override whose item has NOT moved yet stays collapsed — the row follows within one sync', () => {
+        const moved = makeCalendarRoutine({
+            _id: 'r1',
+            routineExceptions: [{ date: '2026-09-03', type: 'modified', newTimeStart: '2026-09-10T09:00:00+03:00' }],
+        });
+        expect(stageEligibleEntryIds('calendar', occurrences, { ...CTX, routines: [moved] })).toEqual([routineEntryId('r1')]);
+    });
+
+    it('a date-keyed override pulls out BOTH occurrences of a twice-daily routine on that date — the key is date-granular by design', () => {
+        const renamed = makeCalendarRoutine({ _id: 'r1', routineExceptions: [{ date: '2026-09-03', type: 'modified', title: 'Renamed occurrence' }] });
+        const twiceDaily = [
+            makeItem({ _id: 'am', status: 'calendar', routineId: 'r1', timeStart: '2026-09-03T09:00:00.000Z' }),
+            makeItem({ _id: 'pm', status: 'calendar', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' }),
+            makeItem({ _id: 'next', status: 'calendar', routineId: 'r1', timeStart: '2026-09-04T09:00:00.000Z' }),
+        ];
+        expect(stageEligibleEntryIds('calendar', twiceDaily, { ...CTX, routines: [renamed] })).toEqual(['am', 'pm', routineEntryId('r1')]);
+    });
+});
+
+describe('normalizeCalendarQueue', () => {
+    const routine = makeCalendarRoutine({ _id: 'r1' });
+    const occurrences = [
+        makeItem({ _id: 'occ1', status: 'calendar', routineId: 'r1', timeStart: '2026-08-27T18:00:00.000Z' }),
+        makeItem({ _id: 'occ2', status: 'calendar', routineId: 'r1', timeStart: '2026-09-03T18:00:00.000Z' }),
+        makeItem({ _id: 'occ3', status: 'calendar', routineId: 'r1', timeStart: '2026-09-10T18:00:00.000Z' }),
+    ];
+    const solo = makeItem({ _id: 'solo', status: 'calendar', timeStart: '2026-09-20T10:00:00.000Z' });
+    const allItems = [...occurrences, solo];
+
+    it('folds raw occurrence ids persisted by a pre-collapse draft onto the routine entry — pending AND decisions', () => {
+        const persisted = {
+            pending: ['occ2', 'occ3', 'solo'],
+            cursor: 0,
+            decisions: [{ itemId: 'occ1', undo: { snapshot: makeItem({ _id: 'occ1', status: 'calendar' }) } }],
+        };
+        const normalized = normalizeCalendarQueue(persisted, allItems, [routine]);
+        // occ1's decision stands for the whole routine now; its single-item snapshot undo is
+        // dropped (routine entries are undo-less), and the still-pending occurrences leave the walk.
+        expect(decidedItemIds(normalized)).toEqual([routineEntryId('r1')]);
+        expect(normalized.decisions[0]?.undo).toBeUndefined();
+        expect(normalized.pending).toEqual(['solo']);
+    });
+
+    it('folds duplicate decisions — raw occurrences plus an existing routine entry — into one decision', () => {
+        const persisted = {
+            pending: [],
+            cursor: 0,
+            decisions: [{ itemId: routineEntryId('r1') }, { itemId: 'occ1' }, { itemId: 'occ2' }, { itemId: 'solo' }],
+        };
+        const normalized = normalizeCalendarQueue(persisted, allItems, [routine]);
+        expect(decidedItemIds(normalized)).toEqual([routineEntryId('r1'), 'solo']);
+    });
+
+    it('re-entering the stage after normalization offers each remaining entry exactly once', () => {
+        const persisted = { pending: ['occ1', 'occ2', 'occ3', 'solo'], cursor: 0, decisions: [] };
+        const normalized = normalizeCalendarQueue(persisted, allItems, [routine]);
+        const eligible = stageEligibleEntryIds('calendar', allItems, { ...CTX, routines: [routine] });
+        expect(refreshQueueOnEntry(normalized, eligible).pending).toEqual([routineEntryId('r1'), 'solo']);
+    });
+
+    it('a routine row missing/inactive at build time collapses MID-STAGE once the active row arrives', () => {
+        const stale = makeCalendarRoutine({ _id: 'r1', active: false });
+        const built = buildStageQueue(stageEligibleEntryIds('calendar', allItems, { ...CTX, routines: [stale] }));
+        expect(built.pending).toEqual(['occ1', 'occ2', 'occ3', 'solo']);
+        const eligibleNow = stageEligibleEntryIds('calendar', allItems, { ...CTX, routines: [routine] });
+        const reconciled = reconcileQueue(normalizeCalendarQueue(built, allItems, [routine]), eligibleNow);
+        expect(reconciled.pending).toEqual([routineEntryId('r1'), 'solo']);
+    });
+
+    it('keeps the cursor on the entry the user is looking at while earlier occurrences fold away', () => {
+        const persisted = { pending: ['occ1', 'occ2', 'solo'], cursor: 2, decisions: [] };
+        const normalized = normalizeCalendarQueue(persisted, allItems, [routine]);
+        expect(normalized.pending).toEqual([routineEntryId('r1'), 'solo']);
+        expect(currentQueueItemId(normalized)).toBe('solo');
+    });
+
+    it('a current entry folding onto an ALREADY-DECIDED one lands on its successor — never silently past unseen entries', () => {
+        // Mid-session heal: the routine card was decided, then the stale raw rows normalize while
+        // the user is parked on one of them. The cursor must land on 'solo', not walk past it.
+        const persisted = { pending: ['occ1', 'occ2', 'occ3', 'solo'], cursor: 2, decisions: [{ itemId: routineEntryId('r1') }] };
+        const normalized = normalizeCalendarQueue(persisted, allItems, [routine]);
+        expect(normalized.pending).toEqual(['solo']);
+        expect(currentQueueItemId(normalized)).toBe('solo');
+    });
+
+    it('droppedIds are NOT folded — escaping one occurrence must not suppress (or mark seen) the whole series', () => {
+        const persisted = { pending: ['occ2', 'occ3', 'solo'], cursor: 0, decisions: [], droppedIds: ['occ1'] };
+        const normalized = normalizeCalendarQueue(persisted, allItems, [routine]);
+        expect(normalized.droppedIds).toEqual(['occ1']);
+        // The routine entry is still offered mid-stage: the stale raw id in droppedIds matches nothing.
+        const eligible = stageEligibleEntryIds('calendar', allItems, { ...CTX, routines: [routine] });
+        expect(reconcileQueue(normalized, eligible).pending).toEqual([routineEntryId('r1'), 'solo']);
+    });
+
+    it('returns the same reference when the queue is already canonical', () => {
+        const canonical = { pending: [routineEntryId('r1'), 'solo'], cursor: 1, decisions: [{ itemId: 'other' }] };
+        expect(normalizeCalendarQueue(canonical, allItems, [routine])).toBe(canonical);
+    });
+
+    it('leaves a paused routine occurrences raw — normalization never collapses what eligibility would not', () => {
+        const paused = makeCalendarRoutine({ _id: 'r1', active: false });
+        const persisted = { pending: ['occ1', 'occ2', 'occ3', 'solo'], cursor: 0, decisions: [] };
+        expect(normalizeCalendarQueue(persisted, allItems, [paused])).toBe(persisted);
     });
 });

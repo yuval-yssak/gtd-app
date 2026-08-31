@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeNextOccurrence, deriveRecurrenceAnchor, formatCalendarRrule, formatRrule } from '../lib/rruleUtils';
 import type { StoredRoutine } from '../types/MyDB';
 
@@ -215,6 +215,15 @@ describe('formatRrule', () => {
 });
 
 describe('formatCalendarRrule', () => {
+    // Range dates render bare ("Apr 15") only within the current year — pin the clock so the
+    // 2026-dated fixtures below stay deterministic whenever the suite actually runs.
+    beforeEach(() => {
+        vi.useFakeTimers({ now: new Date('2026-06-01T12:00:00Z') });
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
     const baseRoutine: StoredRoutine = {
         _id: 'r1',
         userId: 'u1',
@@ -292,5 +301,24 @@ describe('formatCalendarRrule', () => {
             calendarItemTemplate: { timeOfDay: '09:00', duration: 60 },
         };
         expect(formatCalendarRrule(routine)).toBe('Every day at 09:00 for 1h, 1 occurrence');
+    });
+
+    it('adds the year to a "from" date outside the current year — a ten-month-old split must not read as upcoming', () => {
+        const routine: StoredRoutine = {
+            ...baseRoutine,
+            splitFromRoutineId: 'parent-id',
+            createdTs: '2025-10-21T12:00:00Z',
+            calendarItemTemplate: { timeOfDay: '15:00', duration: 30 },
+        };
+        expect(formatCalendarRrule(routine)).toBe('Every Thu at 15:00 for 30m, from Oct 21, 2025');
+    });
+
+    it('adds the year to an "until" date outside the current year', () => {
+        const routine: StoredRoutine = {
+            ...baseRoutine,
+            rrule: 'FREQ=DAILY;INTERVAL=3;UNTIL=20270414T235959Z',
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 60 },
+        };
+        expect(formatCalendarRrule(routine)).toBe('Every 3 days at 09:00 for 1h, until Apr 14, 2027');
     });
 });

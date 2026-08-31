@@ -170,7 +170,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
     // Routine-generated items get a prominent strip above the editor ("review the pattern, not
     // the copy"); a calendar occurrence individually moved off the pattern is labeled an exception.
     const itemRoutine = currentItem.routineId ? routines.find((routine) => routine._id === currentItem.routineId) : undefined;
-    const isExceptionItem = Boolean(itemRoutine && isModifiedExceptionItem(itemRoutine, currentItem._id));
+    const isExceptionItem = Boolean(itemRoutine && isModifiedExceptionItem(itemRoutine, currentItem));
 
     return (
         <Box className={styles.stageRoot} data-testid="focusStage">

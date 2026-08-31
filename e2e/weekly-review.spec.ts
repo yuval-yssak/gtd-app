@@ -990,11 +990,11 @@ test.describe('weekly review', () => {
                 .sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''));
             const exception = poolOccurrences[1];
             if (!exception) throw new Error('expected at least two generated pool occurrences');
+            // No `itemId` on the exception — the production shape: the inbound GCal refresh
+            // rewrites exception records without it, so the review must match by occurrence.
             await gtd.updateRoutine(page, {
                 ...poolRoutine,
-                routineExceptions: [
-                    { date: (exception.timeStart ?? '').slice(0, 10), type: 'modified', itemId: exception._id, newTimeStart: exception.timeStart },
-                ],
+                routineExceptions: [{ date: (exception.timeStart ?? '').slice(0, 10), type: 'modified', newTimeStart: exception.timeStart }],
             });
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
@@ -1064,6 +1064,70 @@ test.describe('weekly review', () => {
             for (const item of gymItems) {
                 expect(item.status).toBe('trash');
             }
+        });
+    });
+
+    test('a draft persisted with raw occurrence ids resumes into the collapsed walk', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-normalize-${dayjs().valueOf()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, {
+                title: 'Standup',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                startDate: dayjs().format('YYYY-MM-DD'),
+                calendarItemTemplate: { timeOfDay: '06:00', duration: 15 },
+                template: {},
+                active: true,
+            });
+            await gtd.generateCalendarItemsToHorizon(page, routine._id);
+            const occurrenceIds = (await gtd.listItems(page))
+                .filter((item) => item.routineId === routine._id)
+                .sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''))
+                .map((item) => item._id);
+            const [decidedId, ...pendingIds] = occurrenceIds;
+            if (!decidedId || pendingIds.length === 0) throw new Error('expected multiple generated occurrences');
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            // Seed the draft a pre-collapse build (or a stale-routine sync window) would have
+            // written: the calendar stage mid-walk over RAW occurrence ids, one already decided.
+            await page.evaluate(
+                async ({ userId, pending, decidedId: decided }) => {
+                    const openRequest = indexedDB.open('gtd-app');
+                    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+                        openRequest.onsuccess = () => resolve(openRequest.result);
+                        openRequest.onerror = () => reject(openRequest.error);
+                    });
+                    const draft = {
+                        key: `weeklyReview:${userId}`,
+                        kind: 'weeklyReview',
+                        userId,
+                        updatedTs: new Date().toISOString(),
+                        flow: {
+                            stageIndex: 2,
+                            stageId: 'calendar',
+                            tickedInboxIds: [],
+                            queues: { calendar: { pending, cursor: 0, decisions: [{ itemId: decided }] } },
+                            skippedStageIds: [],
+                            startedTs: new Date().toISOString(),
+                        },
+                    };
+                    await new Promise<void>((resolve, reject) => {
+                        const tx = db.transaction('drafts', 'readwrite');
+                        tx.objectStore('drafts').put(draft);
+                        tx.oncomplete = () => resolve();
+                        tx.onerror = () => reject(tx.error);
+                    });
+                    db.close();
+                },
+                { userId: routine.userId, pending: pendingIds, decidedId },
+            );
+
+            await page.goto('/weekly-review');
+            await page.getByTestId('resumeReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Calendar');
+            // Every raw id folded onto ONE routine entry, which the raw decision already covers —
+            // the stage resumes complete instead of re-walking dozens of occurrences.
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 1');
         });
     });
 });

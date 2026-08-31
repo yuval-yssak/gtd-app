@@ -161,26 +161,37 @@ export function formatRoutineSchedule(routine: StoredRoutine): string {
     return routine.routineType === 'calendar' ? formatCalendarRrule(routine) : formatRrule(routine.rrule);
 }
 
+/**
+ * "MMM D" within the current year, "MMM D, YYYY" otherwise — a bare "from Oct 21" on a series
+ * split last October reads as seven weeks ahead, not ten months of history.
+ */
+function formatRangeDate(date: dayjs.Dayjs): string {
+    return date.format(date.year() === dayjs().year() ? 'MMM D' : 'MMM D, YYYY');
+}
+
+/** "until Apr 14" when the rrule caps the series, or null. */
+function untilPart(rrule: string): string | null {
+    const untilMatch = rrule.match(/UNTIL=(\d{4})(\d{2})(\d{2})/);
+    return untilMatch ? `until ${formatRangeDate(dayjs(`${untilMatch[1]}-${untilMatch[2]}-${untilMatch[3]}`))}` : null;
+}
+
+/** "5 occurrences" when the rrule is COUNT-bounded, or null. */
+function countPart(rrule: string): string | null {
+    const countMatch = rrule.match(/COUNT=(\d+)/);
+    if (!countMatch?.[1]) {
+        return null;
+    }
+    const count = parseInt(countMatch[1], 10);
+    return `${count} occurrence${count === 1 ? '' : 's'}`;
+}
+
 /** Extracts date range context for split routines (UNTIL for the head, start date for the tail). */
 function formatDateRange(routine: StoredRoutine): string {
-    const parts: string[] = [];
-
-    if (routine.splitFromRoutineId) {
-        parts.push(`from ${dayjs(routine.createdTs).format('MMM D')}`);
-    }
-
-    const untilMatch = routine.rrule.match(/UNTIL=(\d{4})(\d{2})(\d{2})/);
-    if (untilMatch) {
-        const untilDate = dayjs(`${untilMatch[1]}-${untilMatch[2]}-${untilMatch[3]}`);
-        parts.push(`until ${untilDate.format('MMM D')}`);
-    }
-
-    const countMatch = routine.rrule.match(/COUNT=(\d+)/);
-    if (countMatch?.[1]) {
-        const count = parseInt(countMatch[1], 10);
-        parts.push(`${count} occurrence${count === 1 ? '' : 's'}`);
-    }
-
+    const parts = [
+        routine.splitFromRoutineId ? `from ${formatRangeDate(dayjs(routine.createdTs))}` : null,
+        untilPart(routine.rrule),
+        countPart(routine.rrule),
+    ].filter((part): part is string => part !== null);
     if (!hasAtLeastOne(parts)) {
         return '';
     }

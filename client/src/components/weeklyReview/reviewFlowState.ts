@@ -80,13 +80,63 @@ export function routineIdOfEntry(entryId: string): string | null {
     return entryId.startsWith(ROUTINE_ENTRY_PREFIX) ? entryId.slice(ROUTINE_ENTRY_PREFIX.length) : null;
 }
 
+type RoutineException = NonNullable<StoredRoutine['routineExceptions']>[number];
+
+/**
+ * GCal-noise filter: the inbound sync records a `modified` exception for EVERY instance whose
+ * GCal-owned per-instance mirrors (attendees, response status…) differ from the master — which is
+ * essentially every instance of every invited meeting. Only an override the user would recognize
+ * as "this occurrence was changed" counts as a modification.
+ */
+function hasUserVisibleOverride(exception: RoutineException): boolean {
+    return exception.newTimeStart !== undefined || exception.newTimeEnd !== undefined || exception.title !== undefined || exception.notes !== undefined;
+}
+
+/**
+ * Occurrence-keyed exception↔item match, robust to the inbound GCal refresh rewriting the record
+ * without `itemId`: a time-moved instance matches by its overridden start (the generated item's
+ * `timeStart` mirrors it), an in-place override by the original occurrence date the item still
+ * sits on. A time-moved exception whose item has NOT been moved yet deliberately stays collapsed:
+ * the inbound path assigns `timeStart = newTimeStart` verbatim, so the row follows within one
+ * sync and matches from then on.
+ */
+function coversOccurrence(exception: RoutineException, item: StoredItem): boolean {
+    if (item.timeStart === undefined) {
+        return false;
+    }
+    // Compared as strings, never as instants: routine-generated rows store a FLOATING wall-clock
+    // timeStart while `newTimeStart` carries a GCal offset — `dayjs().isSame()` would resolve the
+    // floating side in the browser's zone and flip per user. The inbound path assigns
+    // `timeStart = newTimeStart` verbatim, so exact equality is the real relation; the date
+    // prefix covers rows whose offset was re-serialized.
+    const occurrenceDate = exception.newTimeStart ?? exception.date;
+    return item.timeStart === exception.newTimeStart || item.timeStart.startsWith(occurrenceDate.slice(0, 10));
+}
+
 /**
  * Whether this item is an occurrence individually modified away from its routine's pattern (a
  * `modified` routine exception — e.g. one meeting moved to another time). Exceptions deviate from
  * the rrule, so the calendar stage reviews them as their OWN card instead of collapsing them.
+ * `itemId` matches when present (the pushback path stamps it), but the inbound exception refresh
+ * drops it again — so the durable key is the occurrence itself, and only for exceptions carrying
+ * a user-visible override (attendee-only records are per-instance mirrors, not modifications).
  */
-export function isModifiedExceptionItem(routine: StoredRoutine, itemId: string): boolean {
-    return (routine.routineExceptions ?? []).some((exception) => exception.type === 'modified' && exception.itemId === itemId);
+export function isModifiedExceptionItem(routine: StoredRoutine, item: StoredItem): boolean {
+    return (routine.routineExceptions ?? []).some(
+        (exception) =>
+            exception.type === 'modified' && (exception.itemId === item._id || (hasUserVisibleOverride(exception) && coversOccurrence(exception, item))),
+    );
+}
+
+/** Canonical calendar-stage entry id for an item: its routine's `routine:` entry when the collapse applies, else its own id. */
+function calendarEntryIdForItem(item: StoredItem, routineById: ReadonlyMap<string, StoredRoutine>): string {
+    const routine = item.routineId === undefined ? undefined : routineById.get(item.routineId);
+    // A PAUSED routine has no live pattern to review — its surviving past-due occurrences are
+    // ordinary leftovers the user disposes of individually, so they never collapse.
+    if (!routine?.active || isModifiedExceptionItem(routine, item)) {
+        return item._id;
+    }
+    return routineEntryId(routine._id);
 }
 
 /**
@@ -96,19 +146,14 @@ export function isModifiedExceptionItem(routine: StoredRoutine, itemId: string):
  */
 function collapseCalendarRoutines(sortedItems: ReadonlyArray<StoredItem>, routines: ReadonlyArray<StoredRoutine>): string[] {
     const routineById = new Map(routines.map((routine) => [routine._id, routine]));
-    const seenRoutineIds = new Set<string>();
+    const seenEntryIds = new Set<string>();
     return sortedItems.flatMap((item) => {
-        const routine = item.routineId === undefined ? undefined : routineById.get(item.routineId);
-        // A PAUSED routine has no live pattern to review — its surviving past-due occurrences are
-        // ordinary leftovers the user disposes of individually, so they never collapse.
-        if (!routine?.active || isModifiedExceptionItem(routine, item._id)) {
-            return [item._id];
-        }
-        if (seenRoutineIds.has(routine._id)) {
+        const entryId = calendarEntryIdForItem(item, routineById);
+        if (seenEntryIds.has(entryId)) {
             return [];
         }
-        seenRoutineIds.add(routine._id);
-        return [routineEntryId(routine._id)];
+        seenEntryIds.add(entryId);
+        return [entryId];
     });
 }
 
@@ -433,6 +478,98 @@ function mergeQueueWithEligible(queue: StageQueue, eligibleIds: ReadonlyArray<st
  */
 export function reconcileQueue(queue: StageQueue, eligibleIds: ReadonlyArray<string>): StageQueue {
     return mergeQueueWithEligible(queue, eligibleIds, new Set(queue.droppedIds ?? []));
+}
+
+const sameIds = (a: ReadonlyArray<string>, b: ReadonlyArray<string>) => a.length === b.length && a.every((id, index) => id === b[index]);
+
+/**
+ * Folds decisions onto canonical entry ids — the first decision per entry survives. A folded raw
+ * occurrence loses its undo: routine entries are undo-less by design, and its snapshot restores
+ * one item, not the series. Dropping it is safe ONLY because routine-generated items never carry
+ * an undo in the first place (`captureUndo` in FocusStage/ClarifyStage returns undefined on
+ * `routineId`) — if that ever changes, an in-flight phase-2 `requeueAtCursor` would re-insert the
+ * raw id alongside its routine entry.
+ */
+function normalizeDecisions(decisions: ReadonlyArray<StageDecision>, canonicalOf: (entryId: string) => string): StageDecision[] {
+    const seenIds = new Set<string>();
+    return decisions.flatMap((decision) => {
+        const itemId = canonicalOf(decision.itemId);
+        if (seenIds.has(itemId)) {
+            return [];
+        }
+        seenIds.add(itemId);
+        return [itemId === decision.itemId ? decision : { itemId }];
+    });
+}
+
+/** Maps ids onto canonical form, dropping duplicates and `excluded` ids while preserving first positions. */
+function dedupeMapped(ids: ReadonlyArray<string>, canonicalOf: (entryId: string) => string, excluded: ReadonlySet<string>): string[] {
+    const seenIds = new Set<string>();
+    return ids.flatMap((id) => {
+        const mapped = canonicalOf(id);
+        if (excluded.has(mapped) || seenIds.has(mapped)) {
+            return [];
+        }
+        seenIds.add(mapped);
+        return [mapped];
+    });
+}
+
+/** Keeps the cursor on the entry it pointed at (via its canonical id); a folded-away current entry falls back to its successor's slot. */
+function followCursor(queue: StageQueue, pending: ReadonlyArray<string>, canonicalOf: (entryId: string) => string): number {
+    const currentEntry = queue.pending[queue.cursor];
+    const target = currentEntry === undefined ? -1 : pending.indexOf(canonicalOf(currentEntry));
+    if (target >= 0) {
+        return target;
+    }
+    // The current entry folded onto an already-decided one. Shift left by however many entries
+    // BEFORE the cursor left the list — a bare `Math.min(cursor, len)` would keep a stale index
+    // and walk silently past entries the user never saw. Mirrors mergeQueueWithEligible.
+    const survivors = new Set(pending);
+    const removedBeforeCursor = queue.pending.slice(0, queue.cursor).filter((id) => !survivors.has(canonicalOf(id))).length;
+    return Math.min(Math.max(queue.cursor - removedBeforeCursor, 0), pending.length);
+}
+
+/**
+ * Re-maps a persisted calendar-stage queue onto TODAY's collapse. A draft can hold raw occurrence
+ * ids from before the collapse shipped, or from a window where the routine row was missing or
+ * stale on this device (e.g. a sync gap pinning it `active: false`) — left alone they would walk
+ * the user occurrence-by-occurrence forever, mixing plain cards with routine cards. Raw ids in
+ * `pending` AND `decisions` fold onto their `routine:` entry (the first occurrence keeps the
+ * slot, the rest drop); a pending entry whose canonical form is already decided leaves the walk;
+ * the cursor follows its entry. Idempotent and same-reference when nothing changes, so the
+ * wizard's reconcile effect settles.
+ */
+export function normalizeCalendarQueue(queue: StageQueue, items: ReadonlyArray<StoredItem>, routines: ReadonlyArray<StoredRoutine>): StageQueue {
+    const routineById = new Map(routines.map((routine) => [routine._id, routine]));
+    const itemById = new Map(items.map((item) => [item._id, item]));
+    // Unknown ids (already-`routine:` entries, or items gone from this device) pass through — the
+    // reconcile merge drops stale ones against eligibility, which is not this function's job.
+    const canonicalOf = (entryId: string): string => {
+        const item = itemById.get(entryId);
+        return item === undefined ? entryId : calendarEntryIdForItem(item, routineById);
+    };
+    const decisions = normalizeDecisions(queue.decisions, canonicalOf);
+    const pending = dedupeMapped(queue.pending, canonicalOf, new Set(decisions.map((decision) => decision.itemId)));
+    // `droppedIds` is deliberately NOT remapped: a drop means "the user escaped THIS entry", and
+    // folding it onto the routine would suppress the whole series for the rest of the visit (and
+    // mark it "seen" for the pre-celebration sweep) off a single occurrence. Stale raw ids are
+    // harmless — they simply never match an entry again, and stage entry clears the list.
+    if (isQueueCanonical(queue, pending, decisions)) {
+        return queue;
+    }
+    return { ...queue, pending, decisions, cursor: followCursor(queue, pending, canonicalOf) };
+}
+
+/** Whether normalization changed nothing — the same-reference guard the wizard's effect settles on. */
+function isQueueCanonical(queue: StageQueue, pending: ReadonlyArray<string>, decisions: ReadonlyArray<StageDecision>): boolean {
+    return (
+        sameIds(pending, queue.pending) &&
+        sameIds(
+            decisions.map((decision) => decision.itemId),
+            decidedItemIds(queue),
+        )
+    );
 }
 
 /**

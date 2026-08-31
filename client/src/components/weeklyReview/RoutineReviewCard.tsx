@@ -195,7 +195,7 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
 /** The occurrences this card stands for: the routine's calendar items minus modified exceptions (those review on their own). */
 export function collapsedOccurrences(routine: StoredRoutine, allItems: ReadonlyArray<StoredItem>): StoredItem[] {
     return allItems
-        .filter((item) => item.routineId === routine._id && item.status === 'calendar' && !isModifiedExceptionItem(routine, item._id))
+        .filter((item) => item.routineId === routine._id && item.status === 'calendar' && !isModifiedExceptionItem(routine, item))
         .sort((a, b) => (a.timeStart ?? '').localeCompare(b.timeStart ?? ''));
 }
 

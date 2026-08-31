@@ -26,6 +26,7 @@ import {
     currentStage,
     isChecklistComplete,
     jumpToStage,
+    normalizeCalendarQueue,
     REVIEW_STAGES,
     type ReviewFlowState,
     type ReviewFlowUpdater,
@@ -96,7 +97,15 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
         const isEntry = enteredStageIdRef.current !== stage.id;
         enteredStageIdRef.current = stage.id;
         const eligibleIds = stageEligibleEntryIds(stage.id, items, { todayIso: today, personNameById, routines });
-        const refresh = (queue: StageQueue | undefined) => (isEntry || !queue ? refreshQueueOnEntry(queue, eligibleIds) : reconcileQueue(queue, eligibleIds));
+        // Calendar queues are re-mapped onto today's collapse BEFORE merging: a resumed draft (or
+        // a routine row that only now healed to active) can hold raw occurrence ids — left alone,
+        // the merge would keep offering every occurrence individually alongside its routine card.
+        const normalize = (stageQueue: StageQueue | undefined) =>
+            stageQueue && stage.id === 'calendar' ? normalizeCalendarQueue(stageQueue, items, routines) : stageQueue;
+        const refresh = (rawQueue: StageQueue | undefined) => {
+            const normalizedQueue = normalize(rawQueue);
+            return isEntry || !normalizedQueue ? refreshQueueOnEntry(normalizedQueue, eligibleIds) : reconcileQueue(normalizedQueue, eligibleIds);
+        };
         if (refresh(flow.queues[stage.id]) !== flow.queues[stage.id]) {
             // Recompute against the LATEST flow inside the updater: another commit (e.g. the
             // deferred undo requeue) may have landed since this render, and both helpers are
