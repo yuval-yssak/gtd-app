@@ -449,16 +449,25 @@ export const devLoginRoutes = new Hono()
             integrationId: string;
             syncConfigId: string;
             event: { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: string; description?: string };
+            /**
+             * Backdates ctx.now — reproduces a webhook sync run whose clock was captured before slow
+             * provider calls. Also backdates the `updatedTs` stamped on touched entities and shifts the
+             * past-event cutoff, matching what a real slow run does.
+             */
+            nowOverride?: string;
         }>();
         if (!body.userId || !body.integrationId || !body.syncConfigId || !body.event) {
             return c.json({ error: 'userId, integrationId, syncConfigId, event required' }, 400);
+        }
+        if (body.nowOverride !== undefined && !dayjs(body.nowOverride).isValid()) {
+            return c.json({ error: 'nowOverride must be an ISO datetime string' }, 400);
         }
         const integration = await calendarIntegrationsDAO.findOne({ _id: body.integrationId, user: body.userId });
         const config = await calendarSyncConfigsDAO.findOne({ _id: body.syncConfigId, user: body.userId });
         if (!integration || !config) {
             return c.json({ error: 'integration or syncConfig not found' }, 404);
         }
-        const now = dayjs().toISOString();
+        const now = body.nowOverride ?? dayjs().toISOString();
         // `recordOperation` (called inside upsertCalendarItem) already writes ops to the DB; the
         // local ctx.ops list is just for tracking — no need to insert it again here. The explicit
         // type pin via Parameters<> avoids `ops: never[]` inference.

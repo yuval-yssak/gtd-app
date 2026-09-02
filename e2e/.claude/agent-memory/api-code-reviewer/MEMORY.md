@@ -3,3 +3,5 @@
 - [Reassign cross-account GCal torn-state residual](project_reassign_gcal_torn_state_residual.md) — DB-side torn state now impossible via preValidateTargetSnapshot, but moveItemAcrossCalendars still mutates GCal before validation runs.
 - [No hardcoded dates in calendar tests](feedback_no_hardcoded_dates_in_calendar_tests.md) — Past-cutoff guard in applyExceptionToItems silently ages hardcoded Ymd literals into skip-the-test territory. Use dayjs().add(≥7,'day') and derive compact + dashed forms from the same object.
 - [MCP parity test checks names only](project_mcp_parity_test_names_only.md) — mcpToolParity.test.ts compares tool NAME sets only; descriptions, schemas, webUrl maps + SERVER_INSTRUCTIONS drift silently. Diff both copies textually.
+- [Op-log cursor ordering invariants](project_op_cursor_ordering_invariants.md) — Recurring silent op-loss class: never write a ts below a device's forward-only cursor, never bump ts without reallocating _id.
+- [Adversarial review expectations](feedback_adversarial_review_expectations.md) — Team wants concrete failure scenarios over severity labels; check consumers outside the diff; verify ordering claims by running them.

@@ -17,6 +17,8 @@ declare namespace NodeJS {
         CALENDAR_WEBHOOK_URL?: string;
         CALENDAR_WEBHOOK_CRON_SECRET?: string;
         CALENDAR_AUTH_GRACE_MS?: string;
+        /** Test-only override for the /sync pull/bootstrap cursor holdback window (seconds). */
+        SYNC_CURSOR_HOLDBACK_SECONDS?: string;
         COMMIT_HASH?: string;
         WEBHOOKS_ENABLED?: string;
         /** Anthropic API key for the Lane A Claude-assist endpoint. Separate billing from any Pro/Max subscription. */

@@ -25,7 +25,7 @@ export interface BootstrapPayload {
     /** Optional: a server deployed before the reviewInboxes entity omits this field. */
     reviewInboxes?: (Record<string, unknown> & { user: string })[];
     serverTs: string;
-    serverId: string; // MAX_OP_ID — the id component of the compound cursor for the first incremental pull
+    serverId: string; // id component of the (held-back) compound cursor for the first incremental pull — '' on current servers
 }
 
 export interface PullPayload {
