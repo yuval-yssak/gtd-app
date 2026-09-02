@@ -8,7 +8,20 @@ import { computePurgeFloor, type PurgeFloor, STALE_DEVICE_DAYS } from '../lib/pu
 import { reapStaleDevices } from '../lib/staleDevices.js';
 import { runSyncDoctor } from '../lib/syncDoctor.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import { relinkCalendarMarkersForUser } from './calendar.js';
+import { buildRoutineChainResolver, relinkCalendarMarkersForUser } from './calendar.js';
+
+type SyncDoctorBody = { healPoisonedWatermarks?: boolean; checkCalendarChains?: boolean; chainCheckLimit?: number };
+
+const MIN_CHAIN_CHECK_LIMIT = 1;
+const MAX_CHAIN_CHECK_LIMIT = 100;
+
+/** Clamps a caller-supplied chain-check cap into [1, 100]; `undefined` (→ syncDoctor's default) for anything non-numeric. Exported for unit testing. */
+export function clampChainCheckLimit(raw: unknown): number | undefined {
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+        return undefined;
+    }
+    return Math.min(Math.max(Math.floor(raw), MIN_CHAIN_CHECK_LIMIT), MAX_CHAIN_CHECK_LIMIT);
+}
 
 // Same cutoff as the /sync/pull fire-and-forget reaper — an on-demand purge with the default body
 // must not be more (or less) aggressive than what background pulls already do.
@@ -127,10 +140,21 @@ export const maintenanceRoutes = new Hono<{ Variables: AuthVariables }>()
     // routines, duplicate live calendar items, unmarked retirements, poisoned LWW watermarks, future
     // cursors, dangling integration refs) without writing anything. The single opt-in write is
     // `{ healPoisonedWatermarks: true }`, which re-stamps future-dated rows to now and records ops.
+    // `{ checkCalendarChains: true }` additionally runs the (read-only but Google-round-trip-costly)
+    // split-chain checks: stale anchors on capped/deleted masters, and chains that are over. Capped
+    // per call (`chainCheckLimit`, clamped 1..100, default in syncDoctor.ts) so a big account cannot
+    // turn one request into an unbounded sequential Google sweep; `chainCheckTruncated` signals more.
     .post('/sync-doctor', authenticateRequest, async (c) => {
         const { user } = c.get('session');
-        const body = await c.req.json<{ healPoisonedWatermarks?: boolean }>().catch(() => ({}) as { healPoisonedWatermarks?: boolean });
-        const report = await runSyncDoctor(user.id, dayjs().toISOString(), { healPoisonedWatermarks: body.healPoisonedWatermarks === true });
+        const body = await c.req.json<SyncDoctorBody>().catch(() => ({}) as SyncDoctorBody);
+        const now = dayjs().toISOString();
+        const resolveRoutineChain = body.checkCalendarChains === true ? await buildRoutineChainResolver(user.id, now) : undefined;
+        const chainCheckLimit = clampChainCheckLimit(body.chainCheckLimit);
+        const report = await runSyncDoctor(user.id, now, {
+            healPoisonedWatermarks: body.healPoisonedWatermarks === true,
+            ...(resolveRoutineChain ? { resolveRoutineChain } : {}),
+            ...(chainCheckLimit !== undefined ? { chainCheckLimit } : {}),
+        });
         return c.json(report, 200);
     })
 

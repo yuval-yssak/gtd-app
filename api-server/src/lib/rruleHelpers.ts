@@ -14,7 +14,7 @@ const { RRule } = rrule;
  * Handles both datetime (20260410T090000Z) and bare date (20260410) forms.
  * Bare dates are interpreted as UTC midnight.
  */
-function parseRfc5545DateTime(raw: string): string | null {
+export function parseRfc5545DateTime(raw: string): string | null {
     const isDateOnly = /^\d{8}$/.test(raw);
     const parsed = isDateOnly ? dayjs.utc(raw, 'YYYYMMDD') : dayjs.utc(raw, 'YYYYMMDDTHHmmss[Z]');
     if (!parsed.isValid()) return null;

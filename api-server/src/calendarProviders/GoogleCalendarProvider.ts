@@ -13,6 +13,7 @@ dayjs.extend(utc);
 
 import { markdownToHtml } from '../lib/markdownHtml.js';
 import { normalizeMasterEventId } from '../lib/routineItemRegeneration.js';
+import { extractUntilFromRrule, parseRfc5545DateTime } from '../lib/rruleHelpers.js';
 import type { CalendarIntegrationInterface, GCalAttendee, GCalEventType, GCalPerson, GCalResponseStatus, RoutineInterface } from '../types/entities.js';
 import type { CalendarProvider, CreatedCalendarEvent, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
 import { SyncTokenInvalidError } from './CalendarProvider.js';
@@ -101,10 +102,23 @@ export function seriesStartDate(routine: RoutineInterface): string {
 /**
  * Rewrites an RRULE: line to have exactly one UNTIL=<untilDate> clause, stripping any prior
  * UNTIL or COUNT (which are mutually exclusive with UNTIL in RFC 5545). Exported for testability.
+ *
+ * NEVER moves an existing cap FORWARD: capping means "stop producing occurrences", and replacing an
+ * earlier UNTIL with a later one would re-extend the series — resurrecting every occurrence between
+ * the two dates (e.g. pausing a routine whose GCal master a split already capped months ago). When
+ * the existing UNTIL is at-or-before the requested one the line is returned unchanged. COUNT caps
+ * are still replaced: without DTSTART a COUNT bound can't be compared against an UNTIL date at this
+ * layer, and swapping COUNT for an immediate UNTIL only ever shortens an active segment (the pause
+ * gesture's intent).
  */
 export function rrulePinnedUntil(rruleLine: string, untilDate: string): string {
     const prefix = 'RRULE:';
     const body = rruleLine.startsWith(prefix) ? rruleLine.slice(prefix.length) : rruleLine;
+    const existingUntil = extractUntilFromRrule(body);
+    const requestedUntil = parseRfc5545DateTime(untilDate);
+    if (existingUntil && requestedUntil && !dayjs(existingUntil).isAfter(dayjs(requestedUntil))) {
+        return `${prefix}${body}`;
+    }
     const filtered = body
         .split(';')
         .filter((clause) => !clause.startsWith('UNTIL=') && !clause.startsWith('COUNT='))
@@ -481,21 +495,19 @@ export class GoogleCalendarProvider implements CalendarProvider {
     }
 
     async listEvents(calendarId: string, since: string, until: string): Promise<GCalEvent[]> {
-        const cal = google.calendar({ version: 'v3', auth: this.auth });
-
         // singleEvents: true expands recurring series into individual instances so each
         // occurrence gets its own id, timeStart, and timeEnd — needed for per-event upsert.
         // showDeleted: true includes cancelled events so we can trash the corresponding items.
-        const response = await cal.events.list({
-            calendarId,
-            timeMin: since,
-            timeMax: until,
-            singleEvents: true,
-            showDeleted: true,
-            orderBy: 'startTime',
-        });
-
-        return parseGCalEvents(response.data.items as Array<Record<string, unknown>> | undefined);
+        // PAGINATED via `paginatedEventsFetch`: Google defaults to 250 results/page and truncates
+        // silently. Callers treat the result as a complete window snapshot — the split-chain walk in
+        // particular reads "no continuation instance found" as proof a series is over and RETIRES the
+        // routine, so a truncated page must never masquerade as absence. With singleEvents Google
+        // returns no nextSyncToken, so the '' fallback is inert and only `events` is used.
+        const { events } = await this.paginatedEventsFetch(
+            { calendarId, timeMin: since, timeMax: until, singleEvents: true, showDeleted: true, orderBy: 'startTime', maxResults: 2500 },
+            '',
+        );
+        return events;
     }
 
     async getEvent(calendarId: string, eventId: string): Promise<GCalEvent | null> {
