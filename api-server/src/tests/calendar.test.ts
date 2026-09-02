@@ -7743,6 +7743,40 @@ describe('GoogleCalendarProvider.getExceptions — rebased-master id normalizati
     });
 });
 
+// Regression: `listEvents` used to issue a single un-paginated `events.list` call — Google defaults
+// to 250 results/page and truncates SILENTLY. Callers treat the result as a complete window
+// snapshot; the split-chain walk in particular reads "no continuation instance in the window" as
+// proof a series is over and retires the routine, so a truncated page must never masquerade as
+// absence.
+describe('GoogleCalendarProvider.listEvents — pagination', () => {
+    it('follows nextPageToken across pages and returns the union of all pages', async () => {
+        const eventsProto = Object.getPrototypeOf(google.calendar({ version: 'v3' }).events) as Record<string, unknown>;
+        type ListCall = (params: { pageToken?: string }) => Promise<{ data: { items?: unknown[]; nextPageToken?: string } }>;
+        const listSpy = vi.spyOn(eventsProto, 'list' as keyof typeof eventsProto) as unknown as ReturnType<typeof vi.fn<ListCall>>;
+        const pageItem = (id: string) => ({
+            id,
+            summary: `Event ${id}`,
+            start: { dateTime: '2026-05-26T12:30:00Z' },
+            end: { dateTime: '2026-05-26T13:00:00Z' },
+            updated: '2026-05-01T00:00:00Z',
+            status: 'confirmed',
+        });
+        listSpy.mockImplementation((params) => {
+            if (!params.pageToken) {
+                return Promise.resolve({ data: { items: [pageItem('page1-event')], nextPageToken: 'page-2' } });
+            }
+            expect(params.pageToken).toBe('page-2');
+            return Promise.resolve({ data: { items: [pageItem('page2-event')] } });
+        });
+
+        const provider = new GoogleCalendarProvider(makeIntegration('user-1'));
+        const events = await provider.listEvents('cal-1', '2026-05-01T00:00:00Z', '2026-06-01T00:00:00Z');
+
+        expect(listSpy).toHaveBeenCalledTimes(2);
+        expect(events.map((e) => e.id)).toEqual(['page1-event', 'page2-event']);
+    });
+});
+
 // Belt-and-suspenders for the past-cutoff fix: the provider also clamps `timeMin` so a fresh
 // reconnect with `since` defaulted to epoch doesn't drag back every modified instance since 1970.
 // The consumer-side guard in `applyExceptionToItems` would still catch ancient orphans, but the
@@ -11281,6 +11315,30 @@ describe('classifyRecurringMaster', () => {
         expect(classifyRecurringMaster(successor, [successor], [paused])).toBe('splitSuccessor');
     });
 
+    it('flags an open _R event when a CAPPED EARLIER _R sibling (not the bare base) is in the batch — a re-split of an already-split series', () => {
+        const earlierSuccessorId = `${bareId}_R20260501T090000`;
+        const cappedEarlier = makeEvent({ id: earlierSuccessorId, recurrence: ['RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260614T000000Z'] });
+        const successor = makeEvent({ id: successorId });
+        expect(classifyRecurringMaster(successor, [cappedEarlier, successor], [])).toBe('splitSuccessor');
+    });
+
+    it('flags an open _R event when an ACTIVE, OPEN routine on the bare id is keyed to a different _R anchor (post-chain-re-anchor re-split)', () => {
+        const successor = makeEvent({ id: successorId });
+        const reanchored = makeRoutine({
+            calendarEventId: bareId,
+            active: true,
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            calendarRebasedEventId: `${bareId}_R20260501T090000`,
+        });
+        expect(classifyRecurringMaster(successor, [successor], [reanchored])).toBe('splitSuccessor');
+    });
+
+    it('treats an open _R event as a re-report when the active routine is keyed to THAT SAME _R anchor', () => {
+        const successor = makeEvent({ id: successorId });
+        const owner = makeRoutine({ calendarEventId: bareId, active: true, rrule: 'FREQ=WEEKLY;BYDAY=MO', calendarRebasedEventId: successorId });
+        expect(classifyRecurringMaster(successor, [successor], [owner])).toBe('reReport');
+    });
+
     it('treats a lone _R event with an active uncapped routine on the bare id as a re-report', () => {
         const successor = makeEvent({ id: successorId });
         const active = makeRoutine({ calendarEventId: bareId, active: true, rrule: 'FREQ=WEEKLY;BYDAY=MO' });
@@ -12299,12 +12357,24 @@ describe('routine pause', () => {
 
     it('capRecurringEvent strips existing UNTIL/COUNT and appends the new UNTIL (unit-level)', async () => {
         const { rrulePinnedUntil } = await import('../calendarProviders/GoogleCalendarProvider.js');
-        // Pre-existing UNTIL — rewritten.
-        expect(rrulePinnedUntil('RRULE:FREQ=DAILY;UNTIL=20260301T235959Z', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z');
+        // Pre-existing LATER UNTIL — pulled back (capping earlier is always allowed).
+        expect(rrulePinnedUntil('RRULE:FREQ=DAILY;UNTIL=20260601T235959Z', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z');
         // Pre-existing COUNT — stripped (UNTIL and COUNT are mutually exclusive).
         expect(rrulePinnedUntil('RRULE:FREQ=WEEKLY;COUNT=5;BYDAY=MO', '20260423T235959Z')).toBe('RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260423T235959Z');
         // No prior cap.
         expect(rrulePinnedUntil('RRULE:FREQ=DAILY', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z');
+    });
+
+    it('capRecurringEvent never moves an existing UNTIL forward — that would resurrect dead occurrences (unit-level)', async () => {
+        const { rrulePinnedUntil } = await import('../calendarProviders/GoogleCalendarProvider.js');
+        // Pausing a routine whose GCal master a split already capped months ago: the earlier cap wins.
+        expect(rrulePinnedUntil('RRULE:FREQ=DAILY;UNTIL=20260301T235959Z', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260301T235959Z');
+        // Equal cutoff — unchanged.
+        expect(rrulePinnedUntil('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260423T235959Z');
+        // Bare-date existing UNTIL (all-day series) compares correctly against a datetime request.
+        expect(rrulePinnedUntil('RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260301', '20260423T235959Z')).toBe('RRULE:FREQ=WEEKLY;BYDAY=MO;UNTIL=20260301');
+        // Prefix-less body form is preserved on the keep path too.
+        expect(rrulePinnedUntil('FREQ=DAILY;UNTIL=20260301T235959Z', '20260423T235959Z')).toBe('RRULE:FREQ=DAILY;UNTIL=20260301T235959Z');
     });
 
     it('resume pushback: fires updateRecurringEvent (clears UNTIL) and regenerates future items', async () => {

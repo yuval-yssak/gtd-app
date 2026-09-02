@@ -1,3 +1,4 @@
+- [Async-reduce "sequential" fan-out trap](feedback_async_reduce_sequential_fanout_trap.md) — work awaited before `await acc` starts every iteration in one tick; `.sort()`-ed order tests can't see it. Probe with start/end log.
 - [GCal pushback failure-surfacing coverage](project_gcal_pushback_failure_surfacing_coverage.md) — every push branch must funnel through captureFailedOutcome; a bare `await helper(); return;` is the regression shape.
 - [Beyond-UNTIL cancellation skip + 400→terminal](project_until_cap_skip_and_400_terminal.md) — skip trusts local rrule as proxy for GCal's UNTIL (silent no-push on stale UNTIL); 400→terminal also widened rsvpReplay's revert.
 - [Google 403 IS the rate limit (not 429)](project_gcal_403_rate_limit_is_retryable.md) — must bucket transient_exhausted; the same predicate silently drives rsvpReplay's retryWithBackoff.

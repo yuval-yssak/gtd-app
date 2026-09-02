@@ -10,6 +10,7 @@ import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import type { EntitySnapshot, EntityType, ItemInterface, OperationInterface, RoutineInterface } from '../types/entities.js';
 import { recordOperation } from './operationHelpers.js';
 import { extractUntilFromRrule } from './rruleHelpers.js';
+import type { RoutineChainResolver, SplitChainResolution } from './splitChainResolution.js';
 
 /**
  * Read-only invariant sweep over one user's sync-visible state — the "sync doctor". Every check
@@ -60,6 +61,24 @@ export interface DanglingIntegrationRefFinding {
     calendarIntegrationId: string;
 }
 
+export interface StaleChainAnchorFinding {
+    routineId: string;
+    /** The link the routine currently points at (rebased id when set, else the bare master id). */
+    anchoredEventId: string;
+    /** Raw id of the chain's live terminal link the routine should be anchored at. */
+    terminalEventId: string;
+    terminalRrule: string;
+}
+
+export interface DeadSeriesChainFinding {
+    routineId: string;
+    anchoredEventId: string;
+    /** Raw id of the chain's last real link. */
+    terminalEventId: string;
+    /** ISO datetime after which the terminal link produces no further occurrences. */
+    endedAt: string;
+}
+
 export interface SyncDoctorReport {
     duplicateActiveRoutineSeries: DuplicateActiveSeriesFinding[];
     phantomItemsOnInactiveRoutines: PhantomItemsFinding[];
@@ -68,6 +87,14 @@ export interface SyncDoctorReport {
     poisonedWatermarks: PoisonedWatermarkFinding[];
     futureCursors: FutureCursorFinding[];
     danglingIntegrationRefs: DanglingIntegrationRefFinding[];
+    /** Active routines anchored to a capped/deleted split-chain link while a live continuation exists (Class A). */
+    staleChainAnchors: StaleChainAnchorFinding[];
+    /** Active routines whose whole split chain is over on GCal — phantom generators (Class B). */
+    deadSeriesChains: DeadSeriesChainFinding[];
+    /** True when the opt-in provider-backed chain checks actually ran; empty chain arrays are meaningless otherwise. */
+    checkedCalendarChains: boolean;
+    /** True when the chain check hit its per-call routine cap — more routines remain unchecked. */
+    chainCheckTruncated: boolean;
     healedPoisonedWatermarks: number;
     healthy: boolean;
 }
@@ -259,9 +286,84 @@ async function restampEntity<T extends EntitySnapshot>(
     return recordOperation(userId, { entityType: finding.entityType, entityId: finding.entityId, snapshot: restamped, opType: 'update', now });
 }
 
+/**
+ * Default per-call cap on chain resolutions. Each one costs 1..N sequential Google round-trips and
+ * the doctor runs inside a single HTTP request — an uncapped sweep over a big account would time
+ * out on Cloud Run after spending the whole quota. Callers page via `chainCheckTruncated`.
+ */
+const DEFAULT_CHAIN_CHECK_LIMIT = 25;
+
+/** Per-routine isolation, mirroring the sweep's `healOneChainAnchorIsolated` — one malformed rrule or provider throw must not 500 the whole report. */
+async function resolveChainIsolated(routine: RoutineInterface, resolveRoutineChain: RoutineChainResolver) {
+    try {
+        return await resolveRoutineChain(routine);
+    } catch (err) {
+        console.error(`[sync-doctor] chain resolution failed — skipping routine | routineId=${routine._id}`, err);
+        return null;
+    }
+}
+
+/** One routine's chain verdict, or `null` when the doctor cannot prove anything about it. */
+type ChainFinding = { kind: 'stale'; finding: StaleChainAnchorFinding } | { kind: 'dead'; finding: DeadSeriesChainFinding } | null;
+
+function classifyChainFinding(routine: RoutineInterface, resolution: SplitChainResolution | null): ChainFinding {
+    if (!resolution || resolution.status === 'unresolved') {
+        return null;
+    }
+    const anchoredEventId = routine.calendarRebasedEventId ?? routine.calendarEventId ?? '';
+    const terminalEventId = resolution.terminal.rawId;
+    if (resolution.status === 'over') {
+        return { kind: 'dead', finding: { routineId: routine._id, anchoredEventId, terminalEventId, endedAt: resolution.terminal.endedAt } };
+    }
+    if (terminalEventId === anchoredEventId) {
+        return null;
+    }
+    return { kind: 'stale', finding: { routineId: routine._id, anchoredEventId, terminalEventId, terminalRrule: resolution.terminal.rrule } };
+}
+
+/**
+ * Provider-backed check for both split-chain bug classes. For each ACTIVE GCal-linked routine (up
+ * to `limit` of them), resolve its chain and compare the terminal against the routine's current
+ * anchor (`calendarRebasedEventId ?? calendarEventId`) — the same classification
+ * `healSplitChainAnchors` starts from. A `staleChainAnchor` finding means the row is NOT anchored at
+ * its live terminal; the heal additionally defers when another routine already owns that terminal
+ * (the two-row split model), so a finding is "this row is stale", not a guarantee the sweep rewrites
+ * it. Sequential on purpose: each resolution costs 1..N Google round-trips. Unresolved chains and
+ * routines with no usable provider (resolver returns null) are skipped, not reported — the doctor
+ * only reports what it can prove. Exported for unit testing.
+ */
+export async function findSplitChainFindings(
+    routines: RoutineInterface[],
+    resolveRoutineChain: RoutineChainResolver,
+    limit: number = DEFAULT_CHAIN_CHECK_LIMIT,
+): Promise<{ staleChainAnchors: StaleChainAnchorFinding[]; deadSeriesChains: DeadSeriesChainFinding[]; chainCheckTruncated: boolean }> {
+    const activeLinked = routines.filter((routine) => routine.active && typeof routine.calendarEventId === 'string');
+    // Sequential reduce (not Promise.all) — see the docstring on Google round-trip cost. `reduce`
+    // invokes every callback synchronously, so the accumulator MUST be awaited BEFORE the resolver
+    // is called; awaiting it after would start every Google walk in the same tick and only order
+    // the results.
+    const findings = await activeLinked.slice(0, limit).reduce<Promise<ChainFinding[]>>(async (accumulated, routine) => {
+        const soFar = await accumulated;
+        const resolution = await resolveChainIsolated(routine, resolveRoutineChain);
+        return [...soFar, classifyChainFinding(routine, resolution)];
+    }, Promise.resolve([]));
+    return {
+        staleChainAnchors: findings.flatMap((verdict) => (verdict?.kind === 'stale' ? [verdict.finding] : [])),
+        deadSeriesChains: findings.flatMap((verdict) => (verdict?.kind === 'dead' ? [verdict.finding] : [])),
+        chainCheckTruncated: activeLinked.length > limit,
+    };
+}
+
 export interface SyncDoctorOptions {
     /** Opt-in: re-stamp poisoned watermarks to `now` and record ops. Everything else stays read-only. */
     healPoisonedWatermarks?: boolean;
+    /**
+     * Opt-in provider seam for the split-chain checks (they cost Google round-trips, unlike every
+     * other check). Absent → the chain arrays stay empty and `checkedCalendarChains` is false.
+     */
+    resolveRoutineChain?: RoutineChainResolver;
+    /** Per-call cap on chain resolutions (default `DEFAULT_CHAIN_CHECK_LIMIT`); overflow surfaces as `chainCheckTruncated`. */
+    chainCheckLimit?: number;
 }
 
 export async function runSyncDoctor(userId: string, now: string, options: SyncDoctorOptions = {}): Promise<SyncDoctorReport> {
@@ -272,6 +374,10 @@ export async function runSyncDoctor(userId: string, now: string, options: SyncDo
         ? (await Promise.all(poisonedWatermarks.map((finding) => healPoisonedWatermark(userId, finding, now)))).filter((op) => op !== null)
         : [];
 
+    const chainFindings = options.resolveRoutineChain
+        ? await findSplitChainFindings(state.routines, options.resolveRoutineChain, options.chainCheckLimit)
+        : { staleChainAnchors: [], deadSeriesChains: [], chainCheckTruncated: false };
+
     const report: SyncDoctorReport = {
         duplicateActiveRoutineSeries: findDuplicateActiveRoutineSeries(state.routines),
         phantomItemsOnInactiveRoutines: findPhantomItemsOnInactiveRoutines(state, now),
@@ -280,6 +386,8 @@ export async function runSyncDoctor(userId: string, now: string, options: SyncDo
         poisonedWatermarks,
         futureCursors: findFutureCursors(state, now),
         danglingIntegrationRefs: findDanglingIntegrationRefs(state),
+        ...chainFindings,
+        checkedCalendarChains: options.resolveRoutineChain !== undefined,
         healedPoisonedWatermarks: healed.length,
         healthy: false,
     };
@@ -295,6 +403,8 @@ function isHealthy(report: SyncDoctorReport): boolean {
         report.unmarkedRetiredRoutines.length === 0 &&
         report.poisonedWatermarks.length === 0 &&
         report.futureCursors.length === 0 &&
-        report.danglingIntegrationRefs.length === 0
+        report.danglingIntegrationRefs.length === 0 &&
+        report.staleChainAnchors.length === 0 &&
+        report.deadSeriesChains.length === 0
     );
 }

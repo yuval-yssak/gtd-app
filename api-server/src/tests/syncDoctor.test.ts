@@ -12,9 +12,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
-import { healPoisonedWatermark, runSyncDoctor } from '../lib/syncDoctor.js';
+import type { SplitChainResolution } from '../lib/splitChainResolution.js';
+import { findSplitChainFindings, healPoisonedWatermark, runSyncDoctor } from '../lib/syncDoctor.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { maintenanceRoutes } from '../routes/maintenance.js';
+import { clampChainCheckLimit, maintenanceRoutes } from '../routes/maintenance.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 import { authenticatedRequest, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
@@ -257,6 +258,163 @@ describe('runSyncDoctor — poisoned-watermark healing (opt-in write)', () => {
     });
 });
 
+describe('runSyncDoctor — split-chain checks (opt-in provider seam)', () => {
+    function chainEvent(id: string): { id: string; title: string; timeStart: string; timeEnd: string; updated: string; status: 'confirmed' } {
+        return {
+            id,
+            title: 'Series',
+            timeStart: '2026-01-01T09:00:00Z',
+            timeEnd: '2026-01-01T09:30:00Z',
+            updated: '2026-07-01T00:00:00.000Z',
+            status: 'confirmed',
+        };
+    }
+
+    const liveElsewhere = (terminalId: string): SplitChainResolution => ({
+        status: 'live',
+        terminal: { rawId: terminalId, rrule: 'FREQ=WEEKLY;BYDAY=TH', event: chainEvent(terminalId) },
+        hops: 1,
+    });
+    const over = (terminalId: string, endedAt: string): SplitChainResolution => ({
+        status: 'over',
+        terminal: { rawId: terminalId, rrule: 'FREQ=DAILY;UNTIL=20260830T235959Z', event: chainEvent(terminalId), endedAt },
+        hops: 1,
+    });
+
+    it('reports stale anchors and dead chains from the injected resolver, scoped to active linked routines', async () => {
+        await routinesDAO.insertOne(makeRoutine('r-stale', { calendarEventId: 'evt-a', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-dead', { calendarEventId: 'evt-b', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-inactive', { active: false, calendarEventId: 'evt-c', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-unlinked', {}));
+        await db.collection('calendarIntegrations').insertOne({ _id: 'int-1', user: USER } as never);
+        const resolvedIds: string[] = [];
+        const resolutions: Record<string, SplitChainResolution> = {
+            'r-stale': liveElsewhere('evt-a_R20260827T140000'),
+            'r-dead': over('evt-b_R20260811T073000', '2026-08-30T23:59:59.000Z'),
+        };
+
+        const report = await runSyncDoctor(USER, NOW, {
+            resolveRoutineChain: (routine) => {
+                resolvedIds.push(routine._id);
+                return Promise.resolve(resolutions[routine._id] ?? null);
+            },
+        });
+
+        expect(report.checkedCalendarChains).toBe(true);
+        expect(report.healthy).toBe(false);
+        expect(report.staleChainAnchors).toEqual([
+            { routineId: 'r-stale', anchoredEventId: 'evt-a', terminalEventId: 'evt-a_R20260827T140000', terminalRrule: 'FREQ=WEEKLY;BYDAY=TH' },
+        ]);
+        expect(report.deadSeriesChains).toEqual([
+            { routineId: 'r-dead', anchoredEventId: 'evt-b', terminalEventId: 'evt-b_R20260811T073000', endedAt: '2026-08-30T23:59:59.000Z' },
+        ]);
+        // Inactive and unlinked routines never cost a resolution (each one is Google round-trips).
+        expect(resolvedIds.sort()).toEqual(['r-dead', 'r-stale']);
+    });
+
+    it('a routine already anchored at its live terminal (rebased key match) is not a finding', async () => {
+        await routinesDAO.insertOne(
+            makeRoutine('r-anchored', { calendarEventId: 'evt-a', calendarRebasedEventId: 'evt-a_R20260827T140000', calendarIntegrationId: 'int-1' }),
+        );
+        await db.collection('calendarIntegrations').insertOne({ _id: 'int-1', user: USER } as never);
+
+        const report = await runSyncDoctor(USER, NOW, { resolveRoutineChain: () => Promise.resolve(liveElsewhere('evt-a_R20260827T140000')) });
+
+        expect(report.staleChainAnchors).toHaveLength(0);
+        expect(report.deadSeriesChains).toHaveLength(0);
+        expect(report.healthy).toBe(true);
+    });
+
+    it('skips unresolved chains and resolver-null routines — the doctor only reports what it can prove', async () => {
+        await routinesDAO.insertOne(makeRoutine('r-unresolved', { calendarEventId: 'evt-a', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-no-provider', { calendarEventId: 'evt-b', calendarIntegrationId: 'int-1' }));
+        await db.collection('calendarIntegrations').insertOne({ _id: 'int-1', user: USER } as never);
+
+        const { staleChainAnchors, deadSeriesChains } = await findSplitChainFindings(await routinesDAO.findArray({ user: USER }), (routine) =>
+            Promise.resolve(routine._id === 'r-unresolved' ? { status: 'unresolved', reason: 'gone', hops: 0 } : null),
+        );
+
+        expect(staleChainAnchors).toHaveLength(0);
+        expect(deadSeriesChains).toHaveLength(0);
+    });
+
+    it('without the opt-in, chain arrays stay empty and checkedCalendarChains is false', async () => {
+        const report = await runSyncDoctor(USER, NOW);
+
+        expect(report.checkedCalendarChains).toBe(false);
+        expect(report.staleChainAnchors).toHaveLength(0);
+        expect(report.deadSeriesChains).toHaveLength(0);
+        expect(report.chainCheckTruncated).toBe(false);
+        expect(report.healthy).toBe(true);
+    });
+
+    it('isolates a throwing resolver per routine — one malformed rrule must not 500 the whole report', async () => {
+        await routinesDAO.insertOne(makeRoutine('r-throws', { calendarEventId: 'evt-a', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-fine', { calendarEventId: 'evt-b', calendarIntegrationId: 'int-1' }));
+        await db.collection('calendarIntegrations').insertOne({ _id: 'int-1', user: USER } as never);
+
+        const report = await runSyncDoctor(USER, NOW, {
+            resolveRoutineChain: (routine) => {
+                if (routine._id === 'r-throws') {
+                    throw new Error('Invalid frequency: undefined undefined');
+                }
+                return Promise.resolve(over('evt-b_R20260811T073000', '2026-08-30T23:59:59.000Z'));
+            },
+        });
+
+        expect(report.checkedCalendarChains).toBe(true);
+        expect(report.staleChainAnchors).toHaveLength(0);
+        expect(report.deadSeriesChains).toEqual([
+            { routineId: 'r-fine', anchoredEventId: 'evt-b', terminalEventId: 'evt-b_R20260811T073000', endedAt: '2026-08-30T23:59:59.000Z' },
+        ]);
+    });
+
+    it('caps chain resolutions per call and reports the overflow as chainCheckTruncated', async () => {
+        await routinesDAO.insertOne(makeRoutine('r-cap-1', { calendarEventId: 'evt-a', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-cap-2', { calendarEventId: 'evt-b', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-cap-3', { calendarEventId: 'evt-c', calendarIntegrationId: 'int-1' }));
+        const resolvedIds: string[] = [];
+
+        const { staleChainAnchors, deadSeriesChains, chainCheckTruncated } = await findSplitChainFindings(
+            await routinesDAO.findArray({ user: USER }),
+            (routine) => {
+                resolvedIds.push(routine._id);
+                return Promise.resolve(null);
+            },
+            2,
+        );
+
+        expect(resolvedIds).toHaveLength(2);
+        expect(chainCheckTruncated).toBe(true);
+        expect(staleChainAnchors).toHaveLength(0);
+        expect(deadSeriesChains).toHaveLength(0);
+    });
+
+    // REGRESSION: an async `reduce` that awaited its accumulator AFTER calling the resolver started
+    // every Google walk in the same tick and merely ordered the results — the fan-out the per-call
+    // cap exists to prevent. Order-blind assertions (`resolvedIds.sort()`) cannot see that; only an
+    // in-flight counter can.
+    it('resolves chains strictly one at a time — never starts the next Google walk while one is in flight', async () => {
+        await routinesDAO.insertOne(makeRoutine('r-seq-1', { calendarEventId: 'evt-a', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-seq-2', { calendarEventId: 'evt-b', calendarIntegrationId: 'int-1' }));
+        await routinesDAO.insertOne(makeRoutine('r-seq-3', { calendarEventId: 'evt-c', calendarIntegrationId: 'int-1' }));
+        // `let` counters: the test observes mutation over time by design.
+        let inFlight = 0;
+        let maxInFlight = 0;
+        const slowResolver = async () => {
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            inFlight -= 1;
+            return null;
+        };
+
+        await findSplitChainFindings(await routinesDAO.findArray({ user: USER }), slowResolver);
+
+        expect(maxInFlight).toBe(1);
+    });
+});
+
 describe('POST /maintenance/sync-doctor', () => {
     it('returns the caller-scoped report and defaults to read-only', async () => {
         const { sessionCookie } = await oauthLogin(app, 'google');
@@ -272,6 +430,41 @@ describe('POST /maintenance/sync-doctor', () => {
         expect(report.poisonedWatermarks).toHaveLength(1);
         expect(report.healedPoisonedWatermarks).toBe(0);
         expect((await db.collection('items').findOne({ _id: 'i-endpoint' }))?.updatedTs).toBe('2099-01-01T00:00:00.000Z');
+    });
+
+    it('checkCalendarChains runs the chain checks (vacuously clean with no integrations) and marks them checked', async () => {
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        if (!sessionCookie) throw new Error('expected a session cookie from oauth login');
+
+        const doctorRes = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/maintenance/sync-doctor',
+            sessionCookie,
+            body: { checkCalendarChains: true },
+        });
+
+        expect(doctorRes.status).toBe(200);
+        const report = (await doctorRes.json()) as {
+            checkedCalendarChains: boolean;
+            staleChainAnchors: unknown[];
+            deadSeriesChains: unknown[];
+            chainCheckTruncated: boolean;
+        };
+        expect(report.checkedCalendarChains).toBe(true);
+        expect(report.staleChainAnchors).toHaveLength(0);
+        expect(report.deadSeriesChains).toHaveLength(0);
+        expect(report.chainCheckTruncated).toBe(false);
+    });
+
+    it('clamps chainCheckLimit into [1, 100] and ignores non-numeric values (falls back to the doctor default)', () => {
+        expect(clampChainCheckLimit(0)).toBe(1);
+        expect(clampChainCheckLimit(-5)).toBe(1);
+        expect(clampChainCheckLimit(1000)).toBe(100);
+        expect(clampChainCheckLimit(2.7)).toBe(2);
+        expect(clampChainCheckLimit(42)).toBe(42);
+        expect(clampChainCheckLimit('abc')).toBeUndefined();
+        expect(clampChainCheckLimit(Number.NaN)).toBeUndefined();
+        expect(clampChainCheckLimit(undefined)).toBeUndefined();
     });
 
     it('rejects unauthenticated requests with 401', async () => {

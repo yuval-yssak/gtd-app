@@ -46,6 +46,7 @@ import {
 import { addUntilToRrule } from '../lib/routineSplitUtils.js';
 import { extractUntilFromRrule } from '../lib/rruleHelpers.js';
 import { applyRsvpToAttendees, resolveSyncConfigForItem } from '../lib/rsvpHelpers.js';
+import { type ChainProvider, type ChainTerminal, type RoutineChainResolver, resolveSplitChainTerminal } from '../lib/splitChainResolution.js';
 import { notifyUserViaSse } from '../lib/sseConnections.js';
 import { stableStringify } from '../lib/stableStringify.js';
 import { hasAtLeastOne, type NonEmptyArray } from '../lib/typeUtils.js';
@@ -2076,6 +2077,11 @@ async function syncSingleCalendar(
     // per marker, which doesn't belong on the webhook hot path.
     if (syncResult.fullSyncTimeMin) {
         await relinkStrandedMarkers(integration, provider, ctx);
+        // After relink so restored routine links participate: re-anchor routines stranded on a
+        // capped/deleted link of a GCal split chain, and retire routines whose chain is over. Full
+        // syncs only, for the same reason as the relink sweep — a capped-in-the-past master never
+        // re-enters any sync window on its own, and chain resolution costs Google round-trips.
+        await healSplitChainAnchors(source, provider, ctx);
     }
 
     return linkedRoutines.length;
@@ -2130,7 +2136,9 @@ async function fullSyncFrom(provider: CalendarProvider, calendarId: string, time
  * within that window. It is `undefined` on incremental deltas, which are not snapshots — the sweep
  * must never run on them.
  */
-async function importCalendarEvents(source: CalendarSource, events: GCalEvent[], ctx: SyncContext, fullSyncTimeMin?: string): Promise<void> {
+// Exported for unit testing — regression coverage for split-chain convergence drives real inbound
+// batches through this importer without mocking the whole Google transport.
+export async function importCalendarEvents(source: CalendarSource, events: GCalEvent[], ctx: SyncContext, fullSyncTimeMin?: string): Promise<void> {
     // Fetch existing linked routines so we can also route events that match a known routine
     // calendarEventId — handles cancelled masters that arrive without a `recurrence` field.
     const existingLinkedRoutines = await routinesDAO.findArray({
@@ -2255,10 +2263,12 @@ function isOpenRrule(rrule: string): boolean {
  * successor onto the base routine and never onboard it as its own live series → the series goes
  * invisible in the app. We must instead route the successor to its own NEW active routine.
  *
- * - `'splitSuccessor'`: an open-ended `_R<…>` event whose bare base is also present as a capped/cancelled
- *   master in this batch, OR matches an existing routine on the bare id that is capped (UNTIL) or inactive.
- *   This is the live tail of a split — onboard it as a distinct routine keyed on the BARE id (GCal's
- *   instance ids use the bare id, so `buildCalendarInstanceEventId` matches → no duplicate items).
+ * - `'splitSuccessor'`: an open-ended `_R<…>` event whose series is also represented by a capped/cancelled
+ *   master in this batch (the bare base, or an earlier `_R` link when an already-split series is split
+ *   AGAIN), OR by an existing routine on the bare id that is capped (UNTIL), inactive, or keyed to a
+ *   DIFFERENT `_R` anchor. This is the live tail of a split — onboard it as a distinct routine keyed on
+ *   the BARE id (GCal's instance ids use the bare id, so `buildCalendarInstanceEventId` matches → no
+ *   duplicate items).
  * - `'reReport'`: everything else, including the case where ONLY the `_R` event arrives with no
  *   capped sibling/routine (Google re-reporting a single master with a rebased id). Keep the existing
  *   normalize-onto-existing behavior — this preserves the duplicate-items fix.
@@ -2274,9 +2284,11 @@ export function classifyRecurringMaster(event: GCalEvent, batch: GCalEvent[], ex
         return 'reReport';
     }
     const bareId = normalizeMasterEventId(event.id);
-    // (4a) A distinct base master in the same batch that is itself capped or cancelled.
+    // (4a) A distinct master on the same series in this batch that is itself capped or cancelled. Matched
+    // on the NORMALIZED id, not the bare id alone: a re-split of an already-split series caps the previous
+    // `_R` link, not the bare base, and that capped link is the only sibling the batch carries.
     const cappedSiblingInBatch = batch.some((e) => {
-        if (e.id !== bareId) {
+        if (e.id === event.id || normalizeMasterEventId(e.id) !== bareId) {
             return false;
         }
         if (e.status === 'cancelled') {
@@ -2287,7 +2299,15 @@ export function classifyRecurringMaster(event: GCalEvent, batch: GCalEvent[], ex
     });
     // (4b) An existing routine on the bare id that is already capped (UNTIL) or paused.
     const cappedExistingRoutine = existingRoutines.some((r) => r.calendarEventId === bareId && (!r.active || !isOpenRrule(r.rrule)));
-    return cappedSiblingInBatch || cappedExistingRoutine ? 'splitSuccessor' : 'reReport';
+    // (4c) An existing routine keyed to a DIFFERENT `_R` anchor. Anchors strictly increase per split and
+    // only an OPEN `_R` event reaches this point, so this event is a later segment of that routine's
+    // series — the shape a Class A chain re-anchor leaves behind (one active row on `_R<n>`) when the
+    // series is split again. Without this rule the open `_R<n+1>` falls to phase 1, where the claimed
+    // row is excluded and an active lineage-less twin is minted instead.
+    const rekeyedSuccessorOnSeries = existingRoutines.some(
+        (r) => r.calendarEventId === bareId && Boolean(r.calendarRebasedEventId) && r.calendarRebasedEventId !== event.id,
+    );
+    return cappedSiblingInBatch || cappedExistingRoutine || rekeyedSuccessorOnSeries ? 'splitSuccessor' : 'reReport';
 }
 
 /**
@@ -2477,7 +2497,7 @@ async function importRecurringEventAsRoutine(
     const event: GCalEvent = { ...rawEvent, id: normalizeMasterEventId(rawEvent.id) };
     const rrule = event.status === 'cancelled' ? null : extractRrule(event.recurrence ?? []);
 
-    const existing = await findExistingRoutineForEvent(event, rrule, source, ctx);
+    const existing = await findExistingRoutineForEvent(event, rrule, source, ctx, rawEvent.id);
 
     if (existing?.lastPushedToGCalTs && isOwnEcho(existing.lastPushedToGCalTs, event.updated)) {
         return;
@@ -2764,6 +2784,197 @@ async function resolveSplitParentId(bareEventId: string, source: CalendarSource,
     return hasAtLeastOne(capped) ? pickMostRecentlyUpdated(capped)._id : undefined;
 }
 
+// ── Split-chain anchor heal ──────────────────────────────────────────────────
+
+/**
+ * Full-sync sweep: resolve each ACTIVE linked routine's split chain (see `splitChainResolution.ts`)
+ * and converge on the terminal link. Two failure classes, both invisible to the event-driven import
+ * paths (a capped-in-the-past master never re-enters a full sync's `timeMin` window, and an
+ * unmodified one never appears in an incremental delta):
+ *  - Stale anchor, series alive: the routine points at a capped/deleted link while a LIVE
+ *    continuation exists → re-anchor the routine onto the terminal (Class A).
+ *  - Chain over: the terminal link itself expired (past UNTIL / exhausted COUNT) → retire the
+ *    routine, which otherwise keeps generating phantom items forever with no user-visible signal
+ *    (Class B).
+ * Runs on full syncs only, next to `relinkStrandedMarkers` — resolution costs Google round-trips
+ * that don't belong on the webhook hot path, and fresh splits are already handled live by the
+ * phase-2 successor onboarding.
+ */
+export async function healSplitChainAnchors(source: CalendarSource, provider: ChainProvider, ctx: SyncContext): Promise<void> {
+    const routines = await routinesDAO.findArray({
+        user: ctx.userId,
+        active: true,
+        calendarIntegrationId: source.integration._id,
+        calendarEventId: { $exists: true },
+        // Mirrors syncSingleCalendar's linked-routine scope: explicitly on this config, or legacy config-less.
+        $or: [{ calendarSyncConfigId: source.config._id }, { calendarSyncConfigId: { $exists: false } }],
+    });
+    // Sequential: each resolution costs 1..N Google round-trips; fanning a whole account's routines
+    // out in parallel invites the rate-limit 403s this sweep is meant to run quietly beneath.
+    for (const routine of routines) {
+        await healOneChainAnchorIsolated(routine, source, provider, ctx);
+    }
+}
+
+/** Per-routine fault isolation, mirroring `importRecurringMasterIsolated` — one broken chain must not wedge the sweep. */
+async function healOneChainAnchorIsolated(routine: RoutineInterface, source: CalendarSource, provider: ChainProvider, ctx: SyncContext): Promise<void> {
+    try {
+        await healOneChainAnchor(routine, source, provider, ctx);
+    } catch (err) {
+        console.error(`[gcal-chain-heal] chain heal failed — skipping routine | routineId=${routine._id}`, err);
+    }
+}
+
+async function healOneChainAnchor(routine: RoutineInterface, source: CalendarSource, provider: ChainProvider, ctx: SyncContext): Promise<void> {
+    if (!routine.calendarEventId) {
+        return;
+    }
+    const anchorId = routine.calendarRebasedEventId ?? routine.calendarEventId;
+    const resolution = await resolveSplitChainTerminal(provider, source.config.calendarId, anchorId, ctx.now);
+    if (resolution.status === 'unresolved') {
+        // Nothing positively identified — change nothing. A gone series with no tail is the
+        // cancellation/vanish machinery's call, not this sweep's.
+        return;
+    }
+    if (resolution.status === 'live') {
+        if (resolution.terminal.rawId === anchorId) {
+            return; // already anchored at the live terminal
+        }
+        console.log(`[gcal-chain-heal] chain resolved | routineId=${routine._id} status=live hops=${resolution.hops}`);
+        await reanchorRoutineToChainTerminal(routine, resolution.terminal, source, ctx);
+        return;
+    }
+    console.log(`[gcal-chain-heal] chain resolved | routineId=${routine._id} status=over hops=${resolution.hops}`);
+    await retireRoutineOnDeadChain(routine, resolution.terminal, ctx);
+}
+
+/**
+ * Class A heal — re-anchor an active routine onto its chain's live terminal link, IN PLACE.
+ *
+ * Design decision: this deliberately does NOT mint a successor routine the way phase-2 onboarding
+ * does. Phase 2 handles a split happening NOW (capped base + open `_R` successor in one batch),
+ * where the two-row model preserves the capped segment beside the new tail. Here the split happened
+ * in the PAST and was never onboarded (successor event stranded by a reconnect's syncToken window,
+ * or predating the successor machinery): the one existing routine already owns the series' items,
+ * exceptions and lineage, so converging IT onto the terminal reaches exactly the state phase 2
+ * would have produced. The two paths then meet instead of fighting: stamping
+ * `calendarRebasedEventId` with the terminal's raw id makes a later re-report of the terminal
+ * master resolve to THIS routine via `findSplitSuccessorByRebasedId` (idempotent update — no twin),
+ * and routing the structural write through `updateRoutineFromGCal` applies the usual gates, item
+ * propagation, no-op guard and op recording.
+ */
+async function reanchorRoutineToChainTerminal(routine: RoutineInterface, terminal: ChainTerminal, source: CalendarSource, ctx: SyncContext): Promise<void> {
+    const owner = await findSplitSuccessorByRebasedId(terminal.rawId, source, ctx);
+    if (owner && owner._id !== routine._id) {
+        // The two-row model already holds this tail — the successor routine owns it, and this
+        // (stale, still-active) row is the reap/unique-index machinery's to resolve, not ours.
+        console.log(
+            `[gcal-chain-heal] skipping re-anchor — terminal owned by another routine | routineId=${routine._id} terminal=${terminal.rawId} ownerId=${owner._id}`,
+        );
+        return;
+    }
+    console.log(
+        `[gcal-chain-heal] re-anchoring routine to chain terminal | routineId=${routine._id} from=${routine.calendarRebasedEventId ?? routine.calendarEventId} to=${terminal.rawId}`,
+    );
+    const rekeyed = hasRebasedSuffix(terminal.rawId) ? await rekeySuccessorRebasedId(routine, terminal.rawId, ctx) : routine;
+    const { gateOpenRoutine, terminalEvent } = buildGateOpenTerminalUpdate(rekeyed, terminal);
+    await updateRoutineFromGCal(gateOpenRoutine, terminalEvent, terminal.rrule, source, ctx);
+}
+
+/**
+ * Builds the (routine, event) pair that lets `updateRoutineFromGCal` apply a chain-walk-proven
+ * terminal master:
+ *  - The routine copy DROPS `lastSyncedFromGCalTs` to open the structural gate — the stored anchor
+ *    was stamped by re-reports of the now-dead base and can post-date the terminal's `updated`
+ *    (Google stamps cap + continuation within the same second), which would gate out the very
+ *    rrule fix the heal came for. The walk itself is the out-of-band proof the gate exists to demand.
+ *  - The event copy is re-keyed to the bare id (storage convention — items key instance ids on it)
+ *    and its `updated` is advanced to at least the dropped anchor, so the NEXT stale base re-report
+ *    loses the structural comparison instead of re-capping the freshly re-anchored routine.
+ */
+function buildGateOpenTerminalUpdate(rekeyed: RoutineInterface, terminal: ChainTerminal): { gateOpenRoutine: RoutineInterface; terminalEvent: GCalEvent } {
+    const { lastSyncedFromGCalTs: staleAnchor, ...gateOpenRoutine } = rekeyed;
+    const updated = staleAnchor && dayjs(staleAnchor).isAfter(dayjs(terminal.event.updated)) ? staleAnchor : terminal.event.updated;
+    return { gateOpenRoutine, terminalEvent: { ...terminal.event, id: normalizeMasterEventId(terminal.rawId), updated } };
+}
+
+/**
+ * Class B heal — the chain's terminal link expired (past UNTIL / exhausted COUNT) with no
+ * continuation: the meetings are over on Google's side, but the routine's own rrule never heard and
+ * keeps generating phantoms. Retire through the same inbound pause discipline as a cancelled
+ * master: `deactivateRoutineFromGCal` caps the local rrule from today (REVERSIBLE — the
+ * `newlyLosesUntil` gate revives it if GCal ever uncaps the series), stamps `retiredByGCal` (keeps
+ * the /maintenance heals off the row), records the op, and trashes future items.
+ *
+ * DELIBERATELY NO GCAL WRITE. There is nothing left to cap — and `capRecurringEvent` pins UNTIL to
+ * "yesterday", which against a series whose cap already sits further in the past would move the cap
+ * FORWARD and resurrect every dead occurrence in between. The skip is structural: this path records
+ * server-originated ops (`recordOperation`), which never enter the pushback pipeline
+ * (`maybePushToGCal` only runs for client-driven ops) — and `rrulePinnedUntil` itself refuses
+ * forward moves as a second line of defense.
+ */
+async function retireRoutineOnDeadChain(routine: RoutineInterface, terminal: ChainTerminal & { endedAt: string }, ctx: SyncContext): Promise<void> {
+    console.log(`[gcal-chain-heal] retiring routine — split chain is over | routineId=${routine._id} terminal=${terminal.rawId} endedAt=${terminal.endedAt}`);
+    // The reversibility cap mirrors the reap sweep — but never move a LOCAL cap forward either:
+    // `addUntilToRrule` strips any existing UNTIL, so re-capping a routine whose rrule already ended
+    // in the past would extend it to "yesterday" (the same resurrection semantics `rrulePinnedUntil`
+    // refuses on the GCal side). An already-past cap is left as-is; the retire still deactivates and
+    // stamps `retiredByGCal`.
+    const localUntil = extractUntilFromRrule(routine.rrule);
+    const hasPastLocalCap = localUntil !== null && dayjs(localUntil).isBefore(dayjs(ctx.now));
+    await deactivateRoutineFromGCal(routine, ctx, hasPastLocalCap ? undefined : { capRruleFrom: dayjs.utc(ctx.now).format('YYYY-MM-DD') });
+    // deactivateRoutineFromGCal trashes items from `now` forward; the chain died at `endedAt`, which
+    // can predate now by days — items generated in that gap are phantoms for meetings that never
+    // happened. Sweep them too.
+    await updateItemsAndRecordOps(ctx, {
+        filter: { user: ctx.userId, routineId: routine._id, status: 'calendar', timeStart: { $gt: terminal.endedAt } },
+        setFields: { status: 'trash', updatedTs: ctx.now },
+        unsetFields: { calendarInstanceEventId: '' },
+    });
+}
+
+/**
+ * Whole-user chain resolver for the sync doctor's opt-in calendar-chain checks: maps each routine
+ * to its integration's provider + config calendarId and runs `resolveSplitChainTerminal`. Returns
+ * `null` for routines whose integration is revoked/config-less — the doctor reports those series as
+ * unchecked rather than guessing. `now` is the doctor's single report clock — every resolution in
+ * one report judges liveness against the same instant, keeping the report reproducible.
+ */
+export async function buildRoutineChainResolver(userId: string, now: string): Promise<RoutineChainResolver> {
+    const usable = await loadUsableChainProviders(userId);
+    return async (routine) => {
+        if (!routine.calendarEventId || !routine.calendarIntegrationId) {
+            return null;
+        }
+        const entry = usable.get(routine.calendarIntegrationId);
+        const config = entry ? pickChainConfigForRoutine(entry.configs, routine) : undefined;
+        if (!entry || !config) {
+            return null;
+        }
+        return resolveSplitChainTerminal(entry.provider, config.calendarId, routine.calendarRebasedEventId ?? routine.calendarEventId, now);
+    };
+}
+
+/** A user's non-revoked integrations that still have at least one enabled sync config, keyed by integration id. */
+type UsableChainProviders = Map<string, { provider: GoogleCalendarProvider; configs: NonEmptyArray<CalendarSyncConfigInterface> }>;
+
+async function loadUsableChainProviders(userId: string): Promise<UsableChainProviders> {
+    const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+    const liveIntegrations = integrations.filter((integration) => !revokedIntegrationBody(integration));
+    const entries = await Promise.all(
+        liveIntegrations.map(async (integration) => {
+            const configs = await calendarSyncConfigsDAO.findEnabledByIntegration(integration._id);
+            return hasAtLeastOne(configs) ? ([integration._id, { provider: buildProvider(integration, userId), configs }] as const) : null;
+        }),
+    );
+    return new Map(entries.filter((entry) => entry !== null));
+}
+
+/** The routine's own config when it names one, else the integration's default, else the first enabled config. */
+function pickChainConfigForRoutine(configs: NonEmptyArray<CalendarSyncConfigInterface>, routine: RoutineInterface): CalendarSyncConfigInterface {
+    return configs.find((cfg) => cfg._id === routine.calendarSyncConfigId) ?? configs.find((cfg) => cfg.isDefault) ?? configs[0];
+}
+
 /**
  * Two-stage routine reconciliation, mirroring `findExistingCalendarItem` for items.
  *  1. Match by (user, calendarEventId, calendarIntegrationId) — strong key.
@@ -2776,6 +2987,11 @@ async function findExistingRoutineForEvent(
     rrule: string | null,
     source: CalendarSource,
     ctx: SyncContext,
+    // The UN-normalized id GCal reported the event under (`event.id` is already normalized to the
+    // bare form). Lets the successor-claim check below tell "the terminal master reporting itself"
+    // apart from "the bare base master reporting" — they normalize identically. Defaults to the
+    // normalized id for callers with no raw form in hand.
+    rawEventId: string = event.id,
 ): Promise<RoutineInterface | undefined> {
     const byEventId = await routinesDAO.findArray({
         user: ctx.userId,
@@ -2790,14 +3006,30 @@ async function findExistingRoutineForEvent(
         // successor and rewrites it with the capped base's rrule/active state; phase 2 then reactivates
         // it, so the routine flip-flops every webhook fire (rrule oscillates bare↔UNTIL) and
         // propagateMasterScheduleChanges trashes+recreates all future items each sync. Prefer the
-        // non-successor; fall back to the full set only when every match is a successor (no base present).
+        // non-successor; fall back only to rows not claimed by a DIFFERENT master (below) when every
+        // match is a successor (no base present).
         // A LEGACY successor (pre-rebased-id rollout) carries no calendarRebasedEventId but does carry
         // splitFromRoutineId when sharing the base's bare id — exclude it on that marker too, else the
         // bare capped master caps the live legacy successor and phase 2's active-series fallback then
         // finds no active routine and mints a twin.
         const isSuccessorMarker = (routine: RoutineInterface) => Boolean(routine.calendarRebasedEventId ?? routine.splitFromRoutineId);
         const baseOnly = byEventId.filter((routine) => !isSuccessorMarker(routine));
-        const candidates = hasAtLeastOne(baseOnly) ? baseOnly : byEventId;
+        // A row whose rebased key names a DIFFERENT master than the one reporting belongs to that
+        // master (phase 2 / the chain-anchor heal) and must never be structurally rewritten here.
+        // After an in-place chain re-anchor the successor-marked row is the ONLY row on the bare id,
+        // and the old unconditional fallback handed a later capped-base re-report straight to it —
+        // `newlyGainsUntil` then capped+paused it and trashed all future items, a one-way kill no
+        // sweep reclaims (the heal only touches active rows). With claimed rows excluded the capped
+        // base resolves to NOTHING and flows to createRoutineFromGCal, which creates capped masters
+        // INACTIVE — self-minting the missing base row and converging the series back to the
+        // hardened two-row shape. A re-report of the terminal `_R` master itself still matches (its
+        // raw id equals the stored rebased key), so benign convergence is unaffected.
+        const isClaimedByOtherMaster = (routine: RoutineInterface) => Boolean(routine.calendarRebasedEventId && routine.calendarRebasedEventId !== rawEventId);
+        const unclaimed = byEventId.filter((routine) => !isClaimedByOtherMaster(routine));
+        const candidates = hasAtLeastOne(baseOnly) ? baseOnly : unclaimed;
+        if (!hasAtLeastOne(candidates)) {
+            return undefined;
+        }
         // When duplicate routines linger on the same series, an inbound master update must land on the
         // live one — never on a paused/replaced dead duplicate. Among live routines (or, if none are
         // live, among all), prefer the most-recently-updated so selection is deterministic.
@@ -3187,7 +3419,9 @@ async function createRoutineFromGCal(
             // violation — a second, uncaught E11000 that used to kill the whole sync. It remains only as
             // a fallback for the narrow window where the winner deactivated between throw and re-resolve
             // (reactivation is then collision-free).
-            const winner = (await findActiveRoutineOnSeries(event.id, source, ctx)) ?? (await findExistingRoutineForEvent(event, rrule, source, ctx));
+            const winner =
+                (await findActiveRoutineOnSeries(event.id, source, ctx)) ??
+                (await findExistingRoutineForEvent(event, rrule, source, ctx, opts?.rebasedEventId ?? event.id));
             if (winner) {
                 console.warn(`[gcal-sync] createRoutineFromGCal raced E11000 — updating existing routine | eventId=${event.id} routineId=${winner._id}`);
                 const target = opts?.rebasedEventId ? await rekeySuccessorRebasedId(winner, opts.rebasedEventId, ctx) : winner;
