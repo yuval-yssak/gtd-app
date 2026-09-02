@@ -510,13 +510,13 @@ export interface OperationInterface {
 }
 
 /**
- * Cursor sentinel that sorts strictly above every operation `_id` (UUIDs and the public-API's
- * base62 ids alike — all printable ASCII, which sorts below U+FFFF). Used as the `serverId`
- * component of a bootstrap cursor: the bootstrap snapshot already contains every op at exactly
- * `serverTs`, so the floor `(serverTs, MAX_OP_ID)` correctly means "everything ≤ serverTs is
- * delivered" without re-delivering those ops on the first incremental pull. NEVER use this for a
- * mid-stream incremental cursor — it would skip the rest of a same-`ts` tie-group (the very bug the
- * compound `(ts, _id)` cursor exists to prevent); use `''` (lowest id) there to re-check the ms.
+ * LEGACY cursor sentinel that sorts strictly above every operation `_id` (all printable ASCII,
+ * which sorts below U+FFFF). Bootstrap used to stamp `(serverTs, MAX_OP_ID)` meaning "everything
+ * ≤ serverTs is delivered"; it now stamps the held-back boundary `(serverTs − holdback, '')`
+ * instead so late-committing boundary ops are re-delivered rather than skipped (see
+ * `cursorHoldbackBoundary` in routes/sync.ts). Pre-holdback `deviceSyncState` rows still carry
+ * this value in `lastSyncedId` — the compound cursor and purge-floor comparisons treat it like
+ * any other id, so it must keep sorting above real op ids. Do not stamp it on new cursors.
  */
 export const MAX_OP_ID = '￿';
 

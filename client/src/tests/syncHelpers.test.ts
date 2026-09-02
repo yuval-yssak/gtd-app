@@ -14,7 +14,6 @@ vi.mock('../db/multiUserSync', () => ({
 import dayjs from 'dayjs';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
 import { SYNC_APPLY_LOCK } from '../db/crossContextLock';
-import { MAX_OP_ID } from '../db/deviceId';
 import { syncSingleUser } from '../db/multiUserSync';
 import {
     bootstrapFromServer,
@@ -640,7 +639,7 @@ describe('pullFromServer — item ops', () => {
                 people: [],
                 workContexts: [],
                 serverTs: '2025-06-01T00:00:00.000Z',
-                serverId: MAX_OP_ID,
+                serverId: '',
             });
 
             await bootstrapFromServer(db, USER_ID);
@@ -973,6 +972,9 @@ describe('pullFromServer — calendar routine sync', () => {
 
 describe('bootstrapFromServer', () => {
     it('writes all entity types and sets the per-user compound cursor (ts + serverId)', async () => {
+        // Current servers return a held-back boundary with serverId '' (re-check the boundary ms on
+        // the first pull) — the cursor must store '' verbatim, never widen it to a skip-the-ms
+        // sentinel like the legacy MAX_OP_ID.
         const serverTs = '2025-07-01T00:00:00.000Z';
         vi.mocked(fetchBootstrap).mockResolvedValueOnce({
             items: [serverItem('item-b1')],
@@ -980,7 +982,7 @@ describe('bootstrapFromServer', () => {
             people: [serverPerson('person-b1')],
             workContexts: [serverWorkContext('wc-b1')],
             serverTs,
-            serverId: MAX_OP_ID,
+            serverId: '',
         });
 
         await bootstrapFromServer(db, USER_ID);
@@ -992,8 +994,9 @@ describe('bootstrapFromServer', () => {
 
         const cursor = await db.get('syncCursors', USER_ID);
         expect(cursor?.lastSyncedTs).toBe(serverTs);
-        // serverId (MAX_OP_ID) stored so the first incremental pull won't re-deliver ops at serverTs.
-        expect(cursor?.lastSyncedId).toBe(MAX_OP_ID);
+        // The '' id is stored verbatim so the first incremental pull re-checks the boundary ms
+        // (idempotent re-delivery) instead of skipping late-committing ops there.
+        expect(cursor?.lastSyncedId).toBe('');
     });
 
     it('remaps user → userId on all entities', async () => {

@@ -1,10 +1,10 @@
-import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { authenticateRequest } from '../auth/middleware.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
+import { allocateOpIdentity } from '../lib/opIdentity.js';
 import { replayRsvpOp } from '../lib/rsvpReplay.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
 import type { AuthVariables } from '../types/authTypes.js';
@@ -147,36 +147,33 @@ export const syncIssuesRoutes = new Hono<{ Variables: AuthVariables }>()
             return c.json({ error: 'Op is not retryable' }, 400);
         }
 
-        // Clear failure markers + bump ts BEFORE re-running so the replay path's `markOpFailed`
-        // calls land on a clean row (no stale failureReason from the prior attempt). Bumping ts
-        // also makes the retried op sort to the top of the operations log so other devices learn
-        // about the re-attempt on their next pull.
-        const now = dayjs().toISOString();
-        await operationsDAO.updateOne(
-            { _id: opId, user: user.id },
-            { $set: { ts: now }, $unset: { syncFailed: '', failureReason: '', failureDetail: '', failedTs: '' } },
-        );
+        // Republish the op under a FRESH (ts, _id) instead of bumping `ts` in place: the id's
+        // ms-prefix participates in the `(ts, _id)` sort, so an in-place `ts` bump leaves the op
+        // sorted at the bottom of its new millisecond — below cursors that already passed it —
+        // and it may never reach other devices (the stale-run-clock skip through another door).
+        // Insert the clean fresh row first, then delete the old one: a crash between the two
+        // leaves a duplicate (idempotent on devices), never a lost op. The fresh row starts with
+        // failure markers cleared so the replay path's `markOpFailed` lands on a clean slate.
+        const identity = allocateOpIdentity();
+        const { syncFailed: _sf, failureReason: _fr, failureDetail: _fd, failedTs: _ft, ...cleanOp } = op;
+        const retried: OperationInterface = { ...cleanOp, _id: identity.id, ts: identity.ts };
+        await operationsDAO.insertOne(retried);
+        await operationsDAO.deleteOne(opId, user.id);
 
-        // Reload the post-update op so the replay path sees the cleared markers + fresh ts.
-        const refreshed = await operationsDAO.findOne({ _id: opId, user: user.id });
-        if (!refreshed) {
-            return c.json({ error: 'Issue disappeared mid-retry' }, 404);
-        }
-
-        if (refreshed.opType === 'rsvp') {
-            await replayRsvpOp(user.id, refreshed, buildCalendarProvider);
+        if (retried.opType === 'rsvp') {
+            await replayRsvpOp(user.id, retried, buildCalendarProvider);
         } else {
             // update / create on a calendar entity — re-fire the generic pushback. Awaited (not
             // fire-and-forget) so the response can report success/failure to the panel.
-            await maybePushToGCal(refreshed, buildCalendarProvider);
+            await maybePushToGCal(retried, buildCalendarProvider);
         }
 
         // Re-read the post-replay op. If `syncFailed` is back, the retry failed again — leave the
-        // row in place so the panel re-surfaces it. Otherwise delete the row (success).
-        const postReplay = await operationsDAO.findOne({ _id: opId, user: user.id });
+        // row in place so the panel re-surfaces it (under its new id). Otherwise delete it (success).
+        const postReplay = await operationsDAO.findOne({ _id: retried._id, user: user.id });
         if (postReplay?.syncFailed) {
             return c.json({ ok: false, failureReason: postReplay.failureReason }, 200);
         }
-        await operationsDAO.deleteOne(opId, user.id);
+        await operationsDAO.deleteOne(retried._id, user.id);
         return c.json({ ok: true });
     });

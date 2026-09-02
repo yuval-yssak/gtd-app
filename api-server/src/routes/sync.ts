@@ -20,15 +20,7 @@ import { vapidPublicKey } from '../lib/webPush.js';
 import { auth } from '../loaders/mainLoader.js';
 import { stripDisallowedStatusFields } from '../schemas/operations/index.js';
 import type { AuthVariables } from '../types/authTypes.js';
-import {
-    type DeviceSyncStateInterface,
-    deviceSyncStateId,
-    type EntitySnapshot,
-    type EntityType,
-    MAX_OP_ID,
-    type OpType,
-    type RsvpOpPayload,
-} from '../types/entities.js';
+import { type DeviceSyncStateInterface, deviceSyncStateId, type EntitySnapshot, type EntityType, type OpType, type RsvpOpPayload } from '../types/entities.js';
 import { syncIssuesRoutes } from './syncIssues.js';
 
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
@@ -72,6 +64,44 @@ function sanitizeItemSnapshot<T extends Record<string, unknown>>(op: ClientOp, s
     }
     // Width-only assertion: stripping removes keys, it never changes remaining value types.
     return sanitized as T;
+}
+
+/**
+ * How far behind the wall clock the advertised pull/bootstrap cursor is held. Op `(ts, _id)`
+ * identities are allocated at write time (see lib/opIdentity.ts), but allocation and the Mongo
+ * commit are not atomic: a concurrently-built batch, an event-loop stall, or cross-instance clock
+ * skew can land an op in the collection AFTER a pull has already read past its `ts`. Because the
+ * client cursor is strictly forward-only, that op would be permanently skipped. Holding the
+ * advertised cursor this far back means every op committed within the window is re-checked by the
+ * next pull — re-delivery is idempotent (LWW snapshots), losing an op is not. Five seconds
+ * comfortably covers commit lag and NTP-level skew without meaningfully growing pull payloads.
+ */
+const CURSOR_HOLDBACK_SECONDS = 5;
+
+/**
+ * Read per-call so tests exercising purge/floor mechanics can zero the window (a real 5s wait per
+ * assertion would balloon the suite). Production never sets the env var. Guarded against `''`
+ * (`Number('') === 0` would silently disable the holdback) and negative values (a negative
+ * subtract advertises a FUTURE boundary, skipping every op inside it — worse than no holdback).
+ */
+function cursorHoldbackSeconds(): number {
+    const raw = process.env.SYNC_CURSOR_HOLDBACK_SECONDS;
+    if (raw === undefined || raw.trim() === '') {
+        return CURSOR_HOLDBACK_SECONDS;
+    }
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : CURSOR_HOLDBACK_SECONDS;
+}
+
+/** The compound cursor boundary `(ts, id)` the server is willing to advertise right now. */
+function cursorHoldbackBoundary(): { ts: string; id: string } {
+    // id '' sorts below every op id, so a cursor at the boundary re-checks the whole boundary ms.
+    return { ts: dayjs().subtract(cursorHoldbackSeconds(), 'second').toISOString(), id: '' };
+}
+
+/** Strict `>` over the compound `(ts, id)` op-cursor order shared by pull, bootstrap, and purge. */
+function isCursorAfter(a: { ts: string; id: string }, b: { ts: string; id: string }): boolean {
+    return a.ts > b.ts || (a.ts === b.ts && a.id > b.id);
 }
 
 async function purgeStaleDevices(userId: string): Promise<void> {
@@ -167,9 +197,22 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // server-side — it's a raw user-agent derivative, not a validated field.
         const deviceLabel = c.req.query('deviceLabel')?.trim().slice(0, 80);
         const timezone = c.req.query('timezone');
-        // One serverTs for both the response body and the deviceSyncState row, so the recorded
+        // One boundary for both the response body and the deviceSyncState row, so the recorded
         // floor exactly matches what the client claims it has after consuming this response.
-        const serverTs = dayjs().toISOString();
+        // Held back CURSOR_HOLDBACK_SECONDS: an op whose identity was allocated just before this
+        // read but whose insert commits just after it would land behind a wall-clock cursor and
+        // never reach this device (the bootstrap-vs-concurrent-import race). Starting the cursor
+        // inside the holdback window re-delivers the last few seconds of ops on the first pull —
+        // idempotent against the snapshot the response already carries.
+        // A RE-bootstrapping device (409 recovery, account switch) keeps its existing cursor when
+        // that is already ahead of the held-back boundary: the snapshot is a superset of anything
+        // the device acked, so the higher cursor stays honest — while rewinding it would drag the
+        // user's purge floor backwards and re-deliver a window the device provably consumed.
+        const heldBack = cursorHoldbackBoundary();
+        const existingRow = deviceId ? await deviceSyncStateDAO.findOne({ _id: deviceSyncStateId(deviceId, user.id) }) : null;
+        const existingCursor = existingRow ? { ts: existingRow.lastSyncedTs, id: existingRow.lastSyncedId ?? '' } : null;
+        const bootstrapCursor = existingCursor && isCursorAfter(existingCursor, heldBack) ? existingCursor : heldBack;
+        const serverTs = bootstrapCursor.ts;
 
         const [items, routines, people, workContexts, reviewInboxes] = await Promise.all([
             itemsDAO.findArray({ user: user.id }),
@@ -186,10 +229,11 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
         // can't drop the purge floor through the missing row (its pull would have computed
         // `min(lastSyncedTs)` excluding this device, potentially deleting ops this device needs).
         if (deviceId) {
-            // lastSyncedId = MAX_OP_ID: the snapshot already holds every op at exactly serverTs, so
-            // the compound floor (serverTs, MAX_OP_ID) honestly means "all ops ≤ serverTs delivered"
-            // and the first incremental pull won't re-deliver them.
-            // lastSeenTs: serverTs (in $set, not $setOnInsert) — a fresh row must not be born
+            // lastSyncedId = '' (sorts below every op id): the first incremental pull re-checks the
+            // whole boundary millisecond, so a same-ms op that committed after the snapshot read is
+            // re-delivered rather than skipped. Ops the snapshot already covered re-apply
+            // idempotently.
+            // lastSeenTs: dayjs() (in $set, not $setOnInsert) — a fresh row must not be born
             // half-stale at epoch (one quiet month from the reaper), and a returning device's
             // re-bootstrap is genuine activity worth refreshing on an existing row too.
             await deviceSyncStateDAO.updateOne(
@@ -197,10 +241,10 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
                 {
                     $set: {
                         lastSyncedTs: serverTs,
-                        lastSyncedId: MAX_OP_ID,
+                        lastSyncedId: bootstrapCursor.id,
                         deviceId,
                         user: user.id,
-                        lastSeenTs: serverTs,
+                        lastSeenTs: dayjs().toISOString(),
                         ...(deviceLabel ? { autoLabel: deviceLabel } : {}),
                         ...timezoneReportFields(timezone),
                     },
@@ -209,7 +253,7 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             );
         }
 
-        return c.json({ items, routines, people, workContexts, reviewInboxes, serverTs, serverId: MAX_OP_ID });
+        return c.json({ items, routines, people, workContexts, reviewInboxes, serverTs, serverId: bootstrapCursor.id });
     })
 
     // ---------------------------------------------------------------------------
@@ -351,13 +395,27 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
 
         const ops = await operationsDAO.findOpsAfter(user.id, since, sinceId);
 
-        // `serverTs`/`serverId` mark the high-water mark of *what we just returned* — the client uses
-        // the pair as the next pull's `(since, sinceId)`. Paginating on the totally-ordered `(ts,_id)`
-        // pair (rather than a bare ms) means a same-`ts` batch split across two pulls loses nothing:
-        // the next pull resumes strictly after `lastOp._id`. Empty-ops → echo the incoming cursor.
+        // `serverTs`/`serverId` mark the cursor the client should pull from next. Normally that is
+        // the high-water mark of what we just returned — paginating on the totally-ordered `(ts,_id)`
+        // pair means a same-`ts` batch split across two pulls loses nothing. Two clamps apply:
+        //  - Never advance INTO the holdback window: an op committed late (build→insert gap,
+        //    cross-instance clock skew) inside that window would otherwise land behind the
+        //    forward-only cursor and be skipped forever. Fresh ops are still RETURNED — they are
+        //    just re-checked by the next pull, which is idempotent.
+        //  - Never advertise BELOW the incoming cursor: a client already past the holdback boundary
+        //    (legacy wall-clock bootstrap row, cross-instance skew) must get its own cursor echoed
+        //    back, not a lower one its forward-only guard would reject on every pull.
+        // An empty pull may still advance the cursor up to the holdback boundary: ops can no longer
+        // commit with a `ts` older than that (write-time identity + holdback bound the lag), so the
+        // scanned-and-empty range is provably final and skipping it forward is safe.
         const lastOp = ops.at(-1);
-        const serverTs = lastOp ? lastOp.ts : since;
-        const serverId = lastOp ? lastOp._id : sinceId;
+        const holdback = cursorHoldbackBoundary();
+        const incoming = { ts: since, id: sinceId };
+        const heldBackHighWater =
+            lastOp === undefined || isCursorAfter({ ts: lastOp.ts, id: lastOp._id }, holdback) ? holdback : { ts: lastOp.ts, id: lastOp._id };
+        const boundary = isCursorAfter(heldBackHighWater, incoming) ? heldBackHighWater : incoming;
+        const serverTs = boundary.ts;
+        const serverId = boundary.id;
 
         if (deviceId) {
             // Track per-(device, user) pull cursor so old operations can eventually be purged.

@@ -19,7 +19,7 @@ import type {
 } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import { SYNC_APPLY_LOCK, withCrossContextLock } from './crossContextLock';
-import { getOrCreateDeviceId, getSyncCursor, MAX_OP_ID, setSyncCursor } from './deviceId';
+import { getOrCreateDeviceId, getSyncCursor, setSyncCursor } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
 import { bulkPutItems } from './itemHelpers';
 
@@ -358,9 +358,12 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
         await Promise.all([...mappedReviewInboxes.map((ri) => reviewInboxesTx.store.put(ri)), reviewInboxesTx.done]);
 
         // Per-user compound cursor at (serverTs, serverId) — the snapshot already delivered the current
-        // state, so incremental pull starts from here. serverId is MAX_OP_ID (suppresses re-delivery of
-        // ops at exactly serverTs); fall back to that sentinel if an old server omits it.
-        await setSyncCursor(db, userId, serverTs, serverId ?? MAX_OP_ID);
+        // state, so incremental pull starts from here. The server holds the boundary a few seconds back
+        // (serverId '' re-checks the boundary ms) so ops committing around the snapshot read are
+        // re-delivered — idempotently — instead of skipped. `?? ''` is a type-level belt only (the
+        // payload requires serverId); '' keeps the safe re-check-the-boundary-ms semantics if it ever
+        // fires — the legacy MAX_OP_ID sentinel would skip that ms, the exact loss the holdback closes.
+        await setSyncCursor(db, userId, serverTs, serverId ?? '');
     });
 }
 
@@ -502,8 +505,10 @@ async function doPull(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
  * have pulled the SAME user meanwhile and advanced the cursor past this response's `serverTs` —
  * re-applying that older op range is harmless (idempotent LWW snapshots), but blindly writing its
  * boundary would REWIND the cursor and re-fetch the range on every subsequent pull.
- * `serverId ?? ''` (caller) guards against an old server omitting the id — '' keeps $gte boundary
- * re-check semantics (safe).
+ * `serverId ?? ''` (caller) is a type-level belt only (the payload requires serverId); '' keeps
+ * boundary-ms re-check semantics if it ever fires. Note `isForward === false` is also NORMAL on a
+ * healthy pull: the server clamps its advertised boundary to the incoming cursor when the held-back
+ * high-water sits at or below it, so an echoed-back cursor is simply a no-op here.
  */
 async function advanceSyncCursor(db: IDBPDatabase<MyDB>, userId: string, serverTs: string, serverId: string): Promise<void> {
     const current = await getSyncCursor(db, userId);

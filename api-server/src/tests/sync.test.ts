@@ -2,6 +2,7 @@
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { recordOperation } from '../lib/operationHelpers.js';
 import { STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
@@ -17,6 +18,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+    // Env cleanup FIRST: if closeDataAccess throws, a leftover '0' would silently disable the
+    // holdback for every later-running test file (vitest runs files in one process).
+    delete process.env.SYNC_CURSOR_HOLDBACK_SECONDS;
     await closeDataAccess();
 });
 
@@ -36,6 +40,10 @@ beforeEach(async () => {
         db.collection('deviceUsers').deleteMany({}),
     ]);
     vi.restoreAllMocks();
+    // Zero the pull/bootstrap cursor holdback for this file: the cursor-mechanics and purge tests
+    // below drive multi-pull ack sequences that would otherwise need real >5s waits per assertion.
+    // Tests that exercise the holdback itself override this locally (see the holdback describe).
+    process.env.SYNC_CURSOR_HOLDBACK_SECONDS = '0';
 });
 
 // ─── Local helpers ──────────────────────────────────────────────────────────
@@ -118,6 +126,14 @@ async function registerDevice(deviceId: string, userId: string, row: { lastSynce
 
 /** Small delay to guarantee strictly-ordered ISO timestamps across sequential operations. */
 const tick = () => new Promise<void>((r) => setTimeout(r, 5));
+
+/**
+ * Per-test cursor-holdback override. The file default is '0' (re-set in beforeEach) so cursor/purge
+ * mechanics don't need real multi-second waits; holdback-focused tests opt into a real window here.
+ */
+function setHoldbackSeconds(value: string): void {
+    process.env.SYNC_CURSOR_HOLDBACK_SECONDS = value;
+}
 
 /**
  * Polls a predicate against MongoDB until it returns true or the timeout elapses, then runs
@@ -696,8 +712,10 @@ describe('GET /sync/bootstrap', () => {
         expect(state?.deviceId).toBe('dev-boot');
         expect(state?.user).toBe(userId);
         // Fresh rows are stamped with a live lastSeenTs (not epoch) so they aren't born half-stale
-        // relative to the STALE_DEVICE_DAYS reaper.
-        expect(state?.lastSeenTs).toBe(serverTs);
+        // relative to the STALE_DEVICE_DAYS reaper. serverTs is the held-back cursor boundary, so
+        // lastSeenTs sits at-or-after it — assert freshness, not equality.
+        expect(String(state?.lastSeenTs) >= serverTs).toBe(true);
+        expect(dayjs().diff(dayjs(String(state?.lastSeenTs)), 'second')).toBeLessThan(30);
     });
 
     it('stores a trimmed, length-capped autoLabel when ?deviceLabel= is present', async () => {
@@ -726,27 +744,36 @@ describe('GET /sync/bootstrap', () => {
         expect(state?.autoLabel).toBe('Firefox on Linux');
     });
 
-    it('returns serverId = MAX_OP_ID and a follow-up pull does not re-deliver ops at serverTs', async () => {
+    it('holds the bootstrap cursor back so a recent op is re-delivered on the first pull, never skipped', async () => {
+        // Regression for the bootstrap-vs-concurrent-write race: an op whose insert commits around
+        // the snapshot read used to land behind the wall-clock (serverTs, MAX_OP_ID) cursor and was
+        // never delivered. The cursor now starts at the held-back boundary (serverTs − holdback, ''),
+        // so the first incremental pull re-checks the window — re-delivery is idempotent, a skip is
+        // silent data loss.
+        setHoldbackSeconds('5');
         const cookie = await loginAsAlice();
         const userId = await getUserId(cookie);
 
-        // An op exists from before bootstrap; the snapshot already contains its entity.
+        // An op recorded moments before the bootstrap — inside the holdback window.
         const entityId = crypto.randomUUID();
         await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
 
         const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot', sessionCookie: cookie });
         const { serverTs, serverId } = (await res.json()) as { serverTs: string; serverId: string };
-        expect(serverId).toBe(MAX_OP_ID);
+        expect(serverId).toBe('');
+        expect(MAX_OP_ID > serverId).toBe(true); // legacy sentinel rows must still sort above the new boundary ids
 
-        // The compound floor (serverTs, MAX_OP_ID) must be written so purge treats everything ≤
-        // serverTs as delivered (the snapshot has it).
+        // The floor written for the device matches the advertised boundary exactly.
         const state = await db.collection('deviceSyncState').findOne({ _id: `dev-boot::${userId}` });
-        expect(state?.lastSyncedId).toBe(MAX_OP_ID);
+        expect(state?.lastSyncedTs).toBe(serverTs);
+        expect(state?.lastSyncedId).toBe('');
 
-        // First incremental pull from the bootstrap cursor: the op created at exactly serverTs is in
-        // the snapshot, so it must NOT be re-delivered. MAX_OP_ID excludes the whole serverTs ms.
-        const pullBody = (await (await pull(cookie, { since: serverTs, sinceId: serverId, deviceId: 'dev-boot' })).json()) as { ops: unknown[] };
-        expect(pullBody.ops).toHaveLength(0);
+        // First incremental pull from the bootstrap cursor re-delivers the recent op (the snapshot
+        // already contains its entity — applying it again is a no-op for the client).
+        const pullBody = (await (await pull(cookie, { since: serverTs, sinceId: serverId, deviceId: 'dev-boot' })).json()) as {
+            ops: { entityId: string }[];
+        };
+        expect(pullBody.ops.map((op) => op.entityId)).toContain(entityId);
     });
 
     it('does NOT register a device when ?deviceId= is absent (back-compat for old clients)', async () => {
@@ -1308,7 +1335,9 @@ describe('Reaped-device bootstrap guard', () => {
         const { serverTs } = (await res.json()) as { serverTs: string };
 
         const row = await db.collection('deviceSyncState').findOne({ _id: `dev-fresh::${userId}` });
-        expect(row?.lastSeenTs).toBe(serverTs);
+        // serverTs is the held-back cursor boundary; lastSeenTs is the live clock at-or-after it.
+        expect(String(row?.lastSeenTs) >= serverTs).toBe(true);
+        expect(dayjs().diff(dayjs(String(row?.lastSeenTs)), 'second')).toBeLessThan(30);
         expect(row?.lastSeenTs).not.toBe(dayjs(0).toISOString());
     });
 });
@@ -1406,6 +1435,191 @@ describe('Multi-device round-trip', () => {
         // Both devices have now pulled past all ops → purge fires → operations collection empty
         await waitForPurge(async () => (await db.collection('operations').countDocuments()) === 0);
         expect(await db.collection('operations').countDocuments()).toBe(0);
+    });
+});
+
+// ─── Stale-run-clock op delivery + cursor holdback ──────────────────────────
+
+describe('Stale-run-clock op delivery (moved-meeting IDB-staleness regression)', () => {
+    it('an op recorded with a minutes-old run clock is still delivered to a device whose cursor already advanced', async () => {
+        // The original bug: a GCal webhook sync captured ctx.now at run start, made slow provider
+        // calls, then recorded the "organizer moved the meeting" op with that stale clock as `ts`.
+        // A device that had pushed+pulled anything meanwhile held a cursor past that ts, and the
+        // op was permanently invisible — server correct, IndexedDB stale until re-bootstrap.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-1', userId);
+
+        // The device's cursor sits at "now" — it just pulled its own pushed op.
+        const advancedCursorTs = dayjs().toISOString();
+        await tick();
+
+        // A server-side sync run whose clock was captured 2 minutes ago records the change.
+        const staleRunClock = dayjs().subtract(2, 'minute').toISOString();
+        const entityId = crypto.randomUUID();
+        const op = await recordOperation(userId, {
+            entityType: 'item',
+            entityId,
+            snapshot: { _id: entityId, user: userId, status: 'inbox', title: 'Moved meeting', createdTs: staleRunClock, updatedTs: staleRunClock },
+            opType: 'update',
+            now: staleRunClock,
+        });
+        // Transport ordering is write-time; the entity's LWW clock keeps the run's stamp.
+        expect(op.ts >= advancedCursorTs).toBe(true);
+        expect(op.snapshot?.updatedTs).toBe(staleRunClock);
+
+        const body = (await (await pull(cookie, { since: advancedCursorTs, ackedTs: advancedCursorTs, deviceId: 'dev-1' })).json()) as {
+            ops: { entityId: string }[];
+        };
+        expect(body.ops.map((o) => o.entityId)).toContain(entityId);
+    });
+
+    it('a same-ms successor op past a mid-group cursor is still delivered (monotonic id tie order)', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-1', userId);
+
+        const now = dayjs().toISOString();
+        const [entityA, entityB] = [crypto.randomUUID(), crypto.randomUUID()];
+        const makeServerSnapshot = (entityId: string) =>
+            ({ _id: entityId, user: userId, status: 'inbox', title: 'Tie group', createdTs: now, updatedTs: now }) as const;
+        const first = await recordOperation(userId, { entityType: 'item', entityId: entityA, snapshot: makeServerSnapshot(entityA), opType: 'update', now });
+        const second = await recordOperation(userId, { entityType: 'item', entityId: entityB, snapshot: makeServerSnapshot(entityB), opType: 'update', now });
+
+        // With random UUID ids a cursor parked exactly on `first` could sort `second` BELOW it
+        // when the two share a millisecond — silently skipping it. Monotonic ids order the pair
+        // by write order, so the compound cursor always resumes correctly.
+        const body = (await (await pull(cookie, { since: first.ts, sinceId: first._id, ackedTs: first.ts, deviceId: 'dev-1' })).json()) as {
+            ops: { entityId: string }[];
+        };
+        expect(body.ops.map((o) => o.entityId)).toContain(entityB);
+        expect(second._id > first._id).toBe(true);
+    });
+
+    it('pull holds the advertised cursor outside the holdback window and re-delivers fresh ops instead of passing them', async () => {
+        setHoldbackSeconds('5');
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-1', userId);
+
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+        await tick();
+
+        const first = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' })).json()) as {
+            ops: { entityId: string }[];
+            serverTs: string;
+            serverId: string;
+        };
+        const storedOp = await db.collection('operations').findOne({ entityId });
+        if (!storedOp) throw new Error('expected the pushed op to be persisted');
+
+        // The fresh op is returned, but the advertised cursor stays behind it: an op committing
+        // late inside the window must never end up behind a cursor the client already holds.
+        expect(first.ops.map((o) => o.entityId)).toContain(entityId);
+        expect(first.serverTs < String(storedOp.ts)).toBe(true);
+        expect(first.serverId).toBe('');
+
+        // Pulling again from the held-back cursor re-delivers the op — idempotent, never lost.
+        const second = (await (
+            await pull(cookie, { since: first.serverTs, sinceId: first.serverId, ackedTs: first.serverTs, ackedId: first.serverId, deviceId: 'dev-1' })
+        ).json()) as { ops: { entityId: string }[] };
+        expect(second.ops.map((o) => o.entityId)).toContain(entityId);
+    });
+
+    it('empty pull echoes the incoming cursor unchanged (no holdback regression of an already-advanced cursor)', async () => {
+        setHoldbackSeconds('5');
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-1', userId);
+
+        const since = dayjs().toISOString();
+        const body = (await (await pull(cookie, { since, sinceId: 'abc', ackedTs: since, deviceId: 'dev-1' })).json()) as {
+            ops: unknown[];
+            serverTs: string;
+            serverId: string;
+        };
+        expect(body.ops).toHaveLength(0);
+        expect(body.serverTs).toBe(since);
+        expect(body.serverId).toBe('abc');
+    });
+
+    it('never advertises a boundary below the incoming cursor even when ops are returned inside the holdback window', async () => {
+        // A client already past the held-back boundary (legacy wall-clock bootstrap row, clock
+        // skew) would reject a lower boundary via its forward-only guard; re-advertising one on
+        // every pull would freeze its acked cursor — and with it the user's purge floor. The
+        // server must echo the incoming cursor instead when the held-back high-water sits below it.
+        setHoldbackSeconds('5');
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-1', userId);
+
+        // Legacy-style cursor: wall-clock ts (inside the holdback window) with the max-id sentinel.
+        const legacySince = dayjs().subtract(1, 'second').toISOString();
+        const legacySinceId = '￿';
+        await tick();
+        // A fresh op lands after the legacy cursor — returned, but the boundary must not regress.
+        const entityId = crypto.randomUUID();
+        const now = dayjs().toISOString();
+        await recordOperation(userId, {
+            entityType: 'item',
+            entityId,
+            snapshot: { _id: entityId, user: userId, status: 'inbox', title: 'Fresh op', createdTs: now, updatedTs: now },
+            opType: 'update',
+            now,
+        });
+
+        const body = (await (await pull(cookie, { since: legacySince, sinceId: legacySinceId, ackedTs: legacySince, deviceId: 'dev-1' })).json()) as {
+            ops: { entityId: string }[];
+            serverTs: string;
+            serverId: string;
+        };
+        expect(body.ops.map((o) => o.entityId)).toContain(entityId);
+        const boundaryIsBelowIncoming = body.serverTs < legacySince || (body.serverTs === legacySince && body.serverId < legacySinceId);
+        expect(boundaryIsBelowIncoming).toBe(false);
+    });
+
+    it('re-bootstrap keeps a device cursor that is already ahead of the held-back boundary (no rewind)', async () => {
+        // Rewinding an established cursor on re-bootstrap would drag the user's purge floor
+        // backwards and re-deliver a window the device provably consumed. The snapshot is a
+        // superset of anything the device acked, so keeping the higher cursor stays honest.
+        setHoldbackSeconds('5');
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const advancedTs = dayjs().toISOString(); // inside the holdback window → ahead of the boundary
+        await registerDevice('dev-boot-again', userId, { lastSyncedTs: advancedTs, lastSyncedId: 'op-xyz' });
+
+        const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/bootstrap?deviceId=dev-boot-again', sessionCookie: cookie });
+        const { serverTs, serverId } = (await res.json()) as { serverTs: string; serverId: string };
+        expect(serverTs).toBe(advancedTs);
+        expect(serverId).toBe('op-xyz');
+
+        const row = await db.collection('deviceSyncState').findOne({ _id: `dev-boot-again::${userId}` });
+        expect(row?.lastSyncedTs).toBe(advancedTs);
+        expect(row?.lastSyncedId).toBe('op-xyz');
+    });
+
+    it('falls back to the default holdback for negative or empty env overrides', async () => {
+        // `Number('') === 0` would silently disable the holdback; a negative value would advertise
+        // a FUTURE boundary, skipping every op inside it. Both must fall back to the default.
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await registerDevice('dev-1', userId);
+        const entityId = crypto.randomUUID();
+        await push(cookie, 'dev-1', [makeClientOp('item', entityId, 'create', makeItemSnapshot(entityId, '2024-01-01T00:00:00.000Z'))]);
+        await tick();
+
+        for (const badValue of ['-10', '  ']) {
+            setHoldbackSeconds(badValue);
+            const body = (await (await pull(cookie, { since: dayjs(0).toISOString(), ackedTs: dayjs(0).toISOString(), deviceId: 'dev-1' })).json()) as {
+                ops: { entityId: string }[];
+                serverTs: string;
+            };
+            const storedOp = await db.collection('operations').findOne({ entityId });
+            expect(body.ops.map((o) => o.entityId)).toContain(entityId);
+            // Default 5s holdback in effect → boundary held below the fresh op, never at/past it.
+            expect(body.serverTs < String(storedOp?.ts)).toBe(true);
+        }
     });
 });
 

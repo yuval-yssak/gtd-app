@@ -384,11 +384,57 @@ describe('POST /sync/issues/:opId/retry', () => {
         expect(res.status).toBe(200);
         const body = (await res.json()) as { ok: boolean; failureReason?: string };
         expect(body.ok).toBe(false);
-        // Same op row, re-marked as failed.
-        const refreshed = await operationsDAO.findOne({ _id: op._id });
-        expect(refreshed?.syncFailed).toBe(true);
-        expect(refreshed?.failureReason).toBe('scope_missing');
+        // Retry republishes under a FRESH (ts, _id) — the original row is gone and the re-failed
+        // row carries the markers under its new id, so the panel re-surfaces it on next fetch.
+        expect(await operationsDAO.findOne({ _id: op._id })).toBeNull();
+        const failedRows = await operationsDAO.findArray({ user: userId, entityId: itemId, syncFailed: true });
+        expect(failedRows).toHaveLength(1);
+        const [refreshed] = failedRows;
+        if (!refreshed) throw new Error('expected the re-failed retried op to persist');
+        expect(refreshed._id).not.toBe(op._id);
+        expect(refreshed.failureReason).toBe('scope_missing');
         expect(body.failureReason).toBe('scope_missing');
+    });
+
+    it('republishes the retried op under a fresh (ts, _id) so devices whose cursor passed the original still receive it', async () => {
+        // Regression: the old retry bumped `ts` in place while keeping the original `_id`, whose
+        // ms-prefix anchors the op at its ORIGINAL position in the (ts, _id) sort — below cursors
+        // that already passed it, i.e. permanently undelivered (the stale-run-clock skip through
+        // another door).
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        const itemId = `item-${crypto.randomUUID()}`;
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId));
+        await itemsDAO.insertOne(makeCalendarItem(userId, itemId));
+
+        const op = makeFailedOp(userId, {
+            entityId: itemId,
+            failureReason: 'scope_missing',
+            rsvp: { itemId, calendarEventId: 'gcal-evt-1', calendarIntegrationId: 'int-issues', responseStatus: 'accepted' },
+        });
+        await operationsDAO.insertOne(op);
+
+        // A device's cursor has already advanced past the failed op's original position. The small
+        // delay guarantees the retry's fresh identity lands in a strictly later millisecond than
+        // this cursor capture (same-ms would tie on ts and compare against the max-id sentinel).
+        const advancedCursor = { ts: dayjs().toISOString(), id: '￿' };
+        await new Promise((resolve) => setTimeout(resolve, 5));
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getMyEmail').mockResolvedValue('me@example.com');
+        vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockRejectedValue(new Error('invalid_grant'));
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: `/sync/issues/${op._id}/retry`, sessionCookie: cookie });
+        expect(res.status).toBe(200);
+
+        // The re-failed row (still quarantine-visible via syncFailed, not notApplied) must sort
+        // AFTER the advanced cursor — a fresh identity guarantees it; the in-place ts bump did not.
+        const [retried] = await operationsDAO.findArray({ user: userId, entityId: itemId, syncFailed: true });
+        if (!retried) throw new Error('expected the retried op to persist after failure');
+        const sortsAfterCursor = retried.ts > advancedCursor.ts || (retried.ts === advancedCursor.ts && retried._id > advancedCursor.id);
+        expect(sortsAfterCursor).toBe(true);
+        // Fresh-identity invariant: the id's ms-prefix agrees with the new ts, not the original one.
+        expect(retried._id.startsWith(String(dayjs(retried.ts).valueOf()).padStart(14, '0'))).toBe(true);
     });
 
     it('returns 400 when the op is terminal (not retryable)', async () => {
@@ -426,7 +472,8 @@ describe('POST /sync/issues/:opId/retry', () => {
 
     it('re-marks a routine-instance cancellation retry that is rate-limited again', async () => {
         const cookie = await loginAsAlice();
-        const op = await seedRateLimitedCancellationOp(await getUserId(cookie));
+        const userId = await getUserId(cookie);
+        const op = await seedRateLimitedCancellationOp(userId);
 
         const stillThrottled = Object.assign(new Error('Rate Limit Exceeded'), {
             code: 403,
@@ -439,10 +486,11 @@ describe('POST /sync/issues/:opId/retry', () => {
         const body = (await res.json()) as { ok: boolean; failureReason?: string };
         expect(body.ok).toBe(false);
         expect(body.failureReason).toBe('transient_exhausted');
-        // Row stays retryable — not demoted to terminal by the 403.
-        const refreshed = await operationsDAO.findOne({ _id: op._id });
-        expect(refreshed?.syncFailed).toBe(true);
-        expect(refreshed?.failureReason).toBe('transient_exhausted');
+        // Retry republished the op under a fresh (ts, _id); the re-failed row stays retryable —
+        // not demoted to terminal by the 403 — and surfaces under its new id.
+        const [refreshed] = await operationsDAO.findArray({ user: userId, entityId: op.entityId, syncFailed: true });
+        if (!refreshed) throw new Error('expected the re-failed retried op to persist');
+        expect(refreshed.failureReason).toBe('transient_exhausted');
     });
 
     it("returns 404 when retrying another user's op (tenant isolation)", async () => {

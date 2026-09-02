@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
@@ -6,6 +5,7 @@ import type { EntitySnapshot, EntityType, OperationInterface, OpType, RsvpOpPayl
 import { type ApplyEntityOpOutcome, applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
+import { allocateOpIdentity } from './opIdentity.js';
 import { maybeCascadeReferenceRemoval } from './referenceCascades.js';
 import { replayRsvpOp } from './rsvpReplay.js';
 
@@ -32,7 +32,11 @@ export interface ApplyOptions {
     deviceId: string;
     /** Strict mode: if validation fails, throw `OperationValidationError` instead of logging. */
     strict?: boolean;
-    /** Override timestamp (used in tests / batch flows where every op shares one wall-clock). */
+    /**
+     * Override for the SNAPSHOT clock: `updatedTs` clamp/server-stamp anchor and failure markers.
+     * Deliberately NOT the op's `ts` — `(ts, _id)` always comes from `allocateOpIdentity` at build
+     * time so a stale batch clock can never strand ops behind devices' pull cursors.
+     */
     now?: string;
     /**
      * Skip the GCal pushback leg of `notifyChange`. Passed by callers that already managed the
@@ -105,6 +109,22 @@ function clampFutureTs(ts: string, now: string): string {
     return ts <= now ? ts : now;
 }
 
+/**
+ * Re-stamps built ops with fresh write-time identities immediately before their insert.
+ * `toServerOperation` allocates at build time, but the apply pipeline runs hydration + apply
+ * round-trips between build and insert — re-stamping at the insert site shrinks the
+ * identity→commit gap to the insert itself, keeping the pull-side holdback comfortably
+ * conservative instead of marginally sufficient. Mutates in place (the same op objects flow to
+ * notify/cascade after insert); sequential array order preserves the batch's relative op order.
+ */
+function restampOpIdentities(ops: OperationInterface[]): void {
+    for (const op of ops) {
+        const identity = allocateOpIdentity();
+        op._id = identity.id;
+        op.ts = identity.ts;
+    }
+}
+
 /** Server-side provenance stamped onto every persisted op: which device wrote it, and when. */
 export interface OpStamp {
     deviceId: string;
@@ -135,14 +155,20 @@ function stampSnapshot(snapshot: EntitySnapshot, userId: string, stamp: OpStamp)
  * mismatches up-front; this is defense in depth), and `updatedTs` clamped to server time.
  * Exported for `lib/ownerMove.ts`, which persists its ops directly (no `applyEntityOp` leg —
  * the atomic owner flip already wrote the collection) but must stamp them identically.
+ *
+ * `stamp.now` governs only the snapshot's timestamp authority (`updatedTs` clamp / server-stamp).
+ * The op's `(ts, _id)` comes from `allocateOpIdentity` at build time so it can never trail the
+ * pull cursor by more than the build→insert gap, which the pull-side holdback covers — a shared
+ * batch `now` used as `ts` would recreate the stale-run-clock op-skip bug at batch scale.
  */
 export function toServerOperation(userId: string, raw: RawOperation, stamp: OpStamp): OperationInterface {
-    const { deviceId, now } = stamp;
+    const { deviceId } = stamp;
+    const identity = allocateOpIdentity();
     return {
-        _id: randomUUID(),
+        _id: identity.id,
         user: userId,
         deviceId,
-        ts: now,
+        ts: identity.ts,
         entityType: raw.entityType,
         entityId: raw.entityId,
         opType: raw.opType,
@@ -215,6 +241,7 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     if (outcome === 'skipped_missing') {
         markOpNotApplied(op, now);
     }
+    restampOpIdentities([op]);
     await operationsDAO.insertOne(op);
     if (op.notApplied) {
         return op;
@@ -342,6 +369,7 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     // the pre-update row must be captured before the Promise.all below overwrites it.
     await hydrateCalendarDetachSnapshots(userId, ops);
 
+    restampOpIdentities(ops);
     const [, outcomes] = await Promise.all([operationsDAO.insertMany(ops), Promise.all(ops.map((op) => applyEntityOp(userId, op)))]);
 
     // Quarantine skipped-missing ops (see the single-op path). Rows were already inserted by the

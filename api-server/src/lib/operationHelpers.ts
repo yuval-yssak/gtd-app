@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import type { EntitySnapshot, EntityType, OperationInterface, RsvpOpPayload } from '../types/entities.js';
+import { allocateOpIdentity } from './opIdentity.js';
 
 // Discriminated on opType: create/update require a full snapshot; delete carries null;
 // rsvp carries a sidecar payload (no snapshot — replay reads the item by id).
@@ -64,14 +64,20 @@ export function warnOnFutureUpdatedTs(op: RecordOperationInput): void {
  * `deviceId` defaults to 'server' for ops with no real originating device (calendar webhook,
  * routine generator, etc.). The public API passes `api:<tokenId>` so the device value reflects
  * which integration drove the change. Returns the created operation.
+ *
+ * `op.now` is the caller's entity-stamp clock (ctx.now) and feeds only the future-updatedTs sanity
+ * check. The op's `ts` is deliberately NOT taken from it: sync runs capture ctx.now at run start,
+ * and an op inserted minutes later with that stale `ts` lands behind devices' forward-only pull
+ * cursors and is never delivered. `allocateOpIdentity` stamps `(ts, _id)` at write time instead.
  */
 export async function recordOperation(userId: string, op: RecordOperationInput): Promise<OperationInterface> {
     warnOnFutureUpdatedTs(op);
+    const identity = allocateOpIdentity();
     const operation: OperationInterface = {
-        _id: randomUUID(),
+        _id: identity.id,
         user: userId,
         deviceId: op.deviceId ?? 'server',
-        ts: op.now,
+        ts: identity.ts,
         entityType: op.entityType,
         entityId: op.entityId,
         opType: op.opType,

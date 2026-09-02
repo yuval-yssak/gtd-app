@@ -77,3 +77,46 @@ describe('warnOnFutureUpdatedTs', () => {
         expect(warn).toHaveBeenCalledOnce();
     });
 });
+
+describe('recordOperation op identity (stale-run-clock op-skip regression)', () => {
+    it('stamps ts at write time, NOT from the caller-supplied run clock', async () => {
+        // A webhook/full-sync run captures its clock at run start and can record ops minutes
+        // later. Stamping that stale clock onto `ts` put the op behind devices' forward-only pull
+        // cursors — permanently undelivered. `ts` must come from the wall clock at write time.
+        const staleRunClock = dayjs().subtract(2, 'minute').toISOString();
+        const before = dayjs().toISOString();
+        const op = await recordOperation('user-warn-test', {
+            entityType: 'item',
+            entityId: 'item-warn-test',
+            snapshot: makeSnapshot(staleRunClock),
+            opType: 'update',
+            now: staleRunClock,
+        });
+        expect(op.ts >= before).toBe(true);
+        // The snapshot's entity clock is untouched — only the transport ordering is re-anchored.
+        expect(op.snapshot?.updatedTs).toBe(staleRunClock);
+    });
+
+    it('same-ms ops get monotonically increasing _ids in call order', async () => {
+        const now = dayjs().toISOString();
+        const first = await recordOperation('user-warn-test', {
+            entityType: 'item',
+            entityId: 'entity-a',
+            snapshot: makeSnapshot(now),
+            opType: 'update',
+            now,
+        });
+        const second = await recordOperation('user-warn-test', {
+            entityType: 'item',
+            entityId: 'entity-b',
+            snapshot: makeSnapshot(now),
+            opType: 'update',
+            now,
+        });
+        // Whether or not the two calls share a millisecond, `(ts, _id)` must order them by call
+        // order — random-UUID ids made same-ms tie order arbitrary, so devices replaying the log
+        // could apply two same-ms writes to one entity in the opposite order the server did.
+        expect(second.ts >= first.ts).toBe(true);
+        expect(second._id > first._id).toBe(true);
+    });
+});

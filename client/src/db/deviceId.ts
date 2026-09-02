@@ -18,11 +18,11 @@ export async function getOrCreateDeviceId(db: IDBPDatabase<MyDB>): Promise<strin
 }
 
 /**
- * Cursor id-component sentinel that sorts strictly above every operation `_id`. Mirrors the
- * server's `MAX_OP_ID`. Used as the id component of a bootstrap cursor: the snapshot already holds
- * every op at exactly `serverTs`, so `(serverTs, MAX_OP_ID)` means "all delivered ≤ serverTs" and
- * the first incremental pull won't re-fetch them. Never use it for a mid-stream cursor — that would
- * skip the rest of a same-`ts` tie-group (the bug the compound cursor prevents); use '' there.
+ * LEGACY cursor id-component sentinel that sorts strictly above every operation `_id`. Mirrors the
+ * server's `MAX_OP_ID`. Old bootstraps stamped `(serverTs, MAX_OP_ID)` meaning "all delivered ≤
+ * serverTs"; the server now returns a held-back boundary with serverId '' instead, so late-committing
+ * boundary ops are re-delivered rather than skipped. Kept only so cursors persisted by old sessions
+ * keep sorting above real op ids. Never stamp it on a new cursor.
  */
 export const MAX_OP_ID = '￿';
 
