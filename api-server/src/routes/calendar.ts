@@ -31,6 +31,7 @@ import {
     runMissedPushSweep,
 } from '../lib/calendarPushback.js';
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
+import { toInstant } from '../lib/isoInstant.js';
 import { KeyedMutex } from '../lib/keyedMutex.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { isDuplicateKeyError } from '../lib/mongoErrors.js';
@@ -1311,26 +1312,37 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
     try {
         const provider = buildProvider(integration, userId);
         const configs = await calendarSyncConfigsDAO.findEnabledByIntegration(integrationId);
-        const now = dayjs().toISOString();
         // Aggregate ops across configs so a single SSE notify covers the whole manual sync —
         // mirrors the webhook path's behavior so the calling client always learns to pull.
         const ops: OperationInterface[] = [];
 
         // Sync each enabled calendar independently — each has its own lastSyncedTs cursor.
         // Sequential to avoid overwhelming Google's API with parallel requests per-account.
-        const syncResults = await configs.reduce(async (prevPromise, config) => {
-            const prev = await prevPromise;
-            // Acquire-and-await the per-calendar lock so this manual sync serializes behind any in-flight
-            // webhook sync (and vice-versa) instead of racing it — the caller still gets a fresh result.
-            const count = await withSyncLock(config, () =>
-                withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, { userId, now, ops })),
-            );
-            // Keep webhook channel alive — renew if expired or expiring soon.
-            await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
-                console.error(`[calendar] renewWebhookIfExpired failed for config ${config._id}:`, err);
-            });
-            return prev + count;
-        }, Promise.resolve(0));
+        const { synced: syncResults, inboundStartedAt } = await configs.reduce(
+            async (prevPromise, config) => {
+                const prev = await prevPromise;
+                // Acquire-and-await the per-calendar lock so this manual sync serializes behind any in-flight
+                // webhook sync (and vice-versa) instead of racing it — the caller still gets a fresh result.
+                // `startedAt` is stamped by withSyncLock on acquisition — see its doc for why not earlier.
+                const run = await withSyncLock(config, async (startedAt) => {
+                    const count = await withAuthFailureHandling(integration._id, () =>
+                        syncSingleCalendar(config, integration, provider, { userId, now: startedAt, ops }),
+                    );
+                    return { count, startedAt };
+                });
+                // Keep webhook channel alive — renew if expired or expiring soon.
+                await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
+                    console.error(`[calendar] renewWebhookIfExpired failed for config ${config._id}:`, err);
+                });
+                return { synced: prev.synced + run.count, inboundStartedAt: prev.inboundStartedAt ?? run.startedAt };
+            },
+            Promise.resolve<{ synced: number; inboundStartedAt?: string }>({ synced: 0 }),
+        );
+        // Fence for the missed-push sweep below (`before: now`): the earliest inbound stamp, so rows the
+        // inbound pass wrote (updatedTs >= their run's stamp) fail the sweep's `updatedTs < before` test.
+        // The outbound backfill after this stamps its own, later clock, so its rows fail it too. No
+        // enabled config → nothing inbound ran, and a fresh stamp is a correct fence.
+        const now = inboundStartedAt ?? dayjs().toISOString();
 
         // Outbound backfill: push app-created calendar items / routines that have never been
         // linked to a GCal event. Without this, "Sync now" is one-way (Google → app); a user who
@@ -4720,8 +4732,23 @@ async function resolveExceptionTarget(routine: RoutineInterface, ex: GCalExcepti
     // Use a date-range query rather than $regex to avoid regex injection from GCal data.
     // Scope to status:'calendar' so we never reanimate a `done` or re-trash a `trash` row that
     // happens to share the originalDate with this routine.
+    //
+    // When the exception carries an instance id, only LEGACY rows (`calendarInstanceEventId`
+    // absent/null) may match by date: a row that already carries an id is anchored to ITS OWN
+    // original occurrence and would have hit tier 1 if it were this one. Date-matching it mistakes a
+    // DIFFERENT occurrence that GCal moved onto this date for this occurrence — the "ALL HANDS"
+    // flip-flop: a cancelled Sept 8 instance date-matched the Sept 1 instance that had been moved to
+    // Sept 8, trashed it, and the next sync re-created it as an orphan, forever (~1,600 dead rows).
+    // Without an id on the exception there is nothing to compare, so the legacy date match stands.
+    // `$exists: false` (not `null`): the key is only ever `$unset`, never written as null.
     const nextDay = dayjs(ex.originalDate).add(1, 'day').format('YYYY-MM-DD');
-    const fallbackFilter = { user: userId, routineId: routine._id, status: 'calendar', timeStart: { $gte: ex.originalDate, $lt: nextDay } } as const;
+    const fallbackFilter = {
+        user: userId,
+        routineId: routine._id,
+        status: 'calendar',
+        timeStart: { $gte: ex.originalDate, $lt: nextDay },
+        ...(ex.googleEventId ? { calendarInstanceEventId: { $exists: false } } : {}),
+    } as const;
     const fallbackMatches = await itemsDAO.findArray(fallbackFilter);
     if (fallbackMatches.length > 0) {
         return { filter: fallbackFilter, matches: fallbackMatches };
@@ -4759,22 +4786,6 @@ async function resolveByMovedInstant(routine: RoutineInterface, ex: GCalExceptio
     }
     const ids = matches.map((row) => row._id).filter((id): id is string => Boolean(id));
     return { filter: { _id: { $in: ids }, user: ctx.userId }, matches };
-}
-
-/** Matches an explicit UTC (`Z`) or numeric-offset suffix on an ISO datetime string. */
-const EXPLICIT_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/;
-
-/**
- * Millisecond instant of an ISO time string. Offset-naive strings (routine-generated rows store
- * wall-clock `timeStart` like `2026-08-16T07:00:00`) are interpreted in the calendar's timezone —
- * plain `dayjs()` would use the server's local zone (UTC on Cloud Run), skewing the comparison by
- * the zone offset and making every naive-vs-offset match silently miss.
- */
-function toInstant(time: string, timeZone: string | undefined): number {
-    if (EXPLICIT_OFFSET_RE.test(time)) {
-        return dayjs(time).valueOf();
-    }
-    return dayjs.tz(time, timeZone ?? 'UTC').valueOf();
 }
 
 /** Fetches the routine's live calendar rows and keeps legacy ones (no instance id) sitting exactly at one of the candidate instants. */
@@ -4980,10 +4991,11 @@ async function createItemForOrphanedException(routine: RoutineInterface, ex: GCa
     const itemId = randomUUID();
     // Per-instance overrides (if present) win over the routine's master values; otherwise the
     // master values inherit so the orphan-created item shows the same attendees / organizer / etc.
-    // as every other generated occurrence.
-    const inheritedGCalOwned = pickGCalOwnedRoutineFields(routine);
-    const overrideGCalOwned = pickGCalOwnedExceptionFields(ex);
-    const mergedGCalOwned = { ...inheritedGCalOwned, ...overrideGCalOwned };
+    // as every other generated occurrence. Same merge as the modified-exception apply path so the
+    // next sync sees the row as already up to date — a plain spread inherited the SERIES
+    // `responseStatus` over the instance's own attendee response, which made the next apply a
+    // guaranteed (redundant) update op on every orphan-created row.
+    const { merged: mergedGCalOwned } = mergeGCalOwnedForInstance(routine, pickGCalOwnedExceptionFields(ex));
     // Mirrors the `buildCalendarItem` shape for parity: orphan-create rows carry the routine's
     // calendarIntegrationId + calendarSyncConfigId so UI/audit queries that filter by integration
     // see all routine-generated items uniformly, regardless of which path created them.
@@ -5693,12 +5705,23 @@ async function renewWebhookAndCatchUp(
         return;
     }
     console.log(`[calendar-webhook] channel had lapsed — running catch-up sync | configId=${fresh._id} calendarId=${fresh.calendarId}`);
-    const now = dayjs().toISOString();
-    const ctx: SyncContext = { userId: fresh.user, now, ops: [] };
-    // Serialize against concurrent webhook/manual syncs for the same calendar — see withSyncLock.
-    await withSyncLock(fresh, () => withAuthFailureHandling(integration._id, () => syncSingleCalendar(fresh, integration, provider, ctx)));
+    // Serialize against concurrent webhook/manual syncs for the same calendar — see withSyncLock,
+    // which also supplies the clock stamp for the SyncContext.
+    const ctx = await withSyncLock(fresh, (startedAt) => runLockedSync(fresh, integration, provider, startedAt));
     console.log(`[calendar-webhook] catch-up sync complete | configId=${fresh._id} ops=${ctx.ops.length}`);
-    await notifyDevicesOfSyncOps(fresh.user, ctx.ops, now);
+    await notifyDevicesOfSyncOps(fresh.user, ctx.ops, ctx.now);
+}
+
+/** Runs one calendar's inbound sync under a fresh SyncContext stamped at `startedAt`; returns the context (ops + stamp). */
+async function runLockedSync(
+    config: CalendarSyncConfigInterface,
+    integration: CalendarIntegrationInterface,
+    provider: GoogleCalendarProvider,
+    startedAt: string,
+): Promise<SyncContext> {
+    const ctx: SyncContext = { userId: config.user, now: startedAt, ops: [] };
+    await withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, ctx));
+    return ctx;
 }
 
 export { buildProvider, renewWebhookAndCatchUp };
@@ -5717,9 +5740,16 @@ function syncKeyFor(config: CalendarSyncConfigInterface): string {
     return config.webhookChannelId ?? `${config.user}:${config.calendarId}`;
 }
 
-/** Runs `task` after any in-flight sync for the same calendar completes, chaining so concurrent callers serialize. */
-function withSyncLock<T>(config: CalendarSyncConfigInterface, task: () => Promise<T>): Promise<T> {
-    return syncMutex.withLock(syncKeyFor(config), task);
+/**
+ * Runs `task` after any in-flight sync for the same calendar completes, chaining so concurrent callers
+ * serialize. `task` receives the sync's clock stamp (`now` for its SyncContext), taken the moment the
+ * lock is acquired: stamping at request/webhook arrival let a sync queued behind a backlog write
+ * createdTs/updatedTs/op timestamps from long before it actually ran (observed ~85 min stale on staging
+ * under a client-driven sync storm), skewing LWW against every device. Structural here so every caller
+ * gets it right without per-site discipline.
+ */
+function withSyncLock<T>(config: CalendarSyncConfigInterface, task: (startedAt: string) => Promise<T>): Promise<T> {
+    return syncMutex.withLock(syncKeyFor(config), () => task(dayjs().toISOString()));
 }
 
 // ── Webhook receiver ─────────────────────────────────────────────────────────
@@ -5834,16 +5864,15 @@ async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void
         return;
     }
     const provider = buildProvider(integration, config.user);
-    const now = dayjs().toISOString();
-    const ctx: SyncContext = { userId: config.user, now, ops: [] };
-    // Serialize against a concurrent manual sync for the same calendar — see withSyncLock.
-    await withSyncLock(config, () => withAuthFailureHandling(integration._id, () => syncSingleCalendar(config, integration, provider, ctx)));
+    // Serialize against a concurrent manual sync for the same calendar — see withSyncLock, which also
+    // supplies the clock stamp for the SyncContext.
+    const ctx = await withSyncLock(config, (startedAt) => runLockedSync(config, integration, provider, startedAt));
     console.log(`[gcal-webhook-sync] sync complete | configId=${config._id} ops=${ctx.ops.length}`);
     // Keep webhook channel alive — renew if close to expiring so the next change also triggers a webhook.
     await renewWebhookIfExpired(config, provider, integration._id).catch((err) => {
         console.error(`[calendar-webhook] renewWebhookIfExpired failed for config ${config._id}:`, err);
     });
-    await notifyDevicesOfSyncOps(config.user, ctx.ops, now);
+    await notifyDevicesOfSyncOps(config.user, ctx.ops, ctx.now);
 }
 
 /**

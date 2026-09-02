@@ -5,6 +5,7 @@ import utc from 'dayjs/plugin/utc.js';
 import rrule from 'rrule';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { GCAL_OWNED_ROUTINE_KEYS, type ItemInterface, type OperationInterface, type RoutineInterface } from '../types/entities.js';
+import { toInstant } from './isoInstant.js';
 import { isDuplicateKeyError } from './mongoErrors.js';
 import { recordOperation } from './operationHelpers.js';
 import { hasAtLeastOne } from './typeUtils.js';
@@ -233,9 +234,13 @@ export async function propagateRoutineTitleToItems(routine: RoutineInterface, us
     const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
     const items = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
     const overriddenDates = new Set((routine.routineExceptions ?? []).filter((e) => e.type === 'modified' && typeof e.title === 'string').map((e) => e.date));
+    // Overrides are keyed by the occurrence a row STANDS FOR — a row a modified exception moved across
+    // dates carries its origin date's override, not its landing date's. No timezone here: moved rows
+    // take the exception's offset-explicit `newTimeStart` verbatim, so the instant match needs none.
+    const movedInstants = exceptionDateByMovedInstant(routine, undefined);
 
     const futureItems = items.filter(
-        (i) => (i.timeStart ?? '') >= todayStr && i.title !== routine.title && !overriddenDates.has((i.timeStart ?? '').slice(0, 10)),
+        (i) => (i.timeStart ?? '') >= todayStr && i.title !== routine.title && !overriddenDates.has(occurrenceDateOf(i, movedInstants, undefined)),
     );
     if (!futureItems.length) {
         return [];
@@ -271,6 +276,8 @@ export async function propagateRoutineContentToItems(routine: RoutineInterface, 
     const futureItems = items.filter((i) => (i.timeStart ?? '') >= todayStr);
     const exceptions = routine.routineExceptions ?? [];
     const masterNotes = routine.template.notes;
+    // Same occurrence-date keying as propagateRoutineTitleToItems — see the comment there.
+    const movedInstants = exceptionDateByMovedInstant(routine, undefined);
 
     const ops = await Promise.all(
         futureItems.map(async (item) => {
@@ -278,7 +285,7 @@ export async function propagateRoutineContentToItems(routine: RoutineInterface, 
             if (!itemId) {
                 return null;
             }
-            const dateStr = (item.timeStart ?? '').slice(0, 10);
+            const dateStr = occurrenceDateOf(item, movedInstants, undefined);
             const override = exceptions.find((e) => e.type === 'modified' && e.date === dateStr);
             const nextTitle = override?.title ?? routine.title;
             const nextNotes = override?.notes ?? masterNotes;
@@ -310,9 +317,10 @@ export async function regenerateFutureRoutineItems(routine: RoutineInterface, us
     if (!routine.calendarItemTemplate) {
         return [];
     }
-    const liveByDate = await futureLiveItemsByDate(routine, userId);
-    // Paused routines hold zero future open items: every live item is an orphan, nothing is required.
-    const required = routine.active ? await requiredDatesNotAlreadyClaimed(routine, userId) : new Set<string>();
+    const liveByDate = await futureLiveItemsByDate(routine, userId, timeZone);
+    // Paused routines hold zero future open items: every live item is an orphan (exception-pinned ones
+    // included — pause trashes every future occurrence), nothing is required.
+    const required = routine.active ? withPinnedDates(await requiredDatesNotAlreadyClaimed(routine, userId), liveByDate) : new Set<string>();
     const trashedOps = await trashOrphanedItems(routine, userId, now, liveByDate, required);
     const createdOps = await createMissingOccurrences(routine, userId, now, timeZone, liveByDate, required);
     return [...trashedOps, ...createdOps];
@@ -325,15 +333,80 @@ export async function regenerateFutureRoutineItems(routine: RoutineInterface, us
  * required set so the instance-id-release discipline stays in one place.
  */
 export async function trashFutureCalendarItems(routine: RoutineInterface, userId: string, now: string): Promise<OperationInterface[]> {
-    const liveByDate = await futureLiveItemsByDate(routine, userId);
+    // No timezone needed: with an empty required set every future row is an orphan, pinned or not.
+    const liveByDate = await futureLiveItemsByDate(routine, userId, undefined);
     return trashOrphanedItems(routine, userId, now, liveByDate, new Set());
 }
 
-/** Future `calendar`-status items for the routine, indexed by their `YYYY-MM-DD` occurrence date. */
-async function futureLiveItemsByDate(routine: RoutineInterface, userId: string): Promise<Map<string, ItemInterface>> {
+/**
+ * A live row seen through the schedule's eyes. A row a `modified` exception has MOVED sits exactly at
+ * that exception's `newTimeStart`; GCal (via exception sync) owns its timing, and the occurrence it
+ * stands for is the EXCEPTION's date — not the date it now sits on. Keying such a row by its landing
+ * date mistook it for that date's own occurrence: with the landing date `skipped` (cancelled in GCal)
+ * the schedule "no longer wanted" it, so regeneration trashed it and freed its instance id, and the
+ * next exception sync orphan-created it again — the create/trash flip-flop `resolveExceptionTarget`
+ * guards against (calendar.ts), re-entered through this door on every master schedule change.
+ */
+interface LiveOccurrence {
+    item: ItemInterface;
+    /** True when a `modified` exception pins this row's timing — regeneration must neither trash nor "fix" it. */
+    pinnedByException: boolean;
+}
+
+/**
+ * Exception date keyed by the instant its `modified` exception moved the occurrence to.
+ *
+ * Invariant the tz-less callers (title/content propagation, heal/reassign regen) rely on: a moved
+ * row's `timeStart` and its exception's `newTimeStart` are always written from the SAME string —
+ * verbatim from `ex.newTimeStart` on the GCal inbound path, and from one `timeStart` value on the
+ * client edit path — so `toInstant` reads both sides in the same form and the zone cancels out. A
+ * writer that normalizes only one side (e.g. offset-explicit row, naive exception) would make the
+ * match zone-sensitive, unpin the row under the UTC fallback, and re-open the trash/re-create loop.
+ */
+function exceptionDateByMovedInstant(routine: RoutineInterface, timeZone: string | undefined): Map<number, string> {
+    return new Map(
+        (routine.routineExceptions ?? []).flatMap((e) =>
+            e.type === 'modified' && typeof e.newTimeStart === 'string' ? [[toInstant(e.newTimeStart, timeZone), e.date] as const] : [],
+        ),
+    );
+}
+
+/** The exception date pinning this row, when a `modified` exception moved it to exactly where it sits. */
+function pinnedExceptionDate(item: ItemInterface, movedInstants: Map<number, string>, timeZone: string | undefined): string | undefined {
+    return item.timeStart ? movedInstants.get(toInstant(item.timeStart, timeZone)) : undefined;
+}
+
+/** The occurrence date a live row stands for: its pinning exception's date when moved, else the date it sits on. */
+function occurrenceDateOf(item: ItemInterface, movedInstants: Map<number, string>, timeZone: string | undefined): string {
+    return pinnedExceptionDate(item, movedInstants, timeZone) ?? (item.timeStart ?? '').slice(0, 10);
+}
+
+/** Future `calendar`-status items for the routine, indexed by the `YYYY-MM-DD` occurrence date each stands for. */
+async function futureLiveItemsByDate(routine: RoutineInterface, userId: string, timeZone: string | undefined): Promise<Map<string, LiveOccurrence>> {
     const todayStr = dayjs().startOf('day').format('YYYY-MM-DD');
     const future = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar', timeStart: { $gte: todayStr } });
-    return new Map(future.map((item) => [(item.timeStart ?? '').slice(0, 10), item]));
+    const movedInstants = exceptionDateByMovedInstant(routine, timeZone);
+    return new Map(
+        future.map((item) => {
+            const pinnedDate = pinnedExceptionDate(item, movedInstants, timeZone);
+            return [pinnedDate ?? (item.timeStart ?? '').slice(0, 10), { item, pinnedByException: pinnedDate !== undefined }];
+        }),
+    );
+}
+
+/**
+ * Adds the occurrence dates of exception-pinned live rows to the required set so the reconcile keeps
+ * them: `getValidFutureOccurrences` excludes a cross-date move's ORIGIN date (there is nothing to
+ * generate there), but the moved row standing for that date must stay.
+ */
+function withPinnedDates(required: Set<string>, liveByDate: Map<string, LiveOccurrence>): Set<string> {
+    const pinnedDates = [...liveByDate].filter(([, occurrence]) => occurrence.pinnedByException).map(([date]) => date);
+    return new Set([...required, ...pinnedDates]);
+}
+
+/** A live row survives the reconcile when its timing/title still match the schedule — or when an exception pins it (GCal owns that timing). */
+function keepsSchedule(occurrence: LiveOccurrence, routine: RoutineInterface, now: string): boolean {
+    return occurrence.pinnedByException || !itemDriftsFromSchedule(occurrence.item, routine, now);
 }
 
 /**
@@ -366,10 +439,12 @@ async function trashOrphanedItems(
     routine: RoutineInterface,
     userId: string,
     now: string,
-    liveByDate: Map<string, ItemInterface>,
+    liveByDate: Map<string, LiveOccurrence>,
     required: Set<string>,
 ): Promise<OperationInterface[]> {
-    const orphans = [...liveByDate].filter(([date, item]) => !required.has(date) || itemDriftsFromSchedule(item, routine, now)).map(([, item]) => item);
+    const orphans = [...liveByDate]
+        .filter(([date, occurrence]) => !required.has(date) || !keepsSchedule(occurrence, routine, now))
+        .map(([, occurrence]) => occurrence.item);
     if (!hasAtLeastOne(orphans)) {
         return [];
     }
@@ -422,13 +497,13 @@ async function createMissingOccurrences(
     userId: string,
     now: string,
     timeZone: string | undefined,
-    liveByDate: Map<string, ItemInterface>,
+    liveByDate: Map<string, LiveOccurrence>,
     required: Set<string>,
 ): Promise<OperationInterface[]> {
-    // A live item survives (is not recreated) only when its date is required AND it didn't drift —
+    // A live item survives (is not recreated) only when its date is required AND it keeps the schedule —
     // mirror that exact predicate so a drifted item, just trashed above, gets a fresh replacement.
     const survivingDates = new Set(
-        [...liveByDate].filter(([date, item]) => required.has(date) && !itemDriftsFromSchedule(item, routine, now)).map(([date]) => date),
+        [...liveByDate].filter(([date, occurrence]) => required.has(date) && keepsSchedule(occurrence, routine, now)).map(([date]) => date),
     );
     const missing = [...required].filter((date) => !survivingDates.has(date)).map((date) => dayjs.utc(date).toDate());
     const ops = await Promise.all(missing.map((date) => insertFreshOccurrence(routine, userId, now, date, timeZone)));

@@ -20,7 +20,7 @@ import routinesDAO from '../dataAccess/routinesDAO.js';
 import { pauseRoutine, resumeRoutine } from '../lib/routineComposites.js';
 import { propagateRoutineEditToItems } from '../lib/routineEditPropagation.js';
 import { advanceRoutineAfterDisposal, buildRoutineItemSnapshot, ensureFirstRoutineItem } from '../lib/routineItemGeneration.js';
-import { regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
+import { propagateRoutineContentToItems, regenerateFutureRoutineItems } from '../lib/routineItemRegeneration.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
 import { v1OperationsRoutes } from '../routes/v1/operations.js';
@@ -823,6 +823,109 @@ describe('regenerateFutureRoutineItems — idempotency & delta reconciliation', 
         const trashed = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'trash' });
         expect(trashed.length).toBeGreaterThan(0);
         expect(trashed.every((i) => i.calendarInstanceEventId === undefined)).toBe(true);
+    });
+});
+
+// ── Exception-moved rows ─────────────────────────────────────────────────────
+// Staging incident ("ALL HANDS"): GCal moved the week-1 occurrence onto the week-2 date AND cancelled
+// the regular week-2 occurrence. Regeneration keyed live rows by the date they SIT on, so the moved
+// row read as an orphan of the (skipped) week-2 date: trashed, instance id freed, and the next
+// exception sync orphan-created it again. Rows a `modified` exception pins are keyed by the
+// occurrence they stand for and left alone by the reconcile.
+
+describe('regenerateFutureRoutineItems — exception-moved rows', () => {
+    const TZ = 'Asia/Jerusalem';
+
+    async function seedDailyLinkedRoutine(userId: string): Promise<RoutineInterface> {
+        const now = dayjs().toISOString();
+        const routine: RoutineInterface = {
+            _id: 'regen-moved-routine',
+            user: userId,
+            title: 'ALL HANDS',
+            routineType: 'calendar',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            createdTs: now,
+            updatedTs: now,
+            calendarItemTemplate: { timeOfDay: '09:00', duration: 30 },
+            calendarEventId: 'regen-moved-master',
+        };
+        await routinesDAO.insertOne(routine);
+        return routine;
+    }
+
+    /** Generates the horizon, then mirrors what exception sync does for "week-1 moved onto cancelled week-2". */
+    async function seedMovedOntoCancelled(userId: string, routine: RoutineInterface) {
+        await regenerateFutureRoutineItems(routine, userId, dayjs().toISOString(), TZ);
+        const movedFrom = dayjs().add(2, 'day').format('YYYY-MM-DD');
+        const cancelled = dayjs().add(9, 'day').format('YYYY-MM-DD');
+        const movedTimeStart = `${cancelled}T15:00:00+03:00`;
+        const rows = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        const movedRow = rows.find((row) => row.timeStart?.startsWith(movedFrom));
+        const cancelledRow = rows.find((row) => row.timeStart?.startsWith(cancelled));
+        if (!movedRow || !cancelledRow) throw new Error('expected generated rows on both dates');
+        // The moved row keeps its instance id and takes the exception's time; the cancelled row is trashed with its id freed.
+        await db.collection('items').updateOne({ _id: movedRow._id }, { $set: { timeStart: movedTimeStart, timeEnd: `${cancelled}T15:30:00+03:00` } });
+        await db.collection('items').updateOne({ _id: cancelledRow._id }, { $set: { status: 'trash' }, $unset: { calendarInstanceEventId: '' } });
+        const withExceptions: RoutineInterface = {
+            ...routine,
+            routineExceptions: [
+                { date: movedFrom, type: 'modified', newTimeStart: movedTimeStart, newTimeEnd: `${cancelled}T15:30:00+03:00` },
+                { date: cancelled, type: 'skipped' },
+            ],
+        };
+        return { withExceptions, movedFrom, cancelled, movedTimeStart, movedRow };
+    }
+
+    it('keeps a row moved onto a cancelled date across an unchanged re-run AND a master time change', async () => {
+        const userId = await login();
+        const routine = await seedDailyLinkedRoutine(userId);
+        const { withExceptions, movedFrom, cancelled, movedTimeStart, movedRow } = await seedMovedOntoCancelled(userId, routine);
+
+        // Unchanged schedule: the moved row is NOT an orphan of the skipped date it sits on.
+        expect(await regenerateFutureRoutineItems(withExceptions, userId, dayjs().toISOString(), TZ)).toHaveLength(0);
+
+        // Master time change: every other row reconciles, the pinned row is untouched.
+        const rescheduled: RoutineInterface = { ...withExceptions, calendarItemTemplate: { timeOfDay: '10:00', duration: 30 } };
+        await regenerateFutureRoutineItems(rescheduled, userId, dayjs().toISOString(), TZ);
+        const live = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        const survivor = live.find((row) => row._id === movedRow._id);
+        expect(survivor?.timeStart).toBe(movedTimeStart);
+        expect(survivor?.calendarInstanceEventId).toBe(movedRow.calendarInstanceEventId);
+        // Only the moved row lands on the cancelled date; the origin date is not regenerated.
+        expect(live.filter((row) => row.timeStart?.startsWith(cancelled)).map((row) => row._id)).toEqual([movedRow._id]);
+        expect(live.filter((row) => row.timeStart?.startsWith(movedFrom))).toHaveLength(0);
+        expect(live.filter((row) => row._id !== movedRow._id).every((row) => row.timeStart?.endsWith('T10:00:00'))).toBe(true);
+
+        // And the new schedule is idempotent again.
+        expect(await regenerateFutureRoutineItems(rescheduled, userId, dayjs().toISOString(), TZ)).toHaveLength(0);
+    });
+
+    it('a paused routine still trashes the moved row (pause means no future occurrences at all)', async () => {
+        const userId = await login();
+        const routine = await seedDailyLinkedRoutine(userId);
+        const { withExceptions, movedRow } = await seedMovedOntoCancelled(userId, routine);
+
+        await regenerateFutureRoutineItems({ ...withExceptions, active: false }, userId, dayjs().toISOString(), TZ);
+        expect(await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' })).toHaveLength(0);
+        const trashedMoved = await itemsDAO.findOne({ _id: movedRow._id });
+        expect(trashedMoved?.status).toBe('trash');
+    });
+
+    it('content propagation keeps the moved row’s per-instance title override (keyed by its origin date)', async () => {
+        const userId = await login();
+        const routine = await seedDailyLinkedRoutine(userId);
+        const { withExceptions, movedFrom, movedRow } = await seedMovedOntoCancelled(userId, routine);
+        const overriddenTitle = 'ALL HANDS (moved — extended agenda)';
+        await db.collection('items').updateOne({ _id: movedRow._id }, { $set: { title: overriddenTitle } });
+        const exceptions = (withExceptions.routineExceptions ?? []).map((e) => (e.date === movedFrom ? { ...e, title: overriddenTitle } : e));
+
+        await propagateRoutineContentToItems({ ...withExceptions, routineExceptions: exceptions, title: 'ALL HANDS (renamed)' }, userId, dayjs().toISOString());
+
+        const live = await itemsDAO.findArray({ user: userId, routineId: routine._id, status: 'calendar' });
+        expect(live.find((row) => row._id === movedRow._id)?.title).toBe(overriddenTitle);
+        expect(live.filter((row) => row._id !== movedRow._id).every((row) => row.title === 'ALL HANDS (renamed)')).toBe(true);
     });
 });
 
