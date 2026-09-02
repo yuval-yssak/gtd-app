@@ -5,3 +5,5 @@
 - [MCP parity test checks names only](project_mcp_parity_test_names_only.md) — mcpToolParity.test.ts compares tool NAME sets only; descriptions, schemas, webUrl maps + SERVER_INSTRUCTIONS drift silently. Diff both copies textually.
 - [Op-log cursor ordering invariants](project_op_cursor_ordering_invariants.md) — Recurring silent op-loss class: never write a ts below a device's forward-only cursor, never bump ts without reallocating _id.
 - [Adversarial review expectations](feedback_adversarial_review_expectations.md) — Team wants concrete failure scenarios over severity labels; check consumers outside the diff; verify ordering claims by running them.
+- [Moved routine row on a foreign date](project_gcal_moved_row_foreign_date_class.md) — Recurring class: every `timeStart.slice(0,10)` consumer mis-targets a moved instance. Resolve-tier fixes don't close regeneration/propagation.
+- [Sync `now` stamped outside the lock](project_calendar_sync_now_stamped_outside_lock.md) — 3 callers take the per-calendar mutex; only manual sync stamps inside. Webhook + catch-up still backdate under queue depth.

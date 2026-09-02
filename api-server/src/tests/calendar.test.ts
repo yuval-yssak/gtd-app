@@ -1358,6 +1358,175 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(updatedRoutine?.routineExceptions ?? []).not.toContainEqual(expect.objectContaining({ date, type: 'skipped' }));
     });
 
+    // ─── moved instance landing on a cancelled occurrence's date (the "ALL HANDS" flip-flop) ─────
+
+    it('keeps a moved instance that landed on a cancelled occurrence date stable across syncs (no create/trash flip-flop)', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Staging incident: GCal moved the Sept 1 occurrence to Sept 8 15:00 AND cancelled the regular
+        // Sept 8 occurrence. The cancelled exception missed tier 1 (no row carries the Sept 8 id) and
+        // the tier-2 date fallback grabbed the moved Sept 1 row now sitting on Sept 8 → trashed it; the
+        // next sync found no live row for the Sept 1 exception → re-created it as an orphan. Every
+        // sync produced create/update/trash ops (~1,600 dead rows, a push notification per cycle).
+        const movedFrom = futureMonday(2);
+        const cancelled = futureMonday(3);
+        const movedInstanceId = `gcal-evt-allhands_${movedFrom.replace(/-/g, '')}T060000Z`;
+        const cancelledInstanceId = `gcal-evt-allhands_${cancelled.replace(/-/g, '')}T060000Z`;
+        const selfAttendees: GCalAttendee[] = [
+            { email: 'organizer@example.com', responseStatus: 'accepted', organizer: true },
+            { email: 'alice@example.com', responseStatus: 'needsAction', self: true },
+        ];
+        await routinesDAO.insertOne(
+            makeRoutine(userId, {
+                title: 'ALL HANDS',
+                calendarEventId: 'gcal-evt-allhands',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'sync-config-1',
+                attendees: [
+                    { email: 'organizer@example.com', responseStatus: 'accepted', organizer: true },
+                    { email: 'alice@example.com', responseStatus: 'accepted', self: true },
+                ],
+                responseStatus: 'accepted',
+            }),
+        );
+        // Re-syncs carry the syncToken from the first run and take the incremental fetch path.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue({ events: [], nextSyncToken: 'tok-allhands' });
+        // getExceptions is a time-range query — both exceptions are re-reported on EVERY sync.
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            {
+                originalDate: movedFrom,
+                type: 'modified',
+                newTimeStart: `${cancelled}T15:00:00+03:00`,
+                newTimeEnd: `${cancelled}T15:30:00+03:00`,
+                googleEventId: movedInstanceId,
+                attendees: selfAttendees,
+            },
+            { originalDate: cancelled, type: 'deleted', googleEventId: cancelledInstanceId },
+        ]);
+
+        const syncAndReadBack = async () => {
+            const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+            expect(res.status).toBe(200);
+            const rows = await itemsDAO.findArray({ user: userId, routineId: 'routine-1' });
+            const itemOps = await operationsDAO.findArray({ user: userId, entityType: 'item' });
+            return { live: rows.filter((row) => row.status === 'calendar'), trashed: rows.filter((row) => row.status === 'trash'), itemOps };
+        };
+
+        const first = await syncAndReadBack();
+        expect(first.live).toHaveLength(1);
+        expect(first.trashed).toHaveLength(0);
+        const [created] = first.live;
+        if (!created) throw new Error('expected one orphan-created item');
+        expect(created.calendarInstanceEventId).toBe(movedInstanceId);
+        expect(created.timeStart).toBe(`${cancelled}T15:00:00+03:00`);
+        // The orphan-create path derives responseStatus from the instance's own self attendee (the
+        // modified-exception apply rule), NOT the series value — otherwise the next apply is a
+        // guaranteed redundant update op.
+        expect(created.responseStatus).toBe('needsAction');
+        expect(first.itemOps.map((op) => op.opType)).toEqual(['create']);
+
+        // Re-syncs are fully idempotent: same single live row, nothing trashed, no new item ops.
+        const second = await syncAndReadBack();
+        const third = await syncAndReadBack();
+        for (const run of [second, third]) {
+            expect(run.live.map((row) => row._id)).toEqual([created._id]);
+            expect(run.trashed).toHaveLength(0);
+            expect(run.itemOps).toHaveLength(1);
+        }
+    });
+
+    it('date-matches only the legacy row (no instance id) on a date shared with a row anchored to another occurrence', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Two live rows on the cancelled date: a legacy row (pre instance-id rollout, no id) that IS this
+        // occurrence and must still resolve by date, and a row carrying a DIFFERENT instance id (another
+        // occurrence GCal moved onto this date) that must be left alone. Dropping or inverting the
+        // tier-2 exclusion fails this either way.
+        const date = futureMonday(2);
+        const movedFrom = futureMonday(1);
+        await routinesDAO.insertOne(
+            makeRoutine(userId, { calendarEventId: 'gcal-evt-legacy', calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' }),
+        );
+        const rowOnDate = (id: string, timeOfDay: string, instanceEventId?: string): ItemInterface => ({
+            _id: id,
+            user: userId,
+            status: 'calendar',
+            title: 'Standup',
+            routineId: 'routine-1',
+            timeStart: `${date}T${timeOfDay}:00`,
+            timeEnd: `${date}T${timeOfDay}:00`,
+            ...(instanceEventId ? { calendarInstanceEventId: instanceEventId } : {}),
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        await itemsDAO.insertOne(rowOnDate('item-legacy', '09:00'));
+        await itemsDAO.insertOne(rowOnDate('item-moved-here', '15:00', `gcal-evt-legacy_${movedFrom.replace(/-/g, '')}T060000Z`));
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([
+            { originalDate: date, type: 'deleted', googleEventId: `gcal-evt-legacy_${date.replace(/-/g, '')}T060000Z` },
+        ]);
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        expect(res.status).toBe(200);
+
+        expect((await itemsDAO.findByOwnerAndId('item-legacy', userId))?.status).toBe('trash');
+        expect((await itemsDAO.findByOwnerAndId('item-moved-here', userId))?.status).toBe('calendar');
+    });
+
+    it('stamps inbound timestamps when the calendar lock is acquired, not at request arrival', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // A manual sync queued behind the per-calendar lock used to carry `now` from request arrival
+        // (observed ~85 min stale on staging under a client-driven sync storm), so every row it wrote
+        // got a backdated createdTs/updatedTs and lost LWW against real edits.
+        const date = futureMonday(2);
+        await routinesDAO.insertOne(
+            makeRoutine(userId, { calendarEventId: 'gcal-evt-stamp', calendarIntegrationId: 'int-1', calendarSyncConfigId: 'sync-config-1' }),
+        );
+        const lockReleasedAt: string[] = [];
+        vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsIncremental').mockResolvedValue({ events: [], nextSyncToken: 'tok-stamp' });
+        const getExceptions = vi
+            .spyOn(GoogleCalendarProvider.prototype, 'getExceptions')
+            // First sync: hold the lock for a while, then note when it is about to be released.
+            .mockImplementationOnce(async () => {
+                await new Promise((resolve) => setTimeout(resolve, 300));
+                lockReleasedAt.push(dayjs().toISOString());
+                return [];
+            })
+            // Second sync (queued behind the first): orphan-creates a row whose stamps we inspect.
+            .mockResolvedValueOnce([
+                {
+                    originalDate: date,
+                    type: 'modified',
+                    newTimeStart: `${date}T10:00:00+03:00`,
+                    newTimeEnd: `${date}T10:30:00+03:00`,
+                    googleEventId: `gcal-evt-stamp_${date.replace(/-/g, '')}T060000Z`,
+                },
+            ]);
+
+        const firstSync = authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        // Only fire the second request once the first provably holds the lock (it is inside getExceptions).
+        await vi.waitFor(() => expect(getExceptions).toHaveBeenCalledTimes(1));
+        const secondSync = authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+        const [firstRes, secondRes] = await Promise.all([firstSync, secondSync]);
+        expect(firstRes.status).toBe(200);
+        expect(secondRes.status).toBe(200);
+
+        const [releasedAt] = lockReleasedAt;
+        if (!releasedAt) throw new Error('expected the first sync to record its lock release');
+        const created = await itemsDAO.findArray({ user: userId, routineId: 'routine-1', status: 'calendar' });
+        expect(created).toHaveLength(1);
+        const [item] = created;
+        if (!item) throw new Error('expected one orphan-created item');
+        expect(item.createdTs >= releasedAt).toBe(true);
+        expect(item.updatedTs).toBe(item.createdTs);
+        const [createOp] = await operationsDAO.findArray({ user: userId, entityType: 'item', entityId: item._id });
+        if (!createOp) throw new Error('expected a create op for the orphan-created item');
+        expect(createOp.ts >= releasedAt).toBe(true);
+    });
+
     it('does NOT revive a skipped exception when the master rrule no longer generates that occurrence', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
