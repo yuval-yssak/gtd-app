@@ -1,3 +1,12 @@
+/* Date headline: the same "when" a one-off calendar entry leads with, plus its relative cue. */
+.whenRow {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+}
+
 /* Header row: repeat icon + title, with the open-page affordance at the end. */
 .titleRow {
     display: flex;
@@ -5,25 +14,20 @@
     gap: 0.5rem;
 }
 
-.titleIcon {
-    color: var(--mui-palette-primary-main);
-    flex-shrink: 0;
-}
-
-/* Meta block under the title: schedule, occurrence summary, location / meeting link. */
-.metaList {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    margin-top: 0.5rem;
-}
-
-.metaRow {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
+/* Series context under the title — how many occurrences the one card stands for. */
+.occurrences {
+    display: block;
+    margin-top: 0.25rem;
 }
 
 .notes {
+    margin-top: 1rem;
+}
+
+/* GCal event links + meeting-details panel, same pair a one-off calendar item renders. */
+.eventDetails {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
     margin-top: 1rem;
 }
