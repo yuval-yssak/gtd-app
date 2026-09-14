@@ -174,6 +174,64 @@ test.describe('Routine deep links from items', () => {
         });
     });
 
+    test('a past-but-undone calendar occurrence stays reachable as OVERDUE and can be marked done in place', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `routine-overdue-${dayjs().valueOf()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, {
+                title: 'Update Microsoft Keys',
+                routineType: 'calendar',
+                rrule: 'FREQ=WEEKLY;BYDAY=SU',
+                startDate: dayjs().format('YYYY-MM-DD'),
+                calendarItemTemplate: { timeOfDay: '12:00', duration: 60 },
+                template: {},
+                active: true,
+            });
+            await gtd.generateCalendarItemsToHorizon(page, routine._id);
+            // Age every generated occurrence into the past while leaving it OPEN — the reported
+            // state: the event already happened but was never marked done.
+            const occurrences = (await gtd.listItems(page)).filter((item) => item.routineId === routine._id && item.status === 'calendar');
+            expect(occurrences.length).toBeGreaterThan(0);
+            for (const [index, item] of occurrences.entries()) {
+                const start = dayjs()
+                    .subtract(occurrences.length - index, 'day')
+                    .hour(12)
+                    .minute(0)
+                    .second(0)
+                    .millisecond(0);
+                await gtd.updateItem(page, {
+                    ...item,
+                    timeStart: start.format('YYYY-MM-DDTHH:mm:ss'),
+                    timeEnd: start.add(1, 'hour').format('YYYY-MM-DDTHH:mm:ss'),
+                });
+            }
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            // Before the fix this page read "No upcoming item yet" and offered no way to complete it.
+            await page.goto(`/routine/${routine._id}`);
+            const nextItemLink = page.getByTestId('routineNextItemLink');
+            await expect(nextItemLink).toContainText('Update Microsoft Keys');
+            await expect(page.getByTestId('routineNextItemOverdueChip')).toBeVisible();
+            await expect(page.getByTestId('routineNextItemEmpty')).toHaveCount(0);
+
+            // Ageing preserved array order, so the LAST occurrence is the most recent one — the
+            // overdue item the page surfaces and the click completes. Re-read it: `occurrences`
+            // still holds the PRE-ageing dates.
+            const latestId = occurrences[occurrences.length - 1]?._id;
+            const latest = (await gtd.listItems(page)).find((item) => item._id === latestId);
+            if (!latest?.timeStart) throw new Error('expected an aged most-recent occurrence');
+            const latestDate = dayjs(latest.timeStart).format('MMM D');
+            await expect(nextItemLink).toContainText(latestDate);
+
+            // Mark done in place: the occurrence is completed without opening the item.
+            await page.getByTestId('routineNextItemMarkDone').click();
+            await gtd.flush(page);
+            const afterDone = (await gtd.listItems(page)).filter((item) => item.routineId === routine._id);
+            expect(afterDone.find((item) => item._id === latest._id)?.status).toBe('done');
+            // Every other occurrence was ALSO overdue, so the slot correctly falls through to the
+            // next-most-recent one rather than emptying — the completed date is gone from the link.
+            await expect(nextItemLink).not.toContainText(latestDate);
+        });
+    });
+
     test('routine page shows a disabled reason when no next item exists', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `routine-no-next-${dayjs().valueOf()}@example.com`, async (page) => {
             const paused = await gtd.createRoutine(page, {
@@ -185,7 +243,7 @@ test.describe('Routine deep links from items', () => {
             });
 
             await page.goto(`/routine/${paused._id}`);
-            await expect(page.getByTestId('routineNextItemEmpty')).toHaveText('No upcoming item — routine is paused');
+            await expect(page.getByTestId('routineNextItemEmpty')).toHaveText('No item generated — routine is paused');
             await expect(page.getByTestId('routineNextItemEmpty')).toBeDisabled();
         });
     });
