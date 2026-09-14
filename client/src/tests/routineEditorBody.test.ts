@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { buildSplitPatch, buildUpdatedRoutine } from '../components/routineEditor/RoutineEditorBody';
 import { buildRoutineTemplateFromForm } from '../components/routineEditor/routineFormState';
 import type { StoredRoutine } from '../types/MyDB';
+import { GCAL_OWNED_ROUTINE_KEYS } from '../types/MyDB';
 
 describe('buildRoutineTemplateFromForm', () => {
     it('returns undefined for non-calendar routines (template only applies to calendar)', () => {
@@ -74,6 +75,29 @@ describe('buildUpdatedRoutine', () => {
             routineType: 'nextAction',
             template: { energy: 'high' },
         });
+    });
+
+    it('strips EVERY GCal-owned key on a calendar→nextAction switch, not just the master-mirror subset', () => {
+        // Regression: the server's RoutineSnapshotSchema rejects all 8 GCAL_OWNED_ROUTINE_KEYS on a
+        // non-calendar routine. Stripping only 5 left meetingLink/location/htmlLink on the snapshot,
+        // which 400s and jams the whole push queue on the first type-switch update op.
+        const gcalLinked = {
+            ...BASE_ROUTINE,
+            routineType: 'calendar' as const,
+            organizer: { email: 'organizer@example.com' },
+            creator: { email: 'creator@example.com' },
+            attendees: [{ email: 'organizer@example.com', responseStatus: 'accepted' as const }],
+            responseStatus: 'accepted' as const,
+            eventType: 'default' as const,
+            meetingLink: 'https://meet.google.com/abc',
+            location: 'Room 1',
+            htmlLink: 'https://calendar.google.com/event',
+        };
+        const updated = buildUpdatedRoutine(gcalLinked, BASE_CTX, undefined);
+        expect(BASE_CTX.routineType).not.toBe('calendar');
+        for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+            expect(key in updated).toBe(false);
+        }
     });
 
     it('omits `active` when undefined so the spread does not overwrite the routine value', () => {
