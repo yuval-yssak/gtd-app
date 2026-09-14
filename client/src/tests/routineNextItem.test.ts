@@ -67,13 +67,13 @@ describe('findRoutineNextItem — nextAction routines', () => {
         const result = findRoutineNextItem(makeRoutine(), [], NOW);
         expect(result.item).toBeNull();
         if (result.item) throw new Error('expected no item');
-        expect(result.reason).toBe('No upcoming item yet');
+        expect(result.reason).toBe('No item generated yet');
     });
 
     it('reports the paused reason for an inactive routine', () => {
         const result = findRoutineNextItem(makeRoutine({ active: false }), [], NOW);
         if (result.item) throw new Error('expected no item');
-        expect(result.reason).toBe('No upcoming item — routine is paused');
+        expect(result.reason).toBe('No item generated — routine is paused');
     });
 });
 
@@ -99,18 +99,59 @@ describe('findRoutineNextItem — calendar routines', () => {
         expect(result.item?._id).toBe('i1');
     });
 
-    it('treats the exclusive all-day end date as already over at midnight', () => {
+    it('marks an upcoming instance as not overdue', () => {
+        const future = makeCalendarItem('i1', '2026-07-03T09:00:00.000Z', '2026-07-03T10:00:00.000Z');
+        const result = findRoutineNextItem(calendarRoutine, [future], NOW);
+        expect(result.item?._id).toBe('i1');
+        if (!result.item) throw new Error('expected an item');
+        expect(result.isOverdue).toBe(false);
+    });
+
+    it('surfaces a past-but-still-open instance as OVERDUE instead of hiding it', () => {
+        // The reported bug: the only occurrence had already happened but was never marked done,
+        // so the page claimed there was no upcoming item and offered no way to complete it.
+        const past = makeCalendarItem('i1', '2026-06-01T09:00:00.000Z', '2026-06-01T10:00:00.000Z');
+        const result = findRoutineNextItem(calendarRoutine, [past], NOW);
+        if (!result.item) throw new Error('expected the overdue occurrence to be surfaced');
+        expect(result.item._id).toBe('i1');
+        expect(result.isOverdue).toBe(true);
+    });
+
+    it('returns the LATEST overdue instance when several are past, so the user completes the most recent', () => {
+        const older = makeCalendarItem('i1', '2026-06-01T09:00:00.000Z', '2026-06-01T10:00:00.000Z');
+        const newer = makeCalendarItem('i2', '2026-06-20T09:00:00.000Z', '2026-06-20T10:00:00.000Z');
+        const result = findRoutineNextItem(calendarRoutine, [older, newer], NOW);
+        expect(result.item?._id).toBe('i2');
+    });
+
+    it('still prefers an upcoming instance over an overdue one', () => {
+        const past = makeCalendarItem('i1', '2026-06-01T09:00:00.000Z', '2026-06-01T10:00:00.000Z');
+        const future = makeCalendarItem('i2', '2026-07-03T09:00:00.000Z', '2026-07-03T10:00:00.000Z');
+        const result = findRoutineNextItem(calendarRoutine, [past, future], NOW);
+        expect(result.item?._id).toBe('i2');
+        if (!result.item) throw new Error('expected an item');
+        expect(result.isOverdue).toBe(false);
+    });
+
+    it('treats the exclusive all-day end date as already over at midnight — as overdue, not absent', () => {
         // All-day July 1 stores timeEnd 2026-07-02 (exclusive) — by noon July 2 it has passed.
         const allDayPast = makeItem({ _id: 'i1', status: 'calendar', timeStart: '2026-07-01', timeEnd: '2026-07-02', allDay: true });
         const result = findRoutineNextItem(calendarRoutine, [allDayPast], NOW);
-        expect(result.item).toBeNull();
+        if (!result.item) throw new Error('expected the past all-day occurrence to be surfaced as overdue');
+        expect(result.isOverdue).toBe(true);
     });
 
-    it('reports no upcoming item when all instances are past', () => {
-        const past = makeCalendarItem('i1', '2026-06-01T09:00:00.000Z', '2026-06-01T10:00:00.000Z');
-        const result = findRoutineNextItem(calendarRoutine, [past], NOW);
+    it('reports nothing only when the routine has generated no items at all', () => {
+        const result = findRoutineNextItem(calendarRoutine, [], NOW);
         if (result.item) throw new Error('expected no item');
-        expect(result.reason).toBe('No upcoming item yet');
+        expect(result.reason).toBe('No item generated yet');
+    });
+
+    it('ignores done and trashed occurrences when resolving the overdue fallback', () => {
+        const done = makeItem({ _id: 'i1', status: 'done', timeStart: '2026-06-20T09:00:00.000Z', timeEnd: '2026-06-20T10:00:00.000Z' });
+        const openPast = makeCalendarItem('i2', '2026-06-01T09:00:00.000Z', '2026-06-01T10:00:00.000Z');
+        const result = findRoutineNextItem(calendarRoutine, [done, openPast], NOW);
+        expect(result.item?._id).toBe('i2');
     });
 });
 

@@ -1,8 +1,8 @@
 declare const styles: {
-    readonly metaList: string;
-    readonly metaRow: string;
+    readonly eventDetails: string;
     readonly notes: string;
-    readonly titleIcon: string;
+    readonly occurrences: string;
     readonly titleRow: string;
+    readonly whenRow: string;
 };
 export = styles;

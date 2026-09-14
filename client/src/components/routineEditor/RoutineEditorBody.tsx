@@ -39,6 +39,7 @@ import { computeSplitDate, routineHasPastItems } from '../../lib/routineSplitUti
 import { RruleExhaustedError } from '../../lib/rruleUtils';
 import { offerUndo } from '../../lib/undoStore';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
+import { GCAL_OWNED_ROUTINE_KEYS } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
 import type { ItemEditorChrome } from '../editItemDialogLogic';
 import { mergeFormGroup } from '../itemEditor/itemEditorLiveMerge';
@@ -244,11 +245,11 @@ export function buildUpdatedRoutine(routine: StoredRoutine, ctx: SaveContext, ac
     if (ctx.routineType !== 'calendar') {
         // GCal master-mirror fields are calendar-only — RoutineSnapshotSchema rejects them on a
         // nextAction routine, which would jam the push queue on the first type-switch update op.
-        delete updated.organizer;
-        delete updated.creator;
-        delete updated.attendees;
-        delete updated.responseStatus;
-        delete updated.eventType;
+        // Driven by the shared tuple: hand-listing a subset here silently reopens that jam for
+        // whichever key is missed (meetingLink/location/htmlLink were, before this loop).
+        for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+            delete updated[key];
+        }
     }
     return updated;
 }

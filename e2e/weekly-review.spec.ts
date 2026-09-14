@@ -1008,7 +1008,10 @@ test.describe('weekly review', () => {
             // Each series is ONE entry (plus the exception): "0 of 3", not one per occurrence.
             await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 3');
             const routineCard = page.getByTestId('routineReviewCard');
-            await expect(routineCard.getByTestId('routineCardOverline')).toContainText('reviewed once for all its occurrences');
+            // The routine card leads with the SAME date headline a one-off calendar entry shows —
+            // the date the stage sorted it by — with the routine distinction in the banner.
+            await expect(routineCard.getByTestId('routineCardWhen')).toContainText('6:00 am');
+            await expect(routineCard.getByTestId('reviewRoutineBanner')).toContainText('Routine · Every day at 06:00');
             await expect(routineCard.getByTestId('routineCardTitle')).toHaveText('Morning gym');
 
             // Full routine actions, destructive branch: pause-confirm trashes the series' items
@@ -1018,8 +1021,11 @@ test.describe('weekly review', () => {
             await expect(routineCard.getByTestId('routineCardTitle')).toHaveText('Pool with Elena');
             await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 3');
 
-            // The weekly routine's card: schedule, occurrence count (minus the exception), notes.
-            await expect(routineCard.getByTestId('routineCardSchedule')).toContainText('Every Thu at 18:00');
+            // The weekly routine's card: date headline for its first open occurrence, schedule in the
+            // banner, occurrence count (minus the exception), notes.
+            await expect(routineCard.getByTestId('routineCardWhen')).toContainText('6:00 pm');
+            await expect(routineCard.getByTestId('routineCardWhenRelative')).not.toBeEmpty();
+            await expect(routineCard.getByTestId('reviewRoutineBanner')).toContainText('Every Thu at 18:00');
             await expect(routineCard.getByTestId('routineCardOccurrences')).toContainText(`${poolOccurrences.length - 1} occurrences`);
             await expect(routineCard.getByTestId('routineCardNotes')).toContainText('Bring a towel');
             // Edit opens the routine dialog; Escape closes it without deciding.
@@ -1064,6 +1070,64 @@ test.describe('weekly review', () => {
             for (const item of gymItems) {
                 expect(item.status).toBe('trash');
             }
+        });
+    });
+
+    test('the routine card completes its lead occurrence in place, overdue included', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-routine-done-${dayjs().valueOf()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, {
+                title: 'Update Microsoft Keys',
+                routineType: 'calendar',
+                rrule: 'FREQ=WEEKLY;BYDAY=SU',
+                startDate: dayjs().format('YYYY-MM-DD'),
+                calendarItemTemplate: { timeOfDay: '12:00', duration: 60 },
+                template: {},
+                active: true,
+            });
+            await gtd.generateCalendarItemsToHorizon(page, routine._id);
+            // Age the whole series into the past but leave it OPEN — the user's reported state.
+            const seeded = (await gtd.listItems(page)).filter((item) => item.routineId === routine._id && item.status === 'calendar');
+            expect(seeded.length).toBeGreaterThan(0);
+            for (const [index, item] of seeded.entries()) {
+                const start = dayjs()
+                    .subtract(seeded.length - index, 'day')
+                    .hour(12)
+                    .minute(0)
+                    .second(0)
+                    .millisecond(0);
+                await gtd.updateItem(page, {
+                    ...item,
+                    timeStart: start.format('YYYY-MM-DDTHH:mm:ss'),
+                    timeEnd: start.add(1, 'hour').format('YYYY-MM-DDTHH:mm:ss'),
+                });
+            }
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await page.goto('/weekly-review');
+            await page.getByTestId('startReviewButton').click();
+            await page.getByTestId('stageTravelNext').click();
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Calendar');
+
+            // The card leads with the overdue occurrence's own date and says so.
+            const routineCard = page.getByTestId('routineReviewCard');
+            await expect(routineCard.getByTestId('routineCardOverdueChip')).toBeVisible();
+            await expect(routineCard.getByTestId('routineCardWhen')).toContainText('12:00 pm');
+
+            // The most recent aged occurrence is the one the card stands for.
+            const latestId = seeded[seeded.length - 1]?._id;
+            const latest = (await gtd.listItems(page)).find((item) => item._id === latestId);
+            if (!latest) throw new Error('expected an aged most-recent occurrence');
+
+            // Completing it decides the entry and writes done — no undo (it advances the series).
+            await expect(routineCard.getByTestId('routineCardMarkOccurrenceDone')).toHaveText('Mark overdue done');
+            await page.getByTestId('routineCardMarkOccurrenceDone').click();
+            // Wait on the post-decision STATE, not the counter: the series is the stage's only
+            // entry, so deciding it ends the stage. Asserting the counter races the commit.
+            await expect(page.getByTestId('stageEmptyCard')).toContainText('Calendar — all reviewed!');
+            await gtd.flush(page);
+            const afterDone = (await gtd.listItems(page)).find((item) => item._id === latest._id);
+            expect(afterDone?.status).toBe('done');
         });
     });
 

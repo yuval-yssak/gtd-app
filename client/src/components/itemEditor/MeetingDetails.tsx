@@ -53,6 +53,13 @@ interface MeetingDetailsProps {
      */
     onRsvp: (status: RsvpStatus) => Promise<void>;
     onAttendeesChange: (next: GCalAttendee[]) => Promise<void>;
+    /**
+     * Read-only projection: renders organizer + attendee chips with no add/remove affordance and no
+     * RSVP buttons. Used by the weekly review's routine card, where the panel describes the SERIES
+     * master — editing attendees there is a series-wide GCal write that belongs in the routine
+     * editor, not in a review glance. `onRsvp`/`onAttendeesChange` are never called in this mode.
+     */
+    readOnly?: boolean;
     /** Re-consent URL surfaced by the most recent 403 scope_missing RSVP response. */
     scopeMissingReconsentUrl?: string;
     /**
@@ -96,6 +103,7 @@ export function MeetingDetails({
     onAttendeesChange,
     scopeMissingReconsentUrl,
     onReconsentClosed,
+    readOnly = false,
 }: MeetingDetailsProps) {
     const { people } = useAppData();
     const attendees = item.attendees ?? [];
@@ -139,16 +147,20 @@ export function MeetingDetails({
                             )}
                         </Box>
                     )}
-                    <AttendeesEditor
-                        db={db}
-                        attendees={attendees}
-                        people={people}
-                        selfEmail={self?.email}
-                        ownerUserIdForNewPeople={ownerUserIdForNewPeople ?? item.userId}
-                        isRoutineInstance={Boolean(item.routineId)}
-                        onAttendeesChange={onAttendeesChange}
-                    />
-                    {self && (
+                    {readOnly ? (
+                        <AttendeesReadOnlyList attendees={attendees} people={people} selfEmail={self?.email} />
+                    ) : (
+                        <AttendeesEditor
+                            db={db}
+                            attendees={attendees}
+                            people={people}
+                            selfEmail={self?.email}
+                            ownerUserIdForNewPeople={ownerUserIdForNewPeople ?? item.userId}
+                            isRoutineInstance={Boolean(item.routineId)}
+                            onAttendeesChange={onAttendeesChange}
+                        />
+                    )}
+                    {!readOnly && self && (
                         <RsvpButtons
                             currentStatus={self.responseStatus}
                             onRsvp={onRsvp}
@@ -327,6 +339,47 @@ function AttendeesEditor({ db, attendees, people, selfEmail, ownerUserIdForNewPe
                     </Button>
                 </DialogActions>
             </Dialog>
+        </Box>
+    );
+}
+
+interface AttendeesReadOnlyListProps {
+    attendees: GCalAttendee[];
+    people: StoredPerson[];
+    selfEmail: string | undefined;
+}
+
+/**
+ * Non-interactive attendee roster: same chips (RSVP color, person-link check) as the editor, minus
+ * the delete icon, the picker and the click-through dialogs. See `MeetingDetailsProps.readOnly`.
+ */
+function AttendeesReadOnlyList({ attendees, people, selfEmail }: AttendeesReadOnlyListProps) {
+    return (
+        <Box>
+            <Typography variant="caption" color="text.secondary">
+                Attendees
+            </Typography>
+            <Box className={styles.attendeesList} data-testid="attendeesReadOnlyList">
+                {attendees.map((attendee) => {
+                    const person = findPersonByEmail(people, attendee.email);
+                    const label = attendee.displayName ?? attendee.email;
+                    const isSelf = Boolean(selfEmail && attendee.email.toLowerCase() === selfEmail.toLowerCase());
+                    return (
+                        <Tooltip key={attendee.email} title={attendee.email} placement="top">
+                            <span>
+                                <Chip
+                                    label={person ? `${label} \u2713` : label}
+                                    color={chipColorFor(attendee.responseStatus)}
+                                    variant={attendee.responseStatus === 'needsAction' ? 'outlined' : 'filled'}
+                                    size="small"
+                                    {...(isSelf ? { sx: { fontWeight: 600 } } : {})}
+                                    data-testid={`attendeeReadOnlyChip-${attendee.email}`}
+                                />
+                            </span>
+                        </Tooltip>
+                    );
+                })}
+            </Box>
         </Box>
     );
 }

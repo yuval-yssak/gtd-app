@@ -22,3 +22,22 @@
     margin-bottom: 1rem;
     text-transform: none;
 }
+
+/* Next-item row: the jump link, its overdue marker, and the inline complete action. */
+.nextItemRow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+/* The link owns the row's bottom margin via .nextItemRow — drop its own. */
+.nextItemRow .nextItemLink {
+    margin-bottom: 0;
+}
+
+.nextItemDone {
+    text-transform: none;
+    flex-shrink: 0;
+}

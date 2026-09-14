@@ -1,15 +1,20 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
 import IconButton from '@mui/material/IconButton';
 import Paper from '@mui/material/Paper';
+import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { useState, useTransition } from 'react';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
@@ -42,9 +47,18 @@ function PageHeader({ title, onBack, idForCopy }: { title: string; onBack: () =>
     );
 }
 
-/** Jump-link to the routine's next generated item; renders disabled with a reason when none exists. */
+/**
+ * Jump-link to the routine's next generated item, with an inline "Mark done" so the occurrence can
+ * be completed without opening it. An occurrence whose time has passed but which is still open is
+ * shown as OVERDUE rather than hidden — that is precisely the one the user came here to complete.
+ * Renders disabled with a reason only when the routine has generated nothing at all.
+ */
 function NextItemLink({ routine, items }: { routine: StoredRoutine; items: StoredItem[] }) {
+    const { db } = Route.useRouteContext();
+    const { refreshItems } = useAppData();
     const navigateOrNewTab = useNewTabAwareNavigate();
+    const [isCompleting, startCompleting] = useTransition();
+    const [toast, setToast] = useState('');
     const result = findRoutineNextItem(routine, items, dayjs());
 
     if (!result.item) {
@@ -55,18 +69,40 @@ function NextItemLink({ routine, items }: { routine: StoredRoutine; items: Store
         );
     }
 
-    const { item } = result;
+    const { item, isOverdue } = result;
     const dateLabel = describeNextItemDate(item);
+    // Completing advances the series (clarifyToDone → maybeCreateNextRoutineItem), so the link
+    // re-resolves to the following occurrence on the refresh.
+    const onMarkDone = () =>
+        startCompleting(async () => {
+            await clarifyToDone(db, item, { onReadOnlyGCal: () => setToast(FROM_GMAIL_READONLY_MESSAGE) });
+            await refreshItems();
+        });
+
     return (
-        <Button
-            startIcon={<ArrowForwardIcon />}
-            className={styles.nextItemLink}
-            onClick={(e) => navigateOrNewTab(e, { to: '/item/$itemId', params: { itemId: item._id }, search: { status: null } })}
-            data-testid="routineNextItemLink"
-        >
-            Next: {item.title}
-            {dateLabel && ` · ${dateLabel}`}
-        </Button>
+        <Box className={styles.nextItemRow}>
+            <Button
+                startIcon={<ArrowForwardIcon />}
+                className={styles.nextItemLink}
+                onClick={(e) => navigateOrNewTab(e, { to: '/item/$itemId', params: { itemId: item._id }, search: { status: null } })}
+                data-testid="routineNextItemLink"
+            >
+                Next: {item.title}
+                {dateLabel && ` · ${dateLabel}`}
+            </Button>
+            {isOverdue && <Chip label="Overdue" color="warning" size="small" data-testid="routineNextItemOverdueChip" />}
+            <Button
+                size="small"
+                startIcon={<CheckCircleOutlineIcon />}
+                disabled={isCompleting}
+                onClick={onMarkDone}
+                className={styles.nextItemDone}
+                data-testid="routineNextItemMarkDone"
+            >
+                Mark done
+            </Button>
+            <Snackbar open={Boolean(toast)} autoHideDuration={4000} onClose={() => setToast('')} message={toast} />
+        </Box>
     );
 }
 

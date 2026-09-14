@@ -21,6 +21,24 @@ export interface GCalAttendee extends GCalPerson {
 // for events auto-created from Gmail attachments. Keep in lockstep with the server.
 export type GCalEventType = 'default' | 'outOfOffice' | 'focusTime' | 'workingLocation' | 'fromGmail';
 
+/**
+ * The GCal-master-owned routine fields, mirroring `GCAL_OWNED_ROUTINE_KEYS` in
+ * api-server/src/types/entities.ts. Enumerate this tuple instead of hand-listing the keys: the
+ * server's `RoutineSnapshotSchema` rejects EVERY one of them on a non-calendar routine, so a
+ * client site that strips only some of them sends a snapshot that 400s and jams the push queue.
+ * Keep the arity identical to the server constant.
+ */
+export const GCAL_OWNED_ROUTINE_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType', 'meetingLink', 'location', 'htmlLink'] as const;
+
+export type GCalOwnedRoutineKey = (typeof GCAL_OWNED_ROUTINE_KEYS)[number];
+
+/**
+ * The subset of {@link GCAL_OWNED_ROUTINE_KEYS} that `routineExceptions` entries carry as
+ * per-instance overrides. Narrower than the master set by design — GCal reports no per-instance
+ * meetingLink/location/htmlLink — so it is a separate tuple rather than a slice of that one.
+ */
+export const GCAL_OWNED_EXCEPTION_KEYS = ['organizer', 'creator', 'attendees', 'responseStatus', 'eventType'] as const;
+
 export interface StoredAccount {
     id: string; // Better Auth user ID (UUID)
     email: string;
@@ -137,6 +155,10 @@ export interface StoredRoutine {
     attendees?: GCalAttendee[];
     responseStatus?: GCalResponseStatus;
     eventType?: GCalEventType;
+    /** GCal master conferencing/location/event-URL — mirrored onto generated items. See `GCAL_OWNED_ROUTINE_KEYS` server-side. */
+    meetingLink?: string;
+    location?: string;
+    htmlLink?: string;
     template: StoredRoutineTemplate;
     active: boolean;
     /** True when GCal cancelled this routine's series and the server retired it — see RoutineInterface. Server-owned; echoed back in snapshots. */

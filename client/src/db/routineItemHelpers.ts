@@ -5,7 +5,8 @@ import { RRule } from 'rrule';
 import { getCalendarHorizonMonths } from '../lib/calendarHorizon';
 import { computeFirstOccurrenceDate, mergeRoutineEditIntoOpenItem } from '../lib/routineOpenItemMerge';
 import { computeNextOccurrence, RruleExhaustedError } from '../lib/rruleUtils';
-import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
+import type { GCalOwnedRoutineKey, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
+import { GCAL_OWNED_EXCEPTION_KEYS, GCAL_OWNED_ROUTINE_KEYS } from '../types/MyDB';
 import { putItem } from './itemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
@@ -388,18 +389,26 @@ function buildCalendarItem(
 function mergeGCalOwnedForOccurrence(
     routine: StoredRoutine,
     contentException: NonNullable<StoredRoutine['routineExceptions']>[number] | undefined,
-): Partial<Pick<StoredItem, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> {
-    const merged: Partial<Pick<StoredItem, 'organizer' | 'creator' | 'attendees' | 'responseStatus' | 'eventType'>> = {};
-    if (routine.organizer !== undefined) merged.organizer = routine.organizer;
-    if (routine.creator !== undefined) merged.creator = routine.creator;
-    if (routine.attendees !== undefined) merged.attendees = routine.attendees;
-    if (routine.responseStatus !== undefined) merged.responseStatus = routine.responseStatus;
-    if (routine.eventType !== undefined) merged.eventType = routine.eventType;
-    if (contentException?.organizer !== undefined) merged.organizer = contentException.organizer;
-    if (contentException?.creator !== undefined) merged.creator = contentException.creator;
-    if (contentException?.attendees !== undefined) merged.attendees = contentException.attendees;
-    if (contentException?.responseStatus !== undefined) merged.responseStatus = contentException.responseStatus;
-    if (contentException?.eventType !== undefined) merged.eventType = contentException.eventType;
+): Partial<Pick<StoredItem, GCalOwnedRoutineKey>> {
+    // Loop the shared tuple rather than hand-listing: the server's pickGCalOwnedRoutineMirror
+    // mirrors all 8 keys, and enumerating a subset here left generated occurrences missing the
+    // master's meetingLink/location/htmlLink.
+    const merged: Partial<Pick<StoredItem, GCalOwnedRoutineKey>> = {};
+    for (const key of GCAL_OWNED_ROUTINE_KEYS) {
+        const value = routine[key];
+        if (value !== undefined) {
+            Object.assign(merged, { [key]: value });
+        }
+    }
+    // Per-instance GCal overrides win over the master. `routineExceptions` mirrors only the
+    // subset GCal reports per instance (no meetingLink/location/htmlLink), so this layer is
+    // deliberately narrower than the tuple above rather than indexed by it.
+    for (const key of GCAL_OWNED_EXCEPTION_KEYS) {
+        const value = contentException?.[key];
+        if (value !== undefined) {
+            Object.assign(merged, { [key]: value });
+        }
+    }
     return merged;
 }
 
