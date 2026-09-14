@@ -15,7 +15,7 @@
  * killing the live tail (the one-way kill `findExistingRoutineForEvent`'s old fallback allowed).
  */
 import dayjs from 'dayjs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GCalEvent } from '../calendarProviders/CalendarProvider.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
@@ -181,6 +181,12 @@ const chainBFixture = () =>
         [makeInstance(DEAD_TERMINAL_ID, '2026-08-12T07:30:00Z')],
     );
 
+// The heal regenerates items from `dayjs().startOf('day')` (routineItemRegeneration.ts), so this
+// suite's fixtures are only meaningful relative to a fixed "today". Left on the real clock the
+// assertions rot silently: once the Sep 3-7 fixture dates fall into the past, regeneration stops
+// emitting the items the Class A case expects and a stale pre-heal item survives instead.
+const SUITE_NOW = dayjs('2026-09-02T09:00:00.000Z');
+
 beforeAll(async () => {
     await loadDataAccess('gtd_test_split_chain_heal');
 });
@@ -190,7 +196,13 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+    // `shouldAdvanceTime` keeps the Mongo driver's own timers running under fake timers.
+    vi.useFakeTimers({ now: SUITE_NOW.toDate(), shouldAdvanceTime: true });
     await Promise.all([db.collection('routines').deleteMany({}), db.collection('items').deleteMany({}), db.collection('operations').deleteMany({})]);
+});
+
+afterEach(() => {
+    vi.useRealTimers();
 });
 
 describe('healSplitChainAnchors — Class A (stale anchor, live continuation)', () => {
