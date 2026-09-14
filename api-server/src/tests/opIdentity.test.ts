@@ -81,7 +81,10 @@ describe('allocateOpIdentity', () => {
         // The overflow rolled into a later millisecond, and ts followed the borrowed ms.
         expect(last.ts > first.ts).toBe(true);
         expect(last.id.startsWith(String(dayjs(last.ts).valueOf()).padStart(14, '0'))).toBe(true);
-    });
+        // A million allocations plus the ordering scan runs ~3s locally and slower on CI's shared
+        // runners, where the 5s default left too little headroom and timed out. The volume IS the
+        // test (one full sequence range plus the borrow), so raise the budget rather than shrink it.
+    }, 30_000);
 
     it('ids sort below the legacy MAX_OP_ID bootstrap sentinel', () => {
         // Pre-holdback deviceSyncState rows still carry MAX_OP_ID as lastSyncedId; new op ids must
