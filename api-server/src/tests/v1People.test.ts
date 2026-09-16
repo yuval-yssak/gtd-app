@@ -6,6 +6,7 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
+import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import peopleDAO from '../dataAccess/peopleDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
@@ -31,6 +32,7 @@ beforeEach(async () => {
         db.collection('verification').deleteMany({}),
         db.collection('apiTokens').deleteMany({}),
         db.collection('people').deleteMany({}),
+        db.collection('items').deleteMany({}),
         db.collection('operations').deleteMany({}),
     ]);
     __resetDefaultStoreForTests();
@@ -268,6 +270,34 @@ describe('tenant isolation', () => {
         expect(stored?.name).toBe('Bob');
         const ops = await operationsDAO.findArray({ entityId: 'p-bob' });
         expect(ops).toHaveLength(0);
+    });
+
+    // Guards the tool/API docs: the public delete goes through the apply pipeline, whose
+    // reference-cascade step strips the id from referencing items (see referenceCascades.ts) —
+    // it must never leave `waitingForPersonId` / `peopleIds` dangling.
+    it('cascades to referencing items: unsets waitingForPersonId, pulls from peopleIds, and breadcrumbs the title', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['people.write']);
+        const ts = '2026-01-01T00:00:00.000Z';
+        await peopleDAO.insertOne({ _id: 'p-jane', user: userId, name: 'Jane Doe', createdTs: ts, updatedTs: ts });
+        await itemsDAO.insertOne({
+            _id: 'i-wf',
+            user: userId,
+            status: 'waitingFor',
+            title: 'Reply',
+            createdTs: ts,
+            updatedTs: ts,
+            waitingForPersonId: 'p-jane',
+            peopleIds: ['p-jane', 'p-other'],
+        });
+        const res = await app.fetch(new Request('http://localhost:4000/v1/people/p-jane', { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } }));
+        expect(res.status).toBe(200);
+        const item = await itemsDAO.findByOwnerAndId('i-wf', userId);
+        expect(item).not.toBeNull();
+        expect(item).not.toHaveProperty('waitingForPersonId');
+        expect(item?.peopleIds).toEqual(['p-other']);
+        expect(item?.status).toBe('waitingFor');
+        expect(item?.title).toBe('Reply [person removed: Jane Doe] [was waiting for: Jane Doe]');
     });
 
     it("DELETE targeting another user's row returns 200 alreadyDeleted (the row remains)", async () => {

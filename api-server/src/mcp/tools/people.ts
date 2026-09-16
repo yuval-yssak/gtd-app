@@ -6,9 +6,10 @@ import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestO
 
 /**
  * People CRUD. People are named contacts referenced from items via `peopleIds` and
- * `waitingForPersonId`. Deletion does NOT cascade — references on items are left dangling
- * (the client renders them as "unknown person"). Multi-account: every tool accepts an optional
- * `account` (see types.ts:accountSchema).
+ * `waitingForPersonId`. Deletion cascades server-side (`lib/referenceCascades.ts`): the id is
+ * stripped from every referencing item and a `[person removed: <name>]` / `[was waiting for:
+ * <name>]` breadcrumb is appended to the item title so the link's history stays visible.
+ * Multi-account: every tool accepts an optional `account` (see types.ts:accountSchema).
  */
 
 const listPeople = defineTool({
@@ -72,7 +73,11 @@ const updatePerson = defineTool({
 
 const deletePerson = defineTool({
     name: 'gtd_delete_person',
-    description: 'Delete a person. Idempotent. Does NOT cascade — items referencing this person are left dangling.',
+    description:
+        'Delete a person. Idempotent. Cascades to referencing items: the id is removed from `peopleIds` / `waitingForPersonId` ' +
+        'and a `[person removed: <name>]` or `[was waiting for: <name>]` breadcrumb is appended to each affected item title. ' +
+        'To merely detach one item from a person without deleting the person, use gtd_update_item with `waitingForPersonId: null` ' +
+        'or a `peopleIds` array without that id.',
     inputSchema: { id: idSchema, account: accountSchema },
     handler: async (args, api) =>
         api.request('DELETE', `/v1/people/${encodeURIComponent(args.id)}`, undefined, undefined, requestOptsFromArgs({ account: args.account })),

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
 import { GtdApiError } from '../apiClient.js';
 import type { GtdEnvironment } from '../config.js';
@@ -98,6 +99,47 @@ describe('item tools', () => {
         const [call] = calls;
         if (!call) throw new Error('expected one call');
         expect(call.path).toBe('/v1/items/abc%2Fdef');
+    });
+
+    it('gtd_update_item forwards null (a clear) rather than dropping it', async () => {
+        const { api, calls } = makeFakeApi();
+        await t.updateItem.handler({ id: 'abc', waitingForPersonId: null, expectedBy: '2099-01-01' }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.body).toEqual({ waitingForPersonId: null, expectedBy: '2099-01-01' });
+    });
+
+    it('gtd_update_item accepts null for every clearable field and rejects it for title/status/GCal linkage', () => {
+        const clearable = [
+            'notes',
+            'workContextIds',
+            'peopleIds',
+            'waitingForPersonId',
+            'energy',
+            'time',
+            'focus',
+            'urgent',
+            'expectedBy',
+            'ignoreBefore',
+            'timeStart',
+            'timeEnd',
+        ] as const;
+        for (const field of clearable) {
+            expect(t.updateItem.inputSchema[field].safeParse(null).success, field).toBe(true);
+            expect(t.updateItem.inputSchema[field].safeParse(undefined).success, field).toBe(true);
+        }
+        const notClearable = ['title', 'status', 'calendarEventId', 'calendarIntegrationId', 'calendarSyncConfigId'] as const;
+        for (const field of notClearable) {
+            expect(t.updateItem.inputSchema[field].safeParse(null).success, field).toBe(false);
+        }
+    });
+
+    it('gtd_update_item keeps the notes Markdown-link guidance at the property level of the JSON Schema', () => {
+        // `.describe()` must be applied after `.nullable().optional()` — otherwise zod emits the
+        // description inside `anyOf[0]` and most MCP clients never show it.
+        const schema = z.toJSONSchema(z.object(t.updateItem.inputSchema), { io: 'input' }) as { properties: Record<string, { description?: string }> };
+        expect(schema.properties.notes?.description).toContain('Markdown');
+        expect(schema.properties.waitingForPersonId?.description).toContain('null clears');
     });
 
     it('gtd_update_item PATCHes /v1/items/:id with body without id', async () => {

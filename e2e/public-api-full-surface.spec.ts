@@ -1,6 +1,7 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
+import { gtd } from './helpers/gtd';
 
 const API_URL = 'http://localhost:4000';
 
@@ -19,9 +20,9 @@ interface Plaintext {
     plaintext: string;
 }
 
-async function mintFullSurfaceToken(request: APIRequestContext): Promise<Plaintext> {
+async function mintFullSurfaceToken(request: APIRequestContext, extraScopes: string[] = []): Promise<Plaintext> {
     const res = await request.post(`${API_URL}/account/tokens`, {
-        data: { label: 'phase4-full-surface', scopes: ['items.capture', 'items.read', 'items.write'] },
+        data: { label: 'phase4-full-surface', scopes: ['items.capture', 'items.read', 'items.write', ...extraScopes] },
     });
     expect(res.status()).toBe(200);
     return (await res.json()) as Plaintext;
@@ -130,6 +131,67 @@ test.describe('public /v1 full-surface lifecycle', () => {
                 const res = await apiContext.request.patch(`${API_URL}/v1/items/${_id}`, { ...auth, data: { status: 'trash' } });
                 expect(res.status()).toBe(409);
                 expect(((await res.json()) as { code: string }).code).toBe('invalid_transition');
+            });
+        });
+    });
+    // `null` on PATCH clears an optional field. The interesting half is the sync layer: the clear
+    // must reach a device as an absent key (not be no-op'd or reinstated from the device's copy),
+    // and a later in-app edit on that device must push a snapshot that still lacks the key.
+    test('PATCH { waitingForPersonId: null } clears the person and the cleared state survives a client sync round-trip', async ({ browser }) => {
+        const email = `public-api-clear-${dayjs().valueOf()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const { plaintext } = await mintFullSurfaceToken(page.context().request, ['people.write']);
+            await withBearerOnlyContext(browser, async (apiContext) => {
+                const auth = { headers: { Authorization: `Bearer ${plaintext}` } };
+                const person = await apiContext.request.post(`${API_URL}/v1/people`, { ...auth, data: { name: 'Blocking Bob' } });
+                expect(person.status()).toBe(201);
+                const { _id: personId } = (await person.json()) as { _id: string };
+                const create = await apiContext.request.post(`${API_URL}/v1/items`, { ...auth, data: { title: 'Waiting on Bob' } });
+                const { _id: id, createdTs } = (await create.json()) as { _id: string; createdTs: string };
+
+                const block = await apiContext.request.patch(`${API_URL}/v1/items/${id}`, {
+                    ...auth,
+                    data: { status: 'waitingFor', waitingForPersonId: personId },
+                });
+                expect(block.status()).toBe(200);
+                await gtd.pull(page);
+                const linked = (await gtd.listItems(page)).find((i) => i._id === id);
+                if (!linked) throw new Error('expected the item on the device after pulling the link');
+                expect(linked.waitingForPersonId).toBe(personId);
+
+                // `""` is not a clear — unchanged behaviour, so the failure mode stays explicit.
+                const empty = await apiContext.request.patch(`${API_URL}/v1/items/${id}`, { ...auth, data: { waitingForPersonId: '' } });
+                expect(empty.status()).toBe(400);
+                expect(((await empty.json()) as { code: string }).code).toBe('invalid_operation');
+
+                const clear = await apiContext.request.patch(`${API_URL}/v1/items/${id}`, { ...auth, data: { waitingForPersonId: null } });
+                expect(clear.status()).toBe(200);
+                const cleared = (await clear.json()) as Record<string, unknown>;
+                expect(cleared).not.toHaveProperty('waitingForPersonId');
+                expect(cleared.status).toBe('waitingFor');
+                expect(cleared._id).toBe(id);
+                expect(cleared.createdTs).toBe(createdTs);
+
+                // The device pulls the clear: its local copy loses the key rather than keeping it.
+                await gtd.pull(page);
+                const onDevice = (await gtd.listItems(page)).find((i) => i._id === id);
+                if (!onDevice) throw new Error('expected the item on the device after pulling the clear');
+                expect(onDevice).not.toHaveProperty('waitingForPersonId');
+                expect(onDevice.status).toBe('waitingFor');
+
+                // An in-app edit after the clear pushes a snapshot that still lacks the person —
+                // the client must not resurrect it from anything it cached.
+                await gtd.updateItem(page, { ...onDevice, title: 'Waiting on Bob (edited on device)' });
+                await gtd.flush(page);
+                const after = await apiContext.request.get(`${API_URL}/v1/items/${id}`, auth);
+                expect(after.status()).toBe(200);
+                const serverAfter = (await after.json()) as Record<string, unknown>;
+                expect(serverAfter.title).toBe('Waiting on Bob (edited on device)');
+                expect(serverAfter).not.toHaveProperty('waitingForPersonId');
+                expect(serverAfter.status).toBe('waitingFor');
+                expect(serverAfter.createdTs).toBe(createdTs);
             });
         });
     });
