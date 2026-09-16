@@ -29,14 +29,12 @@ export const accountSchema = zod
  * field description is the signal closest to the point of use (and reaches clients that ignore
  * `instructions` entirely).
  */
-export const notesSchema = zod
-    .string()
-    .optional()
-    .describe(
-        'Optional Markdown body — rendered as Markdown in the web app. Write links as Markdown links, ' +
-            '`[descriptive label](https://example.com)`, never a bare URL. Label the link with what it points at ' +
-            '(page title, ticket key, sender + subject); fall back to the domain if nothing better is available.',
-    );
+export const NOTES_DESCRIPTION =
+    'Optional Markdown body — rendered as Markdown in the web app. Write links as Markdown links, ' +
+    '`[descriptive label](https://example.com)`, never a bare URL. Label the link with what it points at ' +
+    '(page title, ticket key, sender + subject); fall back to the domain if nothing better is available.';
+
+export const notesSchema = zod.string().optional().describe(NOTES_DESCRIPTION);
 
 /**
  * Builds the `RequestOptions` payload for `apiClient.request`. Centralised so adding a new

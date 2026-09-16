@@ -2,7 +2,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
-import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
+import { accountSchema, defineTool, idSchema, NOTES_DESCRIPTION, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
  * Tool definitions for the item surface of the GTD /v1 API. Field shapes mirror what the API
@@ -21,6 +21,10 @@ import { accountSchema, defineTool, idSchema, notesSchema, registerOne, requestO
 // PATCH does NOT accept 'trash' — the route rejects it with 409. Omit it from the enum so the
 // model never proposes a transition the API will refuse.
 const itemStatusSchema = z.enum(['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done']);
+
+// Optional field that can also be explicitly cleared: `null` reaches PATCH as-is (JSON.stringify
+// keeps null, drops undefined), where the route unsets the key. `undefined`/omitted = unchanged.
+const clearable = <T extends z.ZodTypeAny>(schema: T) => schema.nullable().optional();
 
 const capture = defineTool({
     name: 'gtd_capture',
@@ -84,23 +88,30 @@ const updateItem = defineTool({
         '- calendar: timeStart, timeEnd, calendarEventId, calendarIntegrationId, workContextIds, peopleIds\n' +
         '- waitingFor: waitingForPersonId (optional — a waitingFor item need not name a person), peopleIds, expectedBy, ignoreBefore\n' +
         '- somedayMaybe: expectedBy, ignoreBefore\n' +
-        'Caller-supplied fields incompatible with the target status return 400 status_field_violation with extra:{status,field}.',
+        'Caller-supplied fields incompatible with the target status return 400 status_field_violation with extra:{status,field}.\n' +
+        'To CLEAR an optional field that is already set, pass `null` for it (e.g. `{"waitingForPersonId": null}` unsets the ' +
+        'person while keeping status waitingFor). Omitting a field leaves it unchanged; an empty string is rejected. ' +
+        'Not clearable (400 not_clearable): `title`, `status`, and the Google Calendar linkage ids (calendarEventId / ' +
+        'calendarIntegrationId / calendarSyncConfigId) — to detach an item from its calendar event, change its status instead.',
     inputSchema: {
         id: idSchema,
         title: z.string().min(1).optional(),
-        notes: notesSchema,
+        // `.describe()` last so the guidance lands at the property level of the JSON Schema, not inside `anyOf`.
+        notes: clearable(z.string()).describe(`${NOTES_DESCRIPTION} null clears.`),
         status: itemStatusSchema.optional(),
-        workContextIds: z.array(z.string()).optional(),
-        peopleIds: z.array(z.string()).optional(),
-        waitingForPersonId: z.string().optional(),
-        energy: z.enum(['low', 'medium', 'high']).optional(),
-        time: z.number().nonnegative().optional(),
-        focus: z.boolean().optional(),
-        urgent: z.boolean().optional(),
-        expectedBy: z.string().optional().describe('YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe.'),
-        ignoreBefore: z.string().optional().describe('YYYY-MM-DD. Tickler — hides item until this date. Allowed on nextAction / waitingFor / somedayMaybe.'),
-        timeStart: z.string().optional().describe('Floating ISO datetime. Allowed only on calendar items.'),
-        timeEnd: z.string().optional().describe('Floating ISO datetime. Allowed only on calendar items.'),
+        workContextIds: clearable(z.array(z.string())),
+        peopleIds: clearable(z.array(z.string())),
+        waitingForPersonId: clearable(z.string()).describe('Person the waitingFor item is blocked on. null clears it (the item stays waitingFor).'),
+        energy: clearable(z.enum(['low', 'medium', 'high'])),
+        time: clearable(z.number().nonnegative()),
+        focus: clearable(z.boolean()),
+        urgent: clearable(z.boolean()),
+        expectedBy: clearable(z.string()).describe('YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe. null clears.'),
+        ignoreBefore: clearable(z.string()).describe(
+            'YYYY-MM-DD. Tickler — hides item until this date. Allowed on nextAction / waitingFor / somedayMaybe. null clears.',
+        ),
+        timeStart: clearable(z.string()).describe('Floating ISO datetime. Allowed only on calendar items. null clears.'),
+        timeEnd: clearable(z.string()).describe('Floating ISO datetime. Allowed only on calendar items. null clears.'),
         calendarEventId: z.string().optional(),
         calendarIntegrationId: z.string().optional(),
         calendarSyncConfigId: z.string().optional(),

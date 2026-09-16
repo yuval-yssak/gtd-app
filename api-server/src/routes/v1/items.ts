@@ -472,6 +472,10 @@ async function trashItem({ userId, tokenId, itemId }: TrashContext): Promise<Tra
 // set; the apply pipeline's `strict: true` mode enforces every type, the status×field matrix,
 // and `floatingDateTime` rules via `RoutineSnapshotSchema`/`ItemSnapshotSchema`.
 //
+// Sending `null` for an optional field clears it (see `PATCH_CLEARABLE_FIELDS`); `title`/`status`
+// (required) and the GCal linkage ids (see `PATCH_CALENDAR_LINKAGE_FIELDS`) reject `null` with
+// `400 not_clearable`.
+//
 // Requires the `items.write` scope.
 
 // User-settable fields. Server-managed (`_id`, `user`, `createdTs`, `updatedTs`, `routineId`,
@@ -501,6 +505,85 @@ const PATCH_WRITABLE_FIELDS = new Set<keyof ItemInterface>([
     'urgent',
 ]);
 
+// Linkage to a real Google Calendar event is not a plain optional field: dropping it while the
+// item stays `calendar` makes pushback (`handleItemPush`) treat the item as never-pushed and mint
+// a SECOND event, orphaning the first — and clearing only `calendarIntegrationId` would route the
+// next update to the default integration instead of the event's real one. Detaching from GCal is
+// a status transition (→ nextAction/etc.), which routes through `hydrateCalendarDetachSnapshots`
+// and deletes the event properly.
+const PATCH_CALENDAR_LINKAGE_FIELDS = new Set<keyof ItemInterface>(['calendarEventId', 'calendarIntegrationId', 'calendarSyncConfigId']);
+
+// Fields a caller may clear by sending `null`: every writable field except the two that are
+// required on every item (`title`, `status`) and the GCal linkage above. `null` is the JSON-native
+// way to say "unset" — an empty string would still have to pass `nonEmptyString`, and omitting the
+// key means "leave as is" on a merge-style PATCH, so without this there was no way to drop e.g.
+// `waitingForPersonId` once set (short of trashing the item and recreating it).
+const PATCH_CLEARABLE_FIELDS = new Set<keyof ItemInterface>(
+    [...PATCH_WRITABLE_FIELDS].filter((field) => field !== 'title' && field !== 'status' && !PATCH_CALENDAR_LINKAGE_FIELDS.has(field)),
+);
+
+/** A PATCH body split into fields to assign and fields to clear (`null`-valued keys). */
+interface PartitionedPatch {
+    assignments: Record<string, unknown>;
+    clearedFields: string[];
+}
+
+function partitionPatchBody(raw: Record<string, unknown>): PartitionedPatch {
+    const entries = Object.entries(raw);
+    return {
+        assignments: Object.fromEntries(entries.filter(([, value]) => value !== null)),
+        clearedFields: entries.filter(([, value]) => value === null).map(([key]) => key),
+    };
+}
+
+function withClearedFieldsRemoved(item: ItemInterface, clearedFields: ReadonlyArray<string>): ItemInterface {
+    const dropped = new Set(clearedFields);
+    return Object.fromEntries(Object.entries(item).filter(([key]) => !dropped.has(key))) as ItemInterface;
+}
+
+function notClearableError(field: string): PatchError {
+    const reason = PATCH_CALENDAR_LINKAGE_FIELDS.has(field as keyof ItemInterface)
+        ? "cannot be cleared — change the item's status to detach it from Google Calendar"
+        : 'is required and cannot be cleared with null';
+    return { status: 400, code: 'not_clearable', message: `field "${field}" ${reason}`, path: [field] };
+}
+
+/**
+ * Body-shape guards that need no DB access, in order: empty → forbidden key → un-clearable
+ * `null` → trash transition. Returns the first failure or `null` when the body is acceptable.
+ */
+function rejectPatchBody(raw: Record<string, unknown>, clearedFields: ReadonlyArray<string>): PatchError | null {
+    if (Object.keys(raw).length === 0) {
+        return { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' };
+    }
+    const forbidden = Object.keys(raw).find((key) => !PATCH_WRITABLE_FIELDS.has(key as keyof ItemInterface));
+    if (forbidden !== undefined) {
+        return { status: 400, code: 'forbidden_field', message: `field "${forbidden}" cannot be set via the public API` };
+    }
+    const unclearable = clearedFields.find((key) => !PATCH_CLEARABLE_FIELDS.has(key as keyof ItemInterface));
+    if (unclearable !== undefined) {
+        return notClearableError(unclearable);
+    }
+    // Trashing has exactly one public entry point: POST /v1/items/:id/trash (which also handles
+    // routine advancement). PATCH keeps rejecting `{status: 'trash'}` so callers can't reach the
+    // trash transition through the general-purpose update surface — funnelling it through the
+    // dedicated endpoint keeps the disposal semantics (idempotency, routine advancement) in one
+    // place and avoids PATCH having to special-case routine advancement for a trash transition.
+    //
+    // Note on routine advancement via replay: a `trash` snapshot can still arrive through
+    // `/v1/operations/batch` (replay of a client-originated trash op). That path does NOT trigger
+    // server-side `advanceRoutineAfterDisposal` — the client already ran its own
+    // `maybeCreateNextRoutineItem` when it staged the trash op locally, so advancing again would
+    // double-create the tail item.
+    // Bracket access is required by `noPropertyAccessFromIndexSignature` on the `Record` type;
+    // suppress Biome's dot-notation preference, which would conflict with tsc.
+    // biome-ignore lint/complexity/useLiteralKeys: see above.
+    if (raw['status'] === 'trash') {
+        return { status: 409, code: 'invalid_transition', message: 'PATCH cannot transition to status "trash" — undeleting requires the in-app UI' };
+    }
+    return null;
+}
+
 type PatchError = { status: 400 | 404 | 409; code: string; message: string; path?: ReadonlyArray<string | number>; extra?: { status: string; field: string } };
 
 interface PatchContext {
@@ -522,50 +605,29 @@ type PatchResult = { ok: true; item: ItemInterface } | { ok: false; error: Patch
  * stamps `user`/`updatedTs` and `applyEntityOp`'s LWW guard handles concurrent writes.
  */
 async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promise<PatchResult> {
-    if (Object.keys(raw).length === 0) {
-        return { ok: false, error: { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' } };
-    }
-    for (const key of Object.keys(raw)) {
-        if (!PATCH_WRITABLE_FIELDS.has(key as keyof ItemInterface)) {
-            return { ok: false, error: { status: 400, code: 'forbidden_field', message: `field "${key}" cannot be set via the public API` } };
-        }
-    }
-    // Trashing has exactly one public entry point: POST /v1/items/:id/trash (which also handles
-    // routine advancement). PATCH keeps rejecting `{status: 'trash'}` so callers can't reach the
-    // trash transition through the general-purpose update surface — funnelling it through the
-    // dedicated endpoint keeps the disposal semantics (idempotency, routine advancement) in one
-    // place and avoids PATCH having to special-case routine advancement for a trash transition.
-    //
-    // Note on routine advancement via replay: a `trash` snapshot can still arrive through
-    // `/v1/operations/batch` (replay of a client-originated trash op). That path does NOT trigger
-    // server-side `advanceRoutineAfterDisposal` — the client already ran its own
-    // `maybeCreateNextRoutineItem` when it staged the trash op locally, so advancing again would
-    // double-create the tail item.
-    // Bracket access is required by `noPropertyAccessFromIndexSignature` on the `Record` type;
-    // suppress Biome's dot-notation preference, which would conflict with tsc.
-    // biome-ignore lint/complexity/useLiteralKeys: see above.
-    if (raw['status'] === 'trash') {
-        return {
-            ok: false,
-            error: { status: 409, code: 'invalid_transition', message: 'PATCH cannot transition to status "trash" — undeleting requires the in-app UI' },
-        };
+    const { assignments, clearedFields } = partitionPatchBody(raw);
+    const rejection = rejectPatchBody(raw, clearedFields);
+    if (rejection) {
+        return { ok: false, error: rejection };
     }
     const existing = await itemsDAO.findByOwnerAndId(itemId, userId);
     if (!existing) {
         return { ok: false, error: { status: 404, code: 'not_found', message: 'item not found' } };
     }
     const now = dayjs().toISOString();
-    // Merge raw onto existing, then sanitize fields that came *from existing* but no longer fit
-    // the target status. Fields the caller explicitly supplied stay in the snapshot — if they
-    // violate the matrix, Zod surfaces a `status_field_violation` 400 rather than silently
-    // dropping the caller's intent. (The old clarify-only handler silently sanitized everything,
-    // which masked client-side bugs.)
-    // The cast through `ItemInterface` is a type-level lie at the merge boundary — `raw` is
-    // structurally `Record<string, unknown>` after the writable-key filter. Safety relies on
+    // Merge the assignments onto existing, drop the `null`-cleared keys outright, then sanitize
+    // fields that came *from existing* but no longer fit the target status. Fields the caller
+    // explicitly supplied stay in the snapshot — if they violate the matrix, Zod surfaces a
+    // `status_field_violation` 400 rather than silently dropping the caller's intent. (The old
+    // clarify-only handler silently sanitized everything, which masked client-side bugs.)
+    // A cleared key is simply absent from the snapshot: the apply pipeline replaces the whole
+    // row and clients `put` pulled snapshots wholesale, so absence IS the tombstone under LWW.
+    // The cast through `ItemInterface` is a type-level lie at the merge boundary — `assignments`
+    // is structurally `Record<string, unknown>` after the writable-key filter. Safety relies on
     // (a) `PATCH_WRITABLE_FIELDS` having filtered non-ItemInterface keys, and (b) the apply
     // pipeline's strict-mode Zod check rejecting any remaining shape errors.
-    const merged = { ...existing, ...raw, updatedTs: now } as ItemInterface;
-    const updated = sanitizeStaleFields(merged, raw);
+    const merged = withClearedFieldsRemoved({ ...existing, ...assignments, updatedTs: now } as ItemInterface, clearedFields);
+    const updated = sanitizeStaleFields(merged, assignments);
     try {
         await applyAndPublishOperation(
             userId,

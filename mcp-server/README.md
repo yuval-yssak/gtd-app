@@ -165,6 +165,8 @@ There's no `DELETE /v1/items/:id` endpoint, and `PATCH` rejects `{status: 'trash
 
 `gtd_update_item` enforces this server-side. Caller-supplied fields incompatible with the target status return `400 status_field_violation` with `extra: { status, field }` so the model can self-correct.
 
+To clear an optional field that is already set, pass `null` for it — e.g. `gtd_update_item { id, waitingForPersonId: null }` unsets the person while the item stays `waitingFor`. Omitting a field leaves it unchanged; an empty string is rejected. Not clearable (`400 not_clearable`): `title`, `status`, and the Google Calendar linkage ids (`calendarEventId` / `calendarIntegrationId` / `calendarSyncConfigId`) — detach an item from its calendar event by changing its status instead.
+
 | Status | Allowed status-specific fields |
 |---|---|
 | `inbox` | (none — title/notes only) |

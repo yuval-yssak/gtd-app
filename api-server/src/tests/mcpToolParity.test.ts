@@ -6,6 +6,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 // The stdio binary's source-of-truth copies (relative import across packages — test-only, never bundled).
 import { registerBatchTools } from '../../../mcp-server/src/tools/batch.js';
 import { registerItemTools } from '../../../mcp-server/src/tools/items.js';
@@ -17,14 +18,32 @@ import { registerWorkContextTools } from '../../../mcp-server/src/tools/workCont
 import type { ApiClient } from '../mcp/apiClient.js';
 import { registerAllTools } from '../mcp/registerTools.js';
 
-/** Captures tool names registered via `server.registerTool(name, ...)` — the only method our tools call. */
-function captureToolNames(register: (server: McpServer, api: ApiClient) => void): string[] {
-    const names: string[] = [];
-    const stub = { registerTool: (name: string) => names.push(name) } as unknown as McpServer;
+interface RegisteredTool {
+    name: string;
+    description: string;
+    /** Input schema serialized to JSON Schema — the wire shape an MCP client actually sees. */
+    inputSchema: unknown;
+}
+
+/**
+ * Captures every `server.registerTool(name, config, ...)` call — the only method our tools call.
+ * The input schema is serialized to JSON Schema so a `.nullable()` / `.describe()` drift between
+ * the two copies fails here instead of only surfacing to a model at runtime.
+ */
+function captureTools(register: (server: McpServer, api: ApiClient) => void): RegisteredTool[] {
+    const tools: RegisteredTool[] = [];
+    const stub = {
+        registerTool: (name: string, config: { description: string; inputSchema: z.ZodRawShape }) =>
+            tools.push({ name, description: config.description, inputSchema: z.toJSONSchema(z.object(config.inputSchema), { io: 'input' }) }),
+    } as unknown as McpServer;
     // A no-op ApiClient — registration never invokes handlers, so the methods are never called.
     const api = {} as ApiClient;
     register(stub, api);
-    return names.sort();
+    return tools.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function captureToolNames(register: (server: McpServer, api: ApiClient) => void): string[] {
+    return captureTools(register).map((tool) => tool.name);
 }
 
 describe('MCP tool parity (api-server copy ↔ mcp-server source of truth)', () => {
@@ -44,5 +63,19 @@ describe('MCP tool parity (api-server copy ↔ mcp-server source of truth)', () 
         expect(remote).toContain('gtd_capture');
         expect(remote).toContain('gtd_reassign');
         expect(remote.length).toBeGreaterThanOrEqual(28);
+    });
+
+    it('exposes identical descriptions and input JSON Schemas from both copies', () => {
+        const remote = captureTools(registerAllTools);
+        const stdio = captureTools((server, api) => {
+            registerItemTools(server, api);
+            registerRoutineTools(server, api);
+            registerPeopleTools(server, api);
+            registerWorkContextTools(server, api);
+            registerReassignTools(server, api);
+            registerBatchTools(server, api);
+            registerMeTools(server, api);
+        });
+        expect(remote).toEqual(stdio);
     });
 });

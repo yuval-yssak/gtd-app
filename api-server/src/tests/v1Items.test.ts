@@ -836,3 +836,295 @@ describe('PATCH /v1/items/:id (Phase 3 full-surface update)', () => {
         expect(opsAfterReject).toBe(0);
     });
 });
+
+// ─── PATCH `null` clears an optional field ─────────────────────────────────
+//
+// PATCH is merge-style, so before this an optional field could never be unset once set: `""`
+// fails `nonEmptyString`, and omitting the key means "leave as is". `null` is the clear signal.
+
+describe('PATCH /v1/items/:id — null clears optional fields', () => {
+    async function seedWaitingFor(userId: string): Promise<ItemInterface> {
+        const item = await seedItem({ userId, title: 'waiting', status: 'waitingFor', createdTs: '2025-01-01T00:00:00.000Z' });
+        await db
+            .collection('items')
+            .updateOne({ _id: item._id } as never, { $set: { waitingForPersonId: 'p-1', peopleIds: ['p-1', 'p-2'], expectedBy: '2099-01-01' } });
+        return item;
+    }
+
+    it('null unsets waitingForPersonId; status, _id and createdTs are untouched and the key is absent', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { waitingForPersonId: null } });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as Record<string, unknown>;
+        expect(body).not.toHaveProperty('waitingForPersonId');
+        expect(body.status).toBe('waitingFor');
+        expect(body._id).toBe(item._id);
+        expect(body.createdTs).toBe('2025-01-01T00:00:00.000Z');
+        // The other fields that were not mentioned survive the merge.
+        expect(body.peopleIds).toEqual(['p-1', 'p-2']);
+        expect(body.expectedBy).toBe('2099-01-01');
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored).not.toBeNull();
+        expect(stored).not.toHaveProperty('waitingForPersonId');
+        expect(stored?.status).toBe('waitingFor');
+    });
+
+    it('the recorded op snapshot omits the cleared key, so the clear is a real LWW change for other devices', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        const before = dayjs().toISOString();
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { waitingForPersonId: null } });
+        expect(res.status).toBe(200);
+        const ops = await db
+            .collection('operations')
+            .find({ user: userId, entityId: item._id, opType: 'update' } as never)
+            .toArray();
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one update op');
+        const snapshot = op.snapshot as Record<string, unknown>;
+        expect(snapshot).not.toHaveProperty('waitingForPersonId');
+        expect(snapshot.status).toBe('waitingFor');
+        // updatedTs moved forward — a device holding the pre-clear copy loses LWW to this snapshot.
+        expect(dayjs(snapshot.updatedTs as string).isAfter(dayjs(before).subtract(1, 'second'))).toBe(true);
+        expect(dayjs(snapshot.updatedTs as string).isAfter(dayjs(item.updatedTs).subtract(1, 'millisecond'))).toBe(true);
+    });
+
+    it('re-applying a pre-clear snapshot through the pipeline loses LWW to the cleared row', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        const staleCopy = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        if (!staleCopy) throw new Error('expected seeded item');
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { waitingForPersonId: null } });
+        expect(res.status).toBe(200);
+        // A device that never pulled the clear replays its stale full snapshot (older updatedTs).
+        const { applyAndPublishOperation } = await import('../lib/applyOperation.js');
+        await applyAndPublishOperation(
+            userId,
+            { entityType: 'item', opType: 'update', entityId: item._id ?? '', snapshot: staleCopy },
+            { deviceId: 'stale-device' },
+        );
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored).not.toHaveProperty('waitingForPersonId');
+    });
+
+    it('clears every optional field type: arrays, dates, enum, number, booleans, notes', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'na', status: 'nextAction', notes: 'some notes' });
+        await db.collection('items').updateOne({ _id: item._id } as never, {
+            $set: {
+                workContextIds: ['wc-1'],
+                peopleIds: ['p-1'],
+                energy: 'high',
+                time: 30,
+                focus: true,
+                urgent: true,
+                expectedBy: '2099-01-01',
+                ignoreBefore: '2098-12-01',
+            },
+        });
+        const cleared = {
+            notes: null,
+            workContextIds: null,
+            peopleIds: null,
+            energy: null,
+            time: null,
+            focus: null,
+            urgent: null,
+            expectedBy: null,
+            ignoreBefore: null,
+        };
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: cleared });
+        expect(res.status).toBe(200);
+        const stored = (await itemsDAO.findByOwnerAndId(item._id ?? '', userId)) as Record<string, unknown> | null;
+        expect(stored).not.toBeNull();
+        for (const field of Object.keys(cleared)) {
+            expect(stored, field).not.toHaveProperty(field);
+        }
+        expect(stored?.status).toBe('nextAction');
+        expect(stored?.title).toBe('na');
+    });
+
+    it('clears timeEnd on a calendar item but refuses to clear GCal linkage ids — no op is recorded', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'cal', status: 'calendar' });
+        await db.collection('items').updateOne({ _id: item._id } as never, {
+            $set: {
+                timeStart: '2099-04-01T10:00:00',
+                timeEnd: '2099-04-01T11:00:00',
+                calendarEventId: 'ev-1',
+                calendarIntegrationId: 'int-1',
+                calendarSyncConfigId: 'cfg-1',
+            },
+        });
+        // Clearing linkage while the item stays `calendar` would make pushback mint a second GCal
+        // event, so each linkage id is refused up front and nothing reaches the apply pipeline.
+        for (const field of ['calendarEventId', 'calendarIntegrationId', 'calendarSyncConfigId']) {
+            const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { [field]: null } });
+            expect(res.status, field).toBe(400);
+            const body = (await res.json()) as { code: string; path?: string[]; error: string };
+            expect(body.code).toBe('not_clearable');
+            expect(body.path).toEqual([field]);
+            expect(body.error).toContain('status');
+        }
+        const ops = await db
+            .collection('operations')
+            .find({ user: userId, entityId: item._id } as never)
+            .toArray();
+        expect(ops).toHaveLength(0);
+        const untouched = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(untouched?.calendarEventId).toBe('ev-1');
+        expect(untouched?.calendarIntegrationId).toBe('int-1');
+
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { timeEnd: null } });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored?.timeStart).toBe('2099-04-01T10:00:00');
+        expect(stored).not.toHaveProperty('timeEnd');
+        expect(stored?.calendarEventId).toBe('ev-1');
+    });
+
+    it('false and 0 are assignments, not clears — the keys stay present', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'na', status: 'nextAction' });
+        await db.collection('items').updateOne({ _id: item._id } as never, { $set: { focus: true, urgent: true, time: 30 } });
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { focus: false, time: 0 } });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored?.focus).toBe(false);
+        expect(stored?.time).toBe(0);
+        expect(stored?.urgent).toBe(true);
+    });
+
+    it('peopleIds: [] stores a present empty array while peopleIds: null removes the key', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        const emptied = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { peopleIds: [] } });
+        expect(emptied.status).toBe(200);
+        const afterEmpty = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(afterEmpty?.peopleIds).toEqual([]);
+        const cleared = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { peopleIds: null } });
+        expect(cleared.status).toBe(200);
+        const afterClear = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(afterClear).not.toHaveProperty('peopleIds');
+    });
+
+    it('clears preserved metadata on an archival done item (the matrix allows every field there)', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'finished', status: 'done' });
+        await db.collection('items').updateOne({ _id: item._id } as never, { $set: { timeStart: '2099-04-01T10:00:00', energy: 'low' } });
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { energy: null } });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored).not.toHaveProperty('energy');
+        expect(stored?.timeStart).toBe('2099-04-01T10:00:00');
+        expect(stored?.status).toBe('done');
+    });
+
+    it('clearing a field alongside a transition to a status that disallows it is a no-op 200, not a violation', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        // waitingForPersonId is not allowed on nextAction; stale-sanitization would have dropped
+        // it anyway, and an explicit null must not be mistaken for a caller-supplied value.
+        const res = await callApi({
+            method: 'PATCH',
+            path: `/v1/items/${item._id}`,
+            token: plaintext,
+            body: { status: 'nextAction', waitingForPersonId: null },
+        });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored?.status).toBe('nextAction');
+        expect(stored).not.toHaveProperty('waitingForPersonId');
+        expect(stored?.expectedBy).toBe('2099-01-01');
+    });
+
+    it('mixes clears and assignments in one body', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        const res = await callApi({
+            method: 'PATCH',
+            path: `/v1/items/${item._id}`,
+            token: plaintext,
+            body: { waitingForPersonId: null, expectedBy: '2099-06-01', title: 'renamed' },
+        });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored).not.toHaveProperty('waitingForPersonId');
+        expect(stored?.expectedBy).toBe('2099-06-01');
+        expect(stored?.title).toBe('renamed');
+    });
+
+    it('clearing a field that is already absent is a no-op 200 (idempotent)', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'w', status: 'waitingFor' });
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { waitingForPersonId: null } });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored).not.toHaveProperty('waitingForPersonId');
+        expect(stored?.status).toBe('waitingFor');
+    });
+
+    it('a null-only body is not an empty body', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { expectedBy: null } });
+        expect(res.status).toBe(200);
+    });
+
+    it('title: null and status: null are rejected with not_clearable and the row is untouched', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        for (const field of ['title', 'status']) {
+            const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { [field]: null } });
+            expect(res.status, field).toBe(400);
+            const body = (await res.json()) as { code: string; path?: string[] };
+            expect(body.code).toBe('not_clearable');
+            expect(body.path).toEqual([field]);
+        }
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored?.title).toBe('waiting');
+        expect(stored?.waitingForPersonId).toBe('p-1');
+    });
+
+    it('null on a server-managed field is still forbidden_field', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { routineId: null } });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('forbidden_field');
+    });
+
+    it('an empty string is still rejected by the schema — "" is not a clear', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { waitingForPersonId: '' } });
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as { code: string; path?: string[] };
+        expect(body.code).toBe('invalid_operation');
+        expect(body.path).toEqual(['snapshot', 'waitingForPersonId']);
+        const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
+        expect(stored?.waitingForPersonId).toBe('p-1');
+    });
+
+    it('clearing a field alongside a status transition still lets the matrix reject caller-supplied incompatible fields', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedWaitingFor(userId);
+        // waitingFor → calendar: clear the person (fine), but `expectedBy` explicitly supplied is not allowed on calendar.
+        const res = await callApi({
+            method: 'PATCH',
+            path: `/v1/items/${item._id}`,
+            token: plaintext,
+            body: {
+                status: 'calendar',
+                timeStart: '2099-04-01T10:00:00Z',
+                timeEnd: '2099-04-01T11:00:00Z',
+                waitingForPersonId: null,
+                expectedBy: '2099-01-01',
+            },
+        });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('status_field_violation');
+    });
+});

@@ -302,6 +302,16 @@ Status transitions are no longer restricted to `inbox` as the source — any mat
 
 **Stale-field sanitization.** When a status transition makes an existing-row field invalid (e.g. moving a calendar item to `inbox` makes its `timeStart` no longer valid), the server strips the *existing* field automatically. Caller-supplied incompatible fields are NOT silently stripped — they surface as `status_field_violation` so client bugs are visible.
 
+**Clearing a field.** PATCH is merge-style — omitting a key leaves it unchanged — so an optional field that has been set is cleared by sending **`null`** for it:
+
+```json
+{ "waitingForPersonId": null }
+```
+
+unsets the person while the item stays `waitingFor`; `_id`, `createdTs`, and every other field are untouched. Clearable with `null`: `notes`, `workContextIds`, `peopleIds`, `waitingForPersonId`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`. Not clearable (`400 not_clearable`, `path: [field]`): `title` and `status` (required on every item), and the Google Calendar linkage ids `calendarEventId` / `calendarIntegrationId` / `calendarSyncConfigId` — dropping those while the item stays `calendar` would make the sync layer treat it as never-pushed and create a duplicate event, so detaching an item from its calendar event is done by changing its status (e.g. to `nextAction`), which also removes the event from Google Calendar. An empty string is *not* a clear — it fails the non-empty-string schema with `400 invalid_operation`. `false` and `0` are ordinary assignments, not clears. For the array fields, `[]` stores a present empty array while `null` removes the key; both read back as "no references" in the app, but only `null` yields an absent field on `GET`. Clears and assignments may be mixed in one body, and clearing a field on an archival `done`/`trash` item works the same way (it drops the preserved metadata, so prefer not to).
+
+A clear is a real change for sync purposes: the recorded operation carries the full post-clear snapshot with the key **absent**, the server replaces the stored row wholesale, and devices replace their local copy with the pulled snapshot — so under last-write-wins the cleared state wins over any older local copy rather than being reinstated from it.
+
 **Errors**
 
 | Status | `code` | Meaning |
@@ -309,6 +319,7 @@ Status transitions are no longer restricted to `inbox` as the source — any mat
 | `400` | `invalid_body` | Request body is not a JSON object. |
 | `400` | `empty_body` | Body had no fields. |
 | `400` | `forbidden_field` | Body included a server-managed field. |
+| `400` | `not_clearable` | Body sent `null` for `title` / `status` (required) or a Google Calendar linkage id (`calendarEventId` / `calendarIntegrationId` / `calendarSyncConfigId` — detach by changing status instead). The response carries `path: [field]`. |
 | `400` | `invalid_operation` | Zod schema rejected a field type or shape. The response carries `path: [field]` to pinpoint the offender. |
 | `400` | `status_field_violation` | A caller-supplied field is incompatible with the target status under the matrix. The response carries `extra: { status, field }`. |
 | `403` | `forbidden_scope` | Token lacks `items.write`. |
@@ -331,7 +342,7 @@ Both entity types carry an optional `archived: boolean` (soft retire: the app hi
 | `GET` | `/v1/people` | `people.read` | `?limit=` (default 100, max 500), `?cursor=`, `?since=ISODateTime`. |
 | `GET` | `/v1/people/:id` | `people.read` | 404 if missing or not yours. |
 | `PATCH` | `/v1/people/:id` | `people.write` | Same allowlist as POST. Empty body → `400 empty_body`. |
-| `DELETE` | `/v1/people/:id` | `people.write` | Idempotent: missing row returns 200 with `alreadyDeleted: true`. **Does not cascade** — references from items (`peopleIds`, `waitingForPersonId`) are left dangling and the client renders them as missing. |
+| `DELETE` | `/v1/people/:id` | `people.write` | Idempotent: missing row returns 200 with `alreadyDeleted: true`. **Cascades** to referencing items: the id is pulled from `peopleIds` and `waitingForPersonId` is unset, and a `[person removed: <name>]` / `[was waiting for: <name>]` breadcrumb is appended to each affected item's title (one `update` op per item, so other devices pick it up). The cascade is best-effort: a failure is logged server-side and the delete still returns 200, leaving those references dangling. To detach a single item without deleting the person, `PATCH` it with `{ "waitingForPersonId": null }`. |
 | `POST` | `/v1/work-contexts` | `contexts.write` | Body: `{ name, archived? }`. Otherwise mirrors `/v1/people`. |
 | `GET` | `/v1/work-contexts` | `contexts.read` | Same pagination shape. |
 | `GET` | `/v1/work-contexts/:id` | `contexts.read` | |
