@@ -4,6 +4,7 @@ import type { CalendarMeta, NextActionMeta, SomedayMaybeMeta, WaitingForMeta } f
 import type {
     StoredDeviceMeta,
     StoredItem,
+    StoredItemBrief,
     StoredPerson,
     StoredReviewInbox,
     StoredRoutine,
@@ -156,6 +157,27 @@ const gtdImpl = {
 
     removeItem: (page: Page, itemId: string): Promise<void> =>
         page.evaluate((id) => (window as unknown as { __gtd: { removeItem(id: string): Promise<void> } }).__gtd.removeItem(id), itemId),
+
+    // ── Item briefs ──────────────────────────────────────────────────────────
+    getItemBrief: (page: Page, itemId: string): Promise<StoredItemBrief | undefined> =>
+        page.evaluate(
+            (id) => (window as unknown as { __gtd: { getItemBrief(id: string): Promise<StoredItemBrief | undefined> } }).__gtd.getItemBrief(id),
+            itemId,
+        ),
+
+    setUserBrief: (page: Page, item: StoredItem, text: string): Promise<StoredItemBrief | null> =>
+        page.evaluate(
+            ([i, t]) =>
+                (
+                    window as unknown as {
+                        __gtd: { setUserBrief(i: StoredItem, t: string): Promise<StoredItemBrief | null> };
+                    }
+                ).__gtd.setUserBrief(i as StoredItem, t as string),
+            [item, text] as const,
+        ),
+
+    clearBrief: (page: Page, itemId: string): Promise<void> =>
+        page.evaluate((id) => (window as unknown as { __gtd: { clearBrief(id: string): Promise<void> } }).__gtd.clearBrief(id), itemId),
 
     // ── People ───────────────────────────────────────────────────────────────
     createPerson: (page: Page, fields: { name: string; email?: string; phone?: string }): Promise<StoredPerson> =>

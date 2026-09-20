@@ -1,5 +1,5 @@
 import dayjs from 'dayjs';
-import type { StoredItem } from '../../types/MyDB';
+import type { StoredItem, StoredItemBrief } from '../../types/MyDB';
 import { type CalendarFormState, emptyCalendar, type NextActionFormState, type SomedayMaybeFormState, type WaitingForFormState } from '../clarify/types';
 import type { ClarifyDestination, EditableStatus } from '../editItemDialogLogic';
 
@@ -21,6 +21,9 @@ import type { ClarifyDestination, EditableStatus } from '../editItemDialogLogic'
 export interface ItemFormSeeds {
     title: string;
     notes: string;
+    /** The item's brief text ('' when no row / a skipped row). Seeded from the sidecar entity,
+     *  so a brief arriving by sync (another device, a server-generated one) merges like text. */
+    brief: string;
     status: ClarifyDestination;
     na: NextActionFormState;
     cal: CalendarFormState;
@@ -92,10 +95,16 @@ export function itemToSomedayMaybeForm(item: StoredItem): SomedayMaybeFormState 
     };
 }
 
-export function itemToFormSeeds(item: StoredItem): ItemFormSeeds {
+/** The editable text of a brief row: a skipped row (`text: null`) reads as no brief. */
+export function briefTextOf(brief: Pick<StoredItemBrief, 'text'> | undefined | null): string {
+    return brief?.text ?? '';
+}
+
+export function itemToFormSeeds(item: StoredItem, brief?: Pick<StoredItemBrief, 'text'> | null): ItemFormSeeds {
     return {
         title: item.title,
         notes: item.notes ?? '',
+        brief: briefTextOf(brief),
         status: item.status,
         na: itemToNextActionForm(item),
         cal: itemToCalendarForm(item),
@@ -168,10 +177,10 @@ export interface ItemFormsMergeResult {
  */
 export function mergeItemForms(form: ItemFormSeeds, seed: ItemFormSeeds, incoming: ItemFormSeeds): ItemFormsMergeResult {
     const text = mergeFormGroup(
-        { title: form.title, notes: form.notes, status: form.status },
-        { title: seed.title, notes: seed.notes, status: seed.status },
-        { title: incoming.title, notes: incoming.notes, status: incoming.status },
-        { title: 'Title', notes: 'Notes', status: 'Status' },
+        { title: form.title, notes: form.notes, brief: form.brief, status: form.status },
+        { title: seed.title, notes: seed.notes, brief: seed.brief, status: seed.status },
+        { title: incoming.title, notes: incoming.notes, brief: incoming.brief, status: incoming.status },
+        { title: 'Title', notes: 'Notes', brief: 'Brief', status: 'Status' },
     );
     const na = mergeFormGroup(form.na, seed.na, incoming.na, NA_LABELS);
     const cal = mergeFormGroup(form.cal, seed.cal, incoming.cal, CAL_LABELS);
@@ -186,6 +195,7 @@ export function mergeItemForms(form: ItemFormSeeds, seed: ItemFormSeeds, incomin
         merged: {
             title: text.merged.title,
             notes: text.merged.notes,
+            brief: text.merged.brief,
             status: text.merged.status,
             na: na.merged,
             cal: cal.merged,

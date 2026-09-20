@@ -32,13 +32,16 @@ const batch = defineTool({
         'Atomic w.r.t. validation and scope; NOT atomic w.r.t. mid-flight Mongo failures (same caveat as /sync/push). ' +
         'Note: item hard-delete is rejected ({entityType:"item", opType:"delete"} → 400) because it is unrecoverable — ' +
         'use gtd_trash_item to dispose of an item (recoverable soft-delete). opType:"delete" is still valid for ' +
-        'routine, person, and workContext entities.',
+        'routine, person, workContext and itemBrief entities. itemBrief snapshots ({_id: itemId, itemId, text, origin, ' +
+        'sourceHash, generatedTs, createdTs, updatedTs}) must use origin "user" or "agent" (model/skipped are server-only → ' +
+        '400 forbidden_origin) and reference an item you own or create earlier in the same batch (else 404); prefer ' +
+        'gtd_set_brief, which stamps sourceHash for you.',
     inputSchema: {
         ops: z
             .array(
                 z
                     .object({
-                        entityType: z.enum(['item', 'routine', 'person', 'workContext']),
+                        entityType: z.enum(['item', 'routine', 'person', 'workContext', 'itemBrief']),
                         opType: z.enum(['create', 'update', 'delete']),
                         entityId: idSchema,
                         snapshot: z.union([z.record(z.string(), z.unknown()), z.null()]),

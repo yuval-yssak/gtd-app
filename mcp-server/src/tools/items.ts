@@ -40,11 +40,21 @@ const capture = defineTool({
     handler: async ({ account, ...body }, api) => api.request('POST', '/v1/items', body, undefined, requestOptsFromArgs({ account })),
 });
 
+// Read-only `brief` field on every item response. The state is derived server-side against the
+// item's CURRENT title + notes, so the model never has to recompute a hash.
+const BRIEF_FIELD_DESCRIPTION =
+    'Each item carries a read-only `brief` field: `{ text, origin, state, generatedTs }` or null. `state` is "fresh" ' +
+    '(brief matches the current title + notes), "pinnedStale" (a user/agent-authored brief whose notes changed since) ' +
+    'or "none" (no usable brief). Write one with gtd_set_brief.';
+
 const listItems = defineTool({
     name: 'gtd_list_items',
     description:
         "List or search the user's items. Sorted by updatedTs DESC. Defaults to all statuses except `trash`. " +
-        'Use `cursor` from a previous response to paginate.',
+        `Use \`cursor\` from a previous response to paginate. ${BRIEF_FIELD_DESCRIPTION} ` +
+        'Filter by `briefState` to sweep items that still need a brief (`none` excludes items the server deliberately ' +
+        'declined to brief because their notes are too short). The filter is applied per page, so a page can come back ' +
+        'short or empty while `nextCursor` is still present; keep paginating.',
     inputSchema: {
         q: z.string().optional().describe('Case-insensitive literal substring match against title and notes.'),
         status: z
@@ -54,6 +64,10 @@ const listItems = defineTool({
         since: z.string().optional().describe('ISO datetime. Only items with updatedTs > since.'),
         limit: z.number().int().positive().max(200).optional().describe('Defaults to 50. Max 200.'),
         cursor: z.string().optional().describe('Opaque cursor from a previous response.'),
+        briefState: z
+            .enum(['none', 'fresh', 'pinnedStale'])
+            .optional()
+            .describe('Keep only items whose brief is in this state. Applied per fetched page (see description).'),
         account: accountSchema,
     },
     handler: async (args, api) =>
@@ -61,20 +75,43 @@ const listItems = defineTool({
             'GET',
             '/v1/items',
             undefined,
-            { q: args.q, status: args.status, since: args.since, limit: args.limit, cursor: args.cursor },
+            { q: args.q, status: args.status, since: args.since, limit: args.limit, cursor: args.cursor, briefState: args.briefState },
             requestOptsFromArgs({ account: args.account }),
         ),
 });
 
 const getItem = defineTool({
     name: 'gtd_get_item',
-    description: 'Fetch a single item by id. 404 if missing or owned by another user.',
+    description: `Fetch a single item by id. 404 if missing or owned by another user. ${BRIEF_FIELD_DESCRIPTION}`,
     inputSchema: {
         id: idSchema,
         account: accountSchema,
     },
     handler: async (args, api) =>
         api.request('GET', `/v1/items/${encodeURIComponent(args.id)}`, undefined, undefined, requestOptsFromArgs({ account: args.account })),
+});
+
+const setBrief = defineTool({
+    name: 'gtd_set_brief',
+    description:
+        "Write (or clear) an item's brief — a ONE-SENTENCE, review-oriented condensation of its title + notes: what the " +
+        'commitment is and why it is still open. Never logistics, dates or contexts (those live in structured fields). ' +
+        'Write it in the language of the notes, at most ~160 characters. Stored with origin "agent" and PINNED: the ' +
+        'automatic generator never overwrites it, and it keeps showing (marked stale) after the notes change until you ' +
+        'set a new one. Pass `brief: null` to delete it. Returns the item with its `brief` field.',
+    inputSchema: {
+        itemId: idSchema,
+        brief: z.string().min(1).max(500).nullable().describe('The brief text (trimmed server-side; 1–500 chars), or null to clear.'),
+        account: accountSchema,
+    },
+    handler: async (args, api) =>
+        api.request(
+            'PUT',
+            `/v1/items/${encodeURIComponent(args.itemId)}/brief`,
+            { brief: args.brief },
+            undefined,
+            requestOptsFromArgs({ account: args.account }),
+        ),
 });
 
 const updateItem = defineTool({
@@ -153,7 +190,8 @@ export function registerItemTools(server: McpServer, api: ApiClient): void {
     registerOne(server, updateItem, api);
     registerOne(server, completeItem, api);
     registerOne(server, trashItem, api);
+    registerOne(server, setBrief, api);
 }
 
 // Re-exported for tests.
-export const _itemToolsForTesting = { capture, listItems, getItem, updateItem, completeItem, trashItem };
+export const _itemToolsForTesting = { capture, listItems, getItem, updateItem, completeItem, trashItem, setBrief };

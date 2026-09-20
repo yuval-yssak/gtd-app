@@ -24,6 +24,7 @@ import { type RsvpPushStatus, rsvpOnline } from '../../api/calendarApi';
 import type { ReassignItemEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
+import { clearBrief, setUserBrief } from '../../db/itemBriefMutations';
 import {
     clarifyToCalendar,
     clarifyToDone,
@@ -45,6 +46,8 @@ import { useCalendarOptions } from '../../hooks/useCalendarOptions';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
+import { useShowBriefs } from '../../lib/briefPreference';
+import { briefState } from '../../lib/briefSource';
 import { omitArchived } from '../../lib/entityUsage';
 import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
@@ -87,11 +90,14 @@ import { RoutineIndicator } from '../RoutineIndicator';
 import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
 import type { FormState as RoutineFormState } from '../routineEditor/routineFormState';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
+import { BriefSection } from './BriefSection';
+import { decideBriefCommit, type EditorPresentation, isBriefFirst } from './briefSectionLogic';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import { CopyIdButton } from './CopyIdButton';
 import styles from './ItemEditorBody.module.css';
 import { resolveActionsPlacement } from './itemEditorActionsPlacement';
 import {
+    briefTextOf,
     isOwnerOrStructurallyEdited,
     itemToCalendarForm,
     itemToFormSeeds,
@@ -197,6 +203,12 @@ export interface ItemEditorBodyProps {
     initialStatus?: EditableStatus;
     /** Determines which actions container is rendered and visual padding. Dialog wrapper sets 'dialog'. */
     chrome: ItemEditorChrome;
+    /**
+     * `review` (weekly-review cards): when the item has a brief on show, the card leads with the
+     * brief line and folds the notes behind "Show notes". Presentation only — same editor, same
+     * save paths. Default `edit` renders the brief as a plain field under the title.
+     */
+    presentation?: EditorPresentation;
     /** Replaces the default Cancel/Save actions row. Wizards use this for Skip / Save-and-next. */
     renderActions?: (api: ItemEditorActionsApi) => React.ReactNode;
     /**
@@ -218,6 +230,14 @@ export interface ItemEditorBodyProps {
 // Re-exported for callers/tests that historically imported it from here; the implementation moved
 // to itemEditorLiveMerge so the merge module never has to import this component (import cycle).
 export { itemToCalendarForm } from './itemEditorLiveMerge';
+
+/**
+ * Live-merge trigger key. The brief row has its own LWW anchor, so its updatedTs joins the item's:
+ * a brief that arrives (or is deleted) without any item change must still merge into the open editor.
+ */
+function mergeKeyOf(itemTs: string, briefTs: string | undefined): string {
+    return `${itemTs}|${briefTs ?? ''}`;
+}
 
 /** Resolves the body-class for the chrome variant. dialog/page render the bare flex column;
  *  expand and popover add their own padding/borders. */
@@ -247,6 +267,7 @@ export function ItemEditorBody({
     onFromGmailReadOnly,
     initialStatus,
     chrome,
+    presentation = 'edit',
     renderActions,
     actionsContainer,
     hasHostCopyIdButton,
@@ -254,7 +275,7 @@ export function ItemEditorBody({
     const { options: calendarOptions } = useCalendarOptions();
     // all* (unfiltered) sets: the live-row lookup and routine-link resolution must keep working
     // when this item's owner account is toggled out of view (editor reached via deep link).
-    const { loggedInAccounts, allRoutines, allItems, allWorkContexts, allPeople } = useAppData();
+    const { loggedInAccounts, allRoutines, allItems, allWorkContexts, allPeople, allItemBriefs, refreshItemBriefs } = useAppData();
     const { runReassignWithOverlay, isPending } = usePendingReassign();
     const reassignInFlight = isPending('item', item._id);
 
@@ -264,9 +285,16 @@ export function ItemEditorBody({
     const liveItem = allItems.find((i) => i._id === item._id) ?? item;
     const liveItemRef = useRef(liveItem);
     liveItemRef.current = liveItem;
+    // The brief sidecar row (`_id === item._id`) — resolved from the provider's snapshot, never a
+    // per-render IDB read. Same live-row discipline as `liveItem`.
+    const liveBrief = allItemBriefs.find((row) => row._id === item._id);
+    const liveBriefRef = useRef(liveBrief);
+    liveBriefRef.current = liveBrief;
 
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
+    const [brief, setBrief] = useState(() => briefTextOf(liveBrief));
+    const isShowBriefsOn = useShowBriefs();
     const [status, setStatus] = useState<ClarifyDestination>(initialStatus ?? item.status);
     const [ownerUserId, setOwnerUserId] = useState(item.userId);
     const [reassignError, setReassignError] = useState<string | null>(null);
@@ -343,7 +371,7 @@ export function ItemEditorBody({
     // fields silently adopt remote changes and which keep local edits. State (not a ref) so the
     // render-time isDirty below is honestly derived; the ref mirror serves the stable callbacks
     // (navigation guard) exactly like formRefs does.
-    const [seedForms, setSeedForms] = useState(() => itemToFormSeeds(item));
+    const [seedForms, setSeedForms] = useState(() => itemToFormSeeds(item, liveBrief));
     const seedFormsRef = useRef(seedForms);
     seedFormsRef.current = seedForms;
 
@@ -351,8 +379,8 @@ export function ItemEditorBody({
     // dismissible notice with a whole-form "Use their version" escape hatch.
     const [conflictFields, setConflictFields] = useState<string[]>([]);
 
-    const formRefs = useRef({ title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId });
-    formRefs.current = { title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId };
+    const formRefs = useRef({ title, notes, brief, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId });
+    formRefs.current = { title, notes, brief, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId };
 
     /**
      * Shared structural-dirty core for the render-time `isDirty` and the navigation guard's
@@ -368,7 +396,11 @@ export function ItemEditorBody({
     // isDirty) — state-only inputs, no refs. guardBypassRef is deliberately NOT consulted here:
     // it means "a close is in flight, don't prompt", which is orthogonal to what the primary
     // action button should read.
-    const isDirty = isStructurallyEdited({ title, notes, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId }, seedForms, liveItem.userId);
+    const isDirty = isStructurallyEdited(
+        { title, notes, brief, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId },
+        seedForms,
+        liveItem.userId,
+    );
 
     // See onDirtyLockChange's prop doc. Text edits are deliberately NOT part of the lock — the
     // autosave's unmount flush commits them, so navigating away can't lose them.
@@ -448,6 +480,37 @@ export function ItemEditorBody({
         }
     }
 
+    // ── Brief (sidecar entity, its own op) ───────────────────────────────────
+    // Saves on blur/Enter/clear and on unmount (like the text autosave's unmount flush). The last
+    // value THIS editor wrote is remembered so its echo through sync never reads as a conflict.
+    const lastCommittedBriefRef = useRef(briefTextOf(liveBrief));
+    // `fieldValue` is passed in rather than read from formRefs: the clear button changes and
+    // commits in one tick, before the state (and so the ref mirror) has re-rendered.
+    async function commitBrief(fieldValue: string) {
+        const decision = decideBriefCommit(fieldValue, seedFormsRef.current.brief);
+        if (decision.kind === 'noop') {
+            return;
+        }
+        const committedText = decision.kind === 'set' ? decision.text : '';
+        lastCommittedBriefRef.current = committedText;
+        setBrief(committedText);
+        // Rebaseline the seed locally NOW: the merge effect only re-seeds once the refreshed row
+        // has round-tripped through the provider, and a blur/Enter pair (or a second blur) inside
+        // that window would otherwise re-queue the same value as a fresh op.
+        setSeedForms((prev) => ({ ...prev, brief: committedText }));
+        await (decision.kind === 'set' ? setUserBrief(db, liveItemRef.current, decision.text) : clearBrief(db, item._id));
+        await refreshItemBriefs();
+    }
+    const commitBriefRef = useRef(commitBrief);
+    commitBriefRef.current = commitBrief;
+    const flushBrief = (fieldValue: string) => commitBriefRef.current(fieldValue).catch((e) => console.warn('[brief] failed to save brief', e));
+    const flushBriefRef = useRef(flushBrief);
+    flushBriefRef.current = flushBrief;
+    // Unmount flush: the field's blur never fires when the host unmounts the editor (Escape,
+    // wizard advance), so a brief typed right before leaving would otherwise be lost. StrictMode-
+    // safe without a guard: the spurious first cleanup sees form === seed and decides `noop`.
+    useEffect(() => () => void flushBriefRef.current(formRefs.current.brief), []);
+
     // ── Unsaved-changes guard ────────────────────────────────────────────────
     // Structural edits (status, schedule, contexts, owner, …) only persist on explicit Save, so
     // navigating away or reloading would silently drop them. Pause in-app navigations behind a
@@ -484,19 +547,20 @@ export function ItemEditorBody({
     // When sync rewrites the open item: clean fields adopt the incoming values; dirty fields keep
     // the local edit and flag a conflict when the remote version changed them differently. Our own
     // autosave echoing back is recognized via the controller's lastCommitted value — not a conflict.
-    const lastMergedUpdatedTsRef = useRef(item.updatedTs);
+    const lastMergedKeyRef = useRef(mergeKeyOf(item.updatedTs, liveBrief?.updatedTs));
     useEffect(() => {
         // Row identity churns on every unrelated refresh (IDB re-read) — only merge when this
-        // item's content actually changed. Every persisted write bumps updatedTs.
-        if (liveItem.updatedTs === lastMergedUpdatedTsRef.current) {
+        // item's (or its brief's) content actually changed. Every persisted write bumps updatedTs.
+        const mergeKey = mergeKeyOf(liveItem.updatedTs, liveBrief?.updatedTs);
+        if (mergeKey === lastMergedKeyRef.current) {
             return;
         }
-        lastMergedUpdatedTsRef.current = liveItem.updatedTs;
+        lastMergedKeyRef.current = mergeKey;
         const seed = seedFormsRef.current;
-        const incoming = itemToFormSeeds(liveItem);
+        const incoming = itemToFormSeeds(liveItem, liveBrief);
         const form = { ...formRefs.current };
         const { merged, conflicts } = mergeItemForms(
-            { title: form.title, notes: form.notes, status: form.status, na: form.na, cal: form.cal, wf: form.wf, sm: form.sm },
+            { title: form.title, notes: form.notes, brief: form.brief, status: form.status, na: form.na, cal: form.cal, wf: form.wf, sm: form.sm },
             seed,
             incoming,
         );
@@ -512,11 +576,15 @@ export function ItemEditorBody({
             if (label === 'Notes') {
                 return incoming.notes !== committedText.notes;
             }
+            if (label === 'Brief') {
+                return incoming.brief !== lastCommittedBriefRef.current;
+            }
             return true;
         });
 
         setTitle(merged.title);
         setNotes(merged.notes);
+        setBrief(merged.brief);
         setStatus(merged.status);
         setNaForm(merged.na);
         setCalForm(merged.cal);
@@ -532,16 +600,17 @@ export function ItemEditorBody({
             setConflictFields((existing) => [...new Set([...existing, ...realConflicts])]);
         }
         // formRefs/textAutosave are stable refs/instances; the effect must run exactly when the
-        // live row changes.
-    }, [liveItem, textAutosave]);
+        // live row (or its brief row) changes.
+    }, [liveItem, liveBrief, textAutosave]);
 
     /** "Use their version": re-seed the whole form from the live item, dropping local edits. */
     function adoptTheirVersion() {
         const live = liveItemRef.current;
-        const seeds = itemToFormSeeds(live);
+        const seeds = itemToFormSeeds(live, liveBriefRef.current);
         setSeedForms(seeds);
         setTitle(seeds.title);
         setNotes(seeds.notes);
+        setBrief(seeds.brief);
         setStatus(seeds.status);
         setNaForm(seeds.na);
         setCalForm(seeds.cal);
@@ -921,6 +990,8 @@ export function ItemEditorBody({
     }
 
     const shouldAutoFocus = shouldAutoFocusTitle(chrome, initialStatus);
+    const briefRowState = briefState(liveItem, liveBrief);
+    const isBriefLeading = isBriefFirst(presentation, isShowBriefsOn, briefRowState);
 
     const actionButtons = renderActions ? (
         renderActions({ triggerSave: onSave, saveDisabled, isSaving, isDirty, hasTextEdits, isRoutineDestination: status === 'routine', onClose: closeEditor })
@@ -967,6 +1038,14 @@ export function ItemEditorBody({
                 {...(shouldAutoFocus ? { autoFocus: true } : {})}
             />
 
+            <BriefSection
+                value={brief}
+                state={briefRowState}
+                onChange={setBrief}
+                onCommit={(value) => void flushBrief(value)}
+                variant={isBriefLeading ? 'line' : 'field'}
+            />
+
             {status === 'calendar' && (
                 <CalendarFields
                     value={calForm}
@@ -976,7 +1055,7 @@ export function ItemEditorBody({
                 />
             )}
 
-            <NotesSection notes={notes} onNotesChange={onNotesChange} chrome={chrome} />
+            <NotesSection notes={notes} onNotesChange={onNotesChange} chrome={chrome} collapsible={isBriefLeading} />
 
             <Divider />
 

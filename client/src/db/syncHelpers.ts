@@ -10,6 +10,7 @@ import type {
     OpType,
     StoredEntity,
     StoredItem,
+    StoredItemBrief,
     StoredPerson,
     StoredReviewInbox,
     StoredRoutine,
@@ -116,7 +117,10 @@ export async function queueSyncOp(db: IDBPDatabase<MyDB>, op: SyncOpParams): Pro
     // (the organizer gets every state change so the email log matches what the user did) and they
     // do NOT interact with the create/update/delete stream for the same entity. Filter out rsvp
     // ops up-front so the entity-level collapse rules below don't see them.
-    const existing = (await db.getAll('syncOperations')).filter((q) => q.entityId === entityId && q.opType !== 'rsvp');
+    // Keyed on the (entityType, entityId) PAIR: an entityId is not globally unique — a sidecar
+    // entity (itemBrief) deliberately borrows its parent item's id, and matching on the id alone
+    // let a brief delete/update collapse away a pending item create (offline data loss).
+    const existing = (await db.getAll('syncOperations')).filter((q) => q.entityType === entityType && q.entityId === entityId && q.opType !== 'rsvp');
     const hasPendingCreate = existing.some((q) => q.opType === 'create');
 
     if (opType === 'update' && hasPendingCreate) {
@@ -333,7 +337,10 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
 
     // describeDevice gives the row a human-readable label for Settings → Connected devices.
     // navigator.userAgent exists in both window and Service Worker globals.
-    const { items, routines, people, workContexts, reviewInboxes, serverTs, serverId } = await fetchBootstrap(deviceId, describeDevice(navigator.userAgent));
+    const { items, routines, people, workContexts, reviewInboxes, itemBriefs, serverTs, serverId } = await fetchBootstrap(
+        deviceId,
+        describeDevice(navigator.userAgent),
+    );
 
     const mappedItems = items.map((doc) => remapUser(doc) as unknown as StoredItem);
     const mappedRoutines = routines.map((doc) => remapUser(doc) as unknown as StoredRoutine);
@@ -341,6 +348,8 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
     const mappedWorkContexts = workContexts.map((doc) => remapUser(doc) as unknown as StoredWorkContext);
     // `?? []` — a server deployed before the reviewInboxes entity omits the field entirely.
     const mappedReviewInboxes = (reviewInboxes ?? []).map((doc) => remapUser(doc) as unknown as StoredReviewInbox);
+    // Same `?? []` for itemBriefs — a server deployed before the entity omits the field entirely.
+    const mappedItemBriefs = (itemBriefs ?? []).map((doc) => remapUser(doc) as unknown as StoredItemBrief);
 
     await withCrossContextLock(SYNC_APPLY_LOCK, async () => {
         await bulkPutItems(db, mappedItems);
@@ -356,6 +365,9 @@ export async function bootstrapFromServerUnguarded(db: IDBPDatabase<MyDB>, userI
 
         const reviewInboxesTx = db.transaction('reviewInboxes', 'readwrite');
         await Promise.all([...mappedReviewInboxes.map((ri) => reviewInboxesTx.store.put(ri)), reviewInboxesTx.done]);
+
+        const itemBriefsTx = db.transaction('itemBriefs', 'readwrite');
+        await Promise.all([...mappedItemBriefs.map((brief) => itemBriefsTx.store.put(brief)), itemBriefsTx.done]);
 
         // Per-user compound cursor at (serverTs, serverId) — the snapshot already delivered the current
         // state, so incremental pull starts from here. The server holds the boundary a few seconds back
@@ -534,6 +546,8 @@ async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: Ser
             return applyEntityOp(db, 'workContexts', pullUserId, op);
         case 'reviewInbox':
             return applyEntityOp(db, 'reviewInboxes', pullUserId, op);
+        case 'itemBrief':
+            return applyEntityOp(db, 'itemBriefs', pullUserId, op);
         default: {
             // Compile-time exhaustiveness: a new EntityType without a case here becomes a type
             // error. At runtime this branch IS reachable — a server deployed ahead of this client
@@ -548,7 +562,7 @@ async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: Ser
 }
 
 /** The IDB stores that back syncable entities. */
-type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes';
+type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs';
 
 /**
  * Ordinary clock skew between devices must never trip the poisoned-watermark escape below —

@@ -9,6 +9,8 @@ import { announceAccountReauthResolved } from '../contexts/accountReauthEvents';
 import type { MyDB, StoredItem } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import { getOrCreateDeviceId } from './deviceId';
+import { getItemBriefById, getItemBriefsByUser } from './itemBriefHelpers';
+import { clearBrief, setUserBrief } from './itemBriefMutations';
 import type { NextActionFilters } from './itemHelpers';
 import { getActiveNextActions, getItemsByUser, getOverdueItems, getUpcomingCalendarItems } from './itemHelpers';
 import type { CalendarMeta, NextActionMeta, SomedayMaybeMeta, WaitingForMeta } from './itemMutations';
@@ -96,6 +98,12 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         updateReviewInbox: (reviewInbox: Parameters<typeof updateReviewInbox>[1]) => updateReviewInbox(db, reviewInbox),
         removeReviewInbox: (reviewInboxId: string) => removeReviewInbox(db, reviewInboxId),
         seedDefaultReviewInboxes: () => resolveUserId(db).then((uid) => seedDefaultReviewInboxesIfEmpty(db, uid)),
+
+        // ── Item briefs (one-line weekly-review condensations) ───────────────
+        listItemBriefs: () => resolveUserId(db).then((uid) => getItemBriefsByUser(db, uid)),
+        getItemBrief: (itemId: string) => getItemBriefById(db, itemId),
+        setUserBrief: (item: StoredItem, text: string) => setUserBrief(db, item, text),
+        clearBrief: (itemId: string) => clearBrief(db, itemId),
 
         // ── Routines ─────────────────────────────────────────────────────────
         listRoutines: () => resolveUserId(db).then((uid) => getRoutinesByUser(db, uid)),

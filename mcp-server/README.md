@@ -149,6 +149,8 @@ Every tool except `gtd_reassign` accepts an optional `account` arg (default `"de
 | `gtd_get_item` | `GET /v1/items/:id` | `items.read` | `account?` |
 | `gtd_update_item` | `PATCH /v1/items/:id` | `items.write` | `account?` |
 | `gtd_complete_item` | `POST /v1/items/:id/complete` | `items.write` | `account?` |
+| `gtd_trash_item` | `POST /v1/items/:id/trash` | `items.write` | `account?` |
+| `gtd_set_brief` | `PUT /v1/items/:id/brief` | `items.write` | `account?` |
 | `gtd_list_routines` / `gtd_get_routine` | `GET /v1/routines[/:id]` | `routines.read` | `account?` |
 | `gtd_create_routine` / `gtd_update_routine` / `gtd_delete_routine` | routines CRUD | `routines.write` | `account?` |
 | `gtd_pause_routine` / `gtd_resume_routine` / `gtd_split_routine` | composite gestures | `routines.write` | `account?` |

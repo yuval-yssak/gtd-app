@@ -1,4 +1,5 @@
-import type { ItemInterface } from '../../../types/entities.js';
+import { type BriefState, briefState } from '../../../lib/briefSource.js';
+import type { BriefOrigin, ItemBriefInterface, ItemInterface } from '../../../types/entities.js';
 
 /**
  * Allowlist projection for API responses. We use an allowlist (not an omit) so that a future
@@ -31,9 +32,21 @@ export type PublicItem = Pick<
     | 'calendarEventId'
     | 'calendarIntegrationId'
     | 'calendarSyncConfigId'
->;
+> & { brief: PublicItemBrief | null };
 
-const PUBLIC_FIELDS: ReadonlyArray<keyof PublicItem> = [
+/**
+ * Read-only view of the item's brief sidecar. `state` is derived against the item's CURRENT
+ * title + notes (see `briefState`), so a caller never has to recompute the source hash.
+ * `sourceHash`, `user`, `itemId` and the LWW timestamps stay internal.
+ */
+export interface PublicItemBrief {
+    text: string | null;
+    origin: BriefOrigin;
+    state: BriefState;
+    generatedTs: string;
+}
+
+const PUBLIC_FIELDS: ReadonlyArray<Exclude<keyof PublicItem, 'brief'>> = [
     '_id',
     'user',
     'status',
@@ -59,7 +72,15 @@ const PUBLIC_FIELDS: ReadonlyArray<keyof PublicItem> = [
     'calendarSyncConfigId',
 ];
 
-export function presentItem(item: ItemInterface): PublicItem {
+export function presentBrief(item: ItemInterface, brief: ItemBriefInterface | null): PublicItemBrief | null {
+    if (!brief) {
+        return null;
+    }
+    return { text: brief.text, origin: brief.origin, state: briefState(item, brief), generatedTs: brief.generatedTs };
+}
+
+/** `brief` is always present (null when the item has no sidecar row) so callers can rely on the key. */
+export function presentItem(item: ItemInterface, brief: ItemBriefInterface | null): PublicItem {
     const out: Partial<PublicItem> = {};
     for (const key of PUBLIC_FIELDS) {
         const value = item[key];
@@ -70,5 +91,6 @@ export function presentItem(item: ItemInterface): PublicItem {
             (out as Record<string, unknown>)[key] = value;
         }
     }
+    out.brief = presentBrief(item, brief);
     return out as PublicItem;
 }

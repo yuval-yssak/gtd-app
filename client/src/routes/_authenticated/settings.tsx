@@ -7,6 +7,7 @@ import MenuItem from '@mui/material/MenuItem';
 import Paper from '@mui/material/Paper';
 import Radio from '@mui/material/Radio';
 import RadioGroup from '@mui/material/RadioGroup';
+import Switch from '@mui/material/Switch';
 import { useColorScheme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
@@ -23,6 +24,7 @@ import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
+import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
 import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import { COLOR_THEMES, type ColorThemeId, getColorTheme, setColorTheme } from '../../lib/colorTheme';
@@ -127,6 +129,8 @@ function SettingsPage() {
             <RoutineIndicatorSection />
             {/* Inbox preferences */}
             <ItemEditorSection />
+            {/* Weekly review preferences */}
+            <WeeklyReviewSection />
             {/* Notifications section */}
             <NotificationsSection db={db} />
             {/* Connected devices */}
@@ -288,6 +292,40 @@ function AppearanceSection() {
                         </ButtonBase>
                     ))}
                 </Box>
+            </Box>
+        </Paper>
+    );
+}
+
+function WeeklyReviewSection() {
+    const isShowBriefsOn = useShowBriefs();
+
+    return (
+        <Paper variant="outlined" className={styles.section}>
+            <Box className={styles.sectionContent}>
+                <Typography
+                    variant="subtitle1"
+                    sx={{
+                        fontWeight: 600,
+                        mb: 0.5,
+                    }}
+                >
+                    Weekly review
+                </Typography>
+                <Typography
+                    variant="body2"
+                    sx={{
+                        color: 'text.secondary',
+                        mb: 1,
+                    }}
+                >
+                    A brief is a one-line condensation of an item's title and notes. When shown, review cards lead with the brief and fold the notes behind
+                    &ldquo;Show notes&rdquo;. This device only.
+                </Typography>
+                <FormControlLabel
+                    control={<Switch checked={isShowBriefsOn} onChange={(_, checked) => setShowBriefs(checked)} data-testid="settingsShowBriefsToggle" />}
+                    label={<Typography variant="body2">Show briefs</Typography>}
+                />
             </Box>
         </Paper>
     );

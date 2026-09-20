@@ -24,7 +24,7 @@ import {
     waitForPendingFlush,
     withSessionGate,
 } from '../db/syncHelpers';
-import type { MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import type { MyDB, StoredItem, StoredItemBrief, StoredPerson, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 // StoredPerson/Routine/WorkContext are still needed for the db.put() casts below
 import { openTestDB } from './openTestDB';
 
@@ -62,6 +62,21 @@ function serverRoutine(id: string): Record<string, unknown> & { user: string } {
 
 function serverWorkContext(id: string): Record<string, unknown> & { user: string } {
     return { _id: id, user: USER_ID, userId: USER_ID, name: 'At desk', createdTs: '2025-01-01T00:00:00.000Z', updatedTs: '2025-01-01T00:00:00.000Z' };
+}
+
+function serverItemBrief(itemId: string, overrides: Record<string, unknown> = {}): Record<string, unknown> & { user: string } {
+    return {
+        _id: itemId,
+        user: USER_ID,
+        itemId,
+        text: 'Why this is still open',
+        origin: 'user',
+        sourceHash: 'abc',
+        generatedTs: '2025-01-01T00:00:00.000Z',
+        createdTs: '2025-01-01T00:00:00.000Z',
+        updatedTs: '2025-01-01T00:00:00.000Z',
+        ...overrides,
+    };
 }
 
 let db: IDBPDatabase<MyDB>;
@@ -164,6 +179,60 @@ describe('queueSyncOp — userId field', () => {
 // Ops queued under a userId that differs from the currently-active Better Auth session must
 // route through `syncSingleUser`, which pivots the cookie before flushing — otherwise the
 // server's misroute guard rejects the push with a 400.
+
+describe('queueSyncOp — collapse is keyed on (entityType, entityId), not entityId alone', () => {
+    // A sidecar entity (itemBrief) borrows its parent item's id. Matching on the id alone let a
+    // brief delete drop a pending item CREATE (offline capture destroyed) and a brief update
+    // REPLACE it with the brief's snapshot.
+    // The queue must survive the immediate flush each queueSyncOp dispatches, so the push is
+    // made to fail ("offline") for this block and drained before every read.
+    beforeEach(() => {
+        vi.mocked(pushSyncOps).mockRejectedValue(new Error('offline'));
+    });
+    afterEach(async () => {
+        await waitForPendingFlush().catch(() => {});
+        vi.mocked(pushSyncOps).mockResolvedValue(undefined);
+    });
+    const queuedOpKinds = async () => {
+        await waitForPendingFlush().catch(() => {});
+        return (await db.getAll('syncOperations')).map((op) => `${op.entityType}:${op.opType}`);
+    };
+    const briefSnapshot = (text: string): StoredItemBrief => ({
+        _id: 'shared-id',
+        itemId: 'shared-id',
+        userId: USER_ID,
+        text,
+        origin: 'user',
+        sourceHash: 'abc',
+        generatedTs: '2025-01-01T00:00:00.000Z',
+        createdTs: '2025-01-01T00:00:00.000Z',
+        updatedTs: '2025-01-01T00:00:00.000Z',
+    });
+
+    it('a brief delete does not collapse a pending item create sharing the id', async () => {
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'shared-id', snapshot: makeItem('shared-id'), userId: USER_ID });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'itemBrief', entityId: 'shared-id', snapshot: null, userId: USER_ID });
+
+        expect(await queuedOpKinds()).toEqual(['item:create', 'itemBrief:delete']);
+    });
+
+    it('a brief update does not merge into a pending item create sharing the id', async () => {
+        const item = makeItem('shared-id');
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'shared-id', snapshot: item, userId: USER_ID });
+        await queueSyncOp(db, { opType: 'update', entityType: 'itemBrief', entityId: 'shared-id', snapshot: briefSnapshot('new brief'), userId: USER_ID });
+
+        expect(await queuedOpKinds()).toEqual(['item:create', 'itemBrief:update']);
+        expect((await db.getAll('syncOperations')).find((op) => op.entityType === 'item')?.snapshot).toEqual(item);
+    });
+
+    it('same-type collapse still applies: brief create → brief delete drops both, item create stays', async () => {
+        await queueSyncOp(db, { opType: 'create', entityType: 'item', entityId: 'shared-id', snapshot: makeItem('shared-id'), userId: USER_ID });
+        await queueSyncOp(db, { opType: 'create', entityType: 'itemBrief', entityId: 'shared-id', snapshot: briefSnapshot('first'), userId: USER_ID });
+        await queueSyncOp(db, { opType: 'delete', entityType: 'itemBrief', entityId: 'shared-id', snapshot: null, userId: USER_ID });
+
+        expect(await queuedOpKinds()).toEqual(['item:create']);
+    });
+});
 
 describe('queueSyncOp — immediate flush dispatch', () => {
     afterEach(async () => {
@@ -920,6 +989,79 @@ describe('pullFromServer — routine/person/workContext ops', () => {
     });
 });
 
+describe('pullFromServer — itemBrief ops', () => {
+    it('create op writes the brief to the itemBriefs store keyed by item id, remapping user → userId', async () => {
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'itemBrief', entityId: 'item-1', opType: 'create', snapshot: serverItemBrief('item-1') }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const brief = await db.get('itemBriefs', 'item-1');
+        expect(brief?.text).toBe('Why this is still open');
+        expect(brief?.userId).toBe(USER_ID);
+        expect((brief as unknown as { user?: string } | undefined)?.user).toBeUndefined();
+    });
+
+    it('update op replaces the local brief under LWW on the brief row alone (item row untouched)', async () => {
+        await db.put('itemBriefs', { ...serverItemBrief('item-2'), userId: USER_ID } as unknown as StoredItemBrief);
+        await db.put('items', makeItem('item-2', '2025-09-01T00:00:00.000Z'));
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'itemBrief',
+                    entityId: 'item-2',
+                    opType: 'update',
+                    snapshot: serverItemBrief('item-2', { text: 'Rewritten', updatedTs: '2025-02-01T00:00:00.000Z' }),
+                },
+            ],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect((await db.get('itemBriefs', 'item-2'))?.text).toBe('Rewritten');
+        // The sidecar's LWW is independent: the (newer) item row is not consulted or rewritten.
+        expect((await db.get('items', 'item-2'))?.updatedTs).toBe('2025-09-01T00:00:00.000Z');
+    });
+
+    it('update op with an older updatedTs keeps the local brief (LWW)', async () => {
+        await db.put('itemBriefs', { ...serverItemBrief('item-3', { updatedTs: '2025-03-01T00:00:00.000Z' }), userId: USER_ID } as unknown as StoredItemBrief);
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'itemBrief',
+                    entityId: 'item-3',
+                    opType: 'update',
+                    snapshot: serverItemBrief('item-3', { text: 'Older', updatedTs: '2025-02-01T00:00:00.000Z' }),
+                },
+            ],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect((await db.get('itemBriefs', 'item-3'))?.text).toBe('Why this is still open');
+    });
+
+    it('delete op removes the brief from IndexedDB', async () => {
+        await db.put('itemBriefs', { ...serverItemBrief('item-4'), userId: USER_ID } as unknown as StoredItemBrief);
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [{ entityType: 'itemBrief', entityId: 'item-4', opType: 'delete', snapshot: null }],
+            serverTs: '2025-06-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        expect(await db.get('itemBriefs', 'item-4')).toBeUndefined();
+    });
+});
+
 describe('pullFromServer — calendar routine sync', () => {
     function serverCalendarRoutine(id: string, rrule = 'FREQ=DAILY;INTERVAL=1'): Record<string, unknown> & { user: string } {
         return {
@@ -981,6 +1123,7 @@ describe('bootstrapFromServer', () => {
             routines: [serverRoutine('routine-b1')],
             people: [serverPerson('person-b1')],
             workContexts: [serverWorkContext('wc-b1')],
+            itemBriefs: [serverItemBrief('item-b1')],
             serverTs,
             serverId: '',
         });
@@ -991,6 +1134,7 @@ describe('bootstrapFromServer', () => {
         expect(await db.get('routines', 'routine-b1')).toBeDefined();
         expect(await db.get('people', 'person-b1')).toBeDefined();
         expect(await db.get('workContexts', 'wc-b1')).toBeDefined();
+        expect((await db.get('itemBriefs', 'item-b1'))?.userId).toBe(USER_ID);
 
         const cursor = await db.get('syncCursors', USER_ID);
         expect(cursor?.lastSyncedTs).toBe(serverTs);
@@ -1014,6 +1158,20 @@ describe('bootstrapFromServer', () => {
         const item = await db.get('items', 'item-b2');
         expect(item?.userId).toBe(USER_ID);
         expect((item as unknown as { user?: string } | undefined)?.user).toBeUndefined();
+    });
+
+    it('tolerates a server that predates the itemBriefs entity (field omitted)', async () => {
+        vi.mocked(fetchBootstrap).mockResolvedValueOnce({
+            items: [serverItem('item-b3')],
+            routines: [],
+            people: [],
+            workContexts: [],
+            serverTs: '2025-07-01T00:00:00.000Z',
+            serverId: '',
+        });
+
+        await expect(bootstrapFromServer(db, USER_ID)).resolves.toBeUndefined();
+        expect(await db.getAll('itemBriefs')).toHaveLength(0);
     });
 
     it('throws when the server returns non-200, writing nothing', async () => {

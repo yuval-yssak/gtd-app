@@ -8,6 +8,7 @@ import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import entityMovesDAO from '../dataAccess/entityMovesDAO.js';
+import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import oauthAuthCodesDAO from '../dataAccess/oauthAuthCodesDAO.js';
 import oauthClientsDAO from '../dataAccess/oauthClientsDAO.js';
@@ -87,6 +88,7 @@ async function loadDataAccess(customDBName?: string) {
         peopleDAO.init(dbClient, resolvedDBName),
         workContextsDAO.init(dbClient, resolvedDBName),
         reviewInboxesDAO.init(dbClient, resolvedDBName),
+        itemBriefsDAO.init(dbClient, resolvedDBName),
         calendarIntegrationsDAO.init(dbClient, resolvedDBName),
         calendarSyncConfigsDAO.init(dbClient, resolvedDBName),
         sentEmailsDAO.init(dbClient, resolvedDBName),

@@ -112,7 +112,7 @@ Each token has two independent buckets that refill continuously over a one-minut
 
 | Bucket | Endpoints | Capacity |
 |---|---|---|
-| Write | All `POST` / `PATCH` / `DELETE` under `/v1/*` (items, routines, people, work-contexts, composite gestures, reassign, operations/batch) | **60 / minute** |
+| Write | Every write endpoint under `/v1/*` — `POST` / `PATCH` / `DELETE` / `PUT` on items (including `complete`, `trash`, `brief`), routines, people, work-contexts, composite gestures, reassign, operations/batch | **60 / minute** |
 | Read | All `GET` under `/v1/*` (items, routines, people, work-contexts) | **600 / minute** |
 
 A separate **30 / minute per-IP** bucket caps unauthenticated traffic so a flood of bad-credential calls cannot exhaust server resources before reaching the auth check.
@@ -146,8 +146,24 @@ The full item shape is `ItemInterface` in `api-server/src/types/entities.ts`. Th
 | `createdTs` | string | Server-assigned on create. |
 | `updatedTs` | string | Server-assigned on every write. Conflict-resolution anchor. |
 | `externalId` | string? | Caller-provided dedupe key. Unique per `(user, externalId)`. |
+| `brief` | `{ text, origin, state, generatedTs } \| null` | Read-only. The item's one-line brief sidecar (see [Item briefs](#item-briefs)); `null` when the item has none. Written through `PUT /v1/items/:id/brief`, never through `PATCH`. |
 
 GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `waitingForPersonId`, calendar linkage) are now **writable** through `PATCH /v1/items/:id` and `POST /v1/operations/batch` — subject to the status×field matrix (e.g. `expectedBy` / `ignoreBefore` are valid on `nextAction` / `waitingFor` / `somedayMaybe` / `done` / `trash`; `timeStart`/`timeEnd` only on `calendar` / `done` / `trash`; `waitingForPersonId` is optional even on `waitingFor`). Server-managed fields remain off-limits. `PATCH /v1/items/:id` rejects them with `400 forbidden_field` (`_id`, `user`, `createdTs`, `updatedTs`, `routineId`, `contentHash`, `externalId`, and the sync anchors `lastPushedToGCalTs` / `lastSyncedFromGCalTs` / `lastSyncedNotes`). `POST /v1/operations/batch` takes full snapshots, so its rules differ: server-managed sync-integrity anchors absent from the public read projections (items: `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `calendarInstanceEventId`, `cancelledByGCal`, the four `lastKnownCalendar*` markers; routines: the three sync anchors plus `retiredByGCal`, `calendarRebasedEventId`, and the `lastKnownCalendar*` markers — full list in the batch section) are rejected with `400 forbidden_field`; `updatedTs` and `user` are **silently server-overwritten** (callers echo them back from reads); `routineId` and `externalId` stay accepted (trash-replay and create-dedupe flows legitimately carry them).
+
+## Item briefs
+
+A **brief** is a one-sentence, review-oriented condensation of an item's title + notes — *what the commitment is and why it is still open*, never logistics (dates, contexts and people live in the structured fields). The web app shows it in place of the notes preview during the Weekly Review. It is stored as a sidecar entity (`itemBrief`, keyed by the item id) so a server-generated brief can never clobber an offline item edit.
+
+Every item read carries a read-only `brief` object, or `null` when the item has no brief row:
+
+| Field | Type | Notes |
+|---|---|---|
+| `text` | string \| null | The brief. `null` only for `origin: "skipped"` rows (notes too short to condense). |
+| `origin` | `model \| user \| agent \| skipped` | Who produced it. `model` / `skipped` come from the server's generation sweep; `user` is typed in the app; `agent` is written through this API. |
+| `state` | `fresh \| pinnedStale \| none` | Derived against the item's **current** title + notes — you never recompute a hash. `fresh`: the brief matches the current content. `pinnedStale`: a `user`/`agent` brief whose notes changed since (still shown, with a marker). `none`: no usable brief (no row, a skipped row, or a `model` brief whose content moved on). |
+| `generatedTs` | string | ISO datetime the text was produced. |
+
+`user` and `agent` briefs are **pinned**: the generation sweep never overwrites them, and they keep showing after the notes change until they are replaced or cleared. Internal fields (`sourceHash`, `user`, `itemId`, LWW timestamps) are not exposed.
 
 ## Endpoints
 
@@ -221,6 +237,7 @@ Returns items owned by the authenticated user.
 | `since` | ISO datetime | — | Only items with `updatedTs > since`. Useful for polling. |
 | `limit` | int | 50 | Max 200. |
 | `cursor` | string | — | Opaque cursor from a previous response's `nextCursor`. |
+| `briefState` | `none \| fresh \| pinnedStale` | — | Keep only items whose `brief.state` matches. **Applied per page, after the page is fetched** (the state is derived from a hash of each item's current content, so it cannot be a database predicate): a page can come back short or empty while `nextCursor` is still present. Keep paginating until `nextCursor` disappears. Typical sweep: `briefState=none` to find items that still need a brief — as a *filter*, `none` excludes items the server has deliberately declined to brief (`origin: "skipped"`, notes too short), even though such an item reads as `brief.state: "none"`. |
 
 **Response** — `200 OK`
 
@@ -233,7 +250,9 @@ Returns items owned by the authenticated user.
 }
 ```
 
-`nextCursor` is present when more results exist. Pass it back as `cursor=` to fetch the next page. Cursors are opaque (do not parse them); they encode the last item's `(updatedTs, _id)` pair.
+`nextCursor` is present when more results exist. Pass it back as `cursor=` to fetch the next page. Cursors are opaque (do not parse them); they encode the last item's `(updatedTs, _id)` pair — of the **unfiltered** page, so a `briefState` filter never skips rows.
+
+Each item carries its `brief` (fetched in one query per page — see [Item briefs](#item-briefs)).
 
 Sorted by `updatedTs DESC, _id DESC`. Stable across concurrent writes — newly written items always appear on the first page.
 
@@ -241,7 +260,29 @@ Sorted by `updatedTs DESC, _id DESC`. Stable across concurrent writes — newly 
 
 ### `GET /v1/items/:id` — fetch one item
 
-**Response** — `200 OK` with the full item, or `404 Not Found` (`code: not_found`) if the item doesn't exist or belongs to another user. (We deliberately do not distinguish "exists but not yours" from "doesn't exist" — that would leak ID existence.)
+**Response** — `200 OK` with the full item (including its `brief`), or `404 Not Found` (`code: not_found`) if the item doesn't exist or belongs to another user. (We deliberately do not distinguish "exists but not yours" from "doesn't exist" — that would leak ID existence.)
+
+---
+
+### `PUT /v1/items/:id/brief` — write or clear the item's brief
+
+Requires the `items.write` scope. Bearer callers are agents by definition, so the row is stored with `origin: "agent"` (pinned — the generation sweep never overwrites it).
+
+**Request body**
+
+```json
+{ "brief": "Passport renewal still blocked on photos" }
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `brief` | string \| null | The brief text, trimmed server-side; must be non-empty after trim and at most 500 characters. `null` deletes the brief. |
+
+The stored brief is hashed against the item's **current** title + notes, so it reads as `state: "fresh"` until the item changes, then `pinnedStale`. Writing again replaces the text in place (`generatedTs` refreshed); `{ "brief": null }` on an item that has no brief is a no-op.
+
+**Response** — `200 OK` with the projected item, whose `brief` reflects the write (`null` after a clear).
+
+**Errors** — `400 invalid_body` (body is not `{ brief }`), `400 invalid_brief` (not a string/null, empty after trim, or over 500 characters), `404 not_found`, `403 forbidden_scope`.
 
 ---
 
@@ -476,6 +517,8 @@ Snapshot restrictions:
 - `snapshot._id`, when present, must equal the op's `entityId` — a mismatch is rejected with `400 invalid_op_shape`.
 
 > **Item hard-delete is not permitted here.** An op of `{ entityType: 'item', opType: 'delete' }` is rejected with `400 invalid_op_shape` because a hard delete physically removes the row and is unrecoverable. To dispose of an item use [`POST /v1/items/:id/trash`](#post-v1itemsidtrash--soft-delete-recoverable) — a recoverable soft-delete. `opType: 'delete'` remains valid for `routine`, `person`, and `workContext` ops (their deletes hydrate a pre-delete snapshot into the op log for cascade replay).
+
+**`itemBrief` ops.** The brief sidecar (see [Item briefs](#item-briefs)) is writable here under `items.write`, with `entityId` = the item id and a snapshot of `{ _id, user, itemId, text, origin, sourceHash, generatedTs, createdTs, updatedTs }` where `_id === itemId === entityId`. Extra rules, all checked before any write: `origin` must be `user` or `agent` — `model` and `skipped` are server-only and return `400 forbidden_origin`; `model` is a server-managed field (`400 forbidden_field`); the referenced item must exist under the caller, or be created by an `item` op earlier in the same batch (`404 not_found` otherwise, with `entityId`). `sourceHash` is the caller's responsibility on this raw surface — prefer [`PUT /v1/items/:id/brief`](#put-v1itemsidbrief--write-or-clear-the-items-brief), which stamps it from the item's current content. `opType: 'delete'` removes the brief and needs no item.
 
 **Atomicity guarantees**
 
@@ -736,7 +779,7 @@ The model then calls `gtd_reassign` with `fromAccount: "default", toAccount: "wo
 
 ## Local MCP server
 
-A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `gtd_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
+A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete, trash and set-brief for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `gtd_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
 
 See [`mcp-server/README.md`](../mcp-server/README.md) for the build and Claude Desktop / Claude Code config snippet.
 

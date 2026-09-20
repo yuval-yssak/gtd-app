@@ -24,6 +24,8 @@ export interface BootstrapPayload {
     workContexts: (Record<string, unknown> & { user: string })[];
     /** Optional: a server deployed before the reviewInboxes entity omits this field. */
     reviewInboxes?: (Record<string, unknown> & { user: string })[];
+    /** Optional for the same reason: servers predating the itemBrief entity omit it. */
+    itemBriefs?: (Record<string, unknown> & { user: string })[];
     serverTs: string;
     serverId: string; // id component of the (held-back) compound cursor for the first incremental pull — '' on current servers
 }

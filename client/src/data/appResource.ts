@@ -1,10 +1,11 @@
 import type { IDBPDatabase } from 'idb';
+import { getItemBriefsAcrossUsers } from '../db/itemBriefHelpers';
 import { getItemsAcrossUsers } from '../db/itemHelpers';
 import { getPeopleAcrossUsers } from '../db/personHelpers';
 import { getReviewInboxesAcrossUsers } from '../db/reviewInboxHelpers';
 import { getRoutinesAcrossUsers } from '../db/routineHelpers';
 import { getWorkContextsAcrossUsers } from '../db/workContextHelpers';
-import type { MyDB, StoredItem, StoredPerson, StoredReviewInbox, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import type { MyDB, StoredItem, StoredItemBrief, StoredPerson, StoredReviewInbox, StoredRoutine, StoredWorkContext } from '../types/MyDB';
 
 /**
  * Per-user-set bundle of promises that components `use()`. The fields are kept independent so
@@ -16,9 +17,10 @@ export interface AppResourceSnapshot {
     people: Promise<StoredPerson[]>;
     workContexts: Promise<StoredWorkContext[]>;
     reviewInboxes: Promise<StoredReviewInbox[]>;
+    itemBriefs: Promise<StoredItemBrief[]>;
 }
 
-export type ResourceScope = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'all';
+export type ResourceScope = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs' | 'all';
 
 interface CacheEntry {
     db: IDBPDatabase<MyDB>;
@@ -60,6 +62,7 @@ function buildSnapshot(db: IDBPDatabase<MyDB>, userIds: readonly string[]): AppR
         people: getPeopleAcrossUsers(db, ids),
         workContexts: getWorkContextsAcrossUsers(db, ids),
         reviewInboxes: getReviewInboxesAcrossUsers(db, ids),
+        itemBriefs: getItemBriefsAcrossUsers(db, ids),
     };
 }
 
@@ -109,6 +112,8 @@ function replaceField(prev: AppResourceSnapshot, db: IDBPDatabase<MyDB>, userIds
             return { ...prev, workContexts: getWorkContextsAcrossUsers(db, userIds) };
         case 'reviewInboxes':
             return { ...prev, reviewInboxes: getReviewInboxesAcrossUsers(db, userIds) };
+        case 'itemBriefs':
+            return { ...prev, itemBriefs: getItemBriefsAcrossUsers(db, userIds) };
     }
 }
 

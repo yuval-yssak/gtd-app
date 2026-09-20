@@ -4,11 +4,13 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import ButtonBase from '@mui/material/ButtonBase';
+import FormControlLabel from '@mui/material/FormControlLabel';
 import IconButton from '@mui/material/IconButton';
 import LinearProgress from '@mui/material/LinearProgress';
 import Step from '@mui/material/Step';
 import StepButton from '@mui/material/StepButton';
 import Stepper from '@mui/material/Stepper';
+import Switch from '@mui/material/Switch';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import classNames from 'classnames';
@@ -16,6 +18,7 @@ import type { IDBPDatabase } from 'idb';
 import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { useTodayIso } from '../../hooks/useTodayIso';
+import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
 import type { MyDB } from '../../types/MyDB';
 import { ClarifyStage } from './ClarifyStage';
 import { FocusStage } from './FocusStage';
@@ -304,6 +307,7 @@ interface WizardHeaderProps {
 function WizardHeader({ flow, stage, queue, onSkipStage, hasStageActivity, canCollapse, onCollapse }: WizardHeaderProps) {
     const stageNumber = flow.stageIndex + 1;
     const itemProgress = stageItemProgress(queue)?.label ?? null;
+    const isShowBriefsOn = useShowBriefs();
 
     return (
         <Box className={styles.header}>
@@ -335,6 +339,15 @@ function WizardHeader({ flow, stage, queue, onSkipStage, hasStageActivity, canCo
                     )}
                 </Box>
                 <Box className={styles.headerControls}>
+                    {/* Device-local: whether item cards lead with their brief (notes folded) or
+                        show the notes preview. Mirrors the Settings → Weekly review switch. */}
+                    <FormControlLabel
+                        control={
+                            <Switch size="small" checked={isShowBriefsOn} onChange={(_, checked) => setShowBriefs(checked)} data-testid="showBriefsToggle" />
+                        }
+                        label={<Typography variant="body2">Show briefs</Typography>}
+                        className={styles.briefsToggle}
+                    />
                     <Button color="inherit" size="small" onClick={onSkipStage} data-testid="skipStageButton">
                         Skip stage →
                     </Button>

@@ -2,8 +2,10 @@ import type { MiddlewareHandler } from 'hono';
 import { Hono } from 'hono';
 import { authenticateBearer, type BearerVariables } from '../../auth/bearerMiddleware.js';
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
+import itemsDAO from '../../dataAccess/itemsDAO.js';
 import { applyAndPublishOperations, OperationValidationError, type RawOperation } from '../../lib/applyOperation.js';
-import type { ApiTokenScope, EntityType, OpType } from '../../types/entities.js';
+import { isPinnedOrigin } from '../../lib/briefSource.js';
+import type { ApiTokenScope, BriefOrigin, EntityType, OpType } from '../../types/entities.js';
 
 /**
  * Public-API batch endpoint: callers submit a heterogeneous array of primitive ops in one
@@ -32,7 +34,7 @@ interface ParsedBatch {
     ops: ParsedRawOp[];
 }
 
-type ParseError = { code: 'invalid_body' | 'invalid_ops' | 'too_many_ops' | 'invalid_op_shape' | 'forbidden_field'; message: string };
+type ParseError = { code: 'invalid_body' | 'invalid_ops' | 'too_many_ops' | 'invalid_op_shape' | 'forbidden_field' | 'forbidden_origin'; message: string };
 
 function parseBatchBody(raw: BatchBody | null): { ok: true; value: ParsedBatch } | { ok: false; error: ParseError } {
     if (!raw || typeof raw !== 'object') {
@@ -65,7 +67,9 @@ function parseBatchBody(raw: BatchBody | null): { ok: true; value: ParsedBatch }
 // 'reviewInbox' is deliberately excluded: the entity is sync-only for now (no public /v1 or MCP
 // surface). Widening this set also requires a scope decision in scopeForOp — today its fallback
 // would mislabel a reviewInbox op as requiring 'contexts.write'.
-const ENTITY_TYPES = new Set<EntityType>(['item', 'routine', 'person', 'workContext']);
+// 'itemBrief' IS exposed (scope items.write) with two extra guards below: only authored origins
+// (`user` / `agent`) may be written, and the referenced item must exist under the caller.
+const ENTITY_TYPES = new Set<EntityType>(['item', 'routine', 'person', 'workContext', 'itemBrief']);
 const OP_TYPES = new Set<OpType>(['create', 'update', 'delete']);
 
 interface RawOpBag {
@@ -117,13 +121,32 @@ const BATCH_FORBIDDEN_SNAPSHOT_FIELDS: Partial<Record<EntityType, readonly strin
         'lastKnownCalendarSyncConfigId',
         'lastKnownCalendarAccountEmail',
     ],
+    // `model` records which model generated a brief — meaningless on an authored row.
+    itemBrief: ['model'],
 };
 
 function findForbiddenSnapshotField(entityType: EntityType, snapshot: object): string | undefined {
     return BATCH_FORBIDDEN_SNAPSHOT_FIELDS[entityType]?.find((field) => field in snapshot);
 }
 
-type SnapshotShapeError = { ok: false; code?: 'forbidden_field'; message: string };
+type SnapshotShapeError = { ok: false; code?: 'forbidden_field' | 'forbidden_origin'; message: string };
+
+/**
+ * itemBrief-only guards: caller-authored origins only (a forged `model` row would be silently
+ * overwritable by the sweep and misreport provenance), and `itemId` must agree with `entityId`
+ * (the Zod schema pins `_id === itemId`; this closes the remaining `entityId` leg).
+ */
+function checkBriefSnapshotShape(entityId: string, snapshot: { origin?: unknown; itemId?: unknown }): SnapshotShapeError | null {
+    // `isPinnedOrigin` is exactly "caller-authored": `model` / `skipped` are the generation
+    // sweep's provenance, and a forged one would be silently overwritable by the next sweep.
+    if (typeof snapshot.origin !== 'string' || !isPinnedOrigin(snapshot.origin as BriefOrigin)) {
+        return { ok: false, code: 'forbidden_origin', message: 'snapshot.origin must be "user" or "agent" (model/skipped are server-only)' };
+    }
+    if (snapshot.itemId !== undefined && snapshot.itemId !== entityId) {
+        return { ok: false, message: 'snapshot.itemId must match entityId' };
+    }
+    return null;
+}
 
 /** Snapshot-level checks shared by every op shape: forbidden fields + `_id`/`entityId` agreement. */
 function checkSnapshotShape(entityType: EntityType, entityId: string, snapshot: object): SnapshotShapeError | null {
@@ -137,10 +160,10 @@ function checkSnapshotShape(entityType: EntityType, entityId: string, snapshot: 
     if (snapshotId !== undefined && snapshotId !== entityId) {
         return { ok: false, message: 'snapshot._id must match entityId' };
     }
-    return null;
+    return entityType === 'itemBrief' ? checkBriefSnapshotShape(entityId, snapshot) : null;
 }
 
-function parseRawOpShape(op: RawOpBag): { ok: true; value: ParsedRawOp } | { ok: false; code?: 'forbidden_field'; message: string } {
+function parseRawOpShape(op: RawOpBag): { ok: true; value: ParsedRawOp } | SnapshotShapeError {
     const { entityType, opType, entityId, snapshot } = op;
     if (typeof entityType !== 'string' || !ENTITY_TYPES.has(entityType as EntityType)) {
         return { ok: false, message: `entityType must be one of: ${[...ENTITY_TYPES].join(', ')}` };
@@ -190,6 +213,9 @@ function scopeForOp(op: ParsedRawOp): ApiTokenScope {
     if (op.entityType === 'item') {
         return op.opType === 'create' ? 'items.capture' : 'items.write';
     }
+    if (op.entityType === 'itemBrief') {
+        return 'items.write';
+    }
     if (op.entityType === 'routine') {
         return 'routines.write';
     }
@@ -197,6 +223,26 @@ function scopeForOp(op: ParsedRawOp): ApiTokenScope {
         return 'people.write';
     }
     return 'contexts.write';
+}
+
+/**
+ * A brief must hang off an item the caller owns. Returns the first `itemBrief` create/update op
+ * whose item is missing under `userId` (one `$in` lookup for the whole batch), or null. Deletes
+ * are exempt — dropping a brief whose item is already gone is the cascade's own gesture.
+ */
+async function findBriefWithoutItem(userId: string, ops: ParsedRawOp[]): Promise<ParsedRawOp | null> {
+    const briefWrites = ops.filter((op) => op.entityType === 'itemBrief' && op.opType !== 'delete');
+    if (briefWrites.length === 0) {
+        return null;
+    }
+    // An item created in THIS batch counts as present, so a caller can compose an item with its
+    // brief in one request. The two writes target different collections and the brief never reads
+    // the item row, so the pipeline's parallel apply order is immaterial.
+    const createdHere = new Set(ops.filter((op) => op.entityType === 'item' && op.opType === 'create').map((op) => op.entityId));
+    const toLookUp = briefWrites.map((op) => op.entityId).filter((id) => !createdHere.has(id));
+    const owned = toLookUp.length > 0 ? await itemsDAO.findArray({ user: userId, _id: { $in: toLookUp } }) : [];
+    const presentIds = new Set([...createdHere, ...owned.map((item) => item._id)]);
+    return briefWrites.find((op) => !presentIds.has(op.entityId)) ?? null;
 }
 
 /**
@@ -256,6 +302,10 @@ export const v1OperationsRoutes = new Hono<{ Variables: BearerVariables & { batc
         async (c) => {
             const { userId, tokenId } = c.var.apiAuth;
             const { batch } = c.var;
+            const orphanBrief = await findBriefWithoutItem(userId, batch.ops);
+            if (orphanBrief) {
+                return c.json({ error: `itemBrief ${orphanBrief.entityId}: item not found`, code: 'not_found', entityId: orphanBrief.entityId }, 404);
+            }
             try {
                 // `serverStampUpdatedTs`: the public surface has no meaningful client clock — a
                 // caller-echoed `updatedTs` (e.g. from a stale `gtd_get_item`) would silently lose

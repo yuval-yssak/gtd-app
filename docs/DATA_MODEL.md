@@ -31,6 +31,18 @@ A `nextAction`, `waitingFor`, or `somedayMaybe` item can carry an `ignoreBefore`
 
 > `ignoreBefore` is a separate field from the calendar `timeStart`/`timeEnd` pair to keep their semantics unambiguous.
 
+### Item briefs
+
+A **brief** is a one-line, review-oriented condensation of an item's title + notes — *what the commitment is and why it is still open*, never logistics. The Weekly Review card shows it in place of the (long) notes preview.
+
+It lives in its own synced entity, `itemBrief` (collection `itemBriefs`), **not** as a field on `items`, with `_id === item._id` (one-to-one). Every op is a full snapshot replaced under last-write-wins on `updatedTs`, so a server-generated brief written onto the item would beat any offline edit a device has not pushed yet, and the sweeper selects exactly the items being edited (hash mismatch is the trigger). A sidecar has its own LWW anchor, so an item edit and a brief write never contend.
+
+- **`sourceHash`** — `briefSourceHash(title, notes)` (cyrb53 over `title + '\n' + notes`, mirrored in `api-server/src/lib/briefSource.ts` and `client/src/lib/briefSource.ts` with a parity test) at generation/authoring time. A brief is shown only while it matches the item's current hash; a stale one degrades to the notes preview instead of showing a lie.
+- **`origin`** — `model` (generated), `skipped` (notes empty or under 160 chars after trim; `text: null`, written without a model call so the sweeper does not reselect the item), `user` (typed in the editor), `agent` (written via `PUT /v1/items/:id/brief` / MCP `gtd_set_brief`).
+- **Pinned briefs** — `user` and `agent` origins are never overwritten by the sweeper, and the UI keeps showing them after the notes change with a "notes changed since" marker (explicit Regenerate overrides).
+- **Derived state** (`briefState(item, brief)`): `none` (no row, skipped row, or `model` row whose hash no longer matches), `fresh` (hash matches), `pinnedStale` (hash mismatch on a pinned origin).
+- **Lifecycle** — item hard-delete and cross-account reassign drop the brief with a recorded `itemBrief` delete op (`deviceId: 'server:brief-cascade'`); it never moves with the item. Trash / done keep their briefs.
+
 ---
 
 ## Work Contexts
@@ -118,7 +130,7 @@ The app is designed to work **100% offline**. All mutations are recorded as oper
 
 ### Operations log (server-side)
 
-Every change to any entity (`item`, `routine`, `person`, `workContext`) is recorded as an `OperationInterface` document on the server. Each operation stores:
+Every change to any entity (`item`, `routine`, `person`, `workContext`, `reviewInbox`, `itemBrief`) is recorded as an `OperationInterface` document on the server. Each operation stores:
 
 - `deviceId` — which device originated the change
 - `ts` — when the change was made on the device (ISO datetime)
@@ -200,6 +212,31 @@ interface ItemInterface {
 ```
 
 MongoDB indexes: `{ user }`, `{ user, status }`, `{ user, expectedBy }`, `{ user, timeStart }`, `{ user, updatedTs }`
+
+---
+
+### `itemBriefs`
+
+One-to-one sidecar of `items` (see [Item briefs](#item-briefs)). Its own LWW anchor, separate from the item's.
+
+```typescript
+type BriefOrigin = 'model' | 'user' | 'agent' | 'skipped';
+
+interface ItemBriefInterface {
+    _id?: string;            // === item._id
+    user: string;
+    itemId: string;          // same value as _id, kept for readable queries and op-log rows
+    text: string | null;     // null only when origin === 'skipped'
+    origin: BriefOrigin;
+    sourceHash: string;      // briefSourceHash(item.title, item.notes) when produced
+    model?: string;          // model id when origin === 'model'
+    generatedTs: string;     // ISO datetime the text was produced
+    createdTs: string;
+    updatedTs: string;       // LWW anchor for THIS entity only
+}
+```
+
+MongoDB indexes: `{ user }`, `{ user, sourceHash }` (`_id` is the implicit unique key). Op schema `schemas/operations/itemBrief.ts` is strict and a superset of the interface; it also pins `_id === itemId`.
 
 ---
 

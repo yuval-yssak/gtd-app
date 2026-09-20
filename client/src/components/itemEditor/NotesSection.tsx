@@ -1,5 +1,7 @@
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
 import IconButton from '@mui/material/IconButton';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
@@ -15,6 +17,11 @@ interface NotesSectionProps {
     notes: string;
     onNotesChange: (next: string) => void;
     chrome: ItemEditorChrome;
+    /**
+     * Review presentation with a brief on show: the notes start folded behind a "Show notes"
+     * disclosure (the brief already says what the item is) and expand in place on demand.
+     */
+    collapsible?: boolean;
 }
 
 /**
@@ -26,7 +33,18 @@ interface NotesSectionProps {
  *   behaviour. The page-mode redesign was scoped intentionally — the smaller surfaces are short
  *   and edit-oriented and don't need the read-mostly default.
  */
-export function NotesSection({ notes, onNotesChange, chrome }: NotesSectionProps) {
+export function NotesSection({ notes, onNotesChange, chrome, collapsible = false }: NotesSectionProps) {
+    // Hook first, then the disclosure guard: the early return below must not change hook order.
+    const [isExpanded, setIsExpanded] = useState(false);
+    if (collapsible && !isExpanded) {
+        return (
+            <Box>
+                <Button size="small" color="inherit" startIcon={<ExpandMoreIcon />} onClick={() => setIsExpanded(true)} data-testid="showNotesButton">
+                    Show notes
+                </Button>
+            </Box>
+        );
+    }
     if (chrome === 'page') {
         return <PageNotesSection notes={notes} onNotesChange={onNotesChange} />;
     }

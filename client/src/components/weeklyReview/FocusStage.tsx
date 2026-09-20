@@ -188,6 +188,7 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
                     onDirtyLockChange={setIsEditorLocked}
                     onFromGmailReadOnly={() => setToast(FROM_GMAIL_READONLY_MESSAGE)}
                     chrome="page"
+                    presentation="review"
                     renderActions={renderActions}
                     actionsContainer={actionsBarEl}
                 />

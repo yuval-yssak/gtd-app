@@ -44,7 +44,7 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
         (method === 'POST' &&
             (path === '/v1/items' ||
                 path === '/v1/items/bulk' ||
-                /^\/v1\/items\/[^/]+\/complete$/.test(path) ||
+                /^\/v1\/items\/[^/]+\/(complete|trash)$/.test(path) ||
                 path === '/v1/people' ||
                 path === '/v1/work-contexts' ||
                 path === '/v1/routines' ||
@@ -56,7 +56,10 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
                 /^\/v1\/people\/[^/]+$/.test(path) ||
                 /^\/v1\/work-contexts\/[^/]+$/.test(path) ||
                 /^\/v1\/routines\/[^/]+$/.test(path))) ||
-        (method === 'DELETE' && (/^\/v1\/people\/[^/]+$/.test(path) || /^\/v1\/work-contexts\/[^/]+$/.test(path) || /^\/v1\/routines\/[^/]+$/.test(path)));
+        (method === 'DELETE' && (/^\/v1\/people\/[^/]+$/.test(path) || /^\/v1\/work-contexts\/[^/]+$/.test(path) || /^\/v1\/routines\/[^/]+$/.test(path))) ||
+        // This classifier is an allowlist, not a method rule: an unlisted route gets NO limiter
+        // at all (see authenticatedRateLimit), so every new write route must be added here.
+        (method === 'PUT' && /^\/v1\/items\/[^/]+\/brief$/.test(path));
     if (isWrite) return 'write';
     const isRead =
         method === 'GET' &&

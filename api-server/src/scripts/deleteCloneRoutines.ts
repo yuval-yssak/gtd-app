@@ -24,6 +24,7 @@
 import dayjs from 'dayjs';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { cascadeItemBriefRemoval } from '../lib/itemBriefCascade.js';
 import { recordOperation } from '../lib/operationHelpers.js';
 import { closeDataAccess, loadDataAccess } from '../loaders/mainLoader.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
@@ -81,6 +82,7 @@ async function deleteItemRecordingOp(item: ItemInterface, userId: string, now: s
     // Record the op BEFORE the DB delete so a mid-run crash still propagates the delete on next pull.
     await recordOperation(userId, { entityType: 'item', entityId: item._id, snapshot: null, opType: 'delete', now });
     await itemsDAO.deleteByOwner(item._id, userId);
+    await cascadeItemBriefRemoval(userId, item._id);
 }
 
 async function deleteRoutineRecordingOp(routine: RoutineInterface, userId: string, now: string): Promise<void> {

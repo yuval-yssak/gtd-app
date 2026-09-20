@@ -32,6 +32,7 @@ const SHAPE_BY_TOOL: Record<string, ToolShape> = {
     gtd_update_item: { entity: 'item', shape: 'one' },
     gtd_complete_item: { entity: 'item', shape: 'one' },
     gtd_trash_item: { entity: 'item', shape: 'one' },
+    gtd_set_brief: { entity: 'item', shape: 'one' },
     gtd_list_items: { entity: 'item', shape: 'list' },
     gtd_create_routine: { entity: 'routine', shape: 'one' },
     gtd_get_routine: { entity: 'routine', shape: 'one' },

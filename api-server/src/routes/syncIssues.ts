@@ -4,6 +4,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
+import { entityDisplayName } from '../lib/entityDisplayName.js';
 import { allocateOpIdentity } from '../lib/opIdentity.js';
 import { replayRsvpOp } from '../lib/rsvpReplay.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
@@ -37,12 +38,12 @@ interface IssueRow {
     retryable: boolean;
 }
 
-/** Items/routines carry `title`; people/workContexts carry `name`. Null snapshot → no title. */
+/** Null snapshot → no title; otherwise the entity's display label (title / name / brief text). */
 function snapshotTitle(snapshot: OperationInterface['snapshot']): string | undefined {
     if (!snapshot) {
         return undefined;
     }
-    return 'title' in snapshot ? snapshot.title : snapshot.name;
+    return entityDisplayName(snapshot);
 }
 
 /**
