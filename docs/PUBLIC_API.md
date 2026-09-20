@@ -114,6 +114,7 @@ Each token has two independent buckets that refill continuously over a one-minut
 |---|---|---|
 | Write | Every write endpoint under `/v1/*` — `POST` / `PATCH` / `DELETE` / `PUT` on items (including `complete`, `trash`, `brief`), routines, people, work-contexts, composite gestures, reassign, operations/batch | **60 / minute** |
 | Read | All `GET` under `/v1/*` (items, routines, people, work-contexts) | **600 / minute** |
+| Brief generation | `POST /v1/items/:id/brief/generate` — **per user** (not per token), on top of the write bucket; charged only when a model call is made (skip-rule hits are free) | **30 / 10 minutes** (`BRIEF_GENERATE_PER_10MIN`) |
 
 A separate **30 / minute per-IP** bucket caps unauthenticated traffic so a flood of bad-credential calls cannot exhaust server resources before reaching the auth check.
 
@@ -283,6 +284,51 @@ The stored brief is hashed against the item's **current** title + notes, so it r
 **Response** — `200 OK` with the projected item, whose `brief` reflects the write (`null` after a clear).
 
 **Errors** — `400 invalid_body` (body is not `{ brief }`), `400 invalid_brief` (not a string/null, empty after trim, or over 500 characters), `404 not_found`, `403 forbidden_scope`.
+
+---
+
+### `POST /v1/items/:id/brief/generate` — generate the item's brief with the server's model
+
+Asks the server's model (`claude-haiku-4-5`) to write a `model`-origin brief from the item's **current** title + notes. This is the endpoint behind the in-app "Generate brief" button, so it accepts **either** a bearer token carrying `items.write` **or** the first-party session cookie (like the [Claude assist](#claude-assist-lane-a) routes; browser callers get the credentialed CORS profile pinned to the web app's origin).
+
+**Request body** (optional)
+
+```json
+{ "force": true }
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `force` | boolean | Replace an existing **pinned** (`user` / `agent`) brief. Defaults to `false`, in which case a pinned brief returns `409 brief_pinned` and nothing is called or written. |
+
+**Skip rule.** When the notes are empty or under 160 characters after trim, no model is called: a `{ text: null, origin: "skipped" }` marker is recorded instead (so the background sweep does not keep reselecting the item) and the response has `outcome: "skipped"`. Skipped calls do not count against the generation cap.
+
+**Response** — `200 OK`
+
+```json
+{
+    "outcome": "written",
+    "item": { "_id": "…", "title": "Renew passport", "brief": { "text": "…", "origin": "model", "state": "fresh", "generatedTs": "…" }, "…": "…" },
+    "brief": { "_id": "…", "user": "…", "itemId": "…", "text": "…", "origin": "model", "model": "claude-haiku-4-5", "sourceHash": "…", "generatedTs": "…", "createdTs": "…", "updatedTs": "…" }
+}
+```
+
+| `outcome` | Meaning | `brief` |
+|---|---|---|
+| `written` | A model brief was generated and stored (the model may return `text: null` when the title already says everything). | The stored `itemBrief` row. |
+| `skipped` | Notes too short; a `skipped` marker row is stored (or was already current). No model call. | The `skipped` row (`text: null`). |
+| `discarded_stale` | The item's title/notes changed while the model was running; the result was thrown away rather than stored against content it does not describe. Retry. | `null` |
+
+`item` is the projected item re-read after the write, so `item.brief` reflects the outcome. `brief` is the full sidecar row (the same shape `/sync` delivers), or `null` when nothing was written.
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `403` | `forbidden_scope` | Token lacks `items.write`. |
+| `404` | `not_found` | Item doesn't exist or isn't owned by the caller. |
+| `409` | `brief_pinned` | A user/agent-authored brief exists and `force` was not `true`. |
+| `429` | `rate_limited` | Per-user generation cap (or the token's write bucket, or an upstream model rate limit) — honour `Retry-After`. |
+| `502` | `brief_generation_failed` | The model refused or returned unusable output. |
+| `503` | `agent_unavailable` | The model service is unavailable (missing key, out of credits, upstream outage). Try later. |
 
 ---
 
@@ -779,7 +825,7 @@ The model then calls `gtd_reassign` with `fromAccount: "default", toAccount: "wo
 
 ## Local MCP server
 
-A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete, trash and set-brief for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `gtd_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
+A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete, trash, set-brief and generate-brief for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `gtd_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
 
 See [`mcp-server/README.md`](../mcp-server/README.md) for the build and Claude Desktop / Claude Code config snippet.
 

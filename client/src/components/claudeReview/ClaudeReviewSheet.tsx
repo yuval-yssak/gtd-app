@@ -11,6 +11,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useEffect, useRef, useState } from 'react';
 import { AssistApiError, applyProposal, assist, type ClarifyProposal, type ProposedItemPatch } from '#api/assistApi';
+import { useIsMounted } from '../../hooks/useIsMounted';
 import { appliableSideEffect, presentPatch } from '../../lib/proposalPresenter';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import styles from './ClaudeReviewSheet.module.css';
@@ -57,13 +58,7 @@ export function ClaudeReviewSheet({ item, people, workContexts, onClose, onAppli
     // earlier Ask-again/retry can't clobber a newer one) and a mounted flag (so a resolution after
     // the sheet closes doesn't setState on an unmounted component).
     const requestSeq = useRef(0);
-    const mounted = useRef(true);
-    useEffect(() => {
-        mounted.current = true;
-        return () => {
-            mounted.current = false;
-        };
-    }, []);
+    const isMounted = useIsMounted();
 
     // Run (and re-run, for Ask-again / retry) the clarify call. Seeds editedPatch from the proposal.
     async function runAssist(withInstruction?: string) {
@@ -77,14 +72,14 @@ export function ClaudeReviewSheet({ item, people, workContexts, onClose, onAppli
             // the ambient session it would 404 (findByOwnerAndId misses) on a cross-account item.
             const result = await withOwnerSession(item.userId, () => assist(item._id, withInstruction));
             // Drop the result if a newer request started or the sheet unmounted while in flight.
-            if (!mounted.current || seq !== requestSeq.current) {
+            if (!isMounted() || seq !== requestSeq.current) {
                 return;
             }
             setProposal(result);
             setEditedPatch(result.proposedItemPatch ?? null);
             setPhase('loaded');
         } catch (err) {
-            if (!mounted.current || seq !== requestSeq.current) {
+            if (!isMounted() || seq !== requestSeq.current) {
                 return;
             }
             setErrorView(errorViewOf(err));
@@ -113,7 +108,7 @@ export function ClaudeReviewSheet({ item, people, workContexts, onClose, onAppli
             await onApplied();
             onClose(); // unmounts the sheet — no setState afterward (the catch/finally guard mounted).
         } catch (err) {
-            if (!mounted.current) {
+            if (!isMounted()) {
                 return;
             }
             setErrorView(errorViewOf(err));

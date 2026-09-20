@@ -3,6 +3,7 @@ import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import type { BriefOrigin, ItemBriefInterface, ItemInterface } from '../types/entities.js';
 import { applyAndPublishOperation } from './applyOperation.js';
 import { type BriefState, briefSourceHash, briefState } from './briefSource.js';
+import { KeyedMutex } from './keyedMutex.js';
 
 /**
  * Storage ceiling for an authored brief. The model prompt / MCP guidance target ~160 characters
@@ -37,6 +38,41 @@ export function loadBrief(userId: string, itemId: string): Promise<ItemBriefInte
     return itemBriefsDAO.findByOwnerAndId(itemId, userId);
 }
 
+/**
+ * Per-item serialization shared by EVERY brief writer (authored PUT/MCP, on-demand, inline hook,
+ * Phase 3 harvest). Each does a read-then-write (existing row → create/update op); without one
+ * lock two writers both read "no row" and both record `create` for the same `_id`.
+ */
+const briefWriteMutex = new KeyedMutex();
+
+export function withBriefWriteLock<T>(itemId: string, task: () => Promise<T>): Promise<T> {
+    return briefWriteMutex.withLock(itemId, task);
+}
+
+interface BriefRowUpsert {
+    userId: string;
+    /** The full row to persist (`_id === itemId`). */
+    snapshot: ItemBriefInterface;
+    /** The row currently stored, if any — decides `create` vs `update`. */
+    existing: ItemBriefInterface | null;
+    /** Op-log provenance, e.g. `api:<tokenId>` or `server:brief-ondemand`. */
+    deviceId: string;
+}
+
+/**
+ * Persists a brief row through the shared apply pipeline (LWW + op log + fan-out). Create vs
+ * update is decided by the existing row: an `update` op against a missing row would be
+ * quarantined as `skipped_missing` by the apply pipeline instead of inserting. Callers hold
+ * `withBriefWriteLock` around their read + this write.
+ */
+export async function upsertBriefRow({ userId, snapshot, existing, deviceId }: BriefRowUpsert): Promise<void> {
+    await applyAndPublishOperation(
+        userId,
+        { entityType: 'itemBrief', entityId: snapshot.itemId, opType: existing ? 'update' : 'create', snapshot },
+        { deviceId, now: snapshot.updatedTs, strict: true },
+    );
+}
+
 interface AuthoredBriefWrite {
     userId: string;
     /** The item's persisted id — narrowed by the caller, since `ItemInterface._id` is optional. */
@@ -50,33 +86,26 @@ interface AuthoredBriefWrite {
 
 /**
  * Upserts an authored (pinned) brief. `sourceHash` is stamped from the item's CURRENT title +
- * notes so the brief reads as `fresh` until the item changes. Create vs update is decided by
- * the existing row: an `update` op against a missing row would be quarantined as
- * `skipped_missing` by the apply pipeline instead of inserting.
+ * notes so the brief reads as `fresh` until the item changes.
  */
-export async function writeAuthoredBrief({ userId, itemId, item, text, origin, deviceId }: AuthoredBriefWrite): Promise<ItemBriefInterface> {
-    // Two concurrent first PUTs both read `null` here and both record `create`: harmless — the
-    // apply is an upsert and clients treat create/update identically — but the op log will show
-    // two creates for one row. A per-item mutex is Phase 2's concern (sweeper vs user writes).
-    const existing = await loadBrief(userId, itemId);
-    const now = dayjs().toISOString();
-    const snapshot: ItemBriefInterface = {
-        _id: itemId,
-        user: userId,
-        itemId,
-        text,
-        origin,
-        sourceHash: briefSourceHash(item.title, item.notes),
-        generatedTs: now,
-        createdTs: existing?.createdTs ?? now,
-        updatedTs: now,
-    };
-    await applyAndPublishOperation(
-        userId,
-        { entityType: 'itemBrief', entityId: itemId, opType: existing ? 'update' : 'create', snapshot },
-        { deviceId, now, strict: true },
-    );
-    return snapshot;
+export function writeAuthoredBrief({ userId, itemId, item, text, origin, deviceId }: AuthoredBriefWrite): Promise<ItemBriefInterface> {
+    return withBriefWriteLock(itemId, async () => {
+        const existing = await loadBrief(userId, itemId);
+        const now = dayjs().toISOString();
+        const snapshot: ItemBriefInterface = {
+            _id: itemId,
+            user: userId,
+            itemId,
+            text,
+            origin,
+            sourceHash: briefSourceHash(item.title, item.notes),
+            generatedTs: now,
+            createdTs: existing?.createdTs ?? now,
+            updatedTs: now,
+        };
+        await upsertBriefRow({ userId, snapshot, existing, deviceId });
+        return snapshot;
+    });
 }
 
 /** Deletes the brief row with a recorded delete op. Idempotent — a missing row records nothing. */

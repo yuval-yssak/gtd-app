@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { ServerOp } from '#api/syncClient';
 import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import type { ServerItemBriefSnapshot } from '../api/briefApi';
 import { describeDevice } from '../lib/deviceLabel';
 import { hasAtLeastOne } from '../lib/typeUtils';
 import type {
@@ -563,6 +564,17 @@ async function applyServerOp(db: IDBPDatabase<MyDB>, pullUserId: string, op: Ser
 
 /** The IDB stores that back syncable entities. */
 type EntityStoreName = 'items' | 'routines' | 'people' | 'workContexts' | 'reviewInboxes' | 'itemBriefs';
+
+/**
+ * Applies a brief row the server handed straight back to this device (the on-demand generate
+ * endpoint) through the SAME owner/LWW rule the pull path uses, so the SSE-driven pull that
+ * delivers the identical op moments later is an idempotent no-op — and an older snapshot can
+ * never clobber a newer local row. Server-authored, so no sync op is queued. A `text: null`
+ * (skipped) row is stored verbatim; the UI derives `none` from it.
+ */
+export async function applyServerItemBrief(db: IDBPDatabase<MyDB>, snapshot: ServerItemBriefSnapshot): Promise<void> {
+    await applyEntityOp(db, 'itemBriefs', snapshot.user, { entityType: 'itemBrief', entityId: snapshot._id, opType: 'update', snapshot });
+}
 
 /**
  * Ordinary clock skew between devices must never trip the poisoned-watermark escape below —

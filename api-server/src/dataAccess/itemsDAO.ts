@@ -37,6 +37,15 @@ class ItemsDAO extends AbstractDAO<ItemInterface> {
     }
 
     /**
+     * Every user id that owns at least one item. Served by a DISTINCT_SCAN over `{ user: 1 }`
+     * (no collection scan); the reply is one BSON document, so it is bounded by the 16 MB reply
+     * limit — ample for the foreseeable user count, revisit before it is not.
+     */
+    async distinctOwners(): Promise<string[]> {
+        return this._collection.distinct('user');
+    }
+
+    /**
      * Builds the unique partial index that forbids two LIVE calendar items on the same standalone GCal
      * event. Kept OUT of `init` and called only after `dedupeCalendarItemsPerEvent` has run, because
      * `createIndexes` rejects (and would crash boot) if pre-existing data already violates it.

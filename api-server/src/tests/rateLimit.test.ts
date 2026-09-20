@@ -41,6 +41,7 @@ describe('classifyRequest', () => {
         expect(classifyRequest('POST', '/v1/items/abc-123/complete')).toBe('write');
         expect(classifyRequest('POST', '/v1/items/abc-123/trash')).toBe('write');
         expect(classifyRequest('PUT', '/v1/items/abc-123/brief')).toBe('write');
+        expect(classifyRequest('POST', '/v1/items/abc-123/brief/generate')).toBe('write');
         expect(classifyRequest('GET', '/v1/items')).toBe('read');
         expect(classifyRequest('GET', '/v1/items/abc-123')).toBe('read');
     });

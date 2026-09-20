@@ -67,9 +67,14 @@ function withExecuteTokens(proposal: ClarifyProposal, ownerUserId: string, itemI
     };
 }
 
+// Scoped to '/claude/*', NOT '*': this router is mounted on the app at '/v1' BEFORE the CORS
+// middlewares of the other /v1 surfaces, and Hono expands a sub-router's '*' to '/v1/*'. A
+// catch-all here therefore ran the auth middleware for EVERY /v1 path first — including a
+// browser preflight `OPTIONS /v1/items/:id/brief/generate`, which was 401'd before its cors()
+// could answer it (no CORS headers → net::ERR_FAILED). Regression test in cors.test.ts.
 export const v1ClaudeRoutes = new Hono<{ Variables: BearerVariables }>()
-    .use('*', authenticateBearerOrSession)
-    .use('*', authenticatedRateLimit())
+    .use('/claude/*', authenticateBearerOrSession)
+    .use('/claude/*', authenticatedRateLimit())
     .post('/claude/assist', requireScope('claude.assist'), async (c) => {
         const { userId } = c.var.apiAuth;
         const body = (await c.req.json().catch(() => null)) as AssistBody | null;

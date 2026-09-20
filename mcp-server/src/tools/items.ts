@@ -114,6 +114,31 @@ const setBrief = defineTool({
         ),
 });
 
+const generateBrief = defineTool({
+    name: 'gtd_generate_brief',
+    description:
+        "Ask the SERVER's model to write an item's brief from its current title + notes (one sentence, ≤ 160 chars, " +
+        'origin "model"). Outcomes: `written` (a new brief), `skipped` (notes too short — under 160 chars — so a ' +
+        '`text: null` marker was recorded and no model was called), `discarded_stale` (the item changed while ' +
+        'generating; nothing written — retry). Fails with 409 `brief_pinned` when a user- or agent-authored brief ' +
+        'exists: pass `force: true` to REPLACE that authored brief with a model one (only when the user asked for it). ' +
+        'Rate-limited per user (30 per 10 minutes → 429). Prefer gtd_set_brief when you have already composed a brief. ' +
+        'Returns `{ outcome, item, brief }` where `item` carries its projected `brief` field.',
+    inputSchema: {
+        itemId: idSchema,
+        force: z.boolean().optional().describe('Replace an existing user/agent-authored (pinned) brief. Defaults to false.'),
+        account: accountSchema,
+    },
+    handler: async (args, api) =>
+        api.request(
+            'POST',
+            `/v1/items/${encodeURIComponent(args.itemId)}/brief/generate`,
+            { ...(args.force === undefined ? {} : { force: args.force }) },
+            undefined,
+            requestOptsFromArgs({ account: args.account }),
+        ),
+});
+
 const updateItem = defineTool({
     name: 'gtd_update_item',
     description:
@@ -191,7 +216,8 @@ export function registerItemTools(server: McpServer, api: ApiClient): void {
     registerOne(server, completeItem, api);
     registerOne(server, trashItem, api);
     registerOne(server, setBrief, api);
+    registerOne(server, generateBrief, api);
 }
 
 // Re-exported for tests.
-export const _itemToolsForTesting = { capture, listItems, getItem, updateItem, completeItem, trashItem, setBrief };
+export const _itemToolsForTesting = { capture, listItems, getItem, updateItem, completeItem, trashItem, setBrief, generateBrief };

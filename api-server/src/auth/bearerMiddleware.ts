@@ -7,11 +7,11 @@
  * tokens linger; on multi-instance deploys the staleness window is unbounded.
  */
 import dayjs from 'dayjs';
-import type { Context, MiddlewareHandler } from 'hono';
+import type { MiddlewareHandler } from 'hono';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import { type ApiTokenScope, DEFAULT_API_TOKEN_SCOPES } from '../types/entities.js';
 import { resolveBearerToken } from './apiTokens.js';
-import { ANON_BUCKET, defaultStore, tryConsume } from './rateLimitMiddleware.js';
+import { anonymousRejection } from './rateLimitMiddleware.js';
 
 /** Hono context variables made available to v1 route handlers after the bearer middleware runs. */
 export type BearerVariables = {
@@ -22,16 +22,6 @@ export type BearerVariables = {
         scopes: ApiTokenScope[];
     };
 };
-
-/** Best-effort client IP extraction matching the rate-limiter's logic. */
-function extractClientIp(c: Context): string {
-    const xff = c.req.header('x-forwarded-for');
-    if (xff) {
-        const first = xff.split(',')[0]?.trim();
-        if (first) return first;
-    }
-    return c.req.header('x-real-ip') ?? 'unknown';
-}
 
 /**
  * Resolves an `Authorization: Bearer gtd_<token>` header to a populated `apiAuth` value, or null
@@ -82,13 +72,7 @@ export async function resolveBearerApiAuth(authorizationHeader: string | undefin
 export const authenticateBearer: MiddlewareHandler<{ Variables: BearerVariables }> = async (c, next) => {
     const apiAuth = await resolveBearerApiAuth(c.req.header('Authorization'));
     if (!apiAuth) {
-        const result = tryConsume(defaultStore, `anon:${extractClientIp(c)}`, ANON_BUCKET, Date.now());
-        if (!result.allowed) {
-            console.log('[rate-limit]', { bucket: 'anon', ip: extractClientIp(c), route: c.req.path, method: c.req.method });
-            c.header('Retry-After', String(result.retryAfterSec));
-            return c.json({ error: 'Rate limit exceeded. Slow down and retry after a brief pause.', code: 'rate_limited' }, 429);
-        }
-        return c.json({ error: 'Unauthorized', code: 'unauthorized' }, 401);
+        return anonymousRejection(c) ?? c.json({ error: 'Unauthorized', code: 'unauthorized' }, 401);
     }
 
     c.set('apiAuth', apiAuth);

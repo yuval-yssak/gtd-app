@@ -29,7 +29,7 @@ Five ways a brief comes into existence, in priority order:
 | Staleness | `sourceHash` of `title + '\n' + notes` stored on the brief; a model brief is shown only when it matches the item's current hash |
 | Authored briefs | `origin: 'user' \| 'agent'` briefs are **pinned**: the sweeper never overwrites them; the UI shows them even when stale, with a subtle "notes changed since" marker; explicit Regenerate overrides |
 | Skip rule | notes empty or `< 160` chars after trim → a `text: null, origin: 'skipped'` row is written **without a model call**, so the sweeper does not reselect it. Card then shows title only |
-| Model | `BRIEF_MODEL` constant; default `claude-opus-5` per the project's Claude reference (`CLAUDE_ASSIST_MODEL` is `claude-sonnet-4-6` today); `claude-haiku-4-5` is the cheap alternative — **your call** (open decision 1) |
+| Model | `BRIEF_MODEL = 'claude-haiku-4-5'` (open decision 1, answered "Haiku"); `CLAUDE_ASSIST_MODEL` stays `claude-sonnet-4-6` |
 | Output | structured output `output_config.format` → `{ brief: string \| null }`, ≤ 160 chars, language of the notes, `max_tokens: 256`; system prompt cached (`cache_control`), notes treated as data (same injection guard wording as `agentLoop.ts`) |
 | Visibility | device-local preference `showBriefs` (localStorage, same pattern as `lib/colorTheme.ts`), toggled in Settings and in the Weekly Review header; default **on** |
 | Cron auth | reuse `CALENDAR_WEBHOOK_CRON_SECRET` + `x-webhook-cron-secret` header (no new secret, no new GitHub env var); one new Cloud Scheduler job per environment |
@@ -335,6 +335,8 @@ removing most short-note items. Steady state is a few cents a week.
 1. **Model**: `claude-opus-5` (reference default) or `claude-haiku-4-5` (5× cheaper, plenty for a
    one-liner)?
    Haiku
+   > Resolved 2026-09-20: `BRIEF_MODEL = 'claude-haiku-4-5'` (`lib/brief/briefPrompt.ts`), switched before any
+   > `origin: 'model'` row existed, so the corpus is single-model.
 2. **Pinned-but-stale display**: show the user/agent brief with a marker (proposed) or hide it like
    a model brief?
    show the user/agent brief with a marker

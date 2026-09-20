@@ -1,13 +1,20 @@
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ClearIcon from '@mui/icons-material/Clear';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import CircularProgress from '@mui/material/CircularProgress';
 import IconButton from '@mui/material/IconButton';
 import InputAdornment from '@mui/material/InputAdornment';
+import Snackbar from '@mui/material/Snackbar';
+import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import type { BriefState } from '../../lib/briefSource';
-import { BRIEF_LABEL, BRIEF_PLACEHOLDER, BRIEF_STALE_MARKER } from './briefSectionLogic';
+import { BRIEF_LABEL, BRIEF_PLACEHOLDER, BRIEF_STALE_MARKER, describeGenerateButton, REPLACE_BRIEF_PROMPT } from './briefSectionLogic';
 import styles from './ItemEditorBody.module.css';
+import type { BriefGeneration } from './useBriefGeneration';
 
 export interface BriefSectionProps {
     value: string;
@@ -20,6 +27,8 @@ export interface BriefSectionProps {
      * clear vs no-op.
      */
     onCommit: (value: string) => void;
+    /** The AI "Generate brief" button's state machine — see `useBriefGeneration`. */
+    generation: BriefGeneration;
     /**
      * `field` — the always-editable single-line input (the editor's default).
      * `line` — review presentation: the brief reads as a plain line under the title; clicking it
@@ -29,16 +38,23 @@ export interface BriefSectionProps {
 }
 
 /** Single-line brief under the title. Saves on blur/Enter through the host's `onCommit`. */
-export function BriefSection({ value, state, onChange, onCommit, variant = 'field' }: BriefSectionProps) {
+export function BriefSection({ value, state, onChange, onCommit, generation, variant = 'field' }: BriefSectionProps) {
     const [isLineEditing, setIsLineEditing] = useState(false);
     const isLine = variant === 'line' && !isLineEditing;
-    const marker = state === 'pinnedStale' ? <StaleMarker /> : null;
+    // "Regenerate" whenever the user can SEE a brief — a stale model row still fills the field
+    // even though its derived state is `none`.
+    const isRegenerate = state !== 'none' || value.trim().length > 0;
+    const generateButton = <GenerateBriefButton generation={generation} isRegenerate={isRegenerate} fieldValue={value} />;
 
     if (isLine) {
         return (
             <Box>
-                <BriefLine text={value} onActivate={() => setIsLineEditing(true)} />
-                {marker}
+                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
+                    <BriefLine text={value} onActivate={() => setIsLineEditing(true)} />
+                    {generateButton}
+                </Stack>
+                {state === 'pinnedStale' && <StaleMarker />}
+                <BriefGenerationFeedback generation={generation} />
             </Box>
         );
     }
@@ -67,38 +83,107 @@ export function BriefSection({ value, state, onChange, onCommit, variant = 'fiel
                 autoFocus={isLineEditing}
                 slotProps={{
                     input: {
-                        endAdornment: value ? (
-                            <BriefClearAdornment
-                                onClear={() => {
-                                    onChange('');
-                                    commit('');
-                                }}
-                            />
-                        ) : undefined,
+                        endAdornment: (
+                            <InputAdornment position="end">
+                                {value && (
+                                    <BriefClearButton
+                                        onClear={() => {
+                                            onChange('');
+                                            commit('');
+                                        }}
+                                    />
+                                )}
+                                {generateButton}
+                            </InputAdornment>
+                        ),
                     },
                 }}
                 data-testid="briefField"
             />
-            {marker}
+            {state === 'pinnedStale' && <StaleMarker />}
+            <BriefGenerationFeedback generation={generation} />
         </Box>
     );
 }
 
-function BriefClearAdornment({ onClear }: { onClear: () => void }) {
+function BriefClearButton({ onClear }: { onClear: () => void }) {
     return (
-        <InputAdornment position="end">
-            <IconButton
-                size="small"
-                aria-label="Clear brief"
-                // mousedown, not click: a click would blur the field first and commit the
-                // still-populated value before the clear lands.
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={onClear}
-                data-testid="briefClearButton"
-            >
-                <ClearIcon fontSize="small" />
-            </IconButton>
-        </InputAdornment>
+        <IconButton
+            size="small"
+            aria-label="Clear brief"
+            // mousedown, not click: a click would blur the field first and commit the
+            // still-populated value before the clear lands.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onClear}
+            data-testid="briefClearButton"
+        >
+            <ClearIcon fontSize="small" />
+        </IconButton>
+    );
+}
+
+/**
+ * The sparkle button. Unlike the clear button it lets the click BLUR the field on purpose: any
+ * text typed there must commit (as a user brief) before the request goes out, so the server sees
+ * the same pinned-or-not state the inline confirm gate decided on.
+ *
+ * That commit is a plain local put with no LWW check, so it must land BEFORE the generated row is
+ * applied. The confirm gate is what serialises the two: a dirty field always routes through
+ * `confirm` (a human-scale pause before the request), and a clean field commits nothing. Making
+ * the confirm optional would let the commit clobber the freshly generated row.
+ */
+function GenerateBriefButton({ generation, isRegenerate, fieldValue }: { generation: BriefGeneration; isRegenerate: boolean; fieldValue: string }) {
+    const { label, tooltip, isDisabled } = describeGenerateButton({ isRegenerate, isOnline: generation.isOnline, phase: generation.phase });
+    return (
+        <Tooltip title={tooltip}>
+            {/* A disabled button fires no pointer events, so the tooltip needs a live wrapper to anchor to. */}
+            <span>
+                <IconButton
+                    size="small"
+                    aria-label={label}
+                    disabled={isDisabled}
+                    onClick={() => generation.requestGenerate(fieldValue)}
+                    data-testid="briefGenerateButton"
+                >
+                    {generation.phase === 'loading' ? <CircularProgress size={18} /> : <AutoAwesomeIcon fontSize="small" />}
+                </IconButton>
+            </span>
+        </Tooltip>
+    );
+}
+
+/** The inline Replace/Keep confirm and the outcome snackbar — everything the generation says back. */
+function BriefGenerationFeedback({ generation }: { generation: BriefGeneration }) {
+    return (
+        <>
+            {generation.phase === 'confirm' && <ReplaceConfirm onReplace={generation.confirmReplace} onKeep={generation.keepBrief} />}
+            <Snackbar
+                open={generation.notice !== null}
+                autoHideDuration={6000}
+                // A click elsewhere on the page must not swallow the notice before it is read.
+                onClose={(_event, reason) => {
+                    if (reason !== 'clickaway') {
+                        generation.dismissNotice();
+                    }
+                }}
+                message={generation.notice}
+                data-testid="briefGenerateNotice"
+            />
+        </>
+    );
+}
+
+function ReplaceConfirm({ onReplace, onKeep }: { onReplace: () => void; onKeep: () => void }) {
+    return (
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mt: 0.5 }} data-testid="briefReplaceConfirm">
+            <Typography variant="body2">{REPLACE_BRIEF_PROMPT}</Typography>
+            <Button size="small" variant="contained" onClick={onReplace} data-testid="briefReplaceButton">
+                Replace
+            </Button>
+            <Button size="small" onClick={onKeep} data-testid="briefKeepButton">
+                Keep
+            </Button>
+        </Stack>
     );
 }
 

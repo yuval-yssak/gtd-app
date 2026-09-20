@@ -120,6 +120,8 @@
 /* Review presentation: the brief reads as a plain line under the title (click to edit in place). */
 .briefLine {
     cursor: text;
+    /* Fills the review row so the generate button sits at the far end, like the field's adornment. */
+    flex-grow: 1;
     padding: 0.25rem 0;
     border-bottom: 0.0625rem dashed var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
 }

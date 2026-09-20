@@ -24,6 +24,7 @@ import { type RsvpPushStatus, rsvpOnline } from '../../api/calendarApi';
 import type { ReassignItemEditPatch } from '../../api/syncApi';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { usePendingReassign } from '../../contexts/PendingReassignProvider';
+import { dispatchOpFlush } from '../../db/dispatchOpFlush';
 import { clearBrief, setUserBrief } from '../../db/itemBriefMutations';
 import {
     clarifyToCalendar,
@@ -112,6 +113,7 @@ import { NotesSection } from './NotesSection';
 import { ReassignInFlightInline } from './ReassignInFlightInline';
 import { SendUpdatesDialog } from './SendUpdatesDialog';
 import { shouldFireSendUpdatesDialog } from './sendUpdatesDialogLogic';
+import { useBriefGeneration } from './useBriefGeneration';
 
 export type { ItemEditorChrome } from '../editItemDialogLogic';
 
@@ -290,6 +292,10 @@ export function ItemEditorBody({
     const liveBrief = allItemBriefs.find((row) => row._id === item._id);
     const liveBriefRef = useRef(liveBrief);
     liveBriefRef.current = liveBrief;
+    // Hook order: must sit above the reassign-in-flight early return below. `flushItemText` goes
+    // through a ref because `textAutosave` is created further down (it needs the form state).
+    const flushItemTextRef = useRef(async () => {});
+    const briefGeneration = useBriefGeneration(db, { item: liveItem, brief: liveBrief, flushItemText: () => flushItemTextRef.current() });
 
     const [title, setTitle] = useState(item.title);
     const [notes, setNotes] = useState(item.notes ?? '');
@@ -479,6 +485,18 @@ export function ItemEditorBody({
             textAutosave.onChange({ title: formRefs.current.title, notes: nextNotes });
         }
     }
+
+    // Generate-brief precondition: commit the debounced title/notes and push the queued op to
+    // the server, so the model reads the text the user sees (NotesSection's blur does not flush).
+    // dispatchOpFlush, not waitForPendingFlush: queueSyncOp's fire-and-forget dispatch has not
+    // started its flush yet at this point (it first awaits an IDB read), so waiting on an
+    // in-flight flush would resolve immediately with the op still queued. The dispatch awaits the
+    // actual push — joining a flush already running — and pivots to the owner's session for a
+    // cross-account item.
+    flushItemTextRef.current = async () => {
+        await textAutosave.flush();
+        await dispatchOpFlush(db, liveItemRef.current.userId);
+    };
 
     // ── Brief (sidecar entity, its own op) ───────────────────────────────────
     // Saves on blur/Enter/clear and on unmount (like the text autosave's unmount flush). The last
@@ -1043,6 +1061,7 @@ export function ItemEditorBody({
                 state={briefRowState}
                 onChange={setBrief}
                 onCommit={(value) => void flushBrief(value)}
+                generation={briefGeneration}
                 variant={isBriefLeading ? 'line' : 'field'}
             />
 

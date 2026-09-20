@@ -27,6 +27,12 @@ declare namespace NodeJS {
         EXECUTE_TOKEN_SIGNING_KEY?: string;
         /** Per-user daily USD cap for Claude-assist spend. Parsed as a float; falls back to a built-in default. */
         CLAUDE_ASSIST_DAILY_COST_CAP_USD?: string;
+        /** TEST-ONLY: `'1'` makes brief generation return a deterministic fake (e2e). Production refuses to boot with it. */
+        BRIEF_FAKE_MODEL?: string;
+        /** Operator switch: `'1'` regenerates an item's brief ~30 s after each edit (write-path escape hatch). Off by default. */
+        BRIEF_INLINE_ON_WRITE?: string;
+        /** Per-user on-demand brief generations per 10 minutes. Defaults to 30. */
+        BRIEF_GENERATE_PER_10MIN?: string;
         /**
          * Public origin of THIS api-server, used as the OAuth 2.1 issuer + base for the AS/RS metadata
          * documents + the `/mcp` resource identifier (remote MCP flow). e.g.

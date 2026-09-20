@@ -3,6 +3,7 @@ import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { assistCors, publicCors, strictCors } from './auth/corsProfiles.js';
+import { assertBriefFakeModelNotInProduction } from './config.js';
 import { noStoreCache } from './lib/noStoreCache.js';
 import { v1RequestLogger } from './lib/v1Logger.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
@@ -16,6 +17,7 @@ import { syncRoutes } from './routes/sync.js';
 import { tokensRoutes } from './routes/tokens.js';
 import { v1ClaudeRoutes } from './routes/v1/claude.js';
 import { v1Routes } from './routes/v1/index.js';
+import { v1BriefGenerateRoutes } from './routes/v1/itemBriefGenerate.js';
 import { webhookRoutes } from './routes/webhooks.js';
 
 function resolveCommitHash() {
@@ -57,6 +59,12 @@ const app = new Hono()
     .use('/v1/claude/*', assistCors())
     .use('/v1/claude/*', v1RequestLogger())
     .route('/v1', v1ClaudeRoutes)
+    // /v1/items/:id/brief/generate — the second cookie-authed exception under /v1 (the in-app
+    // "Generate brief" button). Same isolation + credentialed CORS as the assist routes above;
+    // the exact path pattern keeps every other /v1/items route on the bearer-only publicCors.
+    .use('/v1/items/:id/brief/generate', assistCors())
+    .use('/v1/items/:id/brief/generate', v1RequestLogger())
+    .route('/v1', v1BriefGenerateRoutes)
     // /v1 is the public bearer-authed surface — relaxed CORS so external integrations can call it
     // from any origin. The bearer token is the auth gate.
     .use('/v1/*', publicCors())
@@ -91,6 +99,7 @@ const app = new Hono()
 export type AppType = typeof app;
 
 async function start() {
+    assertBriefFakeModelNotInProduction(process.env);
     await loadDataAccess();
 
     // Dynamic import so the module (and its production guard) is never evaluated in production.

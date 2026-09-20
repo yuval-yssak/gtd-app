@@ -16,4 +16,6 @@ export const SERVER_INSTRUCTIONS = [
     'link is (page title, ticket key, sender + subject); fall back to the domain when nothing better is available.',
     "A brief is a one-sentence, review-oriented condensation of an item's title + notes — what the commitment is and",
     'why it is still open, never logistics. Items expose it read-only as `brief`; write it with `gtd_set_brief`.',
+    "`gtd_generate_brief` asks the server's model to write the brief; `gtd_set_brief` writes your own. Prefer setting",
+    'a brief you have already composed over generating one.',
 ].join(' ');

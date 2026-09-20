@@ -87,6 +87,9 @@ Each environment (`production`, `staging`) holds its own set of secrets and vari
 | `CALENDAR_WEBHOOK_URL` | `https://api.getting-things-done.app/calendar/webhooks/google` |
 | `WEBHOOKS_ENABLED` | `true` (outbound webhook delivery worker; empty = off) |
 | `CLAUDE_ASSIST_DAILY_COST_CAP_USD` | `1` |
+| `BRIEF_GENERATE_PER_10MIN` | (optional) per-user cap on model calls for brief generation — `POST /v1/items/:id/brief/generate` AND the inline hook share it; defaults to `30` |
+| `BRIEF_INLINE_ON_WRITE` | **Operator switch, not set anywhere.** `1` regenerates an item's brief ~30 s after each first-party / API edit (write-path escape hatch, `lib/brief/briefInlineHook.ts`). Server-originated writes (GCal inbound, routine generator, brief writes) never trigger it; inline generations charge the same per-user cap as the endpoint and run strictly one at a time, so a large `/sync/push` flush cannot fan out into a burst of model calls. Leave unset: the Message Batches sweep is the primary path. |
+| `BRIEF_FAKE_MODEL` | **Test-only — never set in a deployed environment.** `1` makes brief generation return `[fake] <first sentence of the notes>` without calling Anthropic (used by the e2e API webServer). The server refuses to boot with it under `NODE_ENV=production` (`config.ts`). |
 
 **The deploy replaces the full env-var set.** `deploy-api.yml` writes every entry above into `env.yaml` and deploys with `--env-vars-file`, so a value set out-of-band with `gcloud run services update` survives only until the next deploy. Every permanent env var MUST live in the GitHub environment; a missing secret deploys as an empty string (it does not preserve the previous value).
 
