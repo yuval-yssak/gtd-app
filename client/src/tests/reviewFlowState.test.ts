@@ -38,7 +38,7 @@ import {
 import type { StoredItem, StoredRoutine } from '../types/MyDB';
 
 const TODAY = '2026-08-23';
-const CTX = { todayIso: TODAY, personNameById: { 'p-alice': 'Alice', 'p-bob': 'Bob' }, routines: [] };
+const CTX = { todayIso: TODAY, routines: [] };
 
 function makeItem(overrides: Partial<StoredItem> & { _id: string; status: StoredItem['status'] }): StoredItem {
     return { userId: 'user-1', title: overrides._id, createdTs: '2026-01-01T00:00:00.000Z', updatedTs: '2026-01-01T00:00:00.000Z', ...overrides };
@@ -114,21 +114,22 @@ describe('stageEligibleItems', () => {
         ]);
     });
 
-    it('waitingFor mirrors the page default: person groups A→Z, Unassigned last, expectedBy (undated first) within each group', () => {
+    it('waitingFor walks chronologically (expectedBy ascending, undated first) across people — the page\'s "By date" view, NOT its person-grouped default', () => {
         const items = [
             makeItem({ _id: 'bobLater', status: 'waitingFor', waitingForPersonId: 'p-bob', expectedBy: '2026-09-10' }),
             makeItem({ _id: 'unassignedSoon', status: 'waitingFor', expectedBy: '2026-08-25' }),
             makeItem({ _id: 'aliceUndated', status: 'waitingFor', waitingForPersonId: 'p-alice' }),
-            makeItem({ _id: 'bobSoon', status: 'waitingFor', waitingForPersonId: 'p-bob', expectedBy: '2026-08-25' }),
+            makeItem({ _id: 'bobSoon', status: 'waitingFor', waitingForPersonId: 'p-bob', expectedBy: '2026-08-24' }),
             makeItem({ _id: 'unassignedUndated', status: 'waitingFor' }),
             makeItem({ _id: 'hidden', status: 'waitingFor', waitingForPersonId: 'p-alice', ignoreBefore: '2026-12-01' }),
         ];
+        // Bob's two items are split apart by an unassigned one: date order beats person grouping.
         expect(stageEligibleItems('waitingFor', items, CTX).map((item) => item._id)).toEqual([
             'aliceUndated',
-            'bobSoon',
-            'bobLater',
             'unassignedUndated',
+            'bobSoon',
             'unassignedSoon',
+            'bobLater',
         ]);
     });
 

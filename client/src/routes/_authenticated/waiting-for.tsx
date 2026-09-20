@@ -30,7 +30,14 @@ import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useTodayIso } from '../../hooks/useTodayIso';
 import { isTicklerHidden } from '../../lib/ticklerVisibility';
-import { groupByWaitingForPerson, personNameMap, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../../lib/waitingForGroups';
+import {
+    compareWaitingForByExpectedBy,
+    groupByWaitingForPerson,
+    personNameMap,
+    resolvePersonName,
+    sortGroupEntriesByPersonName,
+    UNASSIGNED_GROUP_KEY,
+} from '../../lib/waitingForGroups';
 import { parseWaitingForSearch } from '../../lib/waitingForUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-waiting-for.module.css';
@@ -57,7 +64,7 @@ function WaitingForPage() {
         // Tickler pattern: a snoozed waitingFor item lives on /tickler alone until its date —
         // previously it double-listed here, contradicting docs/DATA_MODEL.md.
         .filter((item) => item.status === 'waitingFor' && !isTicklerHidden(item, todayIso))
-        .sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? ''));
+        .sort(compareWaitingForByExpectedBy);
 
     // Ghosts are fading leftovers, not open work — the header count reflects live rows only.
     const liveWaitingCount = waitingItems.filter((item) => !isGhost(item)).length;

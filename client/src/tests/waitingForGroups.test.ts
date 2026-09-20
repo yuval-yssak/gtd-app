@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { flattenByPersonGroups, groupByWaitingForPerson, resolvePersonName, sortGroupEntriesByPersonName, UNASSIGNED_GROUP_KEY } from '../lib/waitingForGroups';
+import {
+    compareWaitingForByExpectedBy,
+    groupByWaitingForPerson,
+    resolvePersonName,
+    sortGroupEntriesByPersonName,
+    UNASSIGNED_GROUP_KEY,
+} from '../lib/waitingForGroups';
 import type { StoredItem } from '../types/MyDB';
 
 const mkItem = (overrides: Partial<StoredItem> & { _id: string }): StoredItem => ({
@@ -32,24 +38,14 @@ describe('groupByWaitingForPerson', () => {
     });
 });
 
-describe('flattenByPersonGroups', () => {
-    it('flattens in group order (A→Z, Unassigned last), keeping the input item order within each group', () => {
+describe('compareWaitingForByExpectedBy', () => {
+    it('orders expectedBy ascending with undated items first, regardless of person', () => {
         const items = [
-            mkItem({ _id: 'zoe1', waitingForPersonId: 'p-zoe' }),
-            mkItem({ _id: 'none1' }),
-            mkItem({ _id: 'alice1', waitingForPersonId: 'p-alice' }),
-            mkItem({ _id: 'zoe2', waitingForPersonId: 'p-zoe' }),
+            mkItem({ _id: 'later', waitingForPersonId: 'p-alice', expectedBy: '2026-09-10' }),
+            mkItem({ _id: 'undated', waitingForPersonId: 'p-zoe' }),
+            mkItem({ _id: 'soon', expectedBy: '2026-08-25' }),
         ];
-        const flat = flattenByPersonGroups(items, { 'p-zoe': 'Zoe', 'p-alice': 'Alice' });
-        expect(flat.map((i) => i._id)).toEqual(['alice1', 'zoe1', 'zoe2', 'none1']);
-    });
-
-    it('resolves an unknown person id to "Unknown" for ordering and does not mutate its input', () => {
-        const items = [mkItem({ _id: 'mystery', waitingForPersonId: 'p-gone' }), mkItem({ _id: 'bob1', waitingForPersonId: 'p-bob' })];
-        const inputOrder = items.map((i) => i._id);
-        // "Bob" < "Unknown" alphabetically, so the resolvable group leads.
-        expect(flattenByPersonGroups(items, { 'p-bob': 'Bob' }).map((i) => i._id)).toEqual(['bob1', 'mystery']);
-        expect(items.map((i) => i._id)).toEqual(inputOrder);
+        expect([...items].sort(compareWaitingForByExpectedBy).map((i) => i._id)).toEqual(['undated', 'soon', 'later']);
     });
 });
 

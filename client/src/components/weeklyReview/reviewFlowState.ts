@@ -1,6 +1,6 @@
 import { compareNextActions } from '../../lib/compareNextActions';
 import { isTicklerHidden, participatesInTickler } from '../../lib/ticklerVisibility';
-import { flattenByPersonGroups } from '../../lib/waitingForGroups';
+import { compareWaitingForByExpectedBy } from '../../lib/waitingForGroups';
 import type { StoredItem, StoredRoutine } from '../../types/MyDB';
 import { compareCalendarItems } from '../calendarRouteSort';
 
@@ -55,8 +55,6 @@ export const REVIEW_STAGE_IDS: ReadonlyArray<ReviewStageId> = REVIEW_STAGES.map(
 export interface StageEligibilityContext {
     /** YYYY-MM-DD — passed in (never read from the clock here). */
     todayIso: string;
-    /** Person id → display name; drives the waitingFor stage's person-grouped page order. */
-    personNameById: Record<string, string>;
     /** Drives the calendar stage's routine collapse — occurrences of one routine review as ONE entry. */
     routines: ReadonlyArray<StoredRoutine>;
 }
@@ -171,11 +169,12 @@ export function stageEligibleEntryIds(stageId: ReviewStageId, items: ReadonlyArr
 
 /**
  * The items a stage reviews, in presentation order — each stage walks its items in the EXACT
- * order its own list page renders them (in that page's default view), so the review reads like
- * scanning that page top to bottom.
+ * order its own list page renders them, so the review reads like scanning that page top to
+ * bottom. Each case names which of its page's views it mirrors: usually the default, but
+ * `waitingFor` deliberately walks the page's "By date" view (see the case comment for why).
  */
 export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<StoredItem>, context: StageEligibilityContext): StoredItem[] {
-    const { todayIso, personNameById } = context;
+    const { todayIso } = context;
     switch (stageId) {
         case 'clearInboxes':
             return [];
@@ -192,14 +191,11 @@ export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<
             // Same comparator as the Next Actions page (focus first, then expectedBy tiers).
             return items.filter((item) => item.status === 'nextAction' && !isTicklerHidden(item, todayIso)).sort(compareNextActions);
         case 'waitingFor':
-            // The /waiting-for page's default view: expectedBy ascending (undated first, '' sorts
-            // before any date), then grouped by person A→Z with Unassigned last, flattened.
-            return flattenByPersonGroups(
-                items
-                    .filter((item) => item.status === 'waitingFor' && !isTicklerHidden(item, todayIso))
-                    .sort((a, b) => (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '')),
-                personNameById,
-            );
+            // DELIBERATE divergence from the /waiting-for page's default (person-grouped) view:
+            // the review walks the page's "By date" view instead — expectedBy ascending, undated
+            // first — because a person-grouped walk re-scrambles the dates every time the group
+            // changes, and a review scans for what's overdue or due soon, not who owes it.
+            return items.filter((item) => item.status === 'waitingFor' && !isTicklerHidden(item, todayIso)).sort(compareWaitingForByExpectedBy);
         case 'tickler':
             // Mirrors the /tickler page: every tickler-participating status, snoozed rows only.
             return items

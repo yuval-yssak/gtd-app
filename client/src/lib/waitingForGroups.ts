@@ -11,6 +11,17 @@ export function personNameMap(people: ReadonlyArray<StoredPerson>): Record<strin
     return Object.fromEntries(people.map((person) => [person._id, person.name]));
 }
 
+/**
+ * Chronological order for waitingFor items: `expectedBy` ascending. Undated items sort FIRST
+ * (`''` precedes any ISO date) — the /waiting-for "By date" view and the weekly review's
+ * Waiting For stage both walk this order, so keep them on one comparator. Note this is the
+ * inverse of `compareNextActions`, which tiers undated LAST: an open-ended obligation owed to
+ * you deserves a look before dated ones, whereas an undated next action is the lowest tier.
+ */
+export function compareWaitingForByExpectedBy(a: StoredItem, b: StoredItem) {
+    return (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '');
+}
+
 /** Groups waitingFor items by `waitingForPersonId`, falling back to the "Unassigned" bucket. */
 export function groupByWaitingForPerson(items: StoredItem[]): Record<string, StoredItem[]> {
     return items.reduce<Record<string, StoredItem[]>>((acc, item) => {
@@ -23,14 +34,6 @@ export function groupByWaitingForPerson(items: StoredItem[]): Record<string, Sto
 /** Resolves a person's display name, falling back to "Unknown" for ids missing from the map. */
 export function resolvePersonName(personMap: Record<string, string>, personId: string) {
     return personMap[personId] ?? 'Unknown';
-}
-
-/**
- * Flattens items into the /waiting-for page's DEFAULT (person-grouped) presentation order:
- * groups A→Z by resolved name with "Unassigned" last, each group keeping the input item order.
- */
-export function flattenByPersonGroups(items: StoredItem[], personMap: Record<string, string>): StoredItem[] {
-    return sortGroupEntriesByPersonName(groupByWaitingForPerson(items), personMap).flatMap(([, groupItems]) => groupItems);
 }
 
 /** Orders group entries A→Z by resolved person name; "Unassigned" always sorts last. */

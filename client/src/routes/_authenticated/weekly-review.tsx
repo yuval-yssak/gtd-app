@@ -33,7 +33,6 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { seedDefaultReviewInboxesIfEmpty } from '../../db/reviewInboxMutations';
 import { getTodayIso } from '../../lib/dayClock';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
-import { personNameMap } from '../../lib/waitingForGroups';
 import styles from './-weekly-review.module.css';
 
 // Lazy: pulls canvas-confetti out of the main chunk — the celebration renders once per review.
@@ -56,7 +55,7 @@ function WeeklyReviewPage() {
     const { db } = Route.useRouteContext();
     const { stage: urlStageId } = Route.useSearch();
     const navigate = useNavigate();
-    const { account, items, routines, allPeople, refreshReviewInboxes, isInitialSyncing } = useAppData();
+    const { account, items, routines, refreshReviewInboxes, isInitialSyncing } = useAppData();
     const [phase, setPhase] = useState<PagePhase>({ kind: 'loading' });
     // The latest flow across every onFlowChange call, updated synchronously — functional updaters
     // resolve against THIS, not the render-captured phase. Two same-tick commits (the deferred
@@ -138,7 +137,6 @@ function WeeklyReviewPage() {
                 // Shared day clock (fresh here — event-time, not render-cached) so every tickler
                 // boundary in the app reads one day source.
                 todayIso: getTodayIso(),
-                personNameById: personNameMap(allPeople),
                 routines,
             });
             if (hasAtLeastOne(arrivals)) {

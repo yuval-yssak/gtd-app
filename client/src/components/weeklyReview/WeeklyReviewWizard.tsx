@@ -13,10 +13,9 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import classNames from 'classnames';
 import type { IDBPDatabase } from 'idb';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { useTodayIso } from '../../hooks/useTodayIso';
-import { personNameMap } from '../../lib/waitingForGroups';
 import type { MyDB } from '../../types/MyDB';
 import { ClarifyStage } from './ClarifyStage';
 import { FocusStage } from './FocusStage';
@@ -54,7 +53,7 @@ interface WeeklyReviewWizardProps {
 
 /** Guided multi-step weekly review. One stage at a time, one item at a time inside each stage. */
 export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizardProps) {
-    const { account, items, routines, allPeople, allReviewInboxes } = useAppData();
+    const { account, items, routines, allReviewInboxes } = useAppData();
     // Item advances and stage changes unmount the focused button — restore keyboard focus onto
     // its equivalent in the new view instead of letting it fall to <body>.
     const wizardRootRef = useRef<HTMLDivElement | null>(null);
@@ -63,8 +62,6 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     // Shared day clock (already an effect dep below): a review left open across midnight
     // re-reconciles stage eligibility against the new day instead of a stale render-time date.
     const today = useTodayIso();
-    // Unfiltered allPeople, like /waiting-for: a queued item can wait on a hidden account's person.
-    const personNameById = useMemo(() => personNameMap(allPeople), [allPeople]);
     const queue = stage ? flow.queues[stage.id] : undefined;
     // Header collapse (screen real estate): the review STARTS with the full header (the checklist
     // stage); every other view — items, stage-end cards, empty stages — defaults to the slim
@@ -96,7 +93,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
         }
         const isEntry = enteredStageIdRef.current !== stage.id;
         enteredStageIdRef.current = stage.id;
-        const eligibleIds = stageEligibleEntryIds(stage.id, items, { todayIso: today, personNameById, routines });
+        const eligibleIds = stageEligibleEntryIds(stage.id, items, { todayIso: today, routines });
         // Calendar queues are re-mapped onto today's collapse BEFORE merging: a resumed draft (or
         // a routine row that only now healed to active) can hold raw occurrence ids — left alone,
         // the merge would keep offering every occurrence individually alongside its routine card.
@@ -112,7 +109,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
             // idempotent, so composing here can never clobber it.
             onFlowChange((prev) => withStageQueue(prev, stage.id, refresh(prev.queues[stage.id])));
         }
-    }, [stage, items, routines, today, personNameById, flow, onFlowChange]);
+    }, [stage, items, routines, today, flow, onFlowChange]);
 
     if (!stage) {
         return null;

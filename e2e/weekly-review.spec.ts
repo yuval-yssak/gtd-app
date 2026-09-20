@@ -376,6 +376,39 @@ test.describe('weekly review', () => {
         });
     });
 
+    test('waiting-for stage walks items chronologically by expectedBy, not grouped by person', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-wf-order-${dayjs().valueOf()}@example.com`, async (page) => {
+            // Person-grouped (the page's default view) would present both of Alice's items back to
+            // back and Zoe's last; the review must interleave them by date instead.
+            const alice = await gtd.createPerson(page, { name: 'Alice' });
+            const zoe = await gtd.createPerson(page, { name: 'Zoe' });
+            const aliceLater = await gtd.collect(page, 'Alice later');
+            await gtd.clarifyToWaitingFor(page, aliceLater, { waitingForPersonId: alice._id, expectedBy: '2026-12-01' });
+            const zoeSoon = await gtd.collect(page, 'Zoe soon');
+            await gtd.clarifyToWaitingFor(page, zoeSoon, { waitingForPersonId: zoe._id, expectedBy: '2026-09-01' });
+            const aliceMid = await gtd.collect(page, 'Alice mid');
+            await gtd.clarifyToWaitingFor(page, aliceMid, { waitingForPersonId: alice._id, expectedBy: '2026-10-01' });
+            // Undated leads the walk (the page's "By date" convention) — created last so createdTs
+            // order cannot explain it coming first.
+            const zoeUndated = await gtd.collect(page, 'Zoe undated');
+            await gtd.clarifyToWaitingFor(page, zoeUndated, { waitingForPersonId: zoe._id });
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await page.goto('/weekly-review?stage=waitingFor');
+            await page.getByTestId('startReviewButton').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Waiting For');
+
+            const focusStage = page.getByTestId('focusStage');
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Zoe undated');
+            await page.getByTestId('focusKeep').click();
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Zoe soon');
+            await page.getByTestId('focusKeep').click();
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Alice mid');
+            await page.getByTestId('focusKeep').click();
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Alice later');
+        });
+    });
+
     test('clarify stage walks inbox items newest-first (LIFO), matching the inbox page', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-clarify-order-${dayjs().valueOf()}@example.com`, async (page) => {
             // Each collect is a separate round-trip, so createdTs values are distinct — the older
