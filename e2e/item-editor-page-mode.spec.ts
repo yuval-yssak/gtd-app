@@ -282,6 +282,112 @@ test.describe('Item editor — page mode UX', () => {
         });
     });
 
+    test('clicking a link in the notes preview opens it in a new tab and stays in preview', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-notes-link-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Item with a linked note');
+            await gtd.updateItem(page, { ...item, notes: 'See [the docs](https://example.com/docs) for details' });
+            // Hermetic: the new tab never leaves the test machine. Registered on the context so the
+            // popup tab is covered too.
+            await page.context().route('https://example.com/**', (route) => route.fulfill({ contentType: 'text/html', body: '<h1>docs</h1>' }));
+
+            await page.goto(`/item/${item._id}`);
+            const preview = page.getByTestId('pageNotesPreview');
+            await expect(preview).toBeVisible();
+            const link = preview.getByRole('link', { name: 'the docs' });
+            await expect(link).toHaveAttribute('target', '_blank');
+            await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
+
+            // Plain click: opens a new tab, and the preview must NOT flip into the editor.
+            const plainClickTab = page.context().waitForEvent('page');
+            await link.click();
+            await expect(await plainClickTab).toHaveURL(/example\.com\/docs/);
+            await expect(preview).toBeVisible();
+            await expect(notesEditor).toHaveCount(0);
+
+            // cmd+click: same outcome — the modifier gesture must not leak into an edit-mode switch either.
+            const modifierClickTab = page.context().waitForEvent('page');
+            await link.click({ modifiers: ['Meta'] });
+            await expect(await modifierClickTab).toHaveURL(/example\.com\/docs/);
+            await expect(preview).toBeVisible();
+            await expect(notesEditor).toHaveCount(0);
+
+            // Enter on a focused link is the browser's own activation — it opens, the preview stays.
+            await link.focus();
+            const keyboardTab = page.context().waitForEvent('page');
+            await link.press('Enter');
+            await expect(await keyboardTab).toHaveURL(/example\.com\/docs/);
+            await expect(preview).toBeVisible();
+            await expect(notesEditor).toHaveCount(0);
+        });
+    });
+
+    test('Space on a focused link inside the preview enters edit mode without scroll-jumping the page', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-notes-link-space-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Item with a linked note and a tall page');
+            // Enough trailing lines that the document scrolls, so a leaked default Space would move it.
+            const tail = Array.from({ length: 80 }, (_, i) => `Filler ${i + 1}`).join('\n\n');
+            await gtd.updateItem(page, { ...item, notes: `See [the docs](https://example.com/docs) for details\n\n${tail}` });
+
+            await page.goto(`/item/${item._id}`);
+            const preview = page.getByTestId('pageNotesPreview');
+            await expect(preview).toBeVisible();
+            const link = preview.getByRole('link', { name: 'the docs' });
+            await link.focus();
+
+            // Anchors do not activate on Space, so the key belongs to the region: no new tab, no
+            // scroll, but the editor opens (as it does for Space on the region itself).
+            const scrollBefore = await page.evaluate(() => window.scrollY);
+            await link.press(' ');
+            await expect(page.getByRole('textbox', { name: 'Notes (Markdown)' })).toBeVisible({ timeout: 15_000 });
+            expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+            expect(page.context().pages()).toHaveLength(1);
+        });
+    });
+
+    test('clicking prose next to a link still enters edit mode (the carve-out is link-only)', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-notes-prose-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Item with a linked note and prose');
+            await gtd.updateItem(page, { ...item, notes: 'See [the docs](https://example.com/docs) for details' });
+
+            await page.goto(`/item/${item._id}`);
+            const preview = page.getByTestId('pageNotesPreview');
+            await expect(preview).toBeVisible();
+            await preview.getByText('for details').click();
+            await expect(page.getByRole('textbox', { name: 'Notes (Markdown)' })).toBeVisible({ timeout: 15_000 });
+            expect(page.context().pages()).toHaveLength(1);
+        });
+    });
+
+    test('very long notes scroll inside a capped preview and the bottom of the editor stays reachable', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-notes-long-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Item with very long notes');
+            const longNotes = Array.from({ length: 200 }, (_, i) => `Line ${i + 1} of a very long note`).join('\n\n');
+            await gtd.updateItem(page, { ...item, notes: longNotes });
+
+            await page.goto(`/item/${item._id}`);
+            const preview = page.getByTestId('pageNotesPreview');
+            await expect(preview).toBeVisible();
+            await expect(preview).toContainText('Line 200');
+
+            // Read the cap from its single source of truth (index.css) instead of a magic 0.6.
+            const capVh = await page.evaluate(() => Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gtd-notes-max-height')));
+            const viewport = page.viewportSize();
+            const previewBox = await preview.boundingBox();
+            if (!viewport || !previewBox || Number.isNaN(capVh)) throw new Error('expected a viewport, a preview box and a vh cap');
+            // Capped (2px of tolerance for border rounding) but not collapsed.
+            expect(previewBox.height).toBeLessThanOrEqual((viewport.height * capVh) / 100 + 2);
+            expect(previewBox.height).toBeGreaterThan(200);
+            // The overflow lives inside the preview...
+            const scrollsInternally = await preview.evaluate((el) => el.scrollHeight > el.clientHeight);
+            expect(scrollsInternally).toBe(true);
+            // ...so the reported symptom is gone: the bottom of the editor is one page-scroll away.
+            const bottomMeta = page.getByTestId('itemEditorId');
+            await bottomMeta.scrollIntoViewIfNeeded();
+            await expect(bottomMeta).toBeInViewport();
+        });
+    });
+
     test('calendar item renders date/time fields between the title and the notes', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `page-cal-order-${dayjs().valueOf()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Dentist appointment');

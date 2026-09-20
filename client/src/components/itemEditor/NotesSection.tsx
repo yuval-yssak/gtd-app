@@ -5,6 +5,7 @@ import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import Typography from '@mui/material/Typography';
 import { useId, useRef, useState } from 'react';
+import { isLinkActivation } from '../../lib/notesPreviewLinks';
 import { type ItemEditorChrome, notesAreEmpty } from '../editItemDialogLogic';
 import { MarkdownNotesEditor, NOTES_EDITOR_LABEL, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
@@ -105,12 +106,25 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
                 role="region"
                 aria-labelledby={labelId}
                 data-testid="pageNotesPreview"
-                onClick={enterEdit}
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
+                onClick={(e) => {
+                    // A click on a rendered link must open the link (new tab, see MarkdownPreview),
+                    // not flip the notes into the editor underneath it.
+                    if (!isLinkActivation(e.target)) {
                         enterEdit();
                     }
+                }}
+                onKeyDown={(e) => {
+                    if (e.key !== 'Enter' && e.key !== ' ') {
+                        return;
+                    }
+                    // Enter on a focused link is the browser's own activation — let it open the link.
+                    // Space is never a link activation (anchors only respond to Enter), so it always
+                    // belongs to the region; preventDefault also stops the page scroll-jump.
+                    if (e.key === 'Enter' && isLinkActivation(e.target)) {
+                        return;
+                    }
+                    e.preventDefault();
+                    enterEdit();
                 }}
             >
                 <MarkdownPreview markdown={notes} />

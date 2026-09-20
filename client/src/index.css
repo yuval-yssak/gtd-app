@@ -33,6 +33,9 @@ body {
     --gtd-scrollbar-color: #aaa;
     --gtd-code-bg: rgba(0, 0, 0, 0.06);
     --gtd-sheet-handle: rgba(0, 0, 0, 0.2);
+    /* Shared ceiling for long-notes surfaces (rendered preview + CodeMirror scroller) so they
+     * scroll internally instead of pushing the editor's action row below the fold. */
+    --gtd-notes-max-height: 60vh;
 }
 
 /* Attribute selector matches the data-color-scheme="dark" that MUI sets on <html>.

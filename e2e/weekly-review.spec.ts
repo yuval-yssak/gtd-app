@@ -1009,7 +1009,7 @@ test.describe('weekly review', () => {
                 rrule: 'FREQ=WEEKLY;BYDAY=TH',
                 startDate: dayjs().format('YYYY-MM-DD'),
                 calendarItemTemplate: { timeOfDay: '18:00', duration: 60 },
-                template: { notes: 'Bring a towel' },
+                template: { notes: 'Bring a towel — see [pool hours](https://example.com/pool)' },
                 active: true,
             });
             await gtd.generateCalendarItemsToHorizon(page, poolRoutine._id);
@@ -1061,6 +1061,8 @@ test.describe('weekly review', () => {
             await expect(routineCard.getByTestId('reviewRoutineBanner')).toContainText('Every Thu at 18:00');
             await expect(routineCard.getByTestId('routineCardOccurrences')).toContainText(`${poolOccurrences.length - 1} occurrences`);
             await expect(routineCard.getByTestId('routineCardNotes')).toContainText('Bring a towel');
+            // Notes links on the review card open in a new tab (shared MarkdownPreview contract).
+            await expect(routineCard.getByTestId('routineCardNotes').getByRole('link', { name: 'pool hours' })).toHaveAttribute('target', '_blank');
             // Edit opens the routine dialog; Escape closes it without deciding.
             await page.getByTestId('routineCardEdit').click();
             await expect(page.getByRole('dialog').getByTestId('routineEditorSaveButton')).toBeVisible();

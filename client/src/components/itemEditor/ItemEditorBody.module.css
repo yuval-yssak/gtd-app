@@ -51,6 +51,9 @@
 .previewClickable {
     composes: preview;
     cursor: text;
+    /* Same cap as the CodeMirror editor's .cm-scroller: very long notes scroll inside the
+     * preview instead of pushing the action buttons below the fold of the whole page. */
+    max-height: var(--gtd-notes-max-height);
 }
 
 .previewClickable:hover {

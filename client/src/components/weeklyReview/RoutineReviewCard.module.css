@@ -20,8 +20,12 @@
     margin-top: 0.25rem;
 }
 
+/* Same long-notes ceiling as the item editor's preview: the card's own scroll (.editorCard) would
+ * otherwise have to be dragged past the whole notes block to reach the rest of the card. */
 .notes {
     margin-top: 1rem;
+    max-height: var(--gtd-notes-max-height);
+    overflow-y: auto;
 }
 
 /* GCal event links + meeting-details panel, same pair a one-off calendar item renders. */
