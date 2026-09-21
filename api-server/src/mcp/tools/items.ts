@@ -120,8 +120,8 @@ const setBrief = defineTool({
 const generateBrief = defineTool({
     name: 'gtd_generate_brief',
     description:
-        "Ask the SERVER's model to write an item's brief from its current title + notes (one sentence, ≤ 160 chars, " +
-        'origin "model"). Outcomes: `written` (a new brief), `skipped` (notes too short — under 160 chars — so a ' +
+        "Ask the SERVER's model to write an item's brief from its current title + notes (one sentence, targeting " +
+        '~160 chars but never truncated — an overlong brief is stored whole — origin "model"). Outcomes: `written` (a new brief), `skipped` (notes too short — under 160 chars — so a ' +
         '`text: null` marker was recorded and no model was called), `discarded_stale` (the item changed while ' +
         'generating; nothing written — retry). Fails with 409 `brief_pinned` when a user- or agent-authored brief ' +
         'exists: pass `force: true` to REPLACE that authored brief with a model one (only when the user asked for it). ' +

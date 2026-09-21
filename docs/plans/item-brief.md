@@ -30,7 +30,7 @@ Five ways a brief comes into existence, in priority order:
 | Authored briefs | `origin: 'user' \| 'agent'` briefs are **pinned**: the sweeper never overwrites them; the UI shows them even when stale, with a subtle "notes changed since" marker; explicit Regenerate overrides |
 | Skip rule | notes empty or `< 160` chars after trim → a `text: null, origin: 'skipped'` row is written **without a model call**, so the sweeper does not reselect it. Card then shows title only |
 | Model | `BRIEF_MODEL = 'claude-haiku-4-5'` (open decision 1, answered "Haiku"); `CLAUDE_ASSIST_MODEL` stays `claude-sonnet-4-6` |
-| Output | structured output `output_config.format` → `{ brief: string \| null }`, ≤ 160 chars, language of the notes, `max_tokens: 256`; system prompt cached (`cache_control`), notes treated as data (same injection guard wording as `agentLoop.ts`) |
+| Output | structured output `output_config.format` → `{ brief: string \| null }`, **soft** target 160 chars (never truncated server-side — an ellipsis would read as "summary incomplete, open the notes"), must abstract the notes as a whole rather than enumerate them, language of the notes, `max_tokens: 256`; system block carries `cache_control` but it is **inert on Haiku 4.5** (4096-token minimum cacheable prefix vs our ~642 — see `buildSystemBlocks`), notes treated as data (same injection guard wording as `agentLoop.ts`) |
 | Visibility | device-local preference `showBriefs` (localStorage, same pattern as `lib/colorTheme.ts`), toggled in Settings and in the Weekly Review header; default **on** |
 | Cron auth | the scheduler secret, renamed `CRON_SECRET` + `x-cron-secret` header (open decision 6) and shared through `auth/cronSecret.ts`; one new Cloud Scheduler job per environment |
 | Hash function | `cyrb53`-style synchronous string hash mirrored server/client (`lib/briefSource.ts` ↔ `client/src/lib/briefSource.ts`) with a parity test; sha256 would force async hashing in render paths |
@@ -303,7 +303,28 @@ flips a model-origin brief to `none` (seeded via `gtd_set_brief`-equivalent API 
 - `briefPrompt.ts`: `buildBriefRequest(item): MessageCreateParams` — cached system block, user
   turn `<title>…</title><notes>…</notes>`, structured-output schema `{ brief: string | null }`.
   Prompt asks for the review decision ("what this is and why it is still open"), one sentence,
-  ≤ 160 chars, notes' language, `null` when the title already says it all, no invented facts.
+  a soft 160-char target, notes' language, `null` when the title already says it all, no invented
+  facts. Multi-thread notes must be condensed into the shape of the whole (how many threads, who
+  blocks most of them, what the user owns) — never a partial list trailing off in "and …".
+
+  **Why the prompt carries a BAD/GOOD example pair (eval evidence, 2026-09-21).** A real user brief
+  came back as `"… tickets assigned to Yosef and Nir, ongoing latency stats tracking, and…"` — an
+  enumeration amputated by the then-160-char server truncation. Removing the truncation alone was
+  **not** enough: sampling the live Haiku prompt 3× on that item's notes, the model still walked the
+  numbered list and simply had room to finish it (242–271 chars). Adding the explicit BAD/GOOD pair
+  flipped it to a real abstraction, and a "never name more than two people/tickets — count them
+  instead" rule tightened it further. Final 8-run sample on that item: **8/8** ended in a complete
+  sentence with no ellipsis, **8/8** opened with the shape ("Six open threads…, most blocked on
+  teammates"), lengths 93–183 chars. Best output: `"Six open latency threads, most blocked on
+  teammates; only the recurring stats check is yours."` (93 chars).
+
+  **Known residual:** roughly half the runs still append a partial breakdown after the shape
+  sentence — wordier than ideal, but no longer a list that trails off. That variance is inherent to
+  a one-shot Haiku call; the deterministic guarantees (no truncation, no ellipsis) live in
+  `fitBriefText`, not the prompt. Keep the BAD/GOOD example pair and the cardinality rule when
+  reworking this prompt — the abstract rules alone lose to the model's instinct to be complete.
+  Unit tests pin that the rules are *present*, not that the model obeys them; re-run a sample like
+  the above after a prompt change.
 - `briefModel.ts`: `BRIEF_MODEL`, `generateBriefText(item)` → parses the JSON text block; maps SDK
   errors through `lib/claude/agentError.ts` (`503 agent_unavailable` when no key, `429` passthrough).
   `BRIEF_FAKE_MODEL=1` short-circuits to the deterministic fake (e2e only; refused in production
@@ -438,8 +459,11 @@ independence), `maintenanceBriefs.test.ts` (401/200, limit clamp, session scopin
 | `claude-opus-5` | ≈ $0.0025 | ≈ $0.005 | ≈ $12 |
 | `claude-haiku-4-5` | ≈ $0.0005 | ≈ $0.001 | ≈ $2.50 |
 
-Assumes ~400 input tokens per item, cached system prompt, ~40 output tokens, and the skip rule
-removing most short-note items. Steady state is a few cents a week.
+Assumes ~400 input tokens per item, ~40 output tokens, and the skip rule removing most
+short-note items. Steady state is a few cents a week. **Note:** the original estimate assumed a
+cached system prompt; it is not cached on Haiku 4.5 (below the 4096-token floor), so each brief
+pays ~642 system tokens at full input rate. At Haiku's $1/MTok that is ~$0.0006 per brief — small
+in absolute terms, but it means prompt length is a real per-call cost, not a one-off.
 
 ---
 

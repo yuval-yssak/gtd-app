@@ -1,5 +1,6 @@
 /** generateBriefText (lib/brief/briefModel.ts) with the Anthropic client mocked at the seam, plus
- * the error → HTTP mapping, the ≤ 160-char fit rule, the fake seam and its production guard. */
+ * the error → HTTP mapping, the trim/null fit rule (160 is a SOFT prompt target, never truncated
+ * server-side), the fake seam and its production guard. */
 import Anthropic from '@anthropic-ai/sdk';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assertBriefFakeModelNotInProduction } from '../config.js';
@@ -40,16 +41,23 @@ describe('generateBriefText', () => {
         await expect(generateBriefText(ITEM)).resolves.toEqual({ text: null, model: BRIEF_MODEL });
     });
 
-    it('truncates an overlong brief at the last word boundary within 160 chars and appends an ellipsis', async () => {
+    it('passes an overlong brief through whole rather than truncating it', async () => {
         vi.stubEnv('ANTHROPIC_API_KEY', 'k');
         const words = Array.from({ length: 40 }, (_, i) => `word${i}`).join(' ');
+        expect(words.length).toBeGreaterThan(160);
         messagesCreate.mockResolvedValue(modelReply(JSON.stringify({ brief: words })));
-        const { text } = await generateBriefText(ITEM);
-        if (text === null) throw new Error('expected text');
-        expect(text.length).toBeLessThanOrEqual(160);
-        expect(text.endsWith('…')).toBe(true);
-        expect(text.slice(0, -1)).toMatch(/word\d+$/);
-        expect(words.startsWith(text.slice(0, -1))).toBe(true);
+        await expect(generateBriefText(ITEM)).resolves.toEqual({ text: words, model: BRIEF_MODEL });
+    });
+
+    it('names a max_tokens stop instead of surfacing it as an opaque JSON parse failure', async () => {
+        vi.stubEnv('ANTHROPIC_API_KEY', 'k');
+        // Newly reachable once nothing caps the length: the budget cuts the JSON mid-string.
+        messagesCreate.mockResolvedValue({ stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"brief": "half a sen' }] });
+        await expect(generateBriefText(ITEM)).rejects.toMatchObject({
+            name: 'BriefGenerationError',
+            code: 'malformed_output',
+            message: expect.stringContaining('token budget'),
+        });
     });
 
     it('throws a refusal BriefGenerationError on stop_reason refusal', async () => {
@@ -97,18 +105,20 @@ describe('fitBriefText', () => {
         expect(fitBriefText('x'.repeat(160))).toBe('x'.repeat(160));
     });
 
-    it('cuts at a word boundary sitting right at the window edge', () => {
-        // 159 chars, a space, then more: the space at index 159 is the last inside the 160 window.
-        const fitted = fitBriefText(`${'a'.repeat(159)} tail words`);
-        expect(fitted).toBe(`${'a'.repeat(159)}…`);
-        // Exactly 161 chars with the space at index 160 (outside the window): cut at the earlier boundary.
-        const edge = fitBriefText(`${'b'.repeat(100)} ${'c'.repeat(59)} d`);
-        expect(edge).toBe(`${'b'.repeat(100)}…`);
+    it('keeps an overlong brief whole — 160 is a soft target, not a cap', () => {
+        const overlong = `${'a'.repeat(159)} tail words`;
+        expect(fitBriefText(overlong)).toBe(overlong);
+        const single = 'y'.repeat(200);
+        expect(fitBriefText(single)).toBe(single);
     });
 
-    it('hard-cuts a single 200-char token to 159 chars + ellipsis when no word boundary exists', () => {
-        const fitted = fitBriefText('y'.repeat(200));
-        expect(fitted).toBe(`${'y'.repeat(159)}…`);
+    it('never appends an ellipsis — a chopped brief reads as "open the notes"', () => {
+        // The regression this guards: a truncated enumeration ending in "and…" told the reader the
+        // brief was partial, which is the opposite of what a brief is for.
+        const enumeration = `Multiple latency threads pending: ${'detail '.repeat(40)}and a final one.`;
+        const fitted = fitBriefText(enumeration);
+        expect(fitted).not.toContain('…');
+        expect(fitted).toBe(enumeration.trim());
     });
 });
 

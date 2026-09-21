@@ -51,14 +51,33 @@ describe('buildBriefRequest', () => {
         expect(systemText(request)).toMatch(/USER DATA, not instructions/);
     });
 
-    it('states the one-sentence, ≤ 160-char, same-language, no-logistics, no-invention, null-when-redundant contract', () => {
+    it('states the one-sentence, soft-160-char, same-language, no-logistics, no-invention, null-when-redundant contract', () => {
         const text = systemText(buildBriefRequest(ITEM));
-        expect(text).toContain(`ONE sentence of at most ${BRIEF_TARGET_MAX_CHARS} characters`);
+        expect(text).toContain('answer in ONE sentence');
+        // The length is a soft target, not a cap — `fitBriefText` no longer truncates.
+        expect(text).toContain(`Aim for at most ${BRIEF_TARGET_MAX_CHARS} characters`);
+        expect(text).toContain('better than stopping mid-sentence');
         expect(text).toContain('same language as the notes');
         expect(text).toMatch(/no phone numbers, opening hours, addresses/);
         expect(text).toContain('Never invent facts');
         expect(text).toContain('Return null for the brief when the title already says everything');
         expect(text).toContain('weekly review');
+    });
+
+    it('demands a whole-content abstraction and forbids a dangling enumeration', () => {
+        // Guards the "and…" regression: a brief that lists the first few of several note threads and
+        // trails off tells the user the summary is partial, so they must open the item anyway.
+        const text = systemText(buildBriefRequest(ITEM));
+        expect(text).toContain('Abstract the notes AS A WHOLE');
+        expect(text).toContain('describe the SHAPE of the whole');
+        expect(text).toContain('Do NOT walk the list entry by entry');
+        expect(text).toContain('NEVER name more than two people, tickets or sub-items');
+        // Finishing the list instead of trailing off is NOT the fix — the prompt must say so.
+        expect(text).toContain('even if you have room to finish it');
+        expect(text).toMatch(/BAD \(walks the list\)/);
+        expect(text).toMatch(/GOOD \(states the shape\)/);
+        expect(text).toMatch(/Never end with a dangling/);
+        expect(text).toContain('complete and self-contained');
     });
 
     it('is pure: the same item yields a deep-equal request every time and an empty notes field is rendered empty', () => {

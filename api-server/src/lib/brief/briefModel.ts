@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { classifyAgentError } from '../claude/agentError.js';
 import { getAnthropicClient } from '../claude/anthropicClient.js';
-import { BRIEF_TARGET_MAX_CHARS, type BriefSourceItem, buildBriefRequest } from './briefPrompt.js';
+import { type BriefSourceItem, buildBriefRequest } from './briefPrompt.js';
 
 export interface GeneratedBrief {
     /** The one-line brief, or `null` when the model judged the title already says it all. */
@@ -42,28 +42,29 @@ function fakeBrief(item: BriefSourceItem): GeneratedBrief {
 }
 
 /**
- * Enforces the ≤ 160-character contract regardless of what the model returned: trims, and
- * truncates an overlong sentence at the last word boundary that fits, appending an ellipsis.
- * Empty-after-trim collapses to `null` (same meaning as the model's explicit null).
+ * Normalizes what the model returned: trims, and collapses empty-after-trim to `null` (same
+ * meaning as the model's explicit null).
+ *
+ * The prompt's ~160-char target (`BRIEF_TARGET_MAX_CHARS` in `briefPrompt.ts`) is a SOFT limit
+ * — the prompt asks for it, but an overlong brief is
+ * stored whole. Truncating used to append an ellipsis, which told the reader "this abstraction is
+ * incomplete, go open the notes" — the exact opposite of a brief's job. A slightly long but
+ * complete sentence beats a chopped one.
  */
 export function fitBriefText(raw: string | null): string | null {
     const trimmed = (raw ?? '').trim();
-    if (trimmed.length === 0) {
-        return null;
-    }
-    if (trimmed.length <= BRIEF_TARGET_MAX_CHARS) {
-        return trimmed;
-    }
-    const window = trimmed.slice(0, BRIEF_TARGET_MAX_CHARS);
-    const lastSpace = window.lastIndexOf(' ');
-    // No word boundary inside the window (one giant token) — cut hard rather than return nothing.
-    const cut = lastSpace > 0 ? window.slice(0, lastSpace) : window.slice(0, BRIEF_TARGET_MAX_CHARS - 1);
-    return `${cut.trimEnd()}…`;
+    return trimmed.length === 0 ? null : trimmed;
 }
 
 function parseBriefOutput(response: Anthropic.Message): string | null {
     if (response.stop_reason === 'refusal') {
         throw new BriefGenerationError('refusal', 'the model refused to produce a brief');
+    }
+    // Reachable now that nothing caps the brief's length: a `max_tokens` stop cuts the structured
+    // output mid-JSON, so `JSON.parse` would fail anyway — named explicitly so the log says
+    // "budget ran out" instead of an opaque "not JSON". Degrades safely: the sweeper retries.
+    if (response.stop_reason === 'max_tokens') {
+        throw new BriefGenerationError('malformed_output', 'the model hit its token budget before finishing the brief JSON');
     }
     const textBlock = response.content.find((block): block is Anthropic.TextBlock => block.type === 'text');
     if (!textBlock) {
@@ -85,10 +86,11 @@ function parseBriefJson(text: string): string | null {
 }
 
 /**
- * The brief text out of ONE model message, fitted to the ≤ 160-char contract. Shared by the
- * direct call below and the Message Batches harvest (`briefBatch.ts`), so a batch result is
- * interpreted exactly like a synchronous one. Throws `BriefGenerationError` for a refusal or an
- * unusable payload (a JSON parse failure is folded into `malformed_output`).
+ * The brief text out of ONE model message, trimmed (the length target is soft — see
+ * `fitBriefText`). Shared by the direct call below and the Message Batches harvest
+ * (`briefBatch.ts`), so a batch result is interpreted exactly like a synchronous one. Throws
+ * `BriefGenerationError` for a refusal or an unusable payload (a JSON parse failure is folded
+ * into `malformed_output`).
  */
 export function parseBriefResponse(response: Anthropic.Message): string | null {
     try {

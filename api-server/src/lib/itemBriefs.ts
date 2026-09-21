@@ -7,8 +7,10 @@ import { type BriefState, briefSourceHash, briefState } from './briefSource.js';
 import { KeyedMutex } from './keyedMutex.js';
 
 /**
- * Storage ceiling for an authored brief. The model prompt / MCP guidance target ~160 characters
- * (one sentence); 500 is the hard cap so a caller can never stash a second notes field here.
+ * Storage ceiling for an AUTHORED brief (`origin: 'user' | 'agent'`) — `writeModelBrief` never
+ * passes through here, so a model brief is not capped server-side. The ~160-character target in
+ * the prompt and the MCP guidance is a SOFT limit (see `fitBriefText`); this 500 is a hard cap
+ * with a different job: stopping a caller from stashing a second notes field in the brief.
  */
 export const BRIEF_MAX_CHARS = 500;
 
