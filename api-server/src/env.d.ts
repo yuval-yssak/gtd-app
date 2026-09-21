@@ -20,6 +20,10 @@ declare namespace NodeJS {
         CALENDAR_AUTH_GRACE_MS?: string;
         /** Test-only override for the /sync pull/bootstrap cursor holdback window (seconds). */
         SYNC_CURSOR_HOLDBACK_SECONDS?: string;
+        /** Set by vitest in each worker process; namespaces that worker's test databases (mainLoader.namespaceTestDB). */
+        VITEST_POOL_ID?: string;
+        /** Set by src/tests/setup.ts per test file; namespaces that file's test databases (mainLoader.namespaceTestDB). */
+        TEST_FILE_ID?: string;
         COMMIT_HASH?: string;
         WEBHOOKS_ENABLED?: string;
         /** Anthropic API key for the Lane A Claude-assist endpoint. Separate billing from any Pro/Max subscription. */

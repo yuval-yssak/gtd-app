@@ -65,14 +65,25 @@ async function mongoConnect() {
     return client;
 }
 
-// Under vitest, namespace each test DB by the runner's parent PID so two concurrent `npm run test`
-// processes (e.g. a manual run racing the stop-hook's parallel api-server check) never share a
-// `gtd_test` database and wipe each other's collections in beforeEach. `process.ppid` is identical
-// across all worker processes of one run but differs between separate runs — exactly the
-// stable-within-run, unique-across-runs token we need, with no per-test-file plumbing.
+// Under vitest, namespace each test DB by the runner's parent PID, the worker id and the test file so that
+// (a) two concurrent `npm run test` processes (e.g. a manual run racing the stop-hook's parallel
+//     api-server check) never share a `gtd_test` database — `process.ppid` is identical across all
+//     worker processes of one run but differs between separate runs;
+// (b) files running in parallel workers of the same run never share one either (`VITEST_POOL_ID`);
+// (c) files that run one after another in the same reused worker process (the 'shared' vitest
+//     project) never share one: fire-and-forget work a previous file left in flight (web push,
+//     auth-escalation emails, routine regeneration) would otherwise land in the next file's
+//     collections. `TEST_FILE_ID` is stamped by src/tests/setup.ts before the file's hooks run.
+// globalTeardown.ts drops every `*_p<ppid>_w*` database once the run finishes.
 function namespaceTestDB(name: string) {
     if (process.env.NODE_ENV !== 'test') return name;
-    return `${name}_p${process.ppid}`;
+    const fileId = process.env.TEST_FILE_ID;
+    if (!fileId) {
+        // setup.ts stamps this in beforeAll; unset means loadDataAccess ran at module-evaluation time,
+        // which would silently share a database with the previous file on this worker.
+        throw new Error('[tests] loadDataAccess() called before beforeAll — move it into a beforeAll hook');
+    }
+    return `${name}_p${process.ppid}_w${process.env.VITEST_POOL_ID ?? '0'}_f${fileId}`;
 }
 
 async function loadDataAccess(customDBName?: string) {

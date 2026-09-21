@@ -141,6 +141,9 @@ describe('webhook renewal — invalid_grant escalation', () => {
 
         await renewAllExpiring();
         await waitFor(async () => (await calendarIntegrationsDAO.findById('int-1'))?.status === 'suspended');
+        // The warning email is inserted AFTER the status flip by the same fire-and-forget chain; wait
+        // for it too, or it lands during the next test and shows up in that test's email count.
+        await waitFor(async () => (await sentEmailsDAO.findArray({ userId: 'user-1' })).length >= 1);
         watchSpy.mockClear();
 
         // Wait long enough that the grace window would elapse, then run renewal again.

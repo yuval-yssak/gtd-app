@@ -5,9 +5,10 @@ import { MongoClient } from 'mongodb';
 // once after the whole run finishes (teardown). We only need teardown here — dropping the per-run
 // test databases this invocation created.
 //
-// Worker processes namespace their test DBs by `process.ppid` (see mainLoader.namespaceTestDB);
-// that ppid equals THIS (parent) process's pid, so we can find and drop every `*_p<pid>` database
-// the run leaked. Without this, each `npm run test` would leave behind a fresh set of databases.
+// Worker processes namespace their test DBs by `process.ppid` + worker id (see
+// mainLoader.namespaceTestDB); that ppid equals THIS (parent) process's pid, so we can find and drop
+// every `*_p<pid>_w<worker>` database the run leaked. Without this, each `npm run test` would leave
+// behind a fresh set of databases.
 export default function setup() {
     return async function teardown() {
         const url = process.env.MONGO_DB_URL; // same var as config.mongoDBConfig.DBUrl; read directly since config.ts isn't init'd in the parent process
@@ -15,12 +16,12 @@ export default function setup() {
             return;
         }
 
-        const suffix = `_p${process.pid}`;
+        const runMarker = `_p${process.pid}_w`;
         const client = new MongoClient(url);
         try {
             await client.connect();
             const { databases } = await client.db().admin().listDatabases({ nameOnly: true });
-            const ours = databases.filter((d) => d.name.endsWith(suffix));
+            const ours = databases.filter((d) => d.name.includes(runMarker));
             await Promise.all(ours.map((d) => client.db(d.name).dropDatabase()));
         } finally {
             await client.close();

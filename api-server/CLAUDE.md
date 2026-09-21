@@ -12,6 +12,15 @@ Tests need a local Mongo: `docker run -d --rm --name gtd-test-mongo -p 27017:270
 
 The sync-audit suite is separate and hits a real account: `npm run test:sync-audit:setup` then `npm run test:sync-audit`.
 
+### Test harness (`vitest.config.ts`, `src/tests/setup.ts`)
+
+- **Files run in parallel, each in its own database** — `gtd_test_<name>_p<run pid>_w<worker>_f<file hash>` (`mainLoader.namespaceTestDB`); `globalTeardown.ts` drops them after the run. Never rely on data another file wrote.
+- **Worker processes are reused** across files (the `shared` project) so `node_modules` load once per worker; `setup.ts` resets vitest's module registry after each file so `src/` singletons are still fresh per file. A file that calls `vi.mock` is auto-assigned to the `isolated` project (own process) because mocks would leak into the next file.
+- **No outbound HTTP.** `setup.ts` aborts `http.request` / `https.request` (`AbortError`, which gaxios does not retry). An unmocked `GoogleCalendarProvider` method therefore rejects immediately instead of reaching Google's token endpoint — mock the method the test exercises.
+- **`CALENDAR_WEBHOOK_URL` is stripped** at setup; tests that exercise webhook registration set it themselves and delete it in `finally`.
+- Two rules the reuse depends on, because breaking either surfaces as a flake in some *other* file: call `loadDataAccess` only inside `beforeAll` (the per-file id is stamped there; earlier calls throw), and restore every raw `process.env` write you make (vitest does not reset `process.env` between files — use `vi.stubEnv`, or delete in `afterAll`/`finally`).
+- `calendar.test.ts` was split into `calendar.*.test.ts` files sharing `calendarTestKit.ts` (fixtures + `useCalendarTestLifecycle()`); add calendar tests to the topical file, not a new mega-file.
+
 ## Architecture
 
 ### Request Lifecycle

@@ -15,6 +15,7 @@ import peopleDAO from '../dataAccess/peopleDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
 import * as buildCalendarProviderModule from '../lib/buildCalendarProvider.js';
+import { userLocalDate } from '../lib/userTimezone.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
 import type { ItemInterface, PersonInterface, RoutineInterface, WorkContextInterface } from '../types/entities.js';
@@ -356,6 +357,7 @@ describe('POST /sync/reassign', () => {
             await routinesDAO.insertOne(routine);
 
             const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
+            const todayBefore = await userLocalDate(bob.userId);
             const res = await postReassign(cookie, { entityType: 'routine', entityId: routine._id, fromUserId: alice.userId, toUserId: bob.userId });
 
             expect(res.status).toBe(200);
@@ -364,11 +366,13 @@ describe('POST /sync/reassign', () => {
             const [seeded] = bobItems;
             if (!seeded) throw new Error('expected one seeded nextAction item');
             expect(seeded.title).toBe(routine.title);
-            // Routine-generated items are ticklered until their due date; daily rrule lands today.
-            // "Today" is the LOCAL calendar date — routineItemGeneration floors occurrences on
-            // dayjs().format('YYYY-MM-DD'); asserting dayjs.utc() flaked nightly between local
-            // midnight and UTC midnight (expected the previous UTC day).
-            expect(seeded.expectedBy).toBe(dayjs().format('YYYY-MM-DD'));
+            // Routine-generated items are ticklered until their due date; daily rrule lands today —
+            // "today" in the OWNER's timezone (UTC for a fresh test user), which is what
+            // routineItemGeneration anchors on. Derive it through the same helper rather than the
+            // machine clock: asserting local or UTC "today" directly flaked nightly between local
+            // midnight and UTC midnight, whichever way round the two disagreed. Sampled before and
+            // after the request so a rollover in between cannot fail it either.
+            expect([todayBefore, await userLocalDate(bob.userId)]).toContain(seeded.expectedBy);
             expect(seeded.ignoreBefore).toBe(seeded.expectedBy);
             // The seed op must be recorded on Bob's op log so his devices pull the item.
             const seededOps = await operationsDAO.findArray({ user: bob.userId, entityType: 'item', entityId: seeded._id });
