@@ -1,5 +1,7 @@
 # Client Architecture
 
+Repo-wide commands, coding standards and the post-change checklist live in the root [`CLAUDE.md`](../CLAUDE.md) — this file adds only what is specific to `client/`.
+
 ## Router Context
 
 TanStack Router is used with file-based routing. The router context carries only the IndexedDB instance — created once in `main.tsx` and injected at router level so every route can read/write IDB without prop-drilling.
@@ -11,35 +13,15 @@ interface RouterContext {
 }
 ```
 
-`App.tsx` creates the router as a module-level singleton (inside the module, not inside the component — recreating it on render would reset all router state) and passes `db` as the context value:
-
-```ts
-const router = createRouter({ routeTree, context: { db: null as unknown as IDBPDatabase<MyDB> } });
-
-export default function App({ db }: Props) {
-    return <RouterProvider router={router} context={{ db }} />;
-}
-```
-
-Inside any route, access the db via `Route.useRouteContext()`.
+`App.tsx` creates the router as a module-level singleton (inside the module, not inside the component — recreating it on render would reset all router state) and passes `db` as the context value. Inside any route, access the db via `Route.useRouteContext()`.
 
 ## App Data Context
 
-`contexts/AppDataProvider.tsx` is the shared-state layer for authenticated routes. It holds the current account and all entity lists read from IndexedDB.
+`contexts/AppDataProvider.tsx` is the shared-state layer for authenticated routes, owned by `_authenticated.tsx` and consumed via the `useAppData()` hook. It holds the active account, the logged-in account list, and every synced entity list read from IndexedDB — `items`, `workContexts`, `people`, `routines`, `reviewInboxes`, `itemBriefs` — each with a `refresh*()` and an `all*` variant.
 
-```ts
-interface AppData {
-    account: StoredAccount | null;
-    items: StoredItem[];
-    workContexts: StoredWorkContext[];
-    people: StoredPerson[];
-    refreshItems: () => Promise<void>;
-    refreshWorkContexts: () => Promise<void>;
-    refreshPeople: () => Promise<void>;
-}
-```
+**The `all*` lists are cross-account; the unprefixed lists are scoped to visible accounts.** Multiple OAuth accounts live in one IDB database at once, so pick deliberately: a list view wants the scoped list, a lookup by id may need the `all*` one.
 
-`_authenticated.tsx` owns this context. It initialises state from IDB on mount (`loadAll()`), then syncs with the server (`syncAndRefresh()`). Child routes consume it via the `useAppData()` hook.
+`withActiveAccountSession` / `withOwnerSession` pin the API-origin Better Auth session to the right account for the duration of a task. **The app's active account lives in IDB, while the API origin has its own session cookie; they can diverge.** Any call that must act as a specific user has to go through these wrappers, or it silently runs as whoever the cookie says.
 
 **Mutation pattern in routes:**
 ```ts
@@ -63,30 +45,24 @@ The offline-first, last-write-wins model doesn't fit TanStack Query's server-sta
 
 ## IndexedDB Schema
 
-Database name: `gtd-app`. Defined in `db/indexedDB.ts`, typed via `types/MyDB.ts`.
+Database name: `gtd-app`. Schema and upgrade path in `db/indexedDB.ts`, typed via `types/MyDB.ts` — read those for the current version and store list rather than trusting a copy here.
 
-| Store | Key | Index | Purpose |
-|---|---|---|---|
-| `accounts` | `id` (UUID) | `email` (unique) | All OAuth accounts ever used on this device |
-| `activeAccount` | `'active'` (singleton) | — | Reference to the current account |
-| `items` | `_id` (UUID) | `userId` | GTD tasks |
-| `routines` | `_id` (UUID) | `userId` | Recurring task templates |
-| `people` | `_id` (UUID) | `userId` | Contacts |
-| `workContexts` | `_id` (UUID) | `userId` | Context tags |
-| `syncOperations` | auto-increment | — | Offline mutation queue |
-| `deviceSyncState` | `'local'` (singleton) | — | Device ID + last sync cursor (`lastSyncedTs`) |
+Shape: `accounts` (keyed by account `id`, unique `email` index) and the singleton `activeAccount` hold auth state; every synced entity store (`items`, `routines`, `people`, `workContexts`, `reviewInboxes`, `itemBriefs`) is keyed by `_id` and **indexed by `userId`**, so one database holds several OAuth accounts at once; `syncOperations` (auto-increment) is the offline mutation queue; `deviceMeta` / `syncCursors` / `drafts` are device-local.
 
-All entity stores index by `userId` so a single IDB database can hold data for multiple OAuth accounts simultaneously.
+**Adding a synced entity means a schema bump plus a `case` arm in `db/syncHelpers.ts`** — the default branch warns and skips, so a missing arm silently drops those ops.
+
+**Always open through `withAppDB`, never a bare long-lived `openAppDB`.** A connection left open holds the schema version and blocks the next upgrade in every other tab — a v7→v8 upgrade deadlocked on a stale tab and rendered a blank page with no error. The Service Worker outlives individual events, so this matters most there.
 
 ## API Client
 
-All `fetch()` calls live in `src/api/`. Each file has a paired mock companion used in tests.
+All `fetch()` calls live in `src/api/`. Files with a test seam have a paired `.mock.ts` companion and a `"imports"` alias in `package.json`:
 
-| File | Mock | Alias |
+| Alias | Module | Mock |
 |---|---|---|
-| `src/api/syncClient.ts` | `src/api/syncClient.mock.ts` | `#api/syncClient` |
+| `#api/syncClient` | `src/api/syncClient.ts` | `src/api/syncClient.mock.ts` |
+| `#api/syncApi` | `src/api/syncApi.ts` | `src/api/syncApi.mock.ts` |
+| `#api/assistApi` | `src/api/assistApi.ts` | `src/api/assistApi.mock.ts` |
 
-The alias is declared in `package.json` `"imports"`:
 ```json
 "#api/syncClient": {
     "test": "./src/api/syncClient.mock.ts",
@@ -106,13 +82,13 @@ The mock companion exports `vi.fn()` instances. Tests configure per-test behavio
 
 ### Bootstrap (first-run)
 
-When `_authenticated.tsx` mounts and `deviceSyncState` does not exist, `bootstrapFromServer()` runs:
+When `_authenticated.tsx` mounts and no sync cursor exists for the account, `bootstrapFromServer()` runs:
 
 1. `GET /sync/bootstrap` → server returns full snapshots of all entities
-2. Bulk-insert into IDB stores (items, routines, people, workContexts)
-3. Write `deviceSyncState` with `lastSyncedTs = serverTs`
+2. Bulk-insert into IDB stores
+3. Write the sync cursor from the snapshot's high-water mark
 
-After bootstrap, incremental pulls start from `lastSyncedTs`, so no old ops are replayed.
+After bootstrap, incremental pulls start from that cursor, so no old ops are replayed. The cursor must come from the snapshot's high-water mark, **not from "now"** — a concurrent server-side import writing ops at an earlier `ts` would otherwise never be pulled, leaving rows in the DB that the app never shows.
 
 ### SSE (real-time tab updates)
 
@@ -120,10 +96,10 @@ After bootstrap, incremental pulls start from `lastSyncedTs`, so no old ops are 
 
 When another device pushes a change to the server, the server broadcasts an SSE message. The client's listener calls `syncAndRefresh()`:
 1. `flushSyncQueue()` — sends any locally queued ops first
-2. `pullFromServer()` — fetches ops newer than `lastSyncedTs`, applies to IDB (last-write-wins on `updatedTs`)
+2. `pullFromServer()` — fetches ops newer than the cursor, applies to IDB (last-write-wins on `updatedTs`)
 3. `refreshItems()` / `refreshPeople()` / etc. — re-reads IDB → React state
 
-EventSource reconnects automatically on error.
+EventSource reconnects automatically on error. **Be careful adding per-message refetches** — an SSE fan-out that triggers a per-tab pull that triggers another fetch has previously burned the Cloudflare Worker free-tier daily request limit from the user's own open tabs alone.
 
 ### Push Notifications (background sync)
 
@@ -133,24 +109,13 @@ EventSource reconnects automatically on error.
 2. Call `PushManager.subscribe()` with the VAPID key
 3. `POST /push/subscribe` with the push endpoint + stable device ID
 4. Server stores subscription; on any push, broadcasts a Web Push notification
-5. `serviceWorker.ts` Service Worker intercepts the `push` event and calls `pullFromServer(db)` to update IDB in the background
+5. `serviceWorker.ts` intercepts the `push` event and pulls in the background (`db/backgroundSync.ts`)
 
 Degrades gracefully — returns early if the browser lacks Service Worker or PushManager support.
 
 ### Offline Sync Queue
 
-Every mutation immediately writes to IDB and appends a `SyncOperation`:
-
-```ts
-interface SyncOperation {
-    id?: number;          // auto-increment
-    entityType: 'item' | 'routine' | 'person' | 'workContext';
-    entityId: string;
-    opType: 'create' | 'update' | 'delete';
-    queuedAt: string;     // ISO datetime — replay order
-    snapshot: StoredEntity | null;  // full state; null for delete
-}
-```
+Every mutation immediately writes to IDB and appends a `SyncOperation` (`types/MyDB.ts`) carrying `userId`, `entityType`, `entityId`, `opType`, `queuedAt` (ISO, replay order) and the full `snapshot` (`null` for a delete). `userId` is required so a multi-account flush can fan out per user without cross-account leakage.
 
 Before flushing, `flushSyncQueue()` collapses redundant ops per entity:
 
@@ -160,7 +125,7 @@ Before flushing, `flushSyncQueue()` collapses redundant ops per entity:
 | create → delete | both dropped (entity never reached server) |
 | update → delete | single delete |
 
-`POST /sync/push` sends the collapsed ops. Ops are removed from IDB only on a successful response.
+`POST /sync/push` sends the collapsed ops. Ops are removed from IDB only on a successful response. A server-side 400 on any op in the batch jams the queue permanently — see the op-schema warning in the root `CLAUDE.md`.
 
 `flushSyncQueue()` is called:
 - In `_authenticated.tsx` on mount and on every `online` event
@@ -170,61 +135,38 @@ Before flushing, `flushSyncQueue()` collapses redundant ops per entity:
 
 This layout route is the central orchestrator for all authenticated state.
 
-**`beforeLoad`** (runs before render):
-- Calls `fetchSessionSafely()` (wraps `authClient.getSession()`)
+**`beforeLoad`** → `authenticatedRouteGuard` (`routes/-authenticatedRouteGuard.tsx`), which runs before render:
+- Calls `fetchSessionSafely()` (wraps `authClient.getSession()`, tolerating a network error)
 - If offline and device has a cached account → allow through (offline access)
 - If online but no session → redirect to `/login`
 
-**`useEffect` on mount**:
-1. `loadAll()` — reads items, workContexts, people from IDB and sets React state (instant, no network)
+**On mount**:
+1. Reads entities from IDB and seeds React state (instant, no network)
 2. If online: `syncAndRefresh()` — flush queue, bootstrap if needed, pull new ops, refresh state
 3. Open SSE connection
 4. Register push subscription
 
-**Provides:**
-- `AppDataProvider` to all child routes
-- `Outlet` inside MUI layout (sidebar nav + mobile AppBar)
+**Provides:** `AppDataProvider` to all child routes, and `Outlet` inside the MUI layout (sidebar nav + mobile AppBar).
 
-## Directory Map
+Note that `AppNav` double-mounts, so state that must survive a remount (e.g. the reauth banner) belongs in a module-level store, not component state.
+
+## Directory Orientation
 
 ```
 client/src/
-├── main.tsx                     # opens IDB, mounts dev tools in dev, renders App
-├── App.tsx                      # creates TanStack Router, injects db context
-├── serviceWorker.ts             # Service Worker: background sync + push handler
-├── routes/
-│   ├── __root.tsx               # root layout: MUI baseline, Outlet, router devtools
-│   ├── _authenticated.tsx        # protected layout: session guard, data boot, SSE
-│   ├── _authenticated/          # all app screens (inbox, next-actions, calendar, …)
-│   ├── login.tsx
-│   └── auth.callback.tsx        # writes account to IDB after OAuth redirect
-├── contexts/
-│   └── AppDataProvider.tsx        # shared state: account, items, people, workContexts
-├── db/
-│   ├── indexedDB.ts             # IDB schema + openAppDB()
-│   ├── deviceId.ts              # getOrCreateDeviceId(), sync cursor helpers
-│   ├── syncHelpers.ts           # bootstrapFromServer, pullFromServer, flushSyncQueue, queueSyncOp
-│   ├── sseClient.ts             # EventSource singleton + openSseConnection()
-│   ├── pushSubscription.ts       # Web Push registration
-│   ├── item{Helpers,Mutations}.ts
-│   ├── person{Helpers,Mutations}.ts
-│   ├── routine{Helpers,Mutations}.ts
-│   ├── workContext{Helpers,Mutations}.ts
-│   ├── accountHelpers.ts        # upsertAccount, setActiveAccount, getActiveAccount
-│   └── devTools.ts              # window.__gtd harness (dev + test)
-├── hooks/
-│   ├── useOnline.ts             # navigator.onLine + online/offline events
-│   ├── useAccounts.ts           # multi-account switcher logic
-│   └── useRoutines.ts
-├── components/                  # shared UI: AppNav, AccountSwitcher, ClarifyDialog, …
-├── types/
-│   ├── MyDB.ts                  # IDB schema types (Stored* interfaces)
-│   └── routerContext.ts         # RouterContext interface
-├── lib/
-│   └── authClient.ts            # Better Auth browser client
-└── constants/
-    └── globals.ts               # API_SERVER URL
+├── main.tsx / App.tsx           # opens IDB; creates the router and injects db context
+├── serviceWorker.ts             # custom Workbox SW: precache, background sync, push
+├── routes/                      # file-based routes; _authenticated/ is the protected app
+├── contexts/AppDataProvider.tsx # shared authenticated state
+├── data/                        # React 19 cached-promise resources (appResource, …)
+├── db/                          # IDB schema + per-entity {Helpers,Mutations} + sync machinery
+├── api/                         # every fetch() call, plus .mock.ts test seams
+├── hooks/ · lib/ · components/  # React hooks · pure logic · UI
+├── types/MyDB.ts                # IDB schema types (Stored* interfaces)
+└── constants/globals.ts         # API_SERVER URL
 ```
+
+Per-entity IDB access is split `<entity>Helpers.ts` (reads) / `<entity>Mutations.ts` (writes that also queue a sync op). Follow that split when adding an entity.
 
 ## Coding Standards
 
@@ -238,11 +180,11 @@ client/src/
 ### React 19 & Suspense
 
 - React 19 features are first-class: `<Suspense>`, `use()`, `useTransition`, `useOptimistic`, `useActionState`, `useFormStatus`, `useDeferredValue`, `lazy()`, `cache()`. Reach for them before hand-rolled `useState<boolean>` loading flags or `useEffect`-driven async patterns.
-- For data reads: write a cached promise (e.g. `client/src/data/appResource.ts`, `client/src/data/initialAuthBundle.ts`, `prefetchCalendarOptions` in `hooks/useCalendarOptions.ts`) and `use()` it inside the consumer. Two consumers reading the same key share the same promise — that's how Suspense de-dupes.
+- For data reads: write a cached promise (e.g. `data/appResource.ts`, `data/initialAuthBundle.ts`, `prefetchCalendarOptions` in `hooks/useCalendarOptions.ts`) and `use()` it inside the consumer. Two consumers reading the same key share the same promise — that's how Suspense de-dupes. A `use()` reader over a cache that can return `null` will spin: make sure the miss path populates the cache rather than re-throwing every render.
 - Wrap consumers in a Suspense boundary at the right granularity: route-level for the whole-page initial read (`_authenticated.tsx` does this for the `AppData` resource), per-section for hooks that suspend a smaller area, and `<AppErrorBoundary>` (mode `'page'` or `'inline'`) outside every Suspense boundary so a thrown rejection has somewhere to land.
-- For background refreshes that should not flash a fallback (sync, SSE, push): drop the cache entry and call `setSnapshot(newSnapshot)` inside `startTransition`. The provider in `data/AppResourceProvider.tsx` does this — its `refresh(scope)` is exposed via the module-level `triggerAppResourceRefresh` so callers don't need context.
+- For background refreshes that should not flash a fallback (sync, SSE, push): drop the cache entry and swap the snapshot in inside `startTransition`. The provider in `data/AppResourceProvider.tsx` does this — it registers its `refresh(scope)` through `registerAppResourceRefreshHandler`, and callers fire it via the module-level `triggerAppResourceRefresh` (`data/appResource.ts`) without importing context.
 - For mutation pending state: `useTransition` is the default — its `[isPending, startTransition]` replaces the `useState<boolean>` + manual `try/finally` toggle. Keep a `useRef` alongside if you need to dedupe rapid double-submits (transitions don't dedupe).
-- Exception: when a mutation surface needs richer state than a single `isPending` boolean — per-action error messages, per-row pending sets, error/recovery UI — keep `useState`. Examples in this codebase: `useAccounts`'s `pendingAction` enum + `actionError`, `CalendarIntegrations`'s `savingConfigIds` set, the `PendingReassignProvider` overlay map.
+- Exception: when a mutation surface needs richer state than a single `isPending` boolean — per-action error messages, per-row pending sets, error/recovery UI — keep `useState`. Examples in this codebase: `useAccounts`'s `pendingAction` enum + `actionError`, `PersonalApiTokens`'s `revokingId` + `actionError` alongside its `useTransition`, the `PendingReassignProvider` overlay map.
 
 ### Test IDs
 
@@ -255,3 +197,7 @@ client/src/
 - Global CSS variables go in `client/src/index.css`.
 - **Never concatenate classNames with array `.join(" ")`.** Use the `classnames` package instead: `import classNames from "classnames"`.
 - **Never use bracket notation for CSS Module classes** (`styles["preview"]`). Use dot notation (`styles.preview`) — `generate-typed-css-modules` ensures all classes are typed and accessible this way.
+
+### Filters
+
+A page's visibility filter (tickler `ignoreBefore`, archived/visible accounts) must be mirrored by anything that stages items for that page — `reviewFlowState` and the Weekly Review staging in particular. A filter applied on the page but not in staging surfaces items the user has explicitly hidden.
