@@ -251,7 +251,7 @@ gcloud scheduler jobs create http gtd-staging-brief-sweep \
   --schedule="*/15 * * * *" --time-zone="Etc/UTC" \
   --uri="https://api-staging.getting-things-done.app/maintenance/briefs/sweep" \
   --http-method=POST \
-  --update-headers "x-cron-secret=<value>,Content-Type=application/json" \
+  --headers "x-cron-secret=<value>,Content-Type=application/json" \
   --message-body='{}' \
   --attempt-deadline=180s
 
@@ -261,7 +261,7 @@ gcloud scheduler jobs create http gtd-production-brief-sweep \
   --schedule="*/15 * * * *" --time-zone="Etc/UTC" \
   --uri="https://api.getting-things-done.app/maintenance/briefs/sweep" \
   --http-method=POST \
-  --update-headers "x-cron-secret=<value>,Content-Type=application/json" \
+  --headers "x-cron-secret=<value>,Content-Type=application/json" \
   --message-body='{}' \
   --attempt-deadline=180s
 ```
