@@ -33,7 +33,7 @@ const MAX_BULK_CHUNK_SIZE = 500;
 const COMPLETABLE_FROM: ReadonlyArray<ItemInterface['status']> = ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done'];
 
 const ITEM_STATUSES = new Set<ItemInterface['status']>(Object.values(ItemStatus));
-const BRIEF_STATES = new Set<BriefState>(['none', 'fresh', 'pinnedStale']);
+const BRIEF_STATES = new Set<BriefState>(['none', 'declined', 'fresh', 'pinnedStale']);
 
 /** Rows read from Mongo always carry `_id`; the optional on `ItemInterface` exists only for pre-insert shapes. */
 function persistedId(item: ItemInterface): string {

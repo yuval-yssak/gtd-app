@@ -1,11 +1,49 @@
 import { BriefApiError, type GenerateBriefOutcome } from '../../api/briefApi';
 import { type BriefState, isPinnedOrigin } from '../../lib/briefSource';
-import type { StoredItemBrief } from '../../types/MyDB';
+import type { BriefOrigin, StoredItemBrief } from '../../types/MyDB';
 
 export const BRIEF_LABEL = 'Brief';
 export const BRIEF_PLACEHOLDER = 'One line for the weekly review';
 /** Shown under a pinned (user/agent) brief whose source title/notes moved on since it was written. */
 export const BRIEF_STALE_MARKER = 'Notes changed since this brief was written';
+
+/** `declined` + `model`: the model read the notes and judged there was nothing worth condensing. */
+export const BRIEF_DECLINED_MODEL_NOTE = 'No brief — nothing in the notes to summarise';
+/** `declined` + `skipped`: the notes were under the skip threshold, so no model call was made. */
+export const BRIEF_DECLINED_SKIPPED_NOTE = 'No brief — the title already says it';
+
+/**
+ * Snackbar line for a run whose model DECLINED (the server reports that as `written` with a
+ * `text: null` row). Without it a retry on an already-`declined` item changes nothing on screen —
+ * same caption, same empty field, no notice — which is indistinguishable from a broken button.
+ * Worded as an event ("wrote no brief") rather than a state, so it does not simply re-read the
+ * caption sitting directly above it.
+ */
+export const BRIEF_DECLINED_NOTICE = 'Nothing in the notes worth condensing — no brief written';
+
+/**
+ * The muted caption that stands in for an empty Brief field on a `declined` row. Both text-less
+ * origins reach this; the distinction is WHY nothing was written, which is what the user cannot
+ * otherwise tell apart from a broken or still-loading feature.
+ */
+export function describeDeclinedBrief(origin: BriefOrigin): string {
+    return origin === 'skipped' ? BRIEF_DECLINED_SKIPPED_NOTE : BRIEF_DECLINED_MODEL_NOTE;
+}
+
+/**
+ * Whether the declined caption is on show, given the LIVE field value — not the stored row alone.
+ * The caption explains an empty Brief field; the moment the user types, the field is theirs and
+ * the explanation is stale, so it must go on the first keystroke rather than on blur or save.
+ *
+ * Keyed on the field value only (no `isEditing` flag), which settles both edges deliberately:
+ * focusing an empty field KEEPS the caption — with nothing typed yet it reads as a hint, and
+ * hiding it on a stray focus would lose that for nothing — while backspacing back to empty brings
+ * it back at the last character. It cannot flicker mid-backspace: any remaining text is non-empty,
+ * so the caption stays hidden until the field is genuinely empty again.
+ */
+export function isDeclinedNoteVisible({ state, fieldValue }: { state: BriefState; fieldValue: string }): boolean {
+    return state === 'declined' && fieldValue.trim().length === 0;
+}
 
 export type BriefCommit = { kind: 'noop' } | { kind: 'clear' } | { kind: 'set'; text: string };
 
@@ -28,9 +66,12 @@ export type EditorPresentation = 'edit' | 'review';
  * Review presentation only: the card leads with the brief line and folds the notes behind a
  * disclosure — but only when there is a brief worth showing AND the user has not turned briefs
  * off. Otherwise the editor renders exactly as it does everywhere else (notes preview).
+ *
+ * `declined` is deliberately NOT brief-first: there is no brief LINE to lead with, only a one-line
+ * "no brief, and here is why" caption, so the notes preview must stay on show as it does for `none`.
  */
 export function isBriefFirst(presentation: EditorPresentation, isShowBriefsOn: boolean, state: BriefState): boolean {
-    return presentation === 'review' && isShowBriefsOn && state !== 'none';
+    return presentation === 'review' && isShowBriefsOn && (state === 'fresh' || state === 'pinnedStale');
 }
 
 // ── Generate / Regenerate button ─────────────────────────────────────────────
@@ -84,7 +125,12 @@ export function describeGenerateButton({
     return { label, tooltip: `${label} with AI`, isDisabled: phase !== 'idle' };
 }
 
-/** The snackbar line for a completed generation — `null` when a brief was written (the line itself is the feedback). */
+/**
+ * The snackbar line for a completed generation keyed on the OUTCOME alone — `null` when a brief
+ * was written, because the new line is its own feedback. `written` also covers a model decline
+ * (`text: null`), which is NOT self-evident; `settleOutcome` inspects the row for that case
+ * before falling through to here.
+ */
 export function describeGenerateOutcome(outcome: GenerateBriefOutcome): string | null {
     switch (outcome) {
         case 'written':

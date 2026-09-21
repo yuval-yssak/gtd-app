@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { BriefApiError, type GenerateBriefResult, type ServerItemBriefSnapshot } from '../api/briefApi';
 import { type BriefRunPorts, runBriefGeneration } from '../components/itemEditor/briefGenerationRunner';
+import { BRIEF_DECLINED_NOTICE } from '../components/itemEditor/briefSectionLogic';
 
 const ROW: ServerItemBriefSnapshot = {
     _id: 'item-1',
@@ -58,6 +59,22 @@ describe('runBriefGeneration', () => {
         const { ports } = makePorts(resolveWith({ outcome: 'skipped', brief: skippedRow }));
         expect(await runBriefGeneration(false, ports)).toEqual({ kind: 'notice', text: 'Notes are too short for a brief — the title already says it' });
         expect(ports.store).toHaveBeenCalledWith(skippedRow);
+    });
+
+    it('announces a model decline — a `written` row carrying null text is not a silent success', async () => {
+        // The server reports "the model read the notes and found nothing to condense" as
+        // `written` with `text: null`. On a retry the caption is already on screen and unchanged,
+        // so without this notice the click would produce no visible effect whatsoever.
+        const declinedRow = { ...ROW, text: null };
+        const { ports } = makePorts(resolveWith({ outcome: 'written', brief: declinedRow }));
+        expect(await runBriefGeneration(false, ports)).toEqual({ kind: 'notice', text: BRIEF_DECLINED_NOTICE });
+        // The row is still stored: it is the decision that makes the item read as `declined`.
+        expect(ports.store).toHaveBeenCalledWith(declinedRow);
+    });
+
+    it('stays silent for a `written` row that actually carries text — the new brief line is the feedback', async () => {
+        const { ports } = makePorts(resolveWith({ outcome: 'written', brief: ROW }));
+        expect(await runBriefGeneration(false, ports)).toEqual({ kind: 'silent' });
     });
 
     it('stores nothing for discarded_stale and asks the user to retry', async () => {

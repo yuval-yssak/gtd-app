@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { BriefApiError } from '../api/briefApi';
 import {
+    BRIEF_DECLINED_MODEL_NOTE,
+    BRIEF_DECLINED_SKIPPED_NOTE,
     decideBriefCommit,
+    describeDeclinedBrief,
     describeGenerateButton,
     describeGenerateError,
     describeGenerateOutcome,
     isBriefFirst,
     isBriefPinnedError,
+    isDeclinedNoteVisible,
     isReplaceConfirmNeeded,
 } from '../components/itemEditor/briefSectionLogic';
 
@@ -39,6 +43,58 @@ describe('isBriefFirst', () => {
         expect(isBriefFirst('review', true, 'none')).toBe(false);
         expect(isBriefFirst('review', false, 'fresh')).toBe(false);
         expect(isBriefFirst('edit', true, 'fresh')).toBe(false);
+    });
+
+    it('never leads with a declined row — there is no brief line, only a caption, so the notes preview must stay', () => {
+        expect(isBriefFirst('review', true, 'declined')).toBe(false);
+        expect(isBriefFirst('edit', true, 'declined')).toBe(false);
+    });
+});
+
+describe('describeDeclinedBrief', () => {
+    it('blames the notes for a skipped row (no model call was made)', () => {
+        expect(describeDeclinedBrief('skipped')).toBe(BRIEF_DECLINED_SKIPPED_NOTE);
+        expect(BRIEF_DECLINED_SKIPPED_NOTE).toBe('No brief — the title already says it');
+    });
+
+    it('reports a deliberate model decision for every other origin', () => {
+        expect(describeDeclinedBrief('model')).toBe(BRIEF_DECLINED_MODEL_NOTE);
+        expect(BRIEF_DECLINED_MODEL_NOTE).toBe('No brief — nothing in the notes to summarise');
+    });
+
+    it('is total over BriefOrigin — an authored row can only reach the caption by being emptied server-side', () => {
+        // `user`/`agent` rows always carry text today, so they never render declined; the picker
+        // still answers rather than throwing, because the origin comes from stored data.
+        expect(describeDeclinedBrief('user')).toBe(BRIEF_DECLINED_MODEL_NOTE);
+        expect(describeDeclinedBrief('agent')).toBe(BRIEF_DECLINED_MODEL_NOTE);
+    });
+});
+
+describe('isDeclinedNoteVisible', () => {
+    it('shows the caption on a declined row whose field is still empty', () => {
+        expect(isDeclinedNoteVisible({ state: 'declined', fieldValue: '' })).toBe(true);
+    });
+
+    it('hides it on the first keystroke — no blur, commit or save round trip involved', () => {
+        expect(isDeclinedNoteVisible({ state: 'declined', fieldValue: 'P' })).toBe(false);
+        expect(isDeclinedNoteVisible({ state: 'declined', fieldValue: 'Passport before June' })).toBe(false);
+    });
+
+    it('stays hidden all the way down a backspace, then returns at the last character', () => {
+        // Nothing flickers mid-delete: every intermediate value is still non-empty.
+        expect(isDeclinedNoteVisible({ state: 'declined', fieldValue: 'Pa' })).toBe(false);
+        expect(isDeclinedNoteVisible({ state: 'declined', fieldValue: 'P' })).toBe(false);
+        expect(isDeclinedNoteVisible({ state: 'declined', fieldValue: '' })).toBe(true);
+    });
+
+    it('treats a whitespace-only field as empty, matching what the commit rule would store', () => {
+        expect(isDeclinedNoteVisible({ state: 'declined', fieldValue: '   ' })).toBe(true);
+    });
+
+    it('never shows for a state that is not declined, however empty the field is', () => {
+        expect(isDeclinedNoteVisible({ state: 'none', fieldValue: '' })).toBe(false);
+        expect(isDeclinedNoteVisible({ state: 'fresh', fieldValue: '' })).toBe(false);
+        expect(isDeclinedNoteVisible({ state: 'pinnedStale', fieldValue: '' })).toBe(false);
     });
 });
 

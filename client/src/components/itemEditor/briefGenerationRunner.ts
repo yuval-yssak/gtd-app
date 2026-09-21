@@ -1,5 +1,5 @@
 import type { GenerateBriefResult, ServerItemBriefSnapshot } from '../../api/briefApi';
-import { describeGenerateError, describeGenerateOutcome, isBriefPinnedError } from './briefSectionLogic';
+import { BRIEF_DECLINED_NOTICE, describeGenerateError, describeGenerateOutcome, isBriefPinnedError } from './briefSectionLogic';
 
 /** The side effects one generation run needs, handed in so the run itself stays a plain testable function. */
 export interface BriefRunPorts {
@@ -22,7 +22,17 @@ export interface BriefRunPorts {
  */
 export type BriefRunSettlement = { kind: 'silent' } | { kind: 'notice'; text: string } | { kind: 'confirm' };
 
+/**
+ * `written` covers two different things on the wire: a brief landed, or the model read the notes
+ * and DECLINED (a `text: null` row). Only the first is self-evident from the new brief line, so
+ * the null-text case must be read off the payload rather than the outcome enum — otherwise a
+ * retry on an already-`declined` item shows no line, no change and no notice, which is exactly
+ * the "is this broken?" silence the declined state was added to end.
+ */
 function settleOutcome(result: GenerateBriefResult): BriefRunSettlement {
+    if (result.outcome === 'written' && result.brief.text === null) {
+        return { kind: 'notice', text: BRIEF_DECLINED_NOTICE };
+    }
     const text = describeGenerateOutcome(result.outcome);
     return text === null ? { kind: 'silent' } : { kind: 'notice', text };
 }

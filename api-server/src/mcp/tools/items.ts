@@ -45,8 +45,9 @@ const capture = defineTool({
 // item's CURRENT title + notes, so the model never has to recompute a hash.
 const BRIEF_FIELD_DESCRIPTION =
     'Each item carries a read-only `brief` field: `{ text, origin, state, generatedTs }` or null. `state` is "fresh" ' +
-    '(brief matches the current title + notes), "pinnedStale" (a user/agent-authored brief whose notes changed since) ' +
-    'or "none" (no usable brief). Write one with gtd_set_brief.';
+    '(brief matches the current title + notes), "pinnedStale" (a user/agent-authored brief whose notes changed since), ' +
+    '"declined" (the server judged exactly this text and wrote no brief — the model found nothing worth condensing, or ' +
+    'the notes were too short to ask; `text` is null) or "none" (no usable brief). Write one with gtd_set_brief.';
 
 const listItems = defineTool({
     name: 'gtd_list_items',
@@ -54,8 +55,9 @@ const listItems = defineTool({
         "List or search the user's items. Sorted by updatedTs DESC. Defaults to all statuses except `trash`. " +
         `Use \`cursor\` from a previous response to paginate. ${BRIEF_FIELD_DESCRIPTION} ` +
         'Filter by `briefState` to sweep items that still need a brief (`none` excludes items the server deliberately ' +
-        'declined to brief because their notes are too short). The filter is applied per page, so a page can come back ' +
-        'short or empty while `nextCursor` is still present; keep paginating.',
+        'declined to brief because their notes were too short; ask for `declined` to list the ones it declined). ' +
+        'The filter is applied per page, so a page can come back short or empty while `nextCursor` is still present; ' +
+        'keep paginating.',
     inputSchema: {
         q: z.string().optional().describe('Case-insensitive literal substring match against title and notes.'),
         status: z
@@ -66,7 +68,7 @@ const listItems = defineTool({
         limit: z.number().int().positive().max(200).optional().describe('Defaults to 50. Max 200.'),
         cursor: z.string().optional().describe('Opaque cursor from a previous response.'),
         briefState: z
-            .enum(['none', 'fresh', 'pinnedStale'])
+            .enum(['none', 'declined', 'fresh', 'pinnedStale'])
             .optional()
             .describe('Keep only items whose brief is in this state. Applied per fetched page (see description).'),
         account: accountSchema,

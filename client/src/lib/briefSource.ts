@@ -1,16 +1,17 @@
 import type { BriefOrigin, StoredItemBrief } from '../types/MyDB';
 
 /**
- * Mirror of api-server/src/lib/briefSource.ts — the hash and the derived view MUST stay
- * byte-for-byte the same algorithm on both sides (a parity fixture test pins the outputs), because
- * a server-generated brief is only shown when its `sourceHash` equals the client's hash of the
- * item's current title + notes.
+ * Mirror of api-server/src/lib/briefSource.ts — the hash and the derived view MUST stay the same
+ * ALGORITHM on both sides (a parity fixture test pins the outputs), because a server-generated
+ * brief is only shown when its `sourceHash` equals the client's hash of the item's current title
+ * + notes. The two files are logic-mirrored, not byte-identical: comments, import paths and local
+ * type names differ, so a raw `diff` of them is misleading.
  */
 
 /** Notes shorter than this (after trim) get a `skipped` brief row server-side — the title says it all. */
 export const BRIEF_SKIP_MIN_NOTES_CHARS = 160;
 
-export type BriefState = 'none' | 'fresh' | 'pinnedStale';
+export type BriefState = 'none' | 'declined' | 'fresh' | 'pinnedStale';
 
 /**
  * cyrb53 — a fast synchronous 53-bit string hash; sha256 would force async hashing in render
@@ -42,15 +43,23 @@ type BriefStateInput = Pick<StoredItemBrief, 'sourceHash' | 'origin' | 'text'>;
 
 /**
  * The derived view shared with the server:
- * - `none`        — no row, a skipped row, or a stale non-pinned row → show the notes preview
+ * - `none`        — no row, or a stale non-pinned row → show the notes preview
+ * - `declined`    — a text-less row (`model` judged there was nothing to condense, or `skipped`
+ *                   because the notes were too short) taken against THIS text → say so, quietly.
+ *                   Callers word it from `brief.origin`; a text-less row whose hash no longer
+ *                   matches reads as `none`, because the decision was about text that moved on.
  * - `fresh`       — the row's hash matches the item's current text → show the brief
  * - `pinnedStale` — an authored row whose source moved on → show it with a "notes changed" marker
  */
 export function briefState(item: BriefSourceItem, brief: BriefStateInput | undefined | null): BriefState {
-    if (!brief || brief.text === null) {
+    if (!brief) {
         return 'none';
     }
-    if (brief.sourceHash === briefSourceHash(item.title, item.notes)) {
+    const isCurrent = brief.sourceHash === briefSourceHash(item.title, item.notes);
+    if (brief.text === null) {
+        return isCurrent ? 'declined' : 'none';
+    }
+    if (isCurrent) {
         return 'fresh';
     }
     return isPinnedOrigin(brief.origin) ? 'pinnedStale' : 'none';

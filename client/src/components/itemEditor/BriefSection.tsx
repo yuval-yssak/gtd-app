@@ -12,13 +12,28 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import type { BriefState } from '../../lib/briefSource';
-import { BRIEF_LABEL, BRIEF_PLACEHOLDER, BRIEF_STALE_MARKER, describeGenerateButton, REPLACE_BRIEF_PROMPT } from './briefSectionLogic';
+import type { BriefOrigin } from '../../types/MyDB';
+import {
+    BRIEF_LABEL,
+    BRIEF_PLACEHOLDER,
+    BRIEF_STALE_MARKER,
+    describeDeclinedBrief,
+    describeGenerateButton,
+    isDeclinedNoteVisible,
+    REPLACE_BRIEF_PROMPT,
+} from './briefSectionLogic';
 import styles from './ItemEditorBody.module.css';
 import type { BriefGeneration } from './useBriefGeneration';
 
 export interface BriefSectionProps {
     value: string;
     state: BriefState;
+    /**
+     * The stored row's origin, when there is a row. Only read for `state === 'declined'`, where it
+     * decides whether the caption says the model found nothing to condense or that the notes were
+     * too short to ask in the first place.
+     */
+    origin?: BriefOrigin | undefined;
     onChange: (next: string) => void;
     /**
      * Persist `value` (blur / Enter / clear). The value travels with the call because a clear
@@ -38,12 +53,14 @@ export interface BriefSectionProps {
 }
 
 /** Single-line brief under the title. Saves on blur/Enter through the host's `onCommit`. */
-export function BriefSection({ value, state, onChange, onCommit, generation, variant = 'field' }: BriefSectionProps) {
+export function BriefSection({ value, state, origin, onChange, onCommit, generation, variant = 'field' }: BriefSectionProps) {
     const [isLineEditing, setIsLineEditing] = useState(false);
     const isLine = variant === 'line' && !isLineEditing;
     // "Regenerate" whenever the user can SEE a brief — a stale model row still fills the field
-    // even though its derived state is `none`.
-    const isRegenerate = state !== 'none' || value.trim().length > 0;
+    // even though its derived state is `none`. A `declined` row shows no brief text, so the
+    // button stays "Generate" there: pressing it after editing the notes is the intended retry.
+    const isRegenerate = state === 'fresh' || state === 'pinnedStale' || value.trim().length > 0;
+    const stateNote = <BriefStateNote state={state} origin={origin} fieldValue={value} />;
     const generateButton = <GenerateBriefButton generation={generation} isRegenerate={isRegenerate} fieldValue={value} />;
 
     if (isLine) {
@@ -53,7 +70,7 @@ export function BriefSection({ value, state, onChange, onCommit, generation, var
                     <BriefLine text={value} onActivate={() => setIsLineEditing(true)} />
                     {generateButton}
                 </Stack>
-                {state === 'pinnedStale' && <StaleMarker />}
+                {stateNote}
                 <BriefGenerationFeedback generation={generation} />
             </Box>
         );
@@ -100,7 +117,7 @@ export function BriefSection({ value, state, onChange, onCommit, generation, var
                 }}
                 data-testid="briefField"
             />
-            {state === 'pinnedStale' && <StaleMarker />}
+            {stateNote}
             <BriefGenerationFeedback generation={generation} />
         </Box>
     );
@@ -211,10 +228,36 @@ function BriefLine({ text, onActivate }: { text: string; onActivate: () => void 
     );
 }
 
-function StaleMarker() {
+/**
+ * The at-most-one muted line under the brief that explains the row's state. `declined` is the
+ * reason this exists: a text-less row would otherwise render as an ordinary empty field, leaving
+ * the user unable to tell a deliberate "nothing to summarise" from a broken or pending feature.
+ * Both states cost exactly one caption line, so a review card never grows taller than before.
+ *
+ * The declined caption tracks the LIVE field value (see `isDeclinedNoteVisible`), so it clears on
+ * the first keystroke rather than lingering over text the user is already writing.
+ *
+ * Rendered by BOTH variants, but `declined` only ever reaches the field one: `isBriefFirst`
+ * returns false for it, so the host never picks `variant="line"` for a declined row (a line
+ * variant would show this caption under an empty brief line, which reads as a bug).
+ */
+function BriefStateNote({ state, origin, fieldValue }: { state: BriefState; origin: BriefOrigin | undefined; fieldValue: string }) {
+    if (state === 'pinnedStale') {
+        return <BriefCaption text={BRIEF_STALE_MARKER} testId="briefStaleMarker" />;
+    }
+    if (isDeclinedNoteVisible({ state, fieldValue })) {
+        // `declined` implies a stored row, so `origin` is always supplied by the real host. Fall
+        // back rather than render nothing: a missing prop must not silently restore the blank
+        // field this caption exists to replace.
+        return <BriefCaption text={describeDeclinedBrief(origin ?? 'model')} testId="briefDeclinedNote" />;
+    }
+    return null;
+}
+
+function BriefCaption({ text, testId }: { text: string; testId: string }) {
     return (
-        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }} data-testid="briefStaleMarker">
-            {BRIEF_STALE_MARKER}
+        <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 0.5 }} data-testid={testId}>
+            {text}
         </Typography>
     );
 }

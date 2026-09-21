@@ -249,7 +249,10 @@ export interface StoredItemBrief {
     _id: string; // === StoredItem._id
     userId: string;
     itemId: string; // same value as _id — duplicated for readability in queries and the op log
-    text: string | null; // null only when origin === 'skipped'
+    // null records a decision NOT to write a brief: origin 'skipped' (notes too short to ask) or
+    // origin 'model' (the model read the notes and found nothing worth condensing). Both render
+    // as briefState 'declined' while the hash still matches.
+    text: string | null;
     origin: BriefOrigin;
     sourceHash: string; // briefSourceHash(item.title, item.notes) at generation/authoring time
     model?: string; // model id for origin 'model'

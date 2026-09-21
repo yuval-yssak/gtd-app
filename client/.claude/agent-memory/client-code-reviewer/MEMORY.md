@@ -36,3 +36,4 @@
 - [Uncommitted editor text vs server AI call](project_uncommitted_text_vs_server_ai_call.md) — assist/generate-brief buttons fire before the 800ms notes autosave flushes; NotesSection never flushes on blur, so the model reads stale text.
 - [Offline guard below session pivot](project_offline_guard_below_session_pivot.md) — isBrowserOffline inside an API wrapper is dead code when the caller wraps it in withOwnerSession; the pivot's listDeviceSessions rejects first and burns idempotence claims.
 - [Node-env tests hit real localhost](project_node_env_tests_hit_real_localhost.md) — VITE_API_SERVER is reachable in vitest, so an unstubbed fetch in a test passes while making a live call; tell is a test 10x slower than its neighbours.
+- [Visible state vs silent outcome](project_visible_state_vs_silent_outcome.md) — "UI is silent" bugs get fixed in the derived render state but not in the action's snackbar, which keys on a coarse outcome enum; the retry click stays silent.

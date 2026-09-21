@@ -260,17 +260,35 @@ describe('brief projection on item reads', () => {
         expect(((await res.json()) as PublicItem).brief).toMatchObject({ text: 'authored', origin: 'agent', state: 'pinnedStale' });
     });
 
-    it('a model brief whose source moved on reads as state none; a skipped row reads as none with text null', async () => {
+    it('a model brief whose source moved on reads as state none', async () => {
         const actor = await alice();
         const stale = await seedItem(actor.userId);
         await seedBrief(stale, 'model', { sourceHash: 'stale', model: 'claude-haiku-4-5' });
-        const skipped = await seedItem(actor.userId, { notes: 'short' });
-        await seedBrief(skipped, 'skipped');
 
         const staleRes = (await (await call({ method: 'GET', path: `/v1/items/${stale._id}`, token: actor.token })).json()) as PublicItem;
         expect(staleRes.brief).toMatchObject({ origin: 'model', state: 'none' });
+    });
+
+    it('projects state declined for both text-less origins recorded against the current text', async () => {
+        const actor = await alice();
+        const skipped = await seedItem(actor.userId, { notes: 'short' });
+        await seedBrief(skipped, 'skipped');
+        // The model read long notes and returned null — a valid result, not a failure.
+        const declinedByModel = await seedItem(actor.userId);
+        await seedBrief(declinedByModel, 'model', { text: null, model: 'claude-haiku-4-5' });
+
         const skippedRes = (await (await call({ method: 'GET', path: `/v1/items/${skipped._id}`, token: actor.token })).json()) as PublicItem;
-        expect(skippedRes.brief).toMatchObject({ origin: 'skipped', state: 'none', text: null });
+        expect(skippedRes.brief).toMatchObject({ origin: 'skipped', state: 'declined', text: null });
+        const modelRes = (await (await call({ method: 'GET', path: `/v1/items/${declinedByModel._id}`, token: actor.token })).json()) as PublicItem;
+        expect(modelRes.brief).toMatchObject({ origin: 'model', state: 'declined', text: null });
+    });
+
+    it('a text-less row whose source moved on lapses back to none', async () => {
+        const actor = await alice();
+        const item = await seedItem(actor.userId, { notes: 'short' });
+        await seedBrief(item, 'skipped', { sourceHash: 'stale' });
+        const res = (await (await call({ method: 'GET', path: `/v1/items/${item._id}`, token: actor.token })).json()) as PublicItem;
+        expect(res.brief).toMatchObject({ origin: 'skipped', state: 'none', text: null });
     });
 
     it('POST /v1/items (fresh capture) returns brief: null', async () => {
@@ -292,6 +310,13 @@ describe('GET /v1/items?briefState=', () => {
         await seedItem(actor.userId, { _id: 'bare' });
         const skipped = await seedItem(actor.userId, { _id: 'skipped', notes: 'short' });
         await seedBrief(skipped, 'skipped');
+        // The model looked at exactly this text and wrote no brief — `declined`, not `none`.
+        const declined = await seedItem(actor.userId, { _id: 'declined' });
+        await seedBrief(declined, 'model', { text: null });
+        // A skipped row whose notes moved on: renders `none`, but the `none` FILTER still
+        // excludes it (see matchesBriefStateFilter) so an external sweep does not reselect it.
+        const skippedStale = await seedItem(actor.userId, { _id: 'skipped-stale', notes: 'short' });
+        await seedBrief(skippedStale, 'skipped', { sourceHash: 'stale' });
     }
 
     async function listIds(actor: Actor, query: string): Promise<{ ids: string[]; nextCursor?: string }> {
@@ -309,19 +334,22 @@ describe('GET /v1/items?briefState=', () => {
         const body = (await res.json()) as { items: PublicItem[] };
         expect(body.items.map((item) => [item._id, item.brief?.state ?? 'no-row']).sort()).toEqual([
             ['bare', 'no-row'],
+            ['declined', 'declined'],
             ['fresh', 'fresh'],
             ['model-stale', 'none'],
             ['pinned-stale', 'pinnedStale'],
-            ['skipped', 'none'],
+            ['skipped', 'declined'],
+            ['skipped-stale', 'none'],
         ]);
         expect(findArray).toHaveBeenCalledTimes(1);
     });
 
-    // `none` deliberately EXCLUDES the skipped row (state reads `none`, but the sweeper's recorded
-    // "notes too short" decision must not be reselected on every sweep).
+    // `none` deliberately EXCLUDES every `skipped` row — including `skipped-stale`, whose state
+    // now reads `none`: the sweeper's recorded "notes too short" decision must not be reselected.
     it.each([
         ['fresh', ['fresh']],
         ['pinnedStale', ['pinned-stale']],
+        ['declined', ['declined', 'skipped']],
         ['none', ['bare', 'model-stale']],
     ])('briefState=%s keeps %j', async (state, expected) => {
         const actor = await alice();
@@ -332,13 +360,20 @@ describe('GET /v1/items?briefState=', () => {
     it('is a per-page post-filter: the cursor advances over the unfiltered page', async () => {
         const actor = await alice();
         await seedThreeStates(actor);
-        // limit=2 → the first page holds two of the five items; the filter may empty it, but the
-        // cursor still points past both so the caller can keep paginating.
+        // limit=2 → each page holds two of the seeded items; the filter may empty a page, but the
+        // cursor still points past both so the caller can keep paginating to the single match.
         const first = await listIds(actor, '?briefState=fresh&limit=2');
         expect(first.nextCursor).toBeDefined();
-        const second = await listIds(actor, `?briefState=fresh&limit=2&cursor=${first.nextCursor}`);
-        const third = await listIds(actor, `?briefState=fresh&limit=2&cursor=${second.nextCursor}`);
-        expect([...first.ids, ...second.ids, ...third.ids]).toEqual(['fresh']);
+        const collected = [...first.ids];
+        // Walk to exhaustion rather than a fixed page count, so seeding another state cannot
+        // silently truncate the walk and turn a real regression into a passing assertion.
+        let cursor = first.nextCursor;
+        while (cursor) {
+            const page = await listIds(actor, `?briefState=fresh&limit=2&cursor=${cursor}`);
+            collected.push(...page.ids);
+            cursor = page.nextCursor;
+        }
+        expect(collected).toEqual(['fresh']);
     });
 
     it('400s an unknown briefState', async () => {

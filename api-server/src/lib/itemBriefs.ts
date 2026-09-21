@@ -13,10 +13,18 @@ export const BRIEF_MAX_CHARS = 500;
 
 /**
  * SELECTION rule for the `briefState` list filter — distinct from the render rule `briefState()`,
- * which the client mirrors byte-for-byte and must stay untouched. Rendering treats a `skipped`
- * row as "no brief to show"; selecting `none` must NOT re-surface it: the row is the sweeper's
- * recorded decision that the notes are too short, written precisely so the item is not
- * reselected on every pass.
+ * which the client mirrors byte-for-byte and must stay untouched. Selecting `none` must NOT
+ * re-surface a `skipped` row: it is the sweeper's recorded decision that the notes are too short,
+ * written precisely so the item is not reselected on every pass.
+ *
+ * Since `declined` exists, a CURRENT skipped row reads as `declined` and is excluded from `none`
+ * by that alone; the carve-out now only covers a skipped row whose notes moved on. It is kept
+ * deliberately: `none` stays "items an external sweep should brief", and this surface has no
+ * cheap way to tell a moved-on skipped row that is still too short from one that grew. The
+ * server's own sweep does not read this filter (`isBriefTarget` re-targets stale rows directly),
+ * so nothing is starved. Note the consequence: a stale skipped row is neither `declined` (its
+ * hash moved on) nor selectable as `none`, so it is deliberately reachable through NO
+ * `briefState` value — a caller that wants those lists unfiltered.
  */
 export function matchesBriefStateFilter(item: ItemInterface, brief: ItemBriefInterface | null, wanted: BriefState): boolean {
     if (wanted === 'none' && brief?.origin === 'skipped') {

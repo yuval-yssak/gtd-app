@@ -240,7 +240,9 @@ describe('POST /v1/items/:id/brief/generate — outcomes', () => {
         const body = (await res.json()) as GenerateResponse;
         expect(body.outcome).toBe('skipped');
         expect(body.brief).toMatchObject({ origin: 'skipped', text: null });
-        expect(body.item.brief).toMatchObject({ origin: 'skipped', text: null, state: 'none' });
+        // `declined`, not `none`: the row records a decision about exactly this text, and the app
+        // renders that as an explicit "no brief — the title already says it" rather than a blank.
+        expect(body.item.brief).toMatchObject({ origin: 'skipped', text: null, state: 'declined' });
         expect(messagesCreate).not.toHaveBeenCalled();
         // A second call finds the row current and still reports skipped, writing nothing new.
         expect(((await (await generate(itemId, session)).json()) as GenerateResponse).outcome).toBe('skipped');
@@ -270,6 +272,9 @@ describe('POST /v1/items/:id/brief/generate — outcomes', () => {
         const body = (await (await generate(itemId, session)).json()) as GenerateResponse;
         expect(body.outcome).toBe('written');
         expect(body.brief).toMatchObject({ origin: 'model', text: null });
+        // The decision is visible, not silent: the projection reports `declined`, which the app
+        // renders as "no brief — nothing in the notes to summarise" instead of an empty field.
+        expect(body.item.brief).toMatchObject({ origin: 'model', text: null, state: 'declined' });
     });
 
     it('maps model failures: refusal → 502 brief_generation_failed, no key → 503 agent_unavailable', async () => {

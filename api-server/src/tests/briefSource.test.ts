@@ -60,9 +60,15 @@ describe('briefState', () => {
         expect(briefState(item, { sourceHash: 'stale', origin: 'model', text: 'x' })).toBe('none');
     });
 
-    it('a skipped row (text null) is never a usable brief, even when its hash matches', () => {
-        expect(briefState(item, { sourceHash: freshHash, origin: 'skipped', text: null })).toBe('none');
+    it('a text-less row whose hash matches is declined — the decision stands for exactly this text', () => {
+        // Both text-less origins land here; the caller words the caption from `origin`.
+        expect(briefState(item, { sourceHash: freshHash, origin: 'skipped', text: null })).toBe('declined');
+        expect(briefState(item, { sourceHash: freshHash, origin: 'model', text: null })).toBe('declined');
+    });
+
+    it('a text-less row whose hash moved on lapses back to none, so the sweep reconsiders it', () => {
         expect(briefState(item, { sourceHash: 'stale', origin: 'skipped', text: null })).toBe('none');
+        expect(briefState(item, { sourceHash: 'stale', origin: 'model', text: null })).toBe('none');
     });
 
     it('recomputes against the item passed in — editing notes flips fresh to none/pinnedStale', () => {

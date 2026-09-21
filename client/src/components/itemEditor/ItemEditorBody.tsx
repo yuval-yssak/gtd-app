@@ -1059,6 +1059,7 @@ export function ItemEditorBody({
             <BriefSection
                 value={brief}
                 state={briefRowState}
+                origin={liveBrief?.origin}
                 onChange={setBrief}
                 onCommit={(value) => void flushBrief(value)}
                 generation={briefGeneration}

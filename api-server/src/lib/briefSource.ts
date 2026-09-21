@@ -1,9 +1,11 @@
 import type { BriefOrigin, ItemBriefInterface } from '../types/entities.js';
 
 /**
- * Pure rules shared by the server and the client for the item-brief sidecar. MIRRORED
- * BYTE-FOR-BYTE in `client/src/lib/briefSource.ts` (parity fixture test on both sides) — change
- * both together, or a brief hashed on one side reads as stale on the other.
+ * Pure rules shared by the server and the client for the item-brief sidecar. The hash and the
+ * derived view MUST stay the same ALGORITHM as `client/src/lib/briefSource.ts` (a parity fixture
+ * test on both sides pins the outputs) — change both together, or a brief hashed on one side
+ * reads as stale on the other. The two files are logic-mirrored, not byte-identical: comments,
+ * import paths and local type names differ, so a raw `diff` of them is misleading.
  */
 
 /** Notes shorter than this (after trim) are not worth a brief: the card shows the title only. */
@@ -11,11 +13,15 @@ export const BRIEF_SKIP_MIN_NOTES_CHARS = 160;
 
 /**
  * Derived view of a brief against the item's CURRENT content:
- *   - `none`        — no usable brief (no row, skipped row, or a model brief whose source moved on)
+ *   - `none`        — no usable brief (no row, or a model brief whose source moved on)
+ *   - `declined`    — a text-less row recorded against exactly this title + notes: the model read
+ *                     the notes and found nothing to condense (`model`), or the notes were under
+ *                     the skip threshold so no model call was made (`skipped`). Callers word it
+ *                     from `origin`. Once the source moves on the decision lapses back to `none`.
  *   - `fresh`       — the brief was produced from exactly this title + notes
  *   - `pinnedStale` — an authored (user/agent) brief whose source changed; shown with a marker
  */
-export type BriefState = 'none' | 'fresh' | 'pinnedStale';
+export type BriefState = 'none' | 'declined' | 'fresh' | 'pinnedStale';
 
 /**
  * cyrb53 (public-domain string hash, base-36 output) over `title + '\n' + notes`. Synchronous on
@@ -47,10 +53,14 @@ type BriefSource = { title: string; notes?: string | undefined };
 type BriefView = Pick<ItemBriefInterface, 'sourceHash' | 'origin' | 'text'>;
 
 export function briefState(item: BriefSource, brief: BriefView | undefined | null): BriefState {
-    if (!brief || brief.text === null) {
+    if (!brief) {
         return 'none';
     }
-    if (brief.sourceHash === briefSourceHash(item.title, item.notes)) {
+    const isCurrent = brief.sourceHash === briefSourceHash(item.title, item.notes);
+    if (brief.text === null) {
+        return isCurrent ? 'declined' : 'none';
+    }
+    if (isCurrent) {
         return 'fresh';
     }
     return isPinnedOrigin(brief.origin) ? 'pinnedStale' : 'none';

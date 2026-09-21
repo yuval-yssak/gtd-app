@@ -56,8 +56,13 @@ describe('briefState', () => {
         expect(briefState(item, null)).toBe('none');
     });
 
-    it('none for a skipped row even when its hash matches', () => {
-        expect(briefState(item, { sourceHash: freshHash, origin: 'skipped', text: null })).toBe('none');
+    it.each<BriefOrigin>(['model', 'skipped'])('declined for a text-less %s row whose hash matches the current text', (origin) => {
+        expect(briefState(item, { sourceHash: freshHash, origin, text: null })).toBe('declined');
+    });
+
+    it('none for a text-less row whose hash moved on — the decision was about text that no longer exists', () => {
+        expect(briefState(item, { sourceHash: staleHash, origin: 'skipped', text: null })).toBe('none');
+        expect(briefState(item, { sourceHash: staleHash, origin: 'model', text: null })).toBe('none');
     });
 
     it.each<BriefOrigin>(['model', 'user', 'agent'])('fresh when the hash matches (origin %s)', (origin) => {

@@ -159,9 +159,9 @@ Every item read carries a read-only `brief` object, or `null` when the item has 
 
 | Field | Type | Notes |
 |---|---|---|
-| `text` | string \| null | The brief. `null` only for `origin: "skipped"` rows (notes too short to condense). |
+| `text` | string \| null | The brief. `null` on a row that records a decision *not* to write one: `origin: "skipped"` (notes too short to bother condensing) or `origin: "model"` (the model read the notes and judged there was nothing worth condensing — returning `null` is a valid model result, not a failure). |
 | `origin` | `model \| user \| agent \| skipped` | Who produced it. `model` / `skipped` come from the server's generation sweep; `user` is typed in the app; `agent` is written through this API. |
-| `state` | `fresh \| pinnedStale \| none` | Derived against the item's **current** title + notes — you never recompute a hash. `fresh`: the brief matches the current content. `pinnedStale`: a `user`/`agent` brief whose notes changed since (still shown, with a marker). `none`: no usable brief (no row, a skipped row, or a `model` brief whose content moved on). |
+| `state` | `fresh \| declined \| pinnedStale \| none` | Derived against the item's **current** title + notes — you never recompute a hash. `fresh`: the brief matches the current content. `declined`: `text` is `null` on a row recorded against exactly this content — the server deliberately wrote no brief (read `origin` for which reason). `pinnedStale`: a `user`/`agent` brief whose notes changed since (still shown, with a marker). `none`: no usable brief (no row, or a `model`/`skipped` row whose content moved on — the decision lapses with the text it was made about). |
 | `generatedTs` | string | ISO datetime the text was produced. |
 
 `user` and `agent` briefs are **pinned**: the generation sweep never overwrites them, and they keep showing after the notes change until they are replaced or cleared. Internal fields (`sourceHash`, `user`, `itemId`, LWW timestamps) are not exposed.
@@ -238,7 +238,7 @@ Returns items owned by the authenticated user.
 | `since` | ISO datetime | — | Only items with `updatedTs > since`. Useful for polling. |
 | `limit` | int | 50 | Max 200. |
 | `cursor` | string | — | Opaque cursor from a previous response's `nextCursor`. |
-| `briefState` | `none \| fresh \| pinnedStale` | — | Keep only items whose `brief.state` matches. **Applied per page, after the page is fetched** (the state is derived from a hash of each item's current content, so it cannot be a database predicate): a page can come back short or empty while `nextCursor` is still present. Keep paginating until `nextCursor` disappears. Typical sweep: `briefState=none` to find items that still need a brief — as a *filter*, `none` excludes items the server has deliberately declined to brief (`origin: "skipped"`, notes too short), even though such an item reads as `brief.state: "none"`. |
+| `briefState` | `none \| declined \| fresh \| pinnedStale` | — | Keep only items whose `brief.state` matches. **Applied per page, after the page is fetched** (the state is derived from a hash of each item's current content, so it cannot be a database predicate): a page can come back short or empty while `nextCursor` is still present. Keep paginating until `nextCursor` disappears. Typical sweep: `briefState=none` to find items that still need a brief — as a *filter*, `none` also excludes any `origin: "skipped"` row (notes too short), including one whose notes have since moved on and which therefore reads as `brief.state: "none"` — such a row is deliberately reachable through **no** `briefState` value, so list unfiltered if you want it. Use `briefState=declined` to list the items whose *current* content the server looked at and deliberately left without a brief. |
 
 **Response** — `200 OK`
 
