@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
+import itemsDAO from '../dataAccess/itemsDAO.js';
 import type { BriefOrigin, ItemBriefInterface, ItemInterface } from '../types/entities.js';
 import { applyAndPublishOperation } from './applyOperation.js';
 import { type BriefState, briefSourceHash, briefState } from './briefSource.js';
@@ -112,17 +113,29 @@ export function writeAuthoredBrief({ userId, itemId, item, text, origin, deviceI
             updatedTs: now,
         };
         await upsertBriefRow({ userId, snapshot, existing, deviceId });
+        // The sweep never targets a pinned row, so this write changes what the item needs — and it
+        // changed nothing on `items`, so the DAO's write-path choke point did not see it. Marking
+        // keeps the item reachable if the row is later unpinned or removed. See `markBriefStale`.
+        await itemsDAO.markBriefStale(itemId, userId);
         return snapshot;
     });
 }
 
-/** Deletes the brief row with a recorded delete op. Idempotent — a missing row records nothing. */
+/**
+ * Deletes the brief row with a recorded delete op. Idempotent — a missing row records nothing.
+ *
+ * Re-marks the item afterwards: this is the user-facing "remove the brief" gesture (editor, public
+ * API, MCP), and it leaves an item that WAS settled with no brief row at all. Without the mark the
+ * item would be invisible to every future sweep until something happened to rewrite its content —
+ * for an item the user has just finished editing, possibly never.
+ */
 export async function clearBrief(userId: string, itemId: string, deviceId: string): Promise<void> {
     const existing = await loadBrief(userId, itemId);
     if (!existing) {
         return;
     }
     await applyAndPublishOperation(userId, { entityType: 'itemBrief', entityId: itemId, opType: 'delete', snapshot: null }, { deviceId });
+    await itemsDAO.markBriefStale(itemId, userId);
 }
 
 type BriefBodyError = { code: 'invalid_body' | 'invalid_brief'; message: string };

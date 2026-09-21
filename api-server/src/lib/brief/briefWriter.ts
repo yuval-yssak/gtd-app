@@ -4,6 +4,7 @@ import type { ItemBriefInterface } from '../../types/entities.js';
 import { briefSourceHash, isPinnedOrigin } from '../briefSource.js';
 import { loadBrief, upsertBriefRow, withBriefWriteLock } from '../itemBriefs.js';
 import type { GeneratedBrief } from './briefModel.js';
+import type { BriefSourceGuard } from './briefStaleMarker.js';
 
 export type BriefWriteOutcome =
     /** Row upserted. */
@@ -32,11 +33,13 @@ export interface ModelBriefWrite extends SkippedBriefWrite {
 
 interface CurrentState {
     currentHash: string;
+    /** The content the decision was made from — the guard on settling the `briefStale` marker. */
+    source: BriefSourceGuard;
     existing: ItemBriefInterface | null;
 }
 
 /** The compare-and-set verdict: either an early outcome, or "go ahead" with the row to replace. */
-type WriteDecision = { proceed: false; outcome: BriefWriteOutcome } | { proceed: true; existing: ItemBriefInterface | null };
+type WriteDecision = { proceed: false; outcome: BriefWriteOutcome } | { proceed: true; existing: ItemBriefInterface | null; source: BriefSourceGuard };
 
 /** Re-reads the item and its brief row under the lock so the compare-and-set sees fresh state. */
 async function readCurrentState(userId: string, itemId: string): Promise<CurrentState | null> {
@@ -45,13 +48,17 @@ async function readCurrentState(userId: string, itemId: string): Promise<Current
         return null;
     }
     const existing = await loadBrief(userId, itemId);
-    return { currentHash: briefSourceHash(item.title, item.notes), existing };
+    return { currentHash: briefSourceHash(item.title, item.notes), source: { title: item.title, notes: item.notes, status: item.status }, existing };
 }
 
 /**
  * Shared CAS prologue: stale (content moved on, or item deleted) → discard; pinned without
  * `force` → refuse; otherwise proceed. `keepFresh` additionally leaves an already-current row
  * alone (the skip writer never downgrades a fresh model brief to a skipped marker).
+ *
+ * This is the SOURCE OF TRUTH for staleness and stays so: it re-reads the item and hashes its
+ * title + notes for real. The `items.briefStale` marker is only a selection hint — it decides
+ * which items a sweep looks at and can never wave a write through here.
  */
 async function decideBriefWrite(write: SkippedBriefWrite, keepFresh: boolean): Promise<WriteDecision> {
     const state = await readCurrentState(write.userId, write.itemId);
@@ -65,7 +72,16 @@ async function decideBriefWrite(write: SkippedBriefWrite, keepFresh: boolean): P
     if (keepFresh && existing && existing.sourceHash === state.currentHash && !write.force) {
         return { proceed: false, outcome: { outcome: 'unchanged', brief: existing } };
     }
-    return { proceed: true, existing };
+    return { proceed: true, existing, source: state.source };
+}
+
+/**
+ * Retires the item from the sweep's candidate set now that a row exists for exactly this content.
+ * Runs after the row is persisted, so a crash in between leaves the marker set and the next sweep
+ * simply re-settles it — the safe direction.
+ */
+async function settleBriefStale(write: SkippedBriefWrite, source: BriefSourceGuard): Promise<void> {
+    await itemsDAO.clearBriefStale(write.itemId, write.userId, source);
 }
 
 /** The identity + timestamp fields every generated row shares; the caller adds text/origin/model. */
@@ -100,6 +116,7 @@ export function writeModelBrief(write: ModelBriefWrite): Promise<BriefWriteOutco
             model: write.generated.model,
         };
         await upsertBriefRow({ userId: write.userId, snapshot, existing: decision.existing, deviceId: write.deviceId });
+        await settleBriefStale(write, decision.source);
         return { outcome: 'written', brief: snapshot };
     });
 }
@@ -117,6 +134,7 @@ export function writeSkippedBrief(write: SkippedBriefWrite): Promise<BriefWriteO
         }
         const snapshot: ItemBriefInterface = { ...buildRowBase(write, decision.existing), text: null, origin: 'skipped' };
         await upsertBriefRow({ userId: write.userId, snapshot, existing: decision.existing, deviceId: write.deviceId });
+        await settleBriefStale(write, decision.source);
         return { outcome: 'written', brief: snapshot };
     });
 }

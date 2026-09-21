@@ -232,6 +232,45 @@ describe('POST /v1/items/:id/brief/generate — outcomes', () => {
         expect(messagesCreate).toHaveBeenCalledTimes(1);
     });
 
+    it.each(['done', 'trash'] as const)('409 brief_not_applicable for a %s item, with no model call', async (status) => {
+        const session = await login();
+        const itemId = await seedItem(session.userId, { status });
+        modelSays('should never be generated');
+        const res = await generate(itemId, session);
+        expect(res.status).toBe(409);
+        expect((await res.json()) as unknown).toMatchObject({ code: 'brief_not_applicable' });
+        expect(messagesCreate).not.toHaveBeenCalled();
+        expect(await itemBriefsDAO.countDocuments({ _id: itemId })).toBe(0);
+    });
+
+    it('force does NOT override brief_not_applicable — a closed item is out of scope, not protected', async () => {
+        const session = await login();
+        const itemId = await seedItem(session.userId, { status: 'done' });
+        const res = await generate(itemId, session, { force: true });
+        expect(res.status).toBe(409);
+        expect((await res.json()) as unknown).toMatchObject({ code: 'brief_not_applicable' });
+        expect(messagesCreate).not.toHaveBeenCalled();
+    });
+
+    it('keeps a brief already written for an item that is later closed, and refuses to regenerate it', async () => {
+        const session = await login();
+        const itemId = await seedItem(session.userId);
+        await seedBrief(session.userId, itemId, 'model');
+        await itemsDAO.updateOne({ _id: itemId }, { $set: { status: 'done' } });
+        expect((await generate(itemId, session)).status).toBe(409);
+        // The paid-for row survives: a revive from done must find its brief intact.
+        expect(await itemBriefsDAO.countDocuments({ _id: itemId })).toBe(1);
+    });
+
+    it('generates again once the item is revived to a live status', async () => {
+        const session = await login();
+        const itemId = await seedItem(session.userId, { status: 'trash' });
+        expect((await generate(itemId, session)).status).toBe(409);
+        await itemsDAO.updateOne({ _id: itemId }, { $set: { status: 'nextAction' } });
+        modelSays('Passport renewal still blocked on photos.');
+        expect((await generate(itemId, session)).status).toBe(200);
+    });
+
     it('skip rule: short notes write a skipped row without any model call', async () => {
         const session = await login();
         const itemId = await seedItem(session.userId, { notes: 'too short' });

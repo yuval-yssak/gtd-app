@@ -84,6 +84,12 @@ async function seed(rows: Seed[]): Promise<void> {
     }
 }
 
+/** Reads the sweep-selection marker straight off the collection. */
+async function markerOf(itemId: string): Promise<boolean | undefined> {
+    const row = await db.collection<ItemInterface>('items').findOne({ _id: itemId } as never);
+    return row?.briefStale;
+}
+
 function generatedTitles(): string[] {
     return generateBriefText.mock.calls.map(([item]) => (item as { title: string }).title).sort();
 }
@@ -119,6 +125,27 @@ describe('startReviewBriefSweep — selection', () => {
         expect(await itemBriefsDAO.findByOwnerAndId('done-no-row', USER)).toBeNull();
         expect(await itemBriefsDAO.findByOwnerAndId('other-user', 'user-b')).toBeNull();
         expect(await itemBriefsDAO.findByOwnerAndId('no-row', USER)).toMatchObject({ origin: 'model', text: 'brief for Item no-row' });
+    });
+
+    it('drains the briefStale marker set to empty, so a second sweep examines nothing', async () => {
+        await seed([
+            { id: 'no-row' },
+            { id: 'fresh-model', brief: { origin: 'model', stale: false } },
+            { id: 'stale-user', brief: { origin: 'user', stale: true } },
+            { id: 'done-no-row', status: 'done' },
+            { id: 'short', notes: 'short' },
+        ]);
+        // Every seeded item is marked by the DAO on insert.
+        expect(await itemsDAO.countBriefStale(USER)).toBe(5);
+
+        await startReviewBriefSweep(USER);
+        await __settleReviewSweepsForTests();
+
+        // Fresh, pinned and (given the live-status bound) closed items are all settled or never
+        // looked at; the generated/skipped ones are cleared by their writer.
+        expect(await itemsDAO.countBriefStale(USER)).toBe(1);
+        // The one survivor is the closed item — out of the live index bound, so never examined.
+        expect(await markerOf('done-no-row')).toBe(true);
     });
 
     it('writes skip rows synchronously (unbounded) and stamps every write with the sweep device id', async () => {

@@ -301,6 +301,8 @@ Asks the server's model (`claude-haiku-4-5`) to write a `model`-origin brief fro
 |---|---|---|
 | `force` | boolean | Replace an existing **pinned** (`user` / `agent`) brief. Defaults to `false`, in which case a pinned brief returns `409 brief_pinned` and nothing is called or written. |
 
+**Open items only.** Briefs exist for the Weekly Review, which never shows a `done` or `trash` item, so generation is refused for them with `409 brief_not_applicable` — no model call, nothing written. `force` does **not** override this: a closed item is out of scope, not merely protected. A brief written before the item was closed is kept, and the item becomes generatable again the moment it is revived to an open status.
+
 **Skip rule.** When the notes are empty or under 160 characters after trim, no model is called: a `{ text: null, origin: "skipped" }` marker is recorded instead (so the background sweep does not keep reselecting the item) and the response has `outcome: "skipped"`. Skipped calls do not count against the generation cap.
 
 **Response** — `200 OK`
@@ -325,6 +327,7 @@ Asks the server's model (`claude-haiku-4-5`) to write a `model`-origin brief fro
 |---|---|---|
 | `403` | `forbidden_scope` | Token lacks `items.write`. |
 | `404` | `not_found` | Item doesn't exist or isn't owned by the caller. |
+| `409` | `brief_not_applicable` | The item is `done` or `trash`. Briefs are only generated for open items; `force` does not override this. |
 | `409` | `brief_pinned` | A user/agent-authored brief exists and `force` was not `true`. |
 | `429` | `rate_limited` | Per-user generation cap (or the token's write bucket, or an upstream model rate limit) — honour `Retry-After`. |
 | `502` | `brief_generation_failed` | The model refused or returned unusable output. |

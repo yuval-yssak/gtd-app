@@ -24,6 +24,7 @@ import sentEmailsDAO from '../dataAccess/sentEmailsDAO.js';
 import webhookDeliveriesDAO from '../dataAccess/webhookDeliveriesDAO.js';
 import webhookSubscriptionsDAO from '../dataAccess/webhookSubscriptionsDAO.js';
 import workContextsDAO from '../dataAccess/workContextsDAO.js';
+import { backfillBriefStaleMarkers } from '../lib/brief/briefStaleBackfill.js';
 import { migrateLegacyClarifyScope } from './apiTokenScopeMigration.js';
 import { dedupeCalendarItemsPerEvent } from './calendarItemDuplicateMigration.js';
 import { migrateDeviceSyncStateToPerUserCursor } from './deviceSyncStateMigration.js';
@@ -118,6 +119,10 @@ async function loadDataAccess(customDBName?: string) {
     // the same GCal event before building the unique index that forbids them.
     await dedupeCalendarItemsPerEvent(db);
     await itemsDAO.ensureUniqueCalendarEventIndex();
+    // Bring items written before the `briefStale` marker into the marker world so the brief sweep
+    // can select by index instead of walking the collection. One server-side updateMany; idempotent
+    // and a no-op once converged — see briefStaleBackfill.ts.
+    await backfillBriefStaleMarkers();
     auth = createAuth(db);
 }
 

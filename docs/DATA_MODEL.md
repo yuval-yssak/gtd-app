@@ -41,7 +41,9 @@ It lives in its own synced entity, `itemBrief` (collection `itemBriefs`), **not*
 - **`origin`** — `model` (generated), `skipped` (notes empty or under 160 chars after trim; `text: null`, written without a model call so the sweeper does not reselect the item), `user` (typed in the editor), `agent` (written via `PUT /v1/items/:id/brief` / MCP `gtd_set_brief`). `model` and `skipped` rows are **server-written only** (`lib/brief/briefWriter.ts`, stamped `deviceId: 'server:brief-ondemand' | 'server:brief-inline' | 'api:<tokenId>'`); the public batch surface rejects them, and every generation write is a compare-and-set on `sourceHash` so a result never lands on content it does not describe.
 - **Pinned briefs** — `user` and `agent` origins are never overwritten by the sweeper, and the UI keeps showing them after the notes change with a "notes changed since" marker (explicit Regenerate overrides).
 - **Derived state** (`briefState(item, brief)`): `none` (no row, or a non-pinned row whose hash no longer matches), `declined` (hash matches but `text` is `null` — the server decided against a brief for exactly this text; the UI says which reason from `origin` rather than rendering an empty field, since a silent blank is indistinguishable from a broken or pending feature), `fresh` (hash matches, text present), `pinnedStale` (hash mismatch on a pinned origin). A `declined` decision lapses to `none` once the title/notes move on, so the next sweep reconsiders it.
-- **Lifecycle** — item hard-delete and cross-account reassign drop the brief with a recorded `itemBrief` delete op (`deviceId: 'server:brief-cascade'`); it never moves with the item. Trash / done keep their briefs.
+- **Targeting scope** — briefs are generated for OPEN items only (`inbox`, `nextAction`, `calendar`, `waitingFor`, `somedayMaybe`). A `done` / `trash` item is never reviewed, so a brief for one can never be read; the on-demand endpoint refuses with `409 brief_not_applicable` and `force` does not override it. This reversed an earlier "all statuses" decision on 2026-09-21 — see `docs/plans/item-brief.md` § Targeting scope.
+- **Selection marker** — `items.briefStale` (server-owned, see [`items`](#items)) is what makes the sweep a bounded indexed lookup rather than a walk of every item. It is a selection hint only: the compare-and-set in `lib/brief/briefWriter.ts` remains the authority on staleness and re-hashes title + notes for real.
+- **Lifecycle** — item hard-delete and cross-account reassign drop the brief with a recorded `itemBrief` delete op (`deviceId: 'server:brief-cascade'`); it never moves with the item. Trash / done KEEP the briefs they already have — they are paid for, and an item revived from trash or reopened from done finds its brief either still fresh or correctly stale. Nothing deletes them.
 
 ---
 
@@ -208,10 +210,17 @@ interface ItemInterface {
     focus?: boolean;
     urgent?: boolean;
     notes?: string;                  // freeform markdown
+    briefStale?: boolean;            // server-owned brief-sweep selection marker (see below)
 }
 ```
 
-MongoDB indexes: `{ user }`, `{ user, status }`, `{ user, expectedBy }`, `{ user, timeStart }`, `{ user, updatedTs }`
+MongoDB indexes: `{ user }`, `{ user, status }`, `{ user, expectedBy }`, `{ user, timeStart }`, `{ user, updatedTs }`, `brief_stale_targets` = `{ user, briefStale, status }` partial on `briefStale: true`
+
+**`briefStale`** is server-owned and never sent by a client (`ItemsDAO` re-stamps it from the document on every write; `stripBriefStale` drops whatever arrives). It marks items whose `title`, `notes` or `status` may have moved since their `itemBriefs` row, which is what lets the brief sweep select by index instead of walking and re-hashing the whole collection.
+
+It is **tri-state**: `true` = needs a sweep, `false` = swept and settled, absent = written before the field existed. `false` and absent are deliberately distinct — the boot backfill claims exactly the absent ones, so collapsing them would have it re-mark the whole collection on every Cloud Run cold start. The index is partial on `briefStale: true`, so settled rows cost a boolean on disk and nothing in the index.
+
+It is a **selection hint, not an authority** — `lib/brief/briefWriter.ts`'s compare-and-set re-reads the item and hashes for real, and settling is guarded on the item's content so a write racing the sweep cannot have its mark erased. `presentItem`'s allowlist hides it from the public API; the op schema accepts it only to stay a strict superset of the interface (a narrower schema would 400 the whole `/sync/push` batch). See `lib/brief/briefStaleMarker.ts`.
 
 ---
 

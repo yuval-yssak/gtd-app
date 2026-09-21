@@ -3,6 +3,7 @@ import type { ItemBriefInterface, ItemInterface } from '../../types/entities.js'
 import { briefSourceHash, isPinnedOrigin, shouldSkipBrief } from '../briefSource.js';
 import { loadBrief } from '../itemBriefs.js';
 import { generateBriefText } from './briefModel.js';
+import { isBriefableStatus } from './briefScope.js';
 import { type BriefWriteOutcome, writeModelBrief, writeSkippedBrief } from './briefWriter.js';
 
 export interface GenerateBriefParams {
@@ -16,6 +17,8 @@ export interface GenerateBriefParams {
 
 export type GenerateBriefResult =
     | { outcome: 'not_found'; brief: null }
+    /** The item is `done` or `trash` — briefs are a Weekly-Review affordance and it is never reviewed. */
+    | { outcome: 'not_briefable'; brief: null }
     /** The skip rule applied (notes too short): a `skipped` row was written, or one was already current. */
     | { outcome: 'skipped'; brief: ItemBriefInterface }
     // `unchanged` is a skip-writer detail folded into `skipped` here; it never reaches callers.
@@ -36,6 +39,8 @@ export interface BriefTarget {
  */
 export type BriefPlan =
     | { kind: 'not_found' }
+    /** The item is `done` or `trash`: briefs serve the Weekly Review, which never shows it. */
+    | { kind: 'not_briefable'; item: PersistedItem }
     | { kind: 'pinned'; brief: ItemBriefInterface }
     | { kind: 'skip'; item: PersistedItem; sourceHash: string }
     | { kind: 'model'; item: PersistedItem; sourceHash: string };
@@ -49,10 +54,20 @@ export async function loadBriefTarget(userId: string, itemId: string): Promise<B
     return { item, brief: await loadBrief(userId, itemId) };
 }
 
-/** Pure planning step over an already-loaded target (the inline hook reuses its own read). */
+/**
+ * Pure planning step over an already-loaded target (the inline hook reuses its own read).
+ *
+ * The status gate comes FIRST, before `force` and before the pinned check: a `done` / `trash` item
+ * is out of scope for generation entirely, and no caller — not even an explicit "Regenerate" —
+ * should be able to spend a model call on one. An authored brief on a closed item is still
+ * returned by the read paths; it just cannot be regenerated until the item is revived.
+ */
 export function planFromTarget(target: BriefTarget | null, force: boolean): BriefPlan {
     if (!target) {
         return { kind: 'not_found' };
+    }
+    if (!isBriefableStatus(target.item.status)) {
+        return { kind: 'not_briefable', item: target.item };
     }
     if (target.brief && isPinnedOrigin(target.brief.origin) && !force) {
         return { kind: 'pinned', brief: target.brief };
@@ -83,6 +98,9 @@ function asSkipped(written: BriefWriteOutcome): GenerateBriefResult {
 export async function executeBriefPlan(plan: BriefPlan, { userId, itemId, deviceId, force }: GenerateBriefParams): Promise<GenerateBriefResult> {
     if (plan.kind === 'not_found') {
         return { outcome: 'not_found', brief: null };
+    }
+    if (plan.kind === 'not_briefable') {
+        return { outcome: 'not_briefable', brief: null };
     }
     if (plan.kind === 'pinned') {
         return { outcome: 'pinned', brief: plan.brief };

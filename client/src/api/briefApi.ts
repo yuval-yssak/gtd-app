@@ -31,6 +31,7 @@ export type GenerateBriefOutcome = GenerateBriefResult['outcome'];
 /** The server error `code`s the button branches on. `undefined` covers a network failure, a non-JSON body, or an unknown code. */
 const BRIEF_ERROR_CODES = [
     'brief_pinned',
+    'brief_not_applicable',
     'not_found',
     'forbidden_scope',
     'rate_limited',

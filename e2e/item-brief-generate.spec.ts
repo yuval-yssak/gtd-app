@@ -140,6 +140,57 @@ test.describe('item brief — generated on demand', () => {
         });
     });
 
+    test('a done item refuses generation with the open-items-only notice, and generates once revived', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `brief-generate-closed-${dayjs().valueOf()}@example.com`, async (page) => {
+            const captured = await gtd.collect(page, 'Renew passport');
+            // Long enough that "too short" could never be the reason it refuses.
+            const item = await gtd.updateItem(page, { ...captured, notes: LONG_NOTES, status: 'done' });
+            await gtd.flush(page);
+
+            await page.goto(`/item/${item._id}`);
+            await page.getByTestId('briefGenerateButton').click();
+            await expect(page.getByTestId('briefGenerateNotice')).toContainText('Briefs are only generated for open items', { timeout: 15_000 });
+            await expect(briefInputOf(page)).toHaveValue('');
+            // Nothing was recorded — not even a skip marker.
+            expect(await gtd.getItemBrief(page, item._id)).toBeUndefined();
+
+            // Revive it: the very same click now produces a brief.
+            await gtd.updateItem(page, { ...item, status: 'nextAction' });
+            await gtd.flush(page);
+            await page.goto(`/item/${item._id}`);
+            await page.getByTestId('briefGenerateButton').click();
+            await expect(briefInputOf(page)).toHaveValue(FAKE_BRIEF, { timeout: 15_000 });
+            expect((await gtd.getItemBrief(page, item._id))?.origin).toBe('model');
+        });
+    });
+
+    test('a closed item with a typed brief: Replace does not loop — the refusal closes the confirm', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `brief-generate-closed-pinned-${dayjs().valueOf()}@example.com`, async (page) => {
+            const captured = await gtd.collect(page, 'Renew passport');
+            const item = await gtd.updateItem(page, { ...captured, notes: LONG_NOTES });
+            await gtd.flush(page);
+
+            // Type a brief (origin 'user' — pinned), then close the item.
+            await page.goto(`/item/${item._id}`);
+            await briefInputOf(page).fill('My own line for the review');
+            await briefInputOf(page).blur();
+            await expect.poll(async () => (await gtd.getItemBrief(page, item._id))?.origin).toBe('user');
+            await gtd.updateItem(page, { ...item, status: 'done' });
+            await gtd.flush(page);
+
+            // Both 409s are now in play. The client-side confirm fires first (it is unaware of
+            // status), but committing to Replace must land on the real answer rather than
+            // re-firing `force: true` forever — the server refuses that code whatever `force` says.
+            await page.goto(`/item/${item._id}`);
+            await page.getByTestId('briefGenerateButton').click();
+            await page.getByTestId('briefReplaceButton').click();
+            await expect(page.getByTestId('briefGenerateNotice')).toContainText('Briefs are only generated for open items', { timeout: 15_000 });
+            await expect(page.getByTestId('briefReplaceConfirm')).toBeHidden();
+            // The authored brief is untouched — a refused generation never clears what was there.
+            expect((await gtd.getItemBrief(page, item._id))?.text).toBe('My own line for the review');
+        });
+    });
+
     test('short notes produce the "too short" notice and no brief line', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `brief-generate-short-${dayjs().valueOf()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Book dentist');

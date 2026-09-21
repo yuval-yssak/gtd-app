@@ -195,6 +195,34 @@ describe('POST /sync/push — strict-mode validation', () => {
         expect(await db.collection('items').countDocuments({ _id: entityId })).toBe(1);
     });
 
+    it('accepts a snapshot carrying the server-owned briefStale, and re-stamps rather than trusting it', async () => {
+        // `ItemSnapshotSchema` is `.strict()`, and server-originated ops snapshot rows read from
+        // Mongo — which now carry `briefStale`. A client echoing one back (bootstrap ships full
+        // rows) must NOT 400: that rejects the whole batch and permanently jams the push queue,
+        // which is exactly how the routine-schema and expectedBy jams happened.
+        const { sessionCookie } = await oauthLogin(app, 'google');
+        const userId = await getUserId(sessionCookie!);
+        const entityId = crypto.randomUUID();
+
+        const res = await push(sessionCookie!, 'dev-1', [
+            makeClientOp('item', entityId, 'create', {
+                _id: entityId,
+                user: userId,
+                status: 'inbox',
+                title: 'ok',
+                createdTs: '2026-05-08T10:00:00Z',
+                updatedTs: '2026-05-08T10:00:00Z',
+                // The lie: a client claiming this item is already settled.
+                briefStale: false,
+            }),
+        ]);
+
+        expect(res.status).toBe(200);
+        const stored = await db.collection('items').findOne({ _id: entityId } as never);
+        // The DAO re-stamps from the document, so the claim is discarded and the sweep still sees it.
+        expect(stored?.briefStale).toBe(true);
+    });
+
     it('rejects whole batch atomically: a single bad op aborts everything, even if siblings are fine', async () => {
         const { sessionCookie } = await oauthLogin(app, 'google');
         const userId = await getUserId(sessionCookie!);

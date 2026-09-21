@@ -244,12 +244,35 @@ describe('submitBriefBatch', () => {
         expect(await briefBatchesDAO.countDocuments()).toBe(0);
     });
 
-    it('includes done and trash items (all statuses get briefs)', async () => {
-        const done = await seedItem({ status: 'done' });
-        const trash = await seedItem({ status: 'trash' });
-        await submitBriefBatch({ limit: 100 });
-        const rows = [...(await briefBatchRequestsDAO.findByBatch('msgbatch_1')).values()].map((row) => row.itemId).sort();
-        expect(rows).toEqual([done._id, trash._id].sort());
+    it('never briefs a done or trash item — they are not reviewed, so a brief is unreadable spend', async () => {
+        await seedItem({ status: 'done' });
+        await seedItem({ status: 'trash' });
+        await expect(submitBriefBatch({ limit: 100 })).resolves.toEqual({ submitted: 0, skipped: 0, inFlight: false });
+        expect(batchesCreate).not.toHaveBeenCalled();
+    });
+
+    it('briefs an item revived from trash — a status change alone makes it a target again', async () => {
+        const revived = await seedItem({ status: 'trash' });
+        await expect(submitBriefBatch({ limit: 100 })).resolves.toMatchObject({ submitted: 0 });
+        await itemsDAO.updateOne({ _id: revived._id }, { $set: { status: 'nextAction' } });
+        await expect(submitBriefBatch({ limit: 100 })).resolves.toMatchObject({ submitted: 1 });
+        const rows = [...(await briefBatchRequestsDAO.findByBatch('msgbatch_1')).values()].map((row) => row.itemId);
+        expect(rows).toEqual([revived._id]);
+    });
+
+    it('leaves an existing brief on a closed item alone — it is paid for, and survives a revive', async () => {
+        const item = await seedItem();
+        const customId = await seedRequest('msgbatch_done', item);
+        resultsStream([succeeded(customId, 'A one-line brief.')]);
+        batchesRetrieve.mockResolvedValue({ id: 'msgbatch_done', processing_status: 'ended' });
+        await seedProcessingBatch('msgbatch_done', 0);
+        await harvestBriefBatches();
+        expect(await briefOf(item._id)).not.toBeNull();
+
+        // Closing the item stops it being targeted but must NOT remove what was already written.
+        await itemsDAO.updateOne({ _id: item._id }, { $set: { status: 'done' } });
+        await expect(submitBriefBatch({ limit: 100 })).resolves.toMatchObject({ submitted: 0, skipped: 0 });
+        expect(await briefOf(item._id)).not.toBeNull();
     });
 
     it('never targets a pinned brief, stale or not', async () => {

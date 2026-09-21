@@ -1,8 +1,9 @@
 /** Compare-and-set writers for generated briefs (lib/brief/briefWriter.ts) against Mongo. */
 import dayjs from 'dayjs';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import operationsDAO from '../dataAccess/operationsDAO.js';
 import { writeModelBrief, writeSkippedBrief } from '../lib/brief/briefWriter.js';
 import { briefSourceHash } from '../lib/briefSource.js';
 import { writeAuthoredBrief } from '../lib/itemBriefs.js';
@@ -38,6 +39,12 @@ async function seedItem(overrides: Partial<ItemInterface> = {}): Promise<ItemInt
     };
     await itemsDAO.insertOne(item);
     return item;
+}
+
+/** Reads the sweep-selection marker straight off the collection. */
+async function markerOf(itemId: string): Promise<boolean | undefined> {
+    const row = await db.collection<ItemInterface>('items').findOne({ _id: itemId } as never);
+    return row?.briefStale;
 }
 
 function idOf(item: ItemInterface): string {
@@ -116,6 +123,47 @@ describe('writeModelBrief', () => {
         expect(result).toEqual({ outcome: 'discarded_stale', brief: null });
         expect(await itemBriefsDAO.countDocuments({})).toBe(0);
         expect(await briefOps()).toHaveLength(0);
+    });
+
+    it('clears the briefStale marker once the row is written, retiring the item from the sweep', async () => {
+        const item = await seedItem();
+        // The DAO stamped the marker on insert; the sweep would select this item.
+        expect(await markerOf(idOf(item))).toBe(true);
+        expect((await modelWrite(item)).outcome).toBe('written');
+        // `false`, not absent: the tri-state keeps "never seen" distinct so the boot backfill
+        // cannot reclaim a settled item (see briefStaleMarker.ts).
+        expect(await markerOf(idOf(item))).toBe(false);
+    });
+
+    it('leaves the marker SET when the CAS discards a stale result — the item must stay selectable', async () => {
+        const item = await seedItem();
+        const staleHash = briefSourceHash(item.title, 'the notes the model actually saw');
+        expect((await modelWrite(item, { sourceHash: staleHash })).outcome).toBe('discarded_stale');
+        expect(await markerOf(idOf(item))).toBe(true);
+    });
+
+    it('does not settle the marker when the item moves on BETWEEN the CAS read and the clear', async () => {
+        // The window the `updatedTs` guard exists for. Editing before the call would only prove
+        // `discarded_stale` (nothing written, marker trivially untouched) — the guard has to be
+        // exercised on a write that genuinely SUCCEEDS, so the edit lands from inside the upsert.
+        const item = await seedItem();
+        const hash = briefSourceHash(item.title, item.notes);
+        // The brief row lands through the op pipeline, so hooking the op insert puts the edit in
+        // the exact gap between the CAS decision and the settle. The edit deliberately leaves
+        // `updatedTs` alone: the guard must hold on CONTENT, not on a timestamp a writer could
+        // forget to bump.
+        const realInsert = operationsDAO.insertOne.bind(operationsDAO);
+        const spy = vi.spyOn(operationsDAO, 'insertOne').mockImplementation(async (...args) => {
+            const result = await realInsert(...args);
+            await itemsDAO.updateOne({ _id: idOf(item) }, { $set: { notes: `${LONG_NOTES} plus a late edit.` } });
+            return result;
+        });
+        const written = await writeModelBrief({ userId: USER, itemId: idOf(item), sourceHash: hash, generated: GENERATED, deviceId: 'test' });
+        spy.mockRestore();
+
+        expect(written.outcome).toBe('written');
+        // The brief describes the OLD content, so the item must stay selectable for the new one.
+        expect(await markerOf(idOf(item))).toBe(true);
     });
 
     it('discards when the item was deleted in the meantime', async () => {

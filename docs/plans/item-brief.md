@@ -14,7 +14,7 @@ Five ways a brief comes into existence, in priority order:
 
 | # | Path | Role | Where |
 |---|---|---|---|
-| 1 | **Message Batches API** sweep | primary; all users, all statuses incl. `done`/`trash`; 50 % price | `lib/brief/briefBatch.ts`, `POST /maintenance/briefs/sweep` |
+| 1 | **Message Batches API** sweep | primary; all users, OPEN statuses only (see § Targeting scope); 50 % price | `lib/brief/briefBatch.ts`, `POST /maintenance/briefs/sweep` |
 | 2 | **Cloud Scheduler** | drives #1 every 15 min (submit new batch + harvest ended ones) | GCP job → the sweep endpoint, cron-secret header |
 | 3 | **On-demand generate** | user button (editor + review card), public API, MCP `gtd_generate_brief` | `POST /v1/items/:id/brief/generate` (direct `messages.create`) |
 | 4 | **Write-path escape hatch** | inline generation right after an item write; **feature-flagged, off by default** | `applyOperation` post-write hook, `BRIEF_INLINE_ON_WRITE=1` |
@@ -124,8 +124,8 @@ the interface.
   recorded `delete` op so devices drop it.
 - Reassign (`lib/reassignEntity.ts` item arm) → delete the brief on the source user; the target's
   sweeper regenerates. No cross-user brief moves.
-- Trash / done keep their briefs (the user asked for all statuses) and the sweeper still covers
-  them; the sweep query orders live statuses first so the hot set is never starved by the archive.
+- Trash / done KEEP the briefs they already have, but are no longer targeted for new ones — see
+  § Targeting scope below. A revived item finds its brief either still fresh or correctly stale.
 
 **Derived view** (client and server share the rule, `lib/briefSource.ts`):
 
@@ -136,12 +136,95 @@ briefState(item, brief):
   pinnedStale — row.sourceHash ≠ hash && origin ∈ {user, agent}                      → show brief + "notes changed" marker
 ```
 
-**Sweep selection** (`findBriefTargets(limit)`, Mongo aggregation on `items` with `$lookup` into
-`itemBriefs` on `_id`): rows where the brief is missing, or `brief.sourceHash ≠ hash(title, notes)`
-and `brief.origin ∈ {model, skipped}`. `sourceHash` cannot be indexed against a computed value, so
-the pipeline computes the hash with `$function`-free logic: we store nothing on `items`; instead
-the sweep fetches candidate items in `updatedTs DESC` pages, hashes in Node, and compares. On M0
-with ≤ 10 k items per user this is a few hundred ms. Capped at 2 000 targets per run.
+## Targeting scope
+
+> **Decision changed 2026-09-21 — this reverses the original "all statuses" choice.**
+>
+> **Was:** the sweep targeted every status including `done` and `trash`, on the reasoning that the
+> user had asked for all statuses and the archive pass could simply run after the live pass.
+>
+> **Now:** only the OPEN statuses are targeted — `inbox`, `nextAction`, `calendar`, `waitingFor`,
+> `somedayMaybe` (`LIVE_STATUSES` in `lib/brief/briefScope.ts`).
+>
+> **Why:** a brief exists to condense an item's notes for the Weekly Review, and a done or trashed
+> item is never reviewed — so a brief for one can never be read. The staging corpus made the cost
+> concrete: 10 722 of 11 926 items are closed (done 6 269, trash 4 453), i.e. **90 % of everything
+> the sweep walked**, and 2 711 briefs had already been generated for items nobody would review.
+>
+> **What did NOT change:** briefs already written for closed items are kept. They are paid for,
+> they harm nothing, and an item revived from trash or reopened from done arrives with its brief
+> either still fresh or correctly reading stale. There is deliberately no cleanup pass.
+>
+> The rule is enforced on every generation path — the batch sweep and `sweep-mine` through
+> `isBriefTarget` / the page query's index bounds, and the inline hook and the on-demand endpoint
+> through `planFromTarget`, which returns `not_briefable`. The on-demand endpoint answers
+> **409 `brief_not_applicable`**, and `force` does not override it: a closed item is out of scope,
+> not merely protected.
+
+## Sweep selection
+
+`findBriefTargets(limit)` — a bounded indexed lookup over `items`, NOT a scan.
+
+> **Design changed 2026-09-21 — this reverses the original "store nothing on `items`" choice.**
+>
+> **Was:** "`sourceHash` cannot be indexed against a computed value, so we store nothing on
+> `items`; the sweep fetches candidate items in `updatedTs DESC` pages, hashes in Node, and
+> compares. On M0 with ≤ 10 k items per user this is a few hundred ms."
+>
+> **Why it failed:** it was not a few hundred ms. Selection re-derived the whole backlog from
+> scratch on every 15-minute tick — 23 852 documents examined per tick on the staging corpus, ~12
+> MB pulled from a throttled Atlas M0 — and then threw the result away whenever it found a batch
+> already in flight. Measured latencies were 88 s–300 s with roughly half of all attempts hitting
+> Cloud Run's 300 s ceiling as a 504; an 89 s run did literally zero work. The scheduler job had to
+> be paused. Full measurements in `docs/gcp-deploy-plan.md` § Brief sweep.
+>
+> **Now:** a denormalised marker, `items.briefStale` (`lib/brief/briefStaleMarker.ts`), turns
+> staleness into a database predicate:
+>
+> - **Maintained in `ItemsDAO`, not at call sites.** Item writes are spread over ~40 call sites
+>   (`/sync/push`, the `/v1` routes, GCal inbound sync, the routine generator, the reference
+>   cascades, reassign, the one-off scripts). A marker maintained there would rot the first time
+>   one was added without it, and a missed one means an item that never gets a brief. The DAO
+>   overrides `insertOne` / `insertMany` / `replaceById` / `replaceByOwner` / `updateOne` /
+>   `updateMany` / `bulkWrite`, which makes it structurally unbypassable.
+> - **Conservative.** Full-document writes mark unconditionally; partial updates mark when their
+>   payload names `title`, `notes` or `status`. A false `true` costs one hash; a false `false`
+>   would strand an item forever, so the two are not treated symmetrically. `status` is watched so
+>   an item REVIVED to a live status becomes a target again without its content changing.
+> - **Not an authority.** `briefWriter`'s compare-and-set still re-reads the item and hashes
+>   title + notes for real. The marker only decides which items are LOOKED at; a denormalised
+>   value can never wave through a brief whose item moved on.
+> - **Tri-state**: `true` = needs a sweep, `false` = swept and settled, ABSENT = written before the
+>   marker existed. Settling writes `false` rather than `$unset` so "absent" keeps meaning
+>   "pre-dates the feature" — see the backfill below. The index `brief_stale_targets`
+>   (`{user, briefStale, status}`) is partial on `briefStale: true`, so `false` costs a boolean on
+>   disk and nothing in the index: the steady state still indexes zero keys and examines zero
+>   documents.
+> - **Settling is guarded on the item's CONTENT**, not on `updatedTs`. The sweep reads a page, then
+>   round-trips to `itemBriefs` and hashes in Node before settling; a write landing in that window
+>   would otherwise have its fresh mark erased, leaving current content with a stale brief and
+>   nothing to bring it back. Comparing title/notes/status directly cannot be defeated by a writer
+>   that forgets to bump the timestamp.
+> - **Backfill** (`lib/brief/briefStaleBackfill.ts`, called from `mainLoader`): one server-side
+>   `updateMany` over `{ briefStale: { $exists: false } }` marks every pre-marker item, so a
+>   12 000-item corpus is repaired without a document crossing the wire. **Convergent, not merely
+>   idempotent** — Cloud Run scales to zero and re-runs it on every cold start, so it must never
+>   reclaim a settled item; that is precisely why settling writes `false` instead of removing the
+>   field. The sweep then drains the backlog 2 000 at a time.
+>
+> **Measured on a seeded staging-shaped corpus** (11 926 items / 2 users / the real status mix):
+
+| | documents examined per tick | wall time (local Mongo) |
+|---|---|---|
+| before | 23 852 | 180–220 ms local, 88–300 s on Atlas M0 |
+| after, with work to do | 1 204 | 15–41 ms |
+| after, steady state | **0** | 3 ms |
+
+Selection returns rows where the brief is missing, or `brief.sourceHash ≠ hash(title, notes)` and
+`brief.origin ∈ {model, skipped}`. Pinned (`user` / `agent`) rows are never targets. The hash is
+still computed in Node — it cannot be a predicate — but only over the marked items, and the sweep
+clears the marker on every item it examines and does not target, so the set drains to empty.
+Capped at 2 000 targets per run.
 
 ---
 
@@ -326,7 +409,7 @@ ops skipped, generation failure logged and swallowed.
 
 Tests: `briefBatch.test.ts` (custom_id contract + round-trip, skip rows never submitted,
 in-flight guard, params equal `buildBriefRequest`, harvest routing per `result.type` in shuffled
-order, CAS discard, pinned untouched, done/trash included, 26 h expiry, 404 → failed vs
+order, CAS discard, pinned untouched, done/trash NEVER briefed + revive re-targets, 26 h expiry, 404 → failed vs
 transient, unusable payloads, fake seam), `briefSweep.test.ts` (order, serialization, failure
 isolation), `briefSweepMine.test.ts` (live statuses, pinned/fresh/other-user exclusion, 50-cap
 with unbounded skips, serial background execution, failure isolation, cooldown, cap

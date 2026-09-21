@@ -125,6 +125,8 @@ const generateBrief = defineTool({
         '`text: null` marker was recorded and no model was called), `discarded_stale` (the item changed while ' +
         'generating; nothing written — retry). Fails with 409 `brief_pinned` when a user- or agent-authored brief ' +
         'exists: pass `force: true` to REPLACE that authored brief with a model one (only when the user asked for it). ' +
+        'Fails with 409 `brief_not_applicable` when the item is done or trashed — briefs serve the weekly review, which ' +
+        'never shows a closed item, and `force` does NOT override this. Revive the item first if a brief is genuinely wanted. ' +
         'Rate-limited per user (30 per 10 minutes → 429). Prefer gtd_set_brief when you have already composed a brief. ' +
         'Returns `{ outcome, item, brief }` where `item` carries its projected `brief` field.',
     inputSchema: {

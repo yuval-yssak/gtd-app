@@ -184,8 +184,15 @@ describe('describeGenerateError / isBriefPinnedError', () => {
         expect(describeGenerateError(new TypeError('Failed to fetch'))).toBe('Could not generate a brief');
     });
 
+    it('names the closed-item refusal rather than reading as a bug', () => {
+        expect(describeGenerateError(new BriefApiError('x', { status: 409, code: 'brief_not_applicable' }))).toBe('Briefs are only generated for open items');
+    });
+
     it('recognises only the 409 brief_pinned error as a pinned refusal', () => {
         expect(isBriefPinnedError(new BriefApiError('x', { status: 409, code: 'brief_pinned' }))).toBe(true);
+        // Same status, different rule: a closed-item refusal must not open the replace prompt —
+        // `force` is exactly what the server refuses to honour for it, so a confirm would loop.
+        expect(isBriefPinnedError(new BriefApiError('x', { status: 409, code: 'brief_not_applicable' }))).toBe(false);
         expect(isBriefPinnedError(new BriefApiError('x', { status: 409 }))).toBe(false);
         expect(isBriefPinnedError(new Error('409'))).toBe(false);
     });

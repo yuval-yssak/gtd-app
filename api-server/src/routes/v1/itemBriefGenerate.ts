@@ -78,6 +78,13 @@ async function respond(c: RouteContext, { userId, itemId }: GenerateBriefParams,
     if (result.outcome === 'not_found') {
         return c.json({ error: 'item not found', code: 'not_found' }, 404);
     }
+    // 409, not a silent `skipped`: the caller asked for a brief and is not getting one, and the
+    // reason is the item's state rather than a transient failure. Mirrors `brief_pinned` — same
+    // status, same shape — and `force` deliberately does NOT override it: a done/trash item is out
+    // of scope for generation, not merely protected.
+    if (result.outcome === 'not_briefable') {
+        return c.json({ error: 'Briefs are only generated for open items — this item is done or trashed.', code: 'brief_not_applicable' }, 409);
+    }
     if (result.outcome === 'pinned') {
         return c.json({ error: 'This item has a user- or agent-authored brief. Send { force: true } to replace it.', code: 'brief_pinned' }, 409);
     }

@@ -150,7 +150,11 @@ export function isBriefPinnedError(err: unknown): boolean {
     return err instanceof BriefApiError && err.code === 'brief_pinned';
 }
 
-/** The snackbar line for a failed generation, keyed on the server's status (network throws read as generic). */
+/**
+ * The snackbar line for a failed generation, keyed on the server's status (network throws read as
+ * generic). Status branches come first only because no `code` currently shares 429 or 503 — a
+ * future code that does would be shadowed by them, so move the `code` checks above if you add one.
+ */
 export function describeGenerateError(err: unknown): string {
     if (!(err instanceof BriefApiError)) {
         return 'Could not generate a brief';
@@ -162,6 +166,12 @@ export function describeGenerateError(err: unknown): string {
     }
     if (err.status === 503) {
         return 'AI brief generation is not configured on this server';
+    }
+    // Named rather than left to the generic line: the user can see the item is done/trashed, so a
+    // bare "could not generate" reads as a bug instead of the deliberate rule it is. Shorter than
+    // the server's wording on purpose — it states the RULE, and the status chip already shows why.
+    if (err.code === 'brief_not_applicable') {
+        return 'Briefs are only generated for open items';
     }
     return 'Could not generate a brief';
 }

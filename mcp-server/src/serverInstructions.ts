@@ -19,4 +19,6 @@ export const SERVER_INSTRUCTIONS = [
     "`gtd_generate_brief` asks the server's model to write the brief; `gtd_set_brief` writes your own. Prefer setting",
     'a brief you have already composed over generating one. Model briefs are also generated in the background',
     '(a server sweep every ~15 minutes), so a missing brief is not an error — it simply has not been generated yet.',
+    'Briefs are only generated for OPEN items; a done or trashed item is never briefed (409 `brief_not_applicable`),',
+    'though a brief written before it was closed is kept.',
 ].join(' ');
