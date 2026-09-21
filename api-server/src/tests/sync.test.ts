@@ -593,12 +593,18 @@ describe('GET /sync/pull', () => {
         // The persisted ops, in the exact (ts, _id) order the server paginates by.
         const persisted = await db.collection('operations').find({}).sort({ ts: 1, _id: 1 }).toArray();
         expect(persisted).toHaveLength(15);
-        const allTs = new Set(persisted.map((op) => op.ts));
-        expect(allTs.size).toBe(1); // confirm they truly share one millisecond
 
-        // First device pulls everything; simulate a response boundary that splits the tie-group at K
-        // by advancing the cursor to the K-th op and pulling again from there.
-        const K = 6;
+        // allocateOpIdentity reads the real wall clock per op (see opIdentity.ts), so under CI load
+        // the batch can occasionally straddle a millisecond boundary instead of landing in one tie
+        // group. Find any index where consecutive ops truly share a `ts` — that is the boundary this
+        // test needs to exercise the regression, wherever it falls — rather than assuming index 6.
+        const K = persisted.findIndex((op, i) => i > 0 && op.ts === persisted[i - 1]!.ts);
+        if (K === -1) {
+            // Never observed locally or in CI, but allocateOpIdentity's contract doesn't guarantee a
+            // tie among 15 sequential real-clock reads — fail loudly rather than silently no-op so a
+            // genuine regression in the allocator (e.g. losing the same-ms sequence) is still caught.
+            throw new Error('expected at least one same-ts pair among 15 rapidly-allocated ops; opIdentity allocator may be broken');
+        }
         const boundary = persisted[K - 1];
         const second = (await (await pull(cookie, { since: boundary!.ts as string, sinceId: boundary!._id as string, deviceId: 'dev-2' })).json()) as {
             ops: { entityId: string }[];
