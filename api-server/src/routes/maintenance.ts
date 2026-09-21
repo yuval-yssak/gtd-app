@@ -1,8 +1,12 @@
 import dayjs from 'dayjs';
 import { Hono } from 'hono';
+import { requireCronSecret } from '../auth/cronSecret.js';
 import { authenticateRequest } from '../auth/middleware.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
+import { BRIEF_BATCH_DEFAULT_LIMIT } from '../lib/brief/briefBatch.js';
+import { runBriefSweep } from '../lib/brief/briefSweep.js';
+import { startReviewBriefSweep } from '../lib/brief/briefSweepMine.js';
 import { healDuplicateCalendarItems, healSplitSuccessorRoutines, healStuckGCalRoutines } from '../lib/calendarHeal.js';
 import { computePurgeFloor, type PurgeFloor, STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
 import { reapStaleDevices } from '../lib/staleDevices.js';
@@ -21,6 +25,16 @@ export function clampChainCheckLimit(raw: unknown): number | undefined {
         return undefined;
     }
     return Math.min(Math.max(Math.floor(raw), MIN_CHAIN_CHECK_LIMIT), MAX_CHAIN_CHECK_LIMIT);
+}
+
+const MIN_SWEEP_LIMIT = 1;
+
+/** Clamps a caller-supplied sweep cap into [1, 2000]; the default for anything non-numeric. Exported for unit testing. */
+export function clampSweepLimit(raw: unknown): number {
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+        return BRIEF_BATCH_DEFAULT_LIMIT;
+    }
+    return Math.min(Math.max(Math.floor(raw), MIN_SWEEP_LIMIT), BRIEF_BATCH_DEFAULT_LIMIT);
 }
 
 // Same cutoff as the /sync/pull fire-and-forget reaper — an on-demand purge with the default body
@@ -168,4 +182,28 @@ export const maintenanceRoutes = new Hono<{ Variables: AuthVariables }>()
         const { user } = c.get('session');
         const result = await relinkCalendarMarkersForUser(user.id);
         return c.json(result, 200);
+    })
+
+    // ---------------------------------------------------------------------------
+    // POST /maintenance/briefs/sweep — Cloud Scheduler tick for the Message Batches pipeline
+    // ---------------------------------------------------------------------------
+    // Cron-secret guarded (NOT session-authed): harvests ended batches, then submits the next one
+    // across ALL users. Body `{ limit? }` caps the targets selected (clamped to [1, 2000]). The sweep
+    // is serialized in-process, so an overlapping hit waits and then finds the batch in flight.
+    .post('/briefs/sweep', requireCronSecret(), async (c) => {
+        const body = await c.req.json<{ limit?: unknown }>().catch(() => ({}) as { limit?: unknown });
+        const summary = await runBriefSweep({ limit: clampSweepLimit(body.limit) });
+        return c.json(summary, 200);
+    })
+
+    // ---------------------------------------------------------------------------
+    // POST /maintenance/briefs/sweep-mine — review-start sweep for the caller's live items
+    // ---------------------------------------------------------------------------
+    // Session-authed, no body. Writes skip rows for the caller's stale short-note items, then
+    // generates up to 50 briefs in the background for items whose title + notes checksum changed.
+    // Returns `{ started, skippedWritten, cooldown: false }`, or `{ started: 0, cooldown: true }`
+    // within 10 minutes of the caller's previous sweep — the cooldown is the rate limit.
+    .post('/briefs/sweep-mine', authenticateRequest, async (c) => {
+        const { user } = c.get('session');
+        return c.json(await startReviewBriefSweep(user.id), 200);
     });

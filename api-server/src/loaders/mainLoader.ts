@@ -2,6 +2,8 @@ import { type Db, MongoClient } from 'mongodb';
 import { type Auth, createAuth } from '../auth/betterAuth.js';
 import { mongoDBConfig } from '../config.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
+import briefBatchesDAO from '../dataAccess/briefBatchesDAO.js';
+import briefBatchRequestsDAO from '../dataAccess/briefBatchRequestsDAO.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
@@ -89,6 +91,8 @@ async function loadDataAccess(customDBName?: string) {
         workContextsDAO.init(dbClient, resolvedDBName),
         reviewInboxesDAO.init(dbClient, resolvedDBName),
         itemBriefsDAO.init(dbClient, resolvedDBName),
+        briefBatchesDAO.init(dbClient, resolvedDBName),
+        briefBatchRequestsDAO.init(dbClient, resolvedDBName),
         calendarIntegrationsDAO.init(dbClient, resolvedDBName),
         calendarSyncConfigsDAO.init(dbClient, resolvedDBName),
         sentEmailsDAO.init(dbClient, resolvedDBName),

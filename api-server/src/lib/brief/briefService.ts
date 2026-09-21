@@ -21,8 +21,11 @@ export type GenerateBriefResult =
     // `unchanged` is a skip-writer detail folded into `skipped` here; it never reaches callers.
     | Exclude<BriefWriteOutcome, { outcome: 'unchanged' }>;
 
+/** An item read back from Mongo — `_id` is always present, unlike on a create payload. */
+export type PersistedItem = ItemInterface & { _id: string };
+
 export interface BriefTarget {
-    item: ItemInterface;
+    item: PersistedItem;
     brief: ItemBriefInterface | null;
 }
 
@@ -34,8 +37,8 @@ export interface BriefTarget {
 export type BriefPlan =
     | { kind: 'not_found' }
     | { kind: 'pinned'; brief: ItemBriefInterface }
-    | { kind: 'skip'; item: ItemInterface; sourceHash: string }
-    | { kind: 'model'; item: ItemInterface; sourceHash: string };
+    | { kind: 'skip'; item: PersistedItem; sourceHash: string }
+    | { kind: 'model'; item: PersistedItem; sourceHash: string };
 
 /** Loads an item with its brief row; `null` when the item is missing or owned by someone else. */
 export async function loadBriefTarget(userId: string, itemId: string): Promise<BriefTarget | null> {

@@ -3,14 +3,16 @@ import itemBriefsDAO from '../../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
 import type { ItemBriefInterface, ItemInterface, ItemStatus } from '../../types/entities.js';
 import { briefSourceHash, isPinnedOrigin } from '../briefSource.js';
+import type { PersistedItem } from './briefService.js';
 
 /** Items that need a (re)generated brief, paired with the row they would replace. */
 export interface BriefTarget {
-    item: ItemInterface;
+    item: PersistedItem;
     brief?: ItemBriefInterface;
 }
 
-const LIVE_STATUSES: ItemStatus[] = ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe'];
+/** The statuses a user acts on; the review-start sweep and the sweep's first pass are scoped to them. */
+export const LIVE_STATUSES: ItemStatus[] = ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe'];
 const ARCHIVE_STATUSES: ItemStatus[] = ['done', 'trash'];
 /** Items per Mongo page and briefs per `$in` lookup — well under the 16 MB query ceiling. */
 const PAGE_SIZE = 500;
@@ -45,8 +47,8 @@ export function briefTargetPageQuery(userId: string, statuses: ItemStatus[]): { 
 }
 
 /** Loads one user's brief rows for a page of items in a single `$in` query, keyed by item id. */
-async function loadBriefsForPage(userId: string, page: ItemInterface[]): Promise<Map<string, ItemBriefInterface>> {
-    const ids = page.flatMap((item) => (item._id ? [item._id] : []));
+async function loadBriefsForPage(userId: string, page: PersistedItem[]): Promise<Map<string, ItemBriefInterface>> {
+    const ids = page.map((item) => item._id);
     if (ids.length === 0) {
         return new Map();
     }
@@ -55,12 +57,12 @@ async function loadBriefsForPage(userId: string, page: ItemInterface[]): Promise
 }
 
 /** Pages one user's status group newest-first over a single open cursor (see `briefTargetPageQuery`). */
-async function* pageItems(userId: string, statuses: ItemStatus[]): AsyncGenerator<ItemInterface[]> {
+async function* pageItems(userId: string, statuses: ItemStatus[]): AsyncGenerator<PersistedItem[]> {
     const { filter, sort, hint } = briefTargetPageQuery(userId, statuses);
     const cursor = itemsDAO.findSequence(filter, { sort, hint });
     // Accumulate into fixed-size pages so the brief lookup runs once per page, not per item.
     // The accumulator is intrinsic to chunking a stream; kept as a local mutable buffer on purpose.
-    let page: ItemInterface[] = [];
+    let page: PersistedItem[] = [];
     for await (const item of cursor) {
         page.push(item);
         if (page.length === PAGE_SIZE) {
@@ -73,10 +75,10 @@ async function* pageItems(userId: string, statuses: ItemStatus[]): AsyncGenerato
     }
 }
 
-async function targetsInPage(userId: string, page: ItemInterface[]): Promise<BriefTarget[]> {
+async function targetsInPage(userId: string, page: PersistedItem[]): Promise<BriefTarget[]> {
     const briefs = await loadBriefsForPage(userId, page);
     return page.flatMap((item) => {
-        const brief = item._id ? briefs.get(item._id) : undefined;
+        const brief = briefs.get(item._id);
         if (!isBriefTarget(item, brief)) {
             return [];
         }
@@ -84,8 +86,11 @@ async function targetsInPage(userId: string, page: ItemInterface[]): Promise<Bri
     });
 }
 
-/** Collects a user's targets for one status group, stopping as soon as `remaining` is reached. */
-async function collectTargets(userId: string, statuses: ItemStatus[], remaining: number): Promise<BriefTarget[]> {
+/**
+ * Collects ONE user's targets for a status group, newest-first, stopping as soon as `remaining`
+ * is reached (`Infinity` walks the whole group — a single user's live set is bounded).
+ */
+export async function findUserBriefTargets(userId: string, statuses: ItemStatus[], remaining: number): Promise<BriefTarget[]> {
     const collected: BriefTarget[] = [];
     for await (const page of pageItems(userId, statuses)) {
         collected.push(...(await targetsInPage(userId, page)));
@@ -113,7 +118,7 @@ export async function findBriefTargets(limit: number): Promise<BriefTarget[]> {
     const targets: BriefTarget[] = [];
     for (const statuses of [LIVE_STATUSES, ARCHIVE_STATUSES]) {
         for (const userId of owners) {
-            targets.push(...(await collectTargets(userId, statuses, limit - targets.length)));
+            targets.push(...(await findUserBriefTargets(userId, statuses, limit - targets.length)));
             if (targets.length >= limit) {
                 return targets;
             }

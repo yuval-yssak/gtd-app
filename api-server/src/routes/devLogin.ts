@@ -234,6 +234,10 @@ export const devLoginRoutes = new Hono()
                 db.collection('workContexts').deleteMany({ user: { $in: userIds } } as never),
                 db.collection('reviewInboxes').deleteMany({ user: { $in: userIds } } as never),
                 db.collection('itemBriefs').deleteMany({ user: { $in: userIds } } as never),
+                // briefBatches rows are cross-user (no owner) — only the per-user request identities are scoped.
+                // A leftover `processing` row would block a real-mode submit, but e2e/dev run BRIEF_FAKE_MODEL=1,
+                // which bypasses the in-flight guard; the global reset below clears both collections.
+                db.collection('briefBatchRequests').deleteMany({ user: { $in: userIds } } as never),
                 db.collection('deviceUsers').deleteMany({ userId: { $in: userIds } } as never),
                 db.collection('pushSubscriptions').deleteMany({ user: { $in: userIds } } as never),
                 db.collection('calendarIntegrations').deleteMany({ user: { $in: userIds } } as never),
@@ -252,6 +256,8 @@ export const devLoginRoutes = new Hono()
             db.collection('workContexts').deleteMany({}),
             db.collection('reviewInboxes').deleteMany({}),
             db.collection('itemBriefs').deleteMany({}),
+            db.collection('briefBatches').deleteMany({}),
+            db.collection('briefBatchRequests').deleteMany({}),
             db.collection('deviceUsers').deleteMany({}),
             db.collection('pushSubscriptions').deleteMany({}),
             db.collection('calendarIntegrations').deleteMany({}),

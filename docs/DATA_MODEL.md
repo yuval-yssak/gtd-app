@@ -238,6 +238,36 @@ interface ItemBriefInterface {
 
 MongoDB indexes: `{ user }`, `{ user, sourceHash }` (`_id` is the implicit unique key). Op schema `schemas/operations/itemBrief.ts` is strict and a superset of the interface; it also pins `_id === itemId`.
 
+### `briefBatches` / `briefBatchRequests` (server-only)
+
+Bookkeeping for the Message Batches sweep (`lib/brief/briefBatch.ts`, `POST /maintenance/briefs/sweep`). Neither is a synced entity and neither reaches a client.
+
+```typescript
+interface BriefBatchInterface {
+    _id: string;                  // the Anthropic batch id (msgbatch_…)
+    createdTs: string;
+    submittedCount: number;
+    status: 'processing' | 'harvested' | 'expired' | 'failed';
+    harvestedTs?: string;
+    resultCounts?: { succeeded; errored; canceled; expired; discardedStale; pinned; written };
+    expiresAt: Date;              // BSON Date — TTL anchor, createdTs + 90 d
+}
+
+interface BriefBatchRequestInterface {
+    _id: string;                  // the request's custom_id (opaque 32-hex token)
+    batchId: string;
+    user: string;
+    itemId: string;
+    sourceHash: string;           // the compare-and-set anchor at harvest
+    createdTs: string;
+    expiresAt: Date;              // BSON Date — TTL anchor, createdTs + 48 h
+}
+```
+
+A `processing` batch row is the "one batch in flight" guard. Request rows normally exist only while their batch is processing (`deleteByBatch` runs on harvest/expiry/failure) — Anthropic caps `custom_id` at 64 chars of `[A-Za-z0-9_-]`, so the (user, item, hash) identity cannot be encoded in it.
+
+Indexes: `briefBatches { status }` + `{ expiresAt }` TTL, `briefBatchRequests { batchId }`, `{ user }` + `{ expiresAt }` TTL. `expiresAt` is a **BSON `Date`**, not an ISO string — Mongo's TTL monitor only reaps real Dates, so a string field would index fine and never fire (the ISO-string `expiresTs` TTL indexes on `apiTokens` / `oauthRefreshTokens` / `oauthAuthCodes` are silent no-ops for exactly this reason; those DAOs enforce expiry at read time instead — do not copy them for GC). Requests expire 48 h after creation (outliving the 26 h batch ceiling), batch rows after 90 d (a bounded operator audit trail). The TTL is a backstop for rows stranded by a crash between the paired writes, not the normal cleanup path.
+
 ---
 
 ### `routines`

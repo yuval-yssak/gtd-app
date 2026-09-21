@@ -8,6 +8,7 @@ dayjs.extend(timezone);
 
 import { google } from 'googleapis';
 import { type Context, Hono } from 'hono';
+import { requireCronSecret } from '../auth/cronSecret.js';
 import { authenticateRequest } from '../auth/middleware.js';
 import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException } from '../calendarProviders/CalendarProvider.js';
 import { SyncTokenInvalidError } from '../calendarProviders/CalendarProvider.js';
@@ -5897,13 +5898,8 @@ async function notifyDevicesOfSyncOps(userId: string, ops: OperationInterface[],
 
 // ── Webhook renewal ──────────────────────────────────────────────────────────
 
-// Secured by a shared secret so only the Cloud Scheduler job can trigger renewal.
-calendarRoutes.post('/webhooks/renew', async (c) => {
-    const cronSecret = c.req.header('x-webhook-cron-secret');
-    if (!cronSecret || cronSecret !== process.env.CALENDAR_WEBHOOK_CRON_SECRET) {
-        return c.text('Unauthorized', 401);
-    }
-
+// Secured by the shared cron secret so only the Cloud Scheduler job can trigger renewal.
+calendarRoutes.post('/webhooks/renew', requireCronSecret(), async (c) => {
     const horizon = dayjs().add(1, 'day').toISOString();
     const expiring = await calendarSyncConfigsDAO.findNeedingWebhook(horizon);
 

@@ -471,6 +471,61 @@ export interface ItemBriefInterface {
     updatedTs: string;
 }
 
+export type BriefBatchStatus = 'processing' | 'harvested' | 'expired' | 'failed';
+
+/** Per-result tallies of one harvested Message Batch (`lib/brief/briefBatch.ts`). */
+export interface BriefBatchResultCounts {
+    succeeded: number;
+    errored: number;
+    canceled: number;
+    expired: number;
+    /** Succeeded results whose item content moved on between submit and harvest — nothing written. */
+    discardedStale: number;
+    /** Succeeded results that met an authored brief written meanwhile — nothing written. */
+    pinned: number;
+    /** Succeeded results that became an `origin: 'model'` row. */
+    written: number;
+}
+
+/**
+ * One Anthropic Message Batch submitted by the brief sweep. Server-only bookkeeping (not a
+ * synced entity, not user-scoped): a `processing` row is the "one batch in flight" guard, and a
+ * harvested row keeps its tallies for the operator.
+ */
+export interface BriefBatchInterface {
+    /** The Anthropic batch id (`msgbatch_…`). */
+    _id: string;
+    createdTs: string;
+    submittedCount: number;
+    status: BriefBatchStatus;
+    harvestedTs?: string;
+    resultCounts?: BriefBatchResultCounts;
+    /**
+     * BSON Date (not an ISO string — Mongo's TTL monitor only reaps real Dates) after which the
+     * row is dropped: a bounded operator audit trail, not a live-state field.
+     */
+    expiresAt: Date;
+}
+
+/**
+ * Maps a batch request's `custom_id` back to the (user, item, sourceHash) it was built from.
+ * Anthropic caps `custom_id` at 64 chars of `[A-Za-z0-9_-]`, which a Better Auth user id + item
+ * UUID + hash cannot fit, so the identity lives here and the `custom_id` is an opaque token.
+ * Rows are deleted once their batch is harvested or expired.
+ */
+export interface BriefBatchRequestInterface {
+    /** The `custom_id` sent to Anthropic. */
+    _id: string;
+    batchId: string;
+    user: string;
+    itemId: string;
+    /** Hash of the title + notes the request was built from — the compare-and-set anchor at harvest. */
+    sourceHash: string;
+    createdTs: string;
+    /** BSON Date TTL anchor (see the DAO): rows stranded by a crash between paired writes are reaped, not kept forever. */
+    expiresAt: Date;
+}
+
 /**
  * Payload for an `rsvp` opType: a local RSVP click that needs to push the user's responseStatus
  * to GCal as the only sanctioned local-write into the GCal-owned attendee set. Carried in the

@@ -75,9 +75,10 @@ jobs:
                   VAPID_SUBJECT: "${{ vars.VAPID_SUBJECT }}"
                   CALENDAR_WEBHOOK_URL: "${{ vars.CALENDAR_WEBHOOK_URL }}"
                   CALENDAR_ENCRYPTION_KEY: "${{ secrets.CALENDAR_ENCRYPTION_KEY }}"
-                  # Shared secret for the Cloud Scheduler job that keeps GCal watch channels renewed
-                  # (POST /calendar/webhooks/renew). Empty string == endpoint rejects all callers.
-                  CALENDAR_WEBHOOK_CRON_SECRET: "${{ secrets.CALENDAR_WEBHOOK_CRON_SECRET }}"
+                  # Shared secret every Cloud Scheduler job sends as `x-cron-secret`: GCal watch-channel
+                  # renewal (POST /calendar/webhooks/renew) and the brief sweep (POST /maintenance/briefs/sweep).
+                  # Empty string == both endpoints reject all callers.
+                  CRON_SECRET: "${{ secrets.CRON_SECRET }}"
                   # Outbound webhook delivery worker: off in production until you opt in by setting
                   # the GitHub Environment variable WEBHOOKS_ENABLED=true. Empty string == off.
                   WEBHOOKS_ENABLED: "${{ vars.WEBHOOKS_ENABLED }}"

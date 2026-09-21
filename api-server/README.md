@@ -322,6 +322,9 @@ DAOs are initialized as singletons in `loadDataAccess()` before the server start
 | PushSubscriptionsDAO | `pushSubscriptions` | `user` |
 | CalendarIntegrationsDAO | `calendarIntegrations` | `user`, `user+provider` (unique) |
 | CalendarSyncConfigsDAO | `calendarSyncConfigs` | `user`, `integrationId+calendarId` (unique), `webhookChannelId` |
+| ItemBriefsDAO | `itemBriefs` | `user`, `user+sourceHash` |
+| BriefBatchesDAO | `briefBatches` | `status`, `expiresAt` TTL (BSON Date, +90 d) — one Anthropic Message Batch per row; server-only, not user-scoped |
+| BriefBatchRequestsDAO | `briefBatchRequests` | `batchId`, `user`, `expiresAt` TTL (BSON Date, +48 h backstop) — custom_id → user/item/sourceHash, deleted on harvest |
 
 ## Environment Variables
 
@@ -350,7 +353,9 @@ GITHUB_CLIENT_SECRET=...
 # Calendar Integration
 CALENDAR_ENCRYPTION_KEY=<128 hex chars>       # AES-256 key for token encryption
 CALENDAR_WEBHOOK_URL=https://...              # public URL for Google push notifications
-CALENDAR_WEBHOOK_CRON_SECRET=<random string>
+
+# Cloud Scheduler (webhook renewal + brief sweep) — header `x-cron-secret`
+CRON_SECRET=<random string>
 
 # Web Push (VAPID)
 VAPID_PUBLIC_KEY=...

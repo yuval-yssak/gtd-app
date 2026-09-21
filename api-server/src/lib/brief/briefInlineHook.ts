@@ -1,5 +1,5 @@
 import type { OperationInterface } from '../../types/entities.js';
-import { KeyedMutex } from '../keyedMutex.js';
+import { withBriefGenerationDrain } from './briefDrain.js';
 
 /**
  * Write-path escape hatch (`BRIEF_INLINE_ON_WRITE=1`, off by default): regenerate an item's
@@ -14,11 +14,8 @@ import { KeyedMutex } from '../keyedMutex.js';
 export const INLINE_BRIEF_DEBOUNCE_MS = 30_000;
 const DEVICE_ID = 'server:brief-inline';
 const LOG_PREFIX = '[brief-inline]';
-const DRAIN_KEY = 'inline-brief-drain';
 
 const pendingTimers = new Map<string, NodeJS.Timeout>();
-/** Single-key mutex = a FIFO queue with concurrency 1 for every fired timer. */
-const drain = new KeyedMutex();
 
 export function isInlineBriefEnabled(): boolean {
     return process.env.BRIEF_INLINE_ON_WRITE === '1';
@@ -57,11 +54,9 @@ async function runInlineBrief(userId: string, itemId: string): Promise<void> {
 }
 
 function fireInlineBrief(userId: string, itemId: string): Promise<void> {
-    return drain
-        .withLock(DRAIN_KEY, () => runInlineBrief(userId, itemId))
-        .catch((err: unknown) => {
-            console.error(`${LOG_PREFIX} generation failed for item ${itemId}: ${err instanceof Error ? err.message : String(err)}`);
-        });
+    return withBriefGenerationDrain(() => runInlineBrief(userId, itemId)).catch((err: unknown) => {
+        console.error(`${LOG_PREFIX} generation failed for item ${itemId}: ${err instanceof Error ? err.message : String(err)}`);
+    });
 }
 
 /** (Re)arms the per-item trailing timer; the last write within the window wins. */

@@ -20,7 +20,7 @@ export interface SkippedBriefWrite {
     itemId: string;
     /** Hash of the title + notes the decision was made FROM — the compare-and-set anchor. */
     sourceHash: string;
-    /** Op-log provenance: `api:<tokenId>`, `server:brief-ondemand`, `server:brief-inline`, `server:brief-batch`. */
+    /** Op-log provenance: `api:<tokenId>`, `server:brief-ondemand`, `server:brief-inline`, `server:brief-batch`, `server:brief-sweep-mine`. */
     deviceId: string;
     /** Replace a pinned (user/agent) brief. Only the explicit on-demand "Regenerate" sets it. */
     force?: boolean;

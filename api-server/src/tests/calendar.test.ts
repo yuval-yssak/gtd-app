@@ -8114,7 +8114,7 @@ describe('POST /calendar/webhooks/renew', () => {
         const res = await app.fetch(
             new Request('http://localhost:4000/calendar/webhooks/renew', {
                 method: 'POST',
-                headers: { 'x-webhook-cron-secret': 'wrong-secret' },
+                headers: { 'x-cron-secret': 'wrong-secret' },
             }),
         );
         expect(res.status).toBe(401);
@@ -8136,14 +8136,14 @@ describe('POST /calendar/webhooks/renew', () => {
         });
 
         const secret = 'test-cron-secret';
-        process.env.CALENDAR_WEBHOOK_CRON_SECRET = secret;
+        process.env.CRON_SECRET = secret;
         process.env.CALENDAR_WEBHOOK_URL = 'https://example.com/webhooks/google';
 
         try {
             const res = await app.fetch(
                 new Request('http://localhost:4000/calendar/webhooks/renew', {
                     method: 'POST',
-                    headers: { 'x-webhook-cron-secret': secret },
+                    headers: { 'x-cron-secret': secret },
                 }),
             );
             expect(res.status).toBe(200);
@@ -8155,7 +8155,7 @@ describe('POST /calendar/webhooks/renew', () => {
             const config = await calendarSyncConfigsDAO.findByOwnerAndId('sync-config-1', userId);
             expect(config!.webhookResourceId).toBe('res-new');
         } finally {
-            delete process.env.CALENDAR_WEBHOOK_CRON_SECRET;
+            delete process.env.CRON_SECRET;
             delete process.env.CALENDAR_WEBHOOK_URL;
         }
     });

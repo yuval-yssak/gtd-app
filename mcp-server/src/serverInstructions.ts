@@ -17,5 +17,6 @@ export const SERVER_INSTRUCTIONS = [
     "A brief is a one-sentence, review-oriented condensation of an item's title + notes — what the commitment is and",
     'why it is still open, never logistics. Items expose it read-only as `brief`; write it with `gtd_set_brief`.',
     "`gtd_generate_brief` asks the server's model to write the brief; `gtd_set_brief` writes your own. Prefer setting",
-    'a brief you have already composed over generating one.',
+    'a brief you have already composed over generating one. Model briefs are also generated in the background',
+    '(a server sweep every ~15 minutes), so a missing brief is not an error — it simply has not been generated yet.',
 ].join(' ');

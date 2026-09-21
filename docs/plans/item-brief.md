@@ -32,7 +32,7 @@ Five ways a brief comes into existence, in priority order:
 | Model | `BRIEF_MODEL = 'claude-haiku-4-5'` (open decision 1, answered "Haiku"); `CLAUDE_ASSIST_MODEL` stays `claude-sonnet-4-6` |
 | Output | structured output `output_config.format` → `{ brief: string \| null }`, ≤ 160 chars, language of the notes, `max_tokens: 256`; system prompt cached (`cache_control`), notes treated as data (same injection guard wording as `agentLoop.ts`) |
 | Visibility | device-local preference `showBriefs` (localStorage, same pattern as `lib/colorTheme.ts`), toggled in Settings and in the Weekly Review header; default **on** |
-| Cron auth | reuse `CALENDAR_WEBHOOK_CRON_SECRET` + `x-webhook-cron-secret` header (no new secret, no new GitHub env var); one new Cloud Scheduler job per environment |
+| Cron auth | the scheduler secret, renamed `CRON_SECRET` + `x-cron-secret` header (open decision 6) and shared through `auth/cronSecret.ts`; one new Cloud Scheduler job per environment |
 | Hash function | `cyrb53`-style synchronous string hash mirrored server/client (`lib/briefSource.ts` ↔ `client/src/lib/briefSource.ts`) with a parity test; sha256 would force async hashing in render paths |
 
 ### Why a sidecar and not an item field
@@ -273,38 +273,76 @@ ops skipped, generation failure logged and swallowed.
 
 # Phase 3 — Message Batches sweep + Cloud Scheduler + backfill
 
+> Implemented 2026-09-21 on `feat/item-brief` (server side; the wizard trigger is a client
+> follow-up). Deviations from the original draft are marked **(as built)**.
+
 ## 3.1 Batch pipeline
 
-- Collection `briefBatches`: `{ _id: batchId, createdTs, submittedCount, status:
-  'processing' | 'harvested' | 'expired', harvestedTs?, resultCounts? }` + DAO.
+- Collections `briefBatches` `{ _id: batchId, createdTs, submittedCount, status:
+  'processing' | 'harvested' | 'expired' | 'failed', harvestedTs?, resultCounts? }` and
+  **(as built)** `briefBatchRequests` `{ _id: customId, batchId, user, itemId, sourceHash }` +
+  DAOs. Anthropic caps `custom_id` at 64 chars of `[A-Za-z0-9_-]`; a Better Auth user id (32) +
+  item UUID (36) + hash (≤ 11) is 81 chars and the `:` separator is not even allowed, so the
+  identity lives in a request row keyed by an opaque 32-hex `custom_id`. Rows are deleted once
+  their batch is harvested/expired/failed.
 - `briefBatch.ts`:
-  - `submitBriefBatch(limit)`: `findBriefTargets(limit)` → skip-rule rows written immediately
-    (no request) → remaining become batch requests with `custom_id =
-    '${userId}:${itemId}:${sourceHash}'` (max 100 k / 256 MB; we cap at 2 000) →
-    `client.messages.batches.create` → record in `briefBatches`. Returns `{ submitted, skipped }`.
-    Submits nothing when a batch is already `processing` (one in flight keeps the sweep idempotent
-    and the M0 write volume flat).
-  - `harvestBriefBatches()`: for each `processing` row, `batches.retrieve`; if `ended`, stream
-    `batches.results`, key by `custom_id`, and call `writeModelBrief` per success (the CAS in the
-    writer handles the up-to-24 h staleness). `errored` with `invalid_request` → log + write nothing
-    (next sweep retries once the row is fixed); server errors and `expired` → nothing, next sweep
-    resubmits. Marks the row `harvested`.
-- `POST /maintenance/briefs/sweep`: cron-secret guarded, `{ limit? }` → `harvest` then `submit`;
-  returns counts. Also `POST /maintenance/briefs/sweep-mine` (session auth) so the Weekly Review
-  wizard can request a targeted inline sweep for the current user's **live** items only
-  (bounded to 50 direct calls, not a batch) when it opens — fresh briefs for the pass you are
-  about to do.
-- `WeeklyReviewWizard` calls `sweep-mine` once per review start (fire-and-forget, offline-safe).
+  - `submitBriefBatch({ limit })`: `findBriefTargets(limit)` → `planFromTarget` per target →
+    skip plans are executed immediately through `executeBriefPlan` (row written, no request;
+    deviceId `server:brief-batch`) → model plans become batch requests with
+    `params = buildBriefRequest(item)` (byte-identical to the on-demand path, so the cached
+    system prefix serves both) → `client.messages.batches.create` → request rows → batch row
+    (written LAST so a `processing` row always has its requests). Returns
+    `{ submitted, skipped, inFlight, batchId? }`. Submits nothing while a batch is `processing`.
+    Under `BRIEF_FAKE_MODEL=1` the model plans run through the direct fake generator, the SDK
+    is never touched and the in-flight guard is bypassed — the e2e/dev seam.
+  - `harvestBriefBatches()`: for each `processing` row `batches.retrieve`; if `ended`, stream
+    `batches.results`, key by `custom_id` (results arrive in any order), and for each
+    `succeeded` parse the message with the shared `parseBriefResponse` (`briefModel.ts`) and
+    `writeModelBrief` (CAS discards stale, pinned rows untouched); `errored` with
+    `invalid_request_error` is logged loudly, other `errored` / `canceled` / `expired` are only
+    tallied — the target stays stale and the next sweep resubmits it. Marks the row `harvested`
+    with `resultCounts { succeeded, errored, canceled, expired, discardedStale, pinned, written }`.
+    Still `processing` after 26 h → `expired`; unknown to Anthropic (404) → `failed`; transient
+    errors leave the row for the next sweep.
+- `briefSweep.ts`: `runBriefSweep({ limit })` = harvest then submit, serialized on a single
+  `KeyedMutex` key (an overlapping cron hit waits, then finds the batch in flight).
+- `briefSweepMine.ts` (open decision 5, "keep, but only run on those that have their
+  title+notes checksum different"): `startReviewBriefSweep(userId)` selects ONLY the caller's
+  LIVE items (`inbox`, `nextAction`, `calendar`, `waitingFor`, `somedayMaybe`) satisfying
+  `isBriefTarget` (no row, or hash mismatch on a `model` / `skipped` row — never pinned); writes
+  skip rows for every short-notes one synchronously (cheap, unbounded); runs at most
+  `BRIEF_REVIEW_SWEEP_MAX = 50` model generations in the background, strictly one at a time
+  through the shared drain (`briefDrain.ts`, also used by the inline hook), deviceId
+  `server:brief-sweep-mine`. Does not charge the on-demand cap; limited to once per user per
+  `BRIEF_REVIEW_SWEEP_COOLDOWN_MS` (10 min) — inside the cooldown it returns
+  `{ started: 0, cooldown: true }`, otherwise `{ started, skippedWritten, cooldown: false }`.
+- `POST /maintenance/briefs/sweep`: cron-secret guarded (`requireCronSecret`), NOT
+  session-authed; body `{ limit? }` clamped to [1, 2000]; returns `{ harvest, submit }`.
+  `POST /maintenance/briefs/sweep-mine`: session-authed, no body; returns the
+  `startReviewBriefSweep` result. Both documented in `docs/gcp-deploy-plan.md` (ops surface,
+  not `PUBLIC_API.md`).
+- `WeeklyReviewWizard` calls `sweep-mine` once per review start (fire-and-forget, offline-safe)
+  — **client follow-up, not in this phase**.
 
-Tests: `briefBatch.test.ts` with the SDK mocked (custom_id encoding/decoding, skip rows never
-submitted, in-flight guard, harvest result routing per `result.type`, CAS discard on changed
-notes, pinned rows untouched, done/trash rows included), maintenance route auth (401 without
-secret), `sweep-mine` limit + session scoping.
+Tests: `briefBatch.test.ts` (custom_id contract + round-trip, skip rows never submitted,
+in-flight guard, params equal `buildBriefRequest`, harvest routing per `result.type` in shuffled
+order, CAS discard, pinned untouched, done/trash included, 26 h expiry, 404 → failed vs
+transient, unusable payloads, fake seam), `briefSweep.test.ts` (order, serialization, failure
+isolation), `briefSweepMine.test.ts` (live statuses, pinned/fresh/other-user exclusion, 50-cap
+with unbounded skips, serial background execution, failure isolation, cooldown, cap
+independence), `maintenanceBriefs.test.ts` (401/200, limit clamp, session scoping),
+`cronSecret.test.ts`.
 
 ## 3.2 Scheduler + rollout
 
-- `docs/gcp-deploy-plan.md`: new job `gtd-<env>-brief-sweep`, `*/15 * * * *`, POST with the
-  existing `x-webhook-cron-secret` header, same rotate-last rule. `gcloud` commands recorded.
+- Cron secret **renamed** `CALENDAR_WEBHOOK_CRON_SECRET` → `CRON_SECRET`, header
+  `x-webhook-cron-secret` → `x-cron-secret`, shared `requireCronSecret` middleware used by the
+  renewal route and the sweep route. Operator checklist in `docs/gcp-deploy-plan.md`
+  § "Operator steps for the rename" (create the new GitHub secret with the same value in both
+  environments, switch the renewal job's header, redeploy, then create the sweep job; rotate
+  last).
+- `docs/gcp-deploy-plan.md` § "Brief sweep (Cloud Scheduler)": job `gtd-<env>-brief-sweep`,
+  `*/15 * * * *`, `gcloud` commands for staging and production.
 - Staging first: run the sweep by hand (`gcloud scheduler jobs run`), watch `briefBatches`,
   confirm briefs land on the staging client, check Anthropic Console spend, then create the
   production job.
@@ -326,7 +364,7 @@ removing most short-note items. Steady state is a few cents a week.
 
 | Layer | Phase 1 | Phase 2 | Phase 3 |
 |---|---|---|---|
-| API unit | entity sync, LWW, cascades, PUT/GET/filter, MCP parity | prompt, writer CAS, model mock, generate route, inline hook | batch submit/harvest, sweep routes |
+| API unit | entity sync, LWW, cascades, PUT/GET/filter, MCP parity | prompt, writer CAS, model mock, generate route, inline hook | batch submit/harvest, sweep + sweep-mine, cron secret, sweep routes |
 | Client unit | hash parity, mutations, sync arm, live-merge, preference | briefApi, button states | wizard sweep trigger |
 | e2e | authored brief + review presentation + toggle | generate button (fake model) + regenerate confirm | none (no Anthropic in CI); staging manual run |
 
@@ -347,8 +385,15 @@ default on
 5. **`sweep-mine` on review start**: keep (fresh briefs, ≤ 50 direct calls per review) or drop and
    rely purely on the 15-min batch cadence?
    keep, but only run on those that have their title+notes checksum different.
+   > Resolved 2026-09-21: `lib/brief/briefSweepMine.ts` — selection is `isBriefTarget` over the
+   > caller's live items only (no row, or checksum mismatch on a model/skipped row); ≤ 50 model
+   > calls per run, serial, background; once per user per 10 min. Server side shipped; the
+   > wizard call is a client follow-up.
 6. **Cron secret reuse** (`CALENDAR_WEBHOOK_CRON_SECRET`) vs a dedicated `BRIEF_CRON_SECRET`?
 Reuse, but rename it to CRON_SECRET
+   > Resolved 2026-09-21: renamed everywhere to `CRON_SECRET` / header `x-cron-secret`, shared
+   > `auth/cronSecret.ts` `requireCronSecret` on both the renewal and the sweep routes. Operator
+   > rename checklist in `docs/gcp-deploy-plan.md`.
 7. **Origin for MCP writes**: `agent` (proposed, pinned like `user`) — or should agent-written
    briefs be regenerable by the sweeper (`model` semantics)?
    pinned

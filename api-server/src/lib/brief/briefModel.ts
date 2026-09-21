@@ -84,6 +84,23 @@ function parseBriefJson(text: string): string | null {
     return brief;
 }
 
+/**
+ * The brief text out of ONE model message, fitted to the ≤ 160-char contract. Shared by the
+ * direct call below and the Message Batches harvest (`briefBatch.ts`), so a batch result is
+ * interpreted exactly like a synchronous one. Throws `BriefGenerationError` for a refusal or an
+ * unusable payload (a JSON parse failure is folded into `malformed_output`).
+ */
+export function parseBriefResponse(response: Anthropic.Message): string | null {
+    try {
+        return fitBriefText(parseBriefOutput(response));
+    } catch (err) {
+        if (err instanceof SyntaxError) {
+            throw new BriefGenerationError('malformed_output', `response text is not JSON: ${err.message}`);
+        }
+        throw err;
+    }
+}
+
 /** One direct `messages.create` call; the request itself comes from the shared pure builder. */
 export async function generateBriefText(item: BriefSourceItem): Promise<GeneratedBrief> {
     if (process.env.BRIEF_FAKE_MODEL === '1') {
@@ -91,14 +108,7 @@ export async function generateBriefText(item: BriefSourceItem): Promise<Generate
     }
     const request = buildBriefRequest(item);
     const response = await getAnthropicClient().messages.create(request);
-    try {
-        return { text: fitBriefText(parseBriefOutput(response)), model: request.model };
-    } catch (err) {
-        if (err instanceof SyntaxError) {
-            throw new BriefGenerationError('malformed_output', `response text is not JSON: ${err.message}`);
-        }
-        throw err;
-    }
+    return { text: parseBriefResponse(response), model: request.model };
 }
 
 export interface BriefHttpError {
