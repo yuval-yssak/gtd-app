@@ -10,7 +10,7 @@ export const ItemStatus = {
 export type ItemStatus = (typeof ItemStatus)[keyof typeof ItemStatus];
 
 export type EnergyLevel = 'low' | 'medium' | 'high';
-export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox';
+export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief';
 export type OpType = 'create' | 'update' | 'delete' | 'rsvp';
 
 /**
@@ -439,6 +439,94 @@ export interface ReviewInboxInterface {
 }
 
 /**
+ * Who produced an item brief. `model` and `skipped` are server-only origins (the generation
+ * sweep); `user` and `agent` are authored and therefore PINNED — the sweeper never overwrites
+ * them and the UI keeps showing them after the notes change (with a "notes changed" marker).
+ */
+export type BriefOrigin = 'model' | 'user' | 'agent' | 'skipped';
+
+/**
+ * One-line review-oriented condensation of an item's title + notes ("what the commitment is and
+ * why it is still open"). A sidecar entity rather than an item field so a server-generated brief
+ * has its own LWW anchor and can never clobber an offline item edit (see docs/plans/item-brief.md,
+ * "Why a sidecar"). One-to-one with the item: `_id === item._id`.
+ */
+export interface ItemBriefInterface {
+    /** Same value as the owning item's `_id` (one-to-one; O(1) lookup in Mongo and IDB). */
+    _id?: string;
+    user: string;
+    /** Duplicates `_id` for readable queries and op-log rows. */
+    itemId: string;
+    /** `null` only when `origin === 'skipped'` (notes too short to condense). */
+    text: string | null;
+    origin: BriefOrigin;
+    /** `briefSourceHash(item.title, item.notes)` at generation/authoring time — the staleness anchor. */
+    sourceHash: string;
+    /** Model id when `origin === 'model'`. */
+    model?: string;
+    /** ISO datetime the text was produced. */
+    generatedTs: string;
+    createdTs: string;
+    /** LWW anchor for THIS entity only — independent of the item's `updatedTs`. */
+    updatedTs: string;
+}
+
+export type BriefBatchStatus = 'processing' | 'harvested' | 'expired' | 'failed';
+
+/** Per-result tallies of one harvested Message Batch (`lib/brief/briefBatch.ts`). */
+export interface BriefBatchResultCounts {
+    succeeded: number;
+    errored: number;
+    canceled: number;
+    expired: number;
+    /** Succeeded results whose item content moved on between submit and harvest — nothing written. */
+    discardedStale: number;
+    /** Succeeded results that met an authored brief written meanwhile — nothing written. */
+    pinned: number;
+    /** Succeeded results that became an `origin: 'model'` row. */
+    written: number;
+}
+
+/**
+ * One Anthropic Message Batch submitted by the brief sweep. Server-only bookkeeping (not a
+ * synced entity, not user-scoped): a `processing` row is the "one batch in flight" guard, and a
+ * harvested row keeps its tallies for the operator.
+ */
+export interface BriefBatchInterface {
+    /** The Anthropic batch id (`msgbatch_…`). */
+    _id: string;
+    createdTs: string;
+    submittedCount: number;
+    status: BriefBatchStatus;
+    harvestedTs?: string;
+    resultCounts?: BriefBatchResultCounts;
+    /**
+     * BSON Date (not an ISO string — Mongo's TTL monitor only reaps real Dates) after which the
+     * row is dropped: a bounded operator audit trail, not a live-state field.
+     */
+    expiresAt: Date;
+}
+
+/**
+ * Maps a batch request's `custom_id` back to the (user, item, sourceHash) it was built from.
+ * Anthropic caps `custom_id` at 64 chars of `[A-Za-z0-9_-]`, which a Better Auth user id + item
+ * UUID + hash cannot fit, so the identity lives here and the `custom_id` is an opaque token.
+ * Rows are deleted once their batch is harvested or expired.
+ */
+export interface BriefBatchRequestInterface {
+    /** The `custom_id` sent to Anthropic. */
+    _id: string;
+    batchId: string;
+    user: string;
+    itemId: string;
+    /** Hash of the title + notes the request was built from — the compare-and-set anchor at harvest. */
+    sourceHash: string;
+    createdTs: string;
+    /** BSON Date TTL anchor (see the DAO): rows stranded by a crash between paired writes are reaped, not kept forever. */
+    expiresAt: Date;
+}
+
+/**
  * Payload for an `rsvp` opType: a local RSVP click that needs to push the user's responseStatus
  * to GCal as the only sanctioned local-write into the GCal-owned attendee set. Carried in the
  * op log so an offline RSVP replays correctly on reconnect.
@@ -473,7 +561,7 @@ export interface OperationInterface {
      * Stored to allow any device to reconstruct state by replaying operations in ts order.
      * For opType === 'rsvp', snapshot is null and rsvp lives in `rsvp` sidecar instead.
      */
-    snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface | null;
+    snapshot: ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface | ItemBriefInterface | null;
     /**
      * Sidecar for GCal-coupled writes. Populated when the user picked Send/Don't Send in the
      * SendUpdatesDialog so the choice survives offline queueing and replays through pushback.
@@ -720,7 +808,7 @@ export interface CalendarSyncConfigInterface {
 }
 
 /** Union of all entity types that can appear as an operation snapshot. */
-export type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface;
+export type EntitySnapshot = ItemInterface | RoutineInterface | PersonInterface | WorkContextInterface | ReviewInboxInterface | ItemBriefInterface;
 
 /** Discrete event types webhooks can subscribe to. Adding a new event requires extending `mapOpToEvents`. */
 export type WebhookEvent = 'item.created' | 'item.completed';

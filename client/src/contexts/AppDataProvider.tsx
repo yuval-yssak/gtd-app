@@ -30,7 +30,17 @@ import { prefetchCalendarOptions } from '../hooks/useCalendarOptions';
 import { useOnline } from '../hooks/useOnline';
 import { authClient } from '../lib/authClient';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
-import type { MyDB, OAuthProvider, StoredAccount, StoredItem, StoredPerson, StoredReviewInbox, StoredRoutine, StoredWorkContext } from '../types/MyDB';
+import type {
+    MyDB,
+    OAuthProvider,
+    StoredAccount,
+    StoredItem,
+    StoredItemBrief,
+    StoredPerson,
+    StoredReviewInbox,
+    StoredRoutine,
+    StoredWorkContext,
+} from '../types/MyDB';
 import { clearAccountReauthAfterSuccessfulSync, dispatchAccountNeedsReauth, isAccountFlaggedForReauth } from './accountReauthEvents';
 import { filterOutHiddenAccounts, getHiddenAccountIds, subscribeHiddenAccounts } from './hiddenAccounts';
 import { applyOverrideToItem, applyOverrideToRoutine, usePendingReassignMaps } from './PendingReassignProvider';
@@ -57,6 +67,7 @@ export interface AppData {
     people: StoredPerson[];
     routines: StoredRoutine[];
     reviewInboxes: StoredReviewInbox[];
+    itemBriefs: StoredItemBrief[];
     /**
      * Unfiltered variants — include entities owned by hidden accounts. Use for by-id resolution
      * (deep-linked /item/:id and /routine/:id pages, editors' live-row lookups) so an existing
@@ -67,11 +78,13 @@ export interface AppData {
     allPeople: StoredPerson[];
     allRoutines: StoredRoutine[];
     allReviewInboxes: StoredReviewInbox[];
+    allItemBriefs: StoredItemBrief[];
     refreshItems: () => Promise<void>;
     refreshWorkContexts: () => Promise<void>;
     refreshPeople: () => Promise<void>;
     refreshRoutines: () => Promise<void>;
     refreshReviewInboxes: () => Promise<void>;
+    refreshItemBriefs: () => Promise<void>;
     /** Re-reads accounts from IDB after a sign-in/out. Triggers refreshes for unified-view consumers. */
     refreshAccounts: () => Promise<void>;
     syncAndRefresh: () => Promise<void>;
@@ -130,6 +143,7 @@ interface AuthBundle {
     refreshPeople: () => Promise<void>;
     refreshRoutines: () => Promise<void>;
     refreshReviewInboxes: () => Promise<void>;
+    refreshItemBriefs: () => Promise<void>;
     refreshAccounts: () => Promise<void>;
     syncAndRefresh: () => Promise<void>;
     isInitialSyncing: boolean;
@@ -179,6 +193,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     const refreshPeople = useCallback(async () => triggerAppResourceRefresh('people'), []);
     const refreshRoutines = useCallback(async () => triggerAppResourceRefresh('routines'), []);
     const refreshReviewInboxes = useCallback(async () => triggerAppResourceRefresh('reviewInboxes'), []);
+    const refreshItemBriefs = useCallback(async () => triggerAppResourceRefresh('itemBriefs'), []);
 
     // Mirrors Better Auth's device-multi-session list into the IDB `accounts` store before
     // reading from it. Without this seed, only the active session's account row exists at boot
@@ -422,6 +437,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             refreshPeople,
             refreshRoutines,
             refreshReviewInboxes,
+            refreshItemBriefs,
             refreshAccounts,
             syncAndRefresh,
             isInitialSyncing,
@@ -438,6 +454,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             refreshPeople,
             refreshRoutines,
             refreshReviewInboxes,
+            refreshItemBriefs,
             refreshAccounts,
             syncAndRefresh,
             isInitialSyncing,
@@ -563,6 +580,7 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
     const people = use(snapshot.people);
     const routines = use(snapshot.routines);
     const reviewInboxes = use(snapshot.reviewInboxes);
+    const itemBriefs = use(snapshot.itemBriefs);
 
     // Cross-account reassign overlay: while a /sync/reassign is in flight the source-account row
     // is rewritten to render under the target account. Touches only fields safe to forge (userId
@@ -596,6 +614,7 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
     const visiblePeople = useMemo(() => filterOutHiddenAccounts(people, hiddenUserIds), [people, hiddenUserIds]);
     const visibleWorkContexts = useMemo(() => filterOutHiddenAccounts(workContexts, hiddenUserIds), [workContexts, hiddenUserIds]);
     const visibleReviewInboxes = useMemo(() => filterOutHiddenAccounts(reviewInboxes, hiddenUserIds), [reviewInboxes, hiddenUserIds]);
+    const visibleItemBriefs = useMemo(() => filterOutHiddenAccounts(itemBriefs, hiddenUserIds), [itemBriefs, hiddenUserIds]);
 
     const appData: AppData = useMemo(
         () => ({
@@ -605,11 +624,13 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
             people: visiblePeople,
             routines: visibleRoutines,
             reviewInboxes: visibleReviewInboxes,
+            itemBriefs: visibleItemBriefs,
             allItems: overlaidItems,
             allWorkContexts: workContexts,
             allPeople: people,
             allRoutines: overlaidRoutines,
             allReviewInboxes: reviewInboxes,
+            allItemBriefs: itemBriefs,
         }),
         [
             authBundle,
@@ -618,11 +639,13 @@ function AppDataInner({ authBundle, children }: { authBundle: AuthBundle; childr
             visiblePeople,
             visibleRoutines,
             visibleReviewInboxes,
+            visibleItemBriefs,
             overlaidItems,
             workContexts,
             people,
             overlaidRoutines,
             reviewInboxes,
+            itemBriefs,
         ],
     );
 

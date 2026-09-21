@@ -1,4 +1,5 @@
 declare const styles: {
+    readonly briefsToggle: string;
     readonly header: string;
     readonly headerControls: string;
     readonly headerRow: string;

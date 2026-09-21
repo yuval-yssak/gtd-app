@@ -31,6 +31,18 @@ A `nextAction`, `waitingFor`, or `somedayMaybe` item can carry an `ignoreBefore`
 
 > `ignoreBefore` is a separate field from the calendar `timeStart`/`timeEnd` pair to keep their semantics unambiguous.
 
+### Item briefs
+
+A **brief** is a one-line, review-oriented condensation of an item's title + notes — *what the commitment is and why it is still open*, never logistics. The Weekly Review card shows it in place of the (long) notes preview.
+
+It lives in its own synced entity, `itemBrief` (collection `itemBriefs`), **not** as a field on `items`, with `_id === item._id` (one-to-one). Every op is a full snapshot replaced under last-write-wins on `updatedTs`, so a server-generated brief written onto the item would beat any offline edit a device has not pushed yet, and the sweeper selects exactly the items being edited (hash mismatch is the trigger). A sidecar has its own LWW anchor, so an item edit and a brief write never contend.
+
+- **`sourceHash`** — `briefSourceHash(title, notes)` (cyrb53 over `title + '\n' + notes`, mirrored in `api-server/src/lib/briefSource.ts` and `client/src/lib/briefSource.ts` with a parity test) at generation/authoring time. A brief is shown only while it matches the item's current hash; a stale one degrades to the notes preview instead of showing a lie.
+- **`origin`** — `model` (generated), `skipped` (notes empty or under 160 chars after trim; `text: null`, written without a model call so the sweeper does not reselect the item), `user` (typed in the editor), `agent` (written via `PUT /v1/items/:id/brief` / MCP `gtd_set_brief`). `model` and `skipped` rows are **server-written only** (`lib/brief/briefWriter.ts`, stamped `deviceId: 'server:brief-ondemand' | 'server:brief-inline' | 'api:<tokenId>'`); the public batch surface rejects them, and every generation write is a compare-and-set on `sourceHash` so a result never lands on content it does not describe.
+- **Pinned briefs** — `user` and `agent` origins are never overwritten by the sweeper, and the UI keeps showing them after the notes change with a "notes changed since" marker (explicit Regenerate overrides).
+- **Derived state** (`briefState(item, brief)`): `none` (no row, or a non-pinned row whose hash no longer matches), `declined` (hash matches but `text` is `null` — the server decided against a brief for exactly this text; the UI says which reason from `origin` rather than rendering an empty field, since a silent blank is indistinguishable from a broken or pending feature), `fresh` (hash matches, text present), `pinnedStale` (hash mismatch on a pinned origin). A `declined` decision lapses to `none` once the title/notes move on, so the next sweep reconsiders it.
+- **Lifecycle** — item hard-delete and cross-account reassign drop the brief with a recorded `itemBrief` delete op (`deviceId: 'server:brief-cascade'`); it never moves with the item. Trash / done keep their briefs.
+
 ---
 
 ## Work Contexts
@@ -118,7 +130,7 @@ The app is designed to work **100% offline**. All mutations are recorded as oper
 
 ### Operations log (server-side)
 
-Every change to any entity (`item`, `routine`, `person`, `workContext`) is recorded as an `OperationInterface` document on the server. Each operation stores:
+Every change to any entity (`item`, `routine`, `person`, `workContext`, `reviewInbox`, `itemBrief`) is recorded as an `OperationInterface` document on the server. Each operation stores:
 
 - `deviceId` — which device originated the change
 - `ts` — when the change was made on the device (ISO datetime)
@@ -200,6 +212,61 @@ interface ItemInterface {
 ```
 
 MongoDB indexes: `{ user }`, `{ user, status }`, `{ user, expectedBy }`, `{ user, timeStart }`, `{ user, updatedTs }`
+
+---
+
+### `itemBriefs`
+
+One-to-one sidecar of `items` (see [Item briefs](#item-briefs)). Its own LWW anchor, separate from the item's.
+
+```typescript
+type BriefOrigin = 'model' | 'user' | 'agent' | 'skipped';
+
+interface ItemBriefInterface {
+    _id?: string;            // === item._id
+    user: string;
+    itemId: string;          // same value as _id, kept for readable queries and op-log rows
+    text: string | null;     // null only when origin === 'skipped'
+    origin: BriefOrigin;
+    sourceHash: string;      // briefSourceHash(item.title, item.notes) when produced
+    model?: string;          // model id when origin === 'model'
+    generatedTs: string;     // ISO datetime the text was produced
+    createdTs: string;
+    updatedTs: string;       // LWW anchor for THIS entity only
+}
+```
+
+MongoDB indexes: `{ user }`, `{ user, sourceHash }` (`_id` is the implicit unique key). Op schema `schemas/operations/itemBrief.ts` is strict and a superset of the interface; it also pins `_id === itemId`.
+
+### `briefBatches` / `briefBatchRequests` (server-only)
+
+Bookkeeping for the Message Batches sweep (`lib/brief/briefBatch.ts`, `POST /maintenance/briefs/sweep`). Neither is a synced entity and neither reaches a client.
+
+```typescript
+interface BriefBatchInterface {
+    _id: string;                  // the Anthropic batch id (msgbatch_…)
+    createdTs: string;
+    submittedCount: number;
+    status: 'processing' | 'harvested' | 'expired' | 'failed';
+    harvestedTs?: string;
+    resultCounts?: { succeeded; errored; canceled; expired; discardedStale; pinned; written };
+    expiresAt: Date;              // BSON Date — TTL anchor, createdTs + 90 d
+}
+
+interface BriefBatchRequestInterface {
+    _id: string;                  // the request's custom_id (opaque 32-hex token)
+    batchId: string;
+    user: string;
+    itemId: string;
+    sourceHash: string;           // the compare-and-set anchor at harvest
+    createdTs: string;
+    expiresAt: Date;              // BSON Date — TTL anchor, createdTs + 48 h
+}
+```
+
+A `processing` batch row is the "one batch in flight" guard. Request rows normally exist only while their batch is processing (`deleteByBatch` runs on harvest/expiry/failure) — Anthropic caps `custom_id` at 64 chars of `[A-Za-z0-9_-]`, so the (user, item, hash) identity cannot be encoded in it.
+
+Indexes: `briefBatches { status }` + `{ expiresAt }` TTL, `briefBatchRequests { batchId }`, `{ user }` + `{ expiresAt }` TTL. `expiresAt` is a **BSON `Date`**, not an ISO string — Mongo's TTL monitor only reaps real Dates, so a string field would index fine and never fire (the ISO-string `expiresTs` TTL indexes on `apiTokens` / `oauthRefreshTokens` / `oauthAuthCodes` are silent no-ops for exactly this reason; those DAOs enforce expiry at read time instead — do not copy them for GC). Requests expire 48 h after creation (outliving the 26 h batch ceiling), batch rows after 90 d (a bounded operator audit trail). The TTL is a backstop for rows stranded by a crash between the paired writes, not the normal cleanup path.
 
 ---
 

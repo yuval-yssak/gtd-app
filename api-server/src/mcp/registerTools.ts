@@ -23,6 +23,11 @@ export const SERVER_INSTRUCTIONS = [
     'Every `notes` field (on items, routines and people) is rendered as Markdown in the web app. Always write links there',
     'as Markdown links — `[descriptive label](https://example.com)` — never a bare URL. Prefer a label that says what the',
     'link is (page title, ticket key, sender + subject); fall back to the domain when nothing better is available.',
+    "A brief is a one-sentence, review-oriented condensation of an item's title + notes — what the commitment is and",
+    'why it is still open, never logistics. Items expose it read-only as `brief`; write it with `gtd_set_brief`.',
+    "`gtd_generate_brief` asks the server's model to write the brief; `gtd_set_brief` writes your own. Prefer setting",
+    'a brief you have already composed over generating one. Model briefs are also generated in the background',
+    '(a server sweep every ~15 minutes), so a missing brief is not an error — it simply has not been generated yet.',
 ].join(' ');
 
 /**

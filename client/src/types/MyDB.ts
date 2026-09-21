@@ -2,7 +2,7 @@ import type { DBSchema } from 'idb';
 
 export type OAuthProvider = 'google' | 'github';
 export type EnergyLevel = 'low' | 'medium' | 'high';
-export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox';
+export type EntityType = 'item' | 'routine' | 'person' | 'workContext' | 'reviewInbox' | 'itemBrief';
 export type OpType = 'create' | 'update' | 'delete' | 'rsvp';
 
 /** Mirrored from api-server/src/types/entities.ts. Keep in sync. */
@@ -236,6 +236,31 @@ export interface StoredReviewInbox {
     updatedTs: string;
 }
 
+/** Who produced a brief. `user`/`agent` briefs are pinned (never overwritten by the model sweep). */
+export type BriefOrigin = 'model' | 'user' | 'agent' | 'skipped';
+
+/**
+ * One-line review-oriented condensation of an item's title + notes. A SIDECAR synced entity
+ * (`_id === item._id`) rather than a field on the item, so a server-generated brief never
+ * contends with an item edit under full-snapshot LWW. Mirrors ItemBriefInterface on the server
+ * (`user` remapped to `userId` like every other Stored* entity).
+ */
+export interface StoredItemBrief {
+    _id: string; // === StoredItem._id
+    userId: string;
+    itemId: string; // same value as _id — duplicated for readability in queries and the op log
+    // null records a decision NOT to write a brief: origin 'skipped' (notes too short to ask) or
+    // origin 'model' (the model read the notes and found nothing worth condensing). Both render
+    // as briefState 'declined' while the hash still matches.
+    text: string | null;
+    origin: BriefOrigin;
+    sourceHash: string; // briefSourceHash(item.title, item.notes) at generation/authoring time
+    model?: string; // model id for origin 'model'
+    generatedTs: string; // ISO datetime the text was produced
+    createdTs: string;
+    updatedTs: string; // LWW anchor for THIS entity only
+}
+
 /** Per-calendar sync configuration — one OAuth integration can sync multiple Google Calendars. */
 export interface StoredCalendarSyncConfig {
     _id: string;
@@ -254,7 +279,7 @@ export interface StoredCalendarSyncConfig {
     updatedTs: string;
 }
 
-export type StoredEntity = StoredItem | StoredRoutine | StoredPerson | StoredWorkContext | StoredReviewInbox;
+export type StoredEntity = StoredItem | StoredRoutine | StoredPerson | StoredWorkContext | StoredReviewInbox | StoredItemBrief;
 
 /**
  * Device-local unsaved-input draft. Never synced to the server — drafts exist so text typed into a
@@ -412,6 +437,12 @@ export interface MyDB extends DBSchema {
     reviewInboxes: {
         key: string; // StoredReviewInbox._id
         value: StoredReviewInbox;
+        indexes: { userId: string };
+    };
+    // One-line review briefs, keyed by the item id they describe (sidecar of `items`)
+    itemBriefs: {
+        key: string; // StoredItemBrief._id === StoredItem._id
+        value: StoredItemBrief;
         indexes: { userId: string };
     };
     // Pending mutations to replay against the server when connectivity is restored

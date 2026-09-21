@@ -2,13 +2,17 @@
 // Wraps mutation helpers so you don't have to pass db or userId manually each time.
 // Not included in production builds (main.tsx guards with import.meta.env.DEV).
 
+import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { getAllSyncConfigs } from '../api/calendarApi';
 import { getPushStatus } from '../api/pushApi';
 import { announceAccountReauthResolved } from '../contexts/accountReauthEvents';
-import type { MyDB, StoredItem } from '../types/MyDB';
+import { briefSourceHash } from '../lib/briefSource';
+import type { MyDB, StoredItem, StoredItemBrief } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import { getOrCreateDeviceId } from './deviceId';
+import { getItemBriefById, getItemBriefsByUser, putItemBrief } from './itemBriefHelpers';
+import { clearBrief, setUserBrief } from './itemBriefMutations';
 import type { NextActionFilters } from './itemHelpers';
 import { getActiveNextActions, getItemsByUser, getOverdueItems, getUpcomingCalendarItems } from './itemHelpers';
 import type { CalendarMeta, NextActionMeta, SomedayMaybeMeta, WaitingForMeta } from './itemMutations';
@@ -45,6 +49,33 @@ async function resolveUserId(db: IDBPDatabase<MyDB>): Promise<string> {
     const account = await getActiveAccount(db);
     if (!account) throw new Error('[GTD] No active account — log in first');
     return account.id;
+}
+
+/**
+ * Writes the text-less brief row a server generation would have delivered (`model` = the model
+ * found nothing to condense, `skipped` = notes under the threshold), hashed against the item's
+ * CURRENT text so it reads as `declined`.
+ *
+ * Straight to IDB with NO queued sync op, on purpose: `model` / `skipped` rows are server-written
+ * only and the public batch surface rejects them, so this mirrors an inbound pull rather than a
+ * local authoring gesture. Under `BRIEF_FAKE_MODEL=1` the fake model always returns text, so a
+ * declined row cannot be produced by generating — it has to be seeded.
+ */
+async function seedDeclinedBrief(db: IDBPDatabase<MyDB>, item: StoredItem, origin: 'model' | 'skipped'): Promise<StoredItemBrief> {
+    const now = dayjs().toISOString();
+    const brief: StoredItemBrief = {
+        _id: item._id,
+        itemId: item._id,
+        userId: item.userId,
+        text: null,
+        origin,
+        sourceHash: briefSourceHash(item.title, item.notes),
+        generatedTs: now,
+        createdTs: now,
+        updatedTs: now,
+    };
+    await putItemBrief(db, brief);
+    return brief;
 }
 
 export function mountDevTools(db: IDBPDatabase<MyDB>): void {
@@ -96,6 +127,13 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         updateReviewInbox: (reviewInbox: Parameters<typeof updateReviewInbox>[1]) => updateReviewInbox(db, reviewInbox),
         removeReviewInbox: (reviewInboxId: string) => removeReviewInbox(db, reviewInboxId),
         seedDefaultReviewInboxes: () => resolveUserId(db).then((uid) => seedDefaultReviewInboxesIfEmpty(db, uid)),
+
+        // ── Item briefs (one-line weekly-review condensations) ───────────────
+        listItemBriefs: () => resolveUserId(db).then((uid) => getItemBriefsByUser(db, uid)),
+        getItemBrief: (itemId: string) => getItemBriefById(db, itemId),
+        setUserBrief: (item: StoredItem, text: string) => setUserBrief(db, item, text),
+        clearBrief: (itemId: string) => clearBrief(db, itemId),
+        seedDeclinedBrief: (item: StoredItem, origin: 'model' | 'skipped') => seedDeclinedBrief(db, item, origin),
 
         // ── Routines ─────────────────────────────────────────────────────────
         listRoutines: () => resolveUserId(db).then((uid) => getRoutinesByUser(db, uid)),

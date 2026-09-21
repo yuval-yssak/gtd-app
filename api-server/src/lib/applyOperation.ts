@@ -3,6 +3,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
 import type { EntitySnapshot, EntityType, OperationInterface, OpType, RsvpOpPayload } from '../types/entities.js';
 import { type ApplyEntityOpOutcome, applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
+import { maybeScheduleInlineBriefs } from './brief/briefInlineHook.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
 import { allocateOpIdentity } from './opIdentity.js';
@@ -268,6 +269,9 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
         await runReferenceCascades([op]);
     }
 
+    // Step 8 — inline brief generation (flag-gated, debounced, fire-and-forget; never affects the response).
+    maybeScheduleInlineBriefs([op], opts.deviceId);
+
     return op;
 }
 
@@ -401,6 +405,8 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     if (!opts.suppressReferenceCascade) {
         await runReferenceCascades(appliedOps);
     }
+
+    maybeScheduleInlineBriefs(appliedOps, opts.deviceId);
 
     return { ops, outcomes };
 }

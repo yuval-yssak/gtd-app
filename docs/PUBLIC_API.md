@@ -112,8 +112,9 @@ Each token has two independent buckets that refill continuously over a one-minut
 
 | Bucket | Endpoints | Capacity |
 |---|---|---|
-| Write | All `POST` / `PATCH` / `DELETE` under `/v1/*` (items, routines, people, work-contexts, composite gestures, reassign, operations/batch) | **60 / minute** |
+| Write | Every write endpoint under `/v1/*` — `POST` / `PATCH` / `DELETE` / `PUT` on items (including `complete`, `trash`, `brief`), routines, people, work-contexts, composite gestures, reassign, operations/batch | **60 / minute** |
 | Read | All `GET` under `/v1/*` (items, routines, people, work-contexts) | **600 / minute** |
+| Brief generation | `POST /v1/items/:id/brief/generate` — **per user** (not per token), on top of the write bucket; charged only when a model call is made (skip-rule hits are free) | **30 / 10 minutes** (`BRIEF_GENERATE_PER_10MIN`) |
 
 A separate **30 / minute per-IP** bucket caps unauthenticated traffic so a flood of bad-credential calls cannot exhaust server resources before reaching the auth check.
 
@@ -146,8 +147,24 @@ The full item shape is `ItemInterface` in `api-server/src/types/entities.ts`. Th
 | `createdTs` | string | Server-assigned on create. |
 | `updatedTs` | string | Server-assigned on every write. Conflict-resolution anchor. |
 | `externalId` | string? | Caller-provided dedupe key. Unique per `(user, externalId)`. |
+| `brief` | `{ text, origin, state, generatedTs } \| null` | Read-only. The item's one-line brief sidecar (see [Item briefs](#item-briefs)); `null` when the item has none. Written through `PUT /v1/items/:id/brief`, never through `PATCH`. |
 
 GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `waitingForPersonId`, calendar linkage) are now **writable** through `PATCH /v1/items/:id` and `POST /v1/operations/batch` — subject to the status×field matrix (e.g. `expectedBy` / `ignoreBefore` are valid on `nextAction` / `waitingFor` / `somedayMaybe` / `done` / `trash`; `timeStart`/`timeEnd` only on `calendar` / `done` / `trash`; `waitingForPersonId` is optional even on `waitingFor`). Server-managed fields remain off-limits. `PATCH /v1/items/:id` rejects them with `400 forbidden_field` (`_id`, `user`, `createdTs`, `updatedTs`, `routineId`, `contentHash`, `externalId`, and the sync anchors `lastPushedToGCalTs` / `lastSyncedFromGCalTs` / `lastSyncedNotes`). `POST /v1/operations/batch` takes full snapshots, so its rules differ: server-managed sync-integrity anchors absent from the public read projections (items: `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `calendarInstanceEventId`, `cancelledByGCal`, the four `lastKnownCalendar*` markers; routines: the three sync anchors plus `retiredByGCal`, `calendarRebasedEventId`, and the `lastKnownCalendar*` markers — full list in the batch section) are rejected with `400 forbidden_field`; `updatedTs` and `user` are **silently server-overwritten** (callers echo them back from reads); `routineId` and `externalId` stay accepted (trash-replay and create-dedupe flows legitimately carry them).
+
+## Item briefs
+
+A **brief** is a one-sentence, review-oriented condensation of an item's title + notes — *what the commitment is and why it is still open*, never logistics (dates, contexts and people live in the structured fields). The web app shows it in place of the notes preview during the Weekly Review. It is stored as a sidecar entity (`itemBrief`, keyed by the item id) so a server-generated brief can never clobber an offline item edit.
+
+Every item read carries a read-only `brief` object, or `null` when the item has no brief row:
+
+| Field | Type | Notes |
+|---|---|---|
+| `text` | string \| null | The brief. `null` on a row that records a decision *not* to write one: `origin: "skipped"` (notes too short to bother condensing) or `origin: "model"` (the model read the notes and judged there was nothing worth condensing — returning `null` is a valid model result, not a failure). |
+| `origin` | `model \| user \| agent \| skipped` | Who produced it. `model` / `skipped` come from the server's generation sweep; `user` is typed in the app; `agent` is written through this API. |
+| `state` | `fresh \| declined \| pinnedStale \| none` | Derived against the item's **current** title + notes — you never recompute a hash. `fresh`: the brief matches the current content. `declined`: `text` is `null` on a row recorded against exactly this content — the server deliberately wrote no brief (read `origin` for which reason). `pinnedStale`: a `user`/`agent` brief whose notes changed since (still shown, with a marker). `none`: no usable brief (no row, or a `model`/`skipped` row whose content moved on — the decision lapses with the text it was made about). |
+| `generatedTs` | string | ISO datetime the text was produced. |
+
+`user` and `agent` briefs are **pinned**: the generation sweep never overwrites them, and they keep showing after the notes change until they are replaced or cleared. Internal fields (`sourceHash`, `user`, `itemId`, LWW timestamps) are not exposed.
 
 ## Endpoints
 
@@ -221,6 +238,7 @@ Returns items owned by the authenticated user.
 | `since` | ISO datetime | — | Only items with `updatedTs > since`. Useful for polling. |
 | `limit` | int | 50 | Max 200. |
 | `cursor` | string | — | Opaque cursor from a previous response's `nextCursor`. |
+| `briefState` | `none \| declined \| fresh \| pinnedStale` | — | Keep only items whose `brief.state` matches. **Applied per page, after the page is fetched** (the state is derived from a hash of each item's current content, so it cannot be a database predicate): a page can come back short or empty while `nextCursor` is still present. Keep paginating until `nextCursor` disappears. Typical sweep: `briefState=none` to find items that still need a brief — as a *filter*, `none` also excludes any `origin: "skipped"` row (notes too short), including one whose notes have since moved on and which therefore reads as `brief.state: "none"` — such a row is deliberately reachable through **no** `briefState` value, so list unfiltered if you want it. Use `briefState=declined` to list the items whose *current* content the server looked at and deliberately left without a brief. |
 
 **Response** — `200 OK`
 
@@ -233,7 +251,9 @@ Returns items owned by the authenticated user.
 }
 ```
 
-`nextCursor` is present when more results exist. Pass it back as `cursor=` to fetch the next page. Cursors are opaque (do not parse them); they encode the last item's `(updatedTs, _id)` pair.
+`nextCursor` is present when more results exist. Pass it back as `cursor=` to fetch the next page. Cursors are opaque (do not parse them); they encode the last item's `(updatedTs, _id)` pair — of the **unfiltered** page, so a `briefState` filter never skips rows.
+
+Each item carries its `brief` (fetched in one query per page — see [Item briefs](#item-briefs)).
 
 Sorted by `updatedTs DESC, _id DESC`. Stable across concurrent writes — newly written items always appear on the first page.
 
@@ -241,7 +261,74 @@ Sorted by `updatedTs DESC, _id DESC`. Stable across concurrent writes — newly 
 
 ### `GET /v1/items/:id` — fetch one item
 
-**Response** — `200 OK` with the full item, or `404 Not Found` (`code: not_found`) if the item doesn't exist or belongs to another user. (We deliberately do not distinguish "exists but not yours" from "doesn't exist" — that would leak ID existence.)
+**Response** — `200 OK` with the full item (including its `brief`), or `404 Not Found` (`code: not_found`) if the item doesn't exist or belongs to another user. (We deliberately do not distinguish "exists but not yours" from "doesn't exist" — that would leak ID existence.)
+
+---
+
+### `PUT /v1/items/:id/brief` — write or clear the item's brief
+
+Requires the `items.write` scope. Bearer callers are agents by definition, so the row is stored with `origin: "agent"` (pinned — the generation sweep never overwrites it).
+
+**Request body**
+
+```json
+{ "brief": "Passport renewal still blocked on photos" }
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `brief` | string \| null | The brief text, trimmed server-side; must be non-empty after trim and at most 500 characters. `null` deletes the brief. |
+
+The stored brief is hashed against the item's **current** title + notes, so it reads as `state: "fresh"` until the item changes, then `pinnedStale`. Writing again replaces the text in place (`generatedTs` refreshed); `{ "brief": null }` on an item that has no brief is a no-op.
+
+**Response** — `200 OK` with the projected item, whose `brief` reflects the write (`null` after a clear).
+
+**Errors** — `400 invalid_body` (body is not `{ brief }`), `400 invalid_brief` (not a string/null, empty after trim, or over 500 characters), `404 not_found`, `403 forbidden_scope`.
+
+---
+
+### `POST /v1/items/:id/brief/generate` — generate the item's brief with the server's model
+
+Asks the server's model (`claude-haiku-4-5`) to write a `model`-origin brief from the item's **current** title + notes. This is the endpoint behind the in-app "Generate brief" button, so it accepts **either** a bearer token carrying `items.write` **or** the first-party session cookie (like the [Claude assist](#claude-assist-lane-a) routes; browser callers get the credentialed CORS profile pinned to the web app's origin).
+
+**Request body** (optional)
+
+```json
+{ "force": true }
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `force` | boolean | Replace an existing **pinned** (`user` / `agent`) brief. Defaults to `false`, in which case a pinned brief returns `409 brief_pinned` and nothing is called or written. |
+
+**Skip rule.** When the notes are empty or under 160 characters after trim, no model is called: a `{ text: null, origin: "skipped" }` marker is recorded instead (so the background sweep does not keep reselecting the item) and the response has `outcome: "skipped"`. Skipped calls do not count against the generation cap.
+
+**Response** — `200 OK`
+
+```json
+{
+    "outcome": "written",
+    "item": { "_id": "…", "title": "Renew passport", "brief": { "text": "…", "origin": "model", "state": "fresh", "generatedTs": "…" }, "…": "…" },
+    "brief": { "_id": "…", "user": "…", "itemId": "…", "text": "…", "origin": "model", "model": "claude-haiku-4-5", "sourceHash": "…", "generatedTs": "…", "createdTs": "…", "updatedTs": "…" }
+}
+```
+
+| `outcome` | Meaning | `brief` |
+|---|---|---|
+| `written` | A model brief was generated and stored (the model may return `text: null` when the title already says everything). | The stored `itemBrief` row. |
+| `skipped` | Notes too short; a `skipped` marker row is stored (or was already current). No model call. | The `skipped` row (`text: null`). |
+| `discarded_stale` | The item's title/notes changed while the model was running; the result was thrown away rather than stored against content it does not describe. Retry. | `null` |
+
+`item` is the projected item re-read after the write, so `item.brief` reflects the outcome. `brief` is the full sidecar row (the same shape `/sync` delivers), or `null` when nothing was written.
+
+| Status | `code` | Meaning |
+|---|---|---|
+| `403` | `forbidden_scope` | Token lacks `items.write`. |
+| `404` | `not_found` | Item doesn't exist or isn't owned by the caller. |
+| `409` | `brief_pinned` | A user/agent-authored brief exists and `force` was not `true`. |
+| `429` | `rate_limited` | Per-user generation cap (or the token's write bucket, or an upstream model rate limit) — honour `Retry-After`. |
+| `502` | `brief_generation_failed` | The model refused or returned unusable output. |
+| `503` | `agent_unavailable` | The model service is unavailable (missing key, out of credits, upstream outage). Try later. |
 
 ---
 
@@ -476,6 +563,8 @@ Snapshot restrictions:
 - `snapshot._id`, when present, must equal the op's `entityId` — a mismatch is rejected with `400 invalid_op_shape`.
 
 > **Item hard-delete is not permitted here.** An op of `{ entityType: 'item', opType: 'delete' }` is rejected with `400 invalid_op_shape` because a hard delete physically removes the row and is unrecoverable. To dispose of an item use [`POST /v1/items/:id/trash`](#post-v1itemsidtrash--soft-delete-recoverable) — a recoverable soft-delete. `opType: 'delete'` remains valid for `routine`, `person`, and `workContext` ops (their deletes hydrate a pre-delete snapshot into the op log for cascade replay).
+
+**`itemBrief` ops.** The brief sidecar (see [Item briefs](#item-briefs)) is writable here under `items.write`, with `entityId` = the item id and a snapshot of `{ _id, user, itemId, text, origin, sourceHash, generatedTs, createdTs, updatedTs }` where `_id === itemId === entityId`. Extra rules, all checked before any write: `origin` must be `user` or `agent` — `model` and `skipped` are server-only and return `400 forbidden_origin`; `model` is a server-managed field (`400 forbidden_field`); the referenced item must exist under the caller, or be created by an `item` op earlier in the same batch (`404 not_found` otherwise, with `entityId`). `sourceHash` is the caller's responsibility on this raw surface — prefer [`PUT /v1/items/:id/brief`](#put-v1itemsidbrief--write-or-clear-the-items-brief), which stamps it from the item's current content. `opType: 'delete'` removes the brief and needs no item.
 
 **Atomicity guarantees**
 
@@ -736,7 +825,7 @@ The model then calls `gtd_reassign` with `fromAccount: "default", toAccount: "wo
 
 ## Local MCP server
 
-A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `gtd_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
+A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full `/v1` surface as tools (capture, list, get, update, complete, trash, set-brief and generate-brief for items; full CRUD for routines/people/workContexts; pause/resume/split composites; reassign; batch). Every tool accepts an optional `account` arg that selects which configured token signs the call; `gtd_reassign` accepts `fromAccount` / `toAccount` to assemble the two-token consent gesture. The token's scopes are enforced server-side, so the MCP layer is a thin shim.
 
 See [`mcp-server/README.md`](../mcp-server/README.md) for the build and Claude Desktop / Claude Code config snippet.
 

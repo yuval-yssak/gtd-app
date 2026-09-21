@@ -101,6 +101,49 @@ describe('item tools', () => {
         expect(call.path).toBe('/v1/items/abc%2Fdef');
     });
 
+    it('gtd_list_items forwards briefState as a query param', async () => {
+        const { api, calls } = makeFakeApi({ items: [] });
+        await t.listItems.handler({ briefState: 'none' }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.query).toMatchObject({ briefState: 'none' });
+    });
+
+    it('gtd_set_brief PUTs /v1/items/:id/brief with the text, URL-encoding the id', async () => {
+        const { api, calls } = makeFakeApi();
+        await t.setBrief.handler({ itemId: 'abc/def', brief: 'Passport renewal still blocked on photos' }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.method).toBe('PUT');
+        expect(call.path).toBe('/v1/items/abc%2Fdef/brief');
+        expect(call.body).toEqual({ brief: 'Passport renewal still blocked on photos' });
+    });
+
+    it('gtd_generate_brief POSTs /v1/items/:id/brief/generate, forwarding force only when given', async () => {
+        const { api, calls } = makeFakeApi();
+        await t.generateBrief.handler({ itemId: 'abc/def' }, api);
+        await t.generateBrief.handler({ itemId: 'abc', force: true }, api);
+        const [plain, forced] = calls;
+        if (!plain || !forced) throw new Error('expected two calls');
+        expect(plain.method).toBe('POST');
+        expect(plain.path).toBe('/v1/items/abc%2Fdef/brief/generate');
+        expect(plain.body).toEqual({});
+        expect(forced.body).toEqual({ force: true });
+        expect(t.generateBrief.inputSchema.force.safeParse(undefined).success).toBe(true);
+        expect(t.generateBrief.inputSchema.force.safeParse('yes').success).toBe(false);
+    });
+
+    it('gtd_set_brief forwards null (a clear) and rejects an empty string up front', async () => {
+        const { api, calls } = makeFakeApi();
+        await t.setBrief.handler({ itemId: 'abc', brief: null }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.body).toEqual({ brief: null });
+        expect(t.setBrief.inputSchema.brief.safeParse(null).success).toBe(true);
+        expect(t.setBrief.inputSchema.brief.safeParse('').success).toBe(false);
+        expect(t.setBrief.inputSchema.brief.safeParse('x'.repeat(501)).success).toBe(false);
+    });
+
     it('gtd_update_item forwards null (a clear) rather than dropping it', async () => {
         const { api, calls } = makeFakeApi();
         await t.updateItem.handler({ id: 'abc', waitingForPersonId: null, expectedBy: '2099-01-01' }, api);

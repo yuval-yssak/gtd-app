@@ -8,7 +8,7 @@ interface OpenAppDBOptions {
 }
 
 export async function openAppDB(options?: OpenAppDBOptions): Promise<IDBPDatabase<MyDB>> {
-    const db = await openDB<MyDB>('gtd-app', 8, {
+    const db = await openDB<MyDB>('gtd-app', 9, {
         async upgrade(db, oldVersion, _newVersion, tx) {
             // Version 1: core stores
             if (oldVersion < 1) {
@@ -89,6 +89,14 @@ export async function openAppDB(options?: OpenAppDBOptions): Promise<IDBPDatabas
                 const reviewInboxes = db.createObjectStore('reviewInboxes', { keyPath: '_id' });
                 reviewInboxes.createIndex('userId', 'userId', { unique: false });
             }
+
+            // Version 9: item briefs (one-line weekly-review condensations, keyed by item id) — a
+            // new server-replicated sidecar entity store. Existing devices repopulate it via
+            // incremental pull; no local backfill (the entity is brand-new server-side too).
+            if (oldVersion < 9) {
+                const itemBriefs = db.createObjectStore('itemBriefs', { keyPath: '_id' });
+                itemBriefs.createIndex('userId', 'userId', { unique: false });
+            }
         },
         // Without this, a version bump deadlocks silently when any older connection stays open
         // (openDB has no timeout) — every new tab then boots to a blank page. The warn line keeps
@@ -153,8 +161,9 @@ async function backfillSyncCursorIds(tx: IDBPTransaction<MyDB, Array<StoreNames<
  * DB would otherwise leave a lingering lock until the 30s self-heal window elapses on next mount.
  */
 async function wipeCachedEntitiesAndSyncState(tx: IDBPTransaction<MyDB, Array<StoreNames<MyDB>>, 'versionchange'>): Promise<void> {
-    // 'reviewInboxes' is intentionally absent: this wipe runs only on the v4→v5 upgrade path,
-    // before the v8 step creates that store — clearing it here would throw NotFoundError.
+    // 'reviewInboxes' and 'itemBriefs' are intentionally absent: this wipe runs only on the v4→v5
+    // upgrade path, before the v8/v9 steps create those stores — clearing them here would throw
+    // NotFoundError.
     const stores = ['items', 'routines', 'people', 'workContexts', 'syncOperations', 'syncCursors'] as const satisfies ReadonlyArray<StoreNames<MyDB>>;
     await Promise.all(stores.map((name) => tx.objectStore(name).clear()));
     const meta = await tx.objectStore('deviceMeta').get('local');

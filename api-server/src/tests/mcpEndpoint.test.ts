@@ -101,6 +101,8 @@ describe('/mcp protocol', () => {
         const toolNames = (list.body as { result: { tools: { name: string }[] } }).result.tools.map((t) => t.name);
         expect(toolNames).toContain('gtd_me');
         expect(toolNames).toContain('gtd_capture');
+        expect(toolNames).toContain('gtd_set_brief');
+        expect(toolNames).toContain('gtd_generate_brief');
 
         const call = await callMcp(token, { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'gtd_me', arguments: {} } });
         expect(call.status).toBe(200);

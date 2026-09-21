@@ -44,7 +44,7 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
         (method === 'POST' &&
             (path === '/v1/items' ||
                 path === '/v1/items/bulk' ||
-                /^\/v1\/items\/[^/]+\/complete$/.test(path) ||
+                /^\/v1\/items\/[^/]+\/(complete|trash)$/.test(path) ||
                 path === '/v1/people' ||
                 path === '/v1/work-contexts' ||
                 path === '/v1/routines' ||
@@ -56,7 +56,13 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
                 /^\/v1\/people\/[^/]+$/.test(path) ||
                 /^\/v1\/work-contexts\/[^/]+$/.test(path) ||
                 /^\/v1\/routines\/[^/]+$/.test(path))) ||
-        (method === 'DELETE' && (/^\/v1\/people\/[^/]+$/.test(path) || /^\/v1\/work-contexts\/[^/]+$/.test(path) || /^\/v1\/routines\/[^/]+$/.test(path)));
+        (method === 'DELETE' && (/^\/v1\/people\/[^/]+$/.test(path) || /^\/v1\/work-contexts\/[^/]+$/.test(path) || /^\/v1\/routines\/[^/]+$/.test(path))) ||
+        // This classifier is an allowlist, not a method rule: an unlisted route gets NO limiter
+        // at all (see authenticatedRateLimit), so every new write route must be added here.
+        (method === 'PUT' && /^\/v1\/items\/[^/]+\/brief$/.test(path)) ||
+        // Brief generation also has its own per-user cap (see routes/v1/itemBriefGenerate.ts);
+        // the write bucket still applies so it counts against the token's overall write budget.
+        (method === 'POST' && /^\/v1\/items\/[^/]+\/brief\/generate$/.test(path));
     if (isWrite) return 'write';
     const isRead =
         method === 'GET' &&
@@ -173,6 +179,21 @@ export function authenticatedRateLimit(deps: MiddlewareDeps = {}): MiddlewareHan
         await next();
         return;
     };
+}
+
+/**
+ * Charges the IP-keyed anon bucket for a request that failed authentication and returns the 429
+ * to send when it is exhausted, or `null` to proceed with the caller's own 401. Shared by the
+ * bearer-only and the dual-auth middlewares so every /v1 401 path is throttled identically.
+ */
+export function anonymousRejection(c: Context): Response | null {
+    const ip = extractClientIp(c);
+    const result = tryConsume(defaultStore, `anon:${ip}`, ANON_BUCKET, Date.now());
+    if (result.allowed) {
+        return null;
+    }
+    console.log('[rate-limit]', { bucket: 'anon', ip, route: c.req.path, method: c.req.method });
+    return rateLimitedResponse(c, result.retryAfterSec);
 }
 
 /**

@@ -27,7 +27,11 @@ export default defineConfig({
             // specs exercise the same server-local-vs-user-local split production has. Note
             // reuseExistingServer below: a dev server already running keeps ITS timezone — restart
             // it under TZ=UTC when working on the timezone specs. (Paths are relative to e2e/.)
-            command: 'cd ../api-server && TZ=UTC npm run dev',
+            // BRIEF_FAKE_MODEL=1 swaps the Anthropic call behind brief generation for a deterministic
+            // fake (`[fake] <first sentence of the notes>`) so item-brief-generate.spec.ts needs no key;
+            // the same reuseExistingServer caveat applies — an already-running server without the flag
+            // answers 503 agent_unavailable.
+            command: 'cd ../api-server && TZ=UTC BRIEF_FAKE_MODEL=1 npm run dev',
             url: 'http://localhost:4000/sync/config',
             reuseExistingServer: true,
             stdout: 'ignore',

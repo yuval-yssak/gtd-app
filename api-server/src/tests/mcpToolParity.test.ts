@@ -7,6 +7,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { SERVER_INSTRUCTIONS as STDIO_SERVER_INSTRUCTIONS } from '../../../mcp-server/src/serverInstructions.js';
 // The stdio binary's source-of-truth copies (relative import across packages — test-only, never bundled).
 import { registerBatchTools } from '../../../mcp-server/src/tools/batch.js';
 import { registerItemTools } from '../../../mcp-server/src/tools/items.js';
@@ -16,7 +17,7 @@ import { registerReassignTools } from '../../../mcp-server/src/tools/reassign.js
 import { registerRoutineTools } from '../../../mcp-server/src/tools/routines.js';
 import { registerWorkContextTools } from '../../../mcp-server/src/tools/workContexts.js';
 import type { ApiClient } from '../mcp/apiClient.js';
-import { registerAllTools } from '../mcp/registerTools.js';
+import { SERVER_INSTRUCTIONS as REMOTE_SERVER_INSTRUCTIONS, registerAllTools } from '../mcp/registerTools.js';
 
 interface RegisteredTool {
     name: string;
@@ -77,5 +78,10 @@ describe('MCP tool parity (api-server copy ↔ mcp-server source of truth)', () 
             registerMeTools(server, api);
         });
         expect(remote).toEqual(stdio);
+    });
+
+    it('serves identical server instructions from both copies', () => {
+        expect(REMOTE_SERVER_INSTRUCTIONS).toEqual(STDIO_SERVER_INSTRUCTIONS);
+        expect(REMOTE_SERVER_INSTRUCTIONS).toContain('gtd_set_brief');
     });
 });

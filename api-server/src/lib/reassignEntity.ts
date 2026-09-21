@@ -17,6 +17,7 @@ import {
     type WorkContextInterface,
 } from '../types/entities.js';
 import { applyAndPublishOperation, OperationValidationError } from './applyOperation.js';
+import { cascadeItemBriefRemoval } from './itemBriefCascade.js';
 import { KeyedMutex } from './keyedMutex.js';
 import { notifyChanges } from './notifyChange.js';
 import { applyAndPublishOwnerMove, republishOwnerMoveOps } from './ownerMove.js';
@@ -146,6 +147,13 @@ async function dispatchByEntityType(params: ReassignParams): Promise<ReassignRes
                 error: 'reviewInboxes are per-user review checklist entries and cannot be reassigned',
                 code: 'validation_failed',
             };
+        case 'itemBrief':
+            return {
+                ok: false,
+                status: 400,
+                error: 'itemBriefs follow their item — reassign the item instead (its brief is dropped on the source side)',
+                code: 'validation_failed',
+            };
     }
 }
 
@@ -156,8 +164,7 @@ async function reassignItem(params: ReassignParams): Promise<ReassignResult> {
     if (!item) {
         // Already-moved idempotency: a retry of a completed move (or the heal path for a crash
         // between the atomic flip and the op-log inserts) finds the entity under toUserId.
-        const alreadyMoved = await resolveAlreadyMoved((id, uid) => itemsDAO.findByOwnerAndId(id, uid), 'item', params);
-        return alreadyMoved ?? { ok: false, status: 404, error: 'Item not found under fromUserId' };
+        return resolveItemAlreadyMoved(params);
     }
     if (item.routineId) {
         return { ok: false, status: 400, error: 'Routine-generated items cannot be reassigned — edit the routine itself' };
@@ -201,10 +208,27 @@ async function reassignItem(params: ReassignParams): Promise<ReassignResult> {
     if (outcome === 'not-owned') {
         // Lost a race after the initial read: another mover flipped the row first. Resolve through
         // the same idempotency branch as the up-front miss.
-        const alreadyMoved = await resolveAlreadyMoved((id, uid) => itemsDAO.findByOwnerAndId(id, uid), 'item', params);
-        return alreadyMoved ?? { ok: false, status: 404, error: 'Item not found under fromUserId' };
+        return resolveItemAlreadyMoved(params);
     }
+    // The brief stays behind: it is not part of the owner flip (separate collection), and the
+    // target's sweeper regenerates one from the moved content.
+    await cascadeItemBriefRemoval(params.fromUserId, params.entityId);
     return { ok: true };
+}
+
+/**
+ * Item arm of the already-moved branch. Re-runs the brief cascade on success: `ownerMove` bypasses
+ * the pipeline's reference cascades, so a crash between the atomic flip and the cascade above
+ * would otherwise strand the source user's brief row forever — this retry is the only heal path.
+ * The cascade is idempotent (no-op without a row).
+ */
+async function resolveItemAlreadyMoved(params: ReassignParams): Promise<ReassignResult> {
+    const alreadyMoved = await resolveAlreadyMoved((id, uid) => itemsDAO.findByOwnerAndId(id, uid), 'item', params);
+    if (!alreadyMoved) {
+        return { ok: false, status: 404, error: 'Item not found under fromUserId' };
+    }
+    await cascadeItemBriefRemoval(params.fromUserId, params.entityId);
+    return alreadyMoved;
 }
 
 /**

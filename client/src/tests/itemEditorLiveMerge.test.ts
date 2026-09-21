@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { itemToFormSeeds, mergeFormGroup, mergeItemForms } from '../components/itemEditor/itemEditorLiveMerge';
-import type { StoredItem } from '../types/MyDB';
+import { briefTextOf, itemToFormSeeds, mergeFormGroup, mergeItemForms } from '../components/itemEditor/itemEditorLiveMerge';
+import type { StoredItem, StoredItemBrief } from '../types/MyDB';
 
 function makeItem(overrides: Partial<StoredItem> = {}): StoredItem {
     return {
@@ -16,7 +16,36 @@ function makeItem(overrides: Partial<StoredItem> = {}): StoredItem {
     };
 }
 
+function makeBrief(overrides: Partial<StoredItemBrief> = {}): StoredItemBrief {
+    return {
+        _id: 'item-1',
+        itemId: 'item-1',
+        userId: 'user-1',
+        text: 'Why this is still open',
+        origin: 'user',
+        sourceHash: 'abc',
+        generatedTs: '2026-07-01T10:00:00.000Z',
+        createdTs: '2026-07-01T10:00:00.000Z',
+        updatedTs: '2026-07-01T10:00:00.000Z',
+        ...overrides,
+    };
+}
+
+describe('briefTextOf', () => {
+    it("reads '' for no row and for a skipped row, the text otherwise", () => {
+        expect(briefTextOf(undefined)).toBe('');
+        expect(briefTextOf(null)).toBe('');
+        expect(briefTextOf(makeBrief({ text: null, origin: 'skipped' }))).toBe('');
+        expect(briefTextOf(makeBrief())).toBe('Why this is still open');
+    });
+});
+
 describe('itemToFormSeeds', () => {
+    it('seeds the brief from the sidecar row and leaves it empty without one', () => {
+        expect(itemToFormSeeds(makeItem()).brief).toBe('');
+        expect(itemToFormSeeds(makeItem(), makeBrief()).brief).toBe('Why this is still open');
+    });
+
     it('seeds every form group from the item', () => {
         const seeds = itemToFormSeeds(makeItem({ notes: 'note', time: 15, expectedBy: '2026-07-10' }));
         expect(seeds.title).toBe('Original title');
@@ -67,6 +96,41 @@ describe('mergeItemForms', () => {
         const { merged, conflicts } = mergeItemForms(seed, seed, incoming);
         expect(merged.title).toBe('Renamed remotely');
         expect(conflicts).toEqual([]);
+    });
+
+    it('adopts a remote brief into a CLEAN brief field silently (no conflict)', () => {
+        // A brief arriving by sync — another device, or a future server-generated one — must fill a
+        // field the user has not touched without any notice.
+        const item = makeItem();
+        const seed = itemToFormSeeds(item);
+        const incoming = itemToFormSeeds(item, makeBrief({ text: 'Arrived from another device' }));
+
+        const { merged, conflicts } = mergeItemForms(seed, seed, incoming);
+        expect(merged.brief).toBe('Arrived from another device');
+        expect(conflicts).toEqual([]);
+    });
+
+    it('keeps a DIRTY brief and reports the conflict when remote wrote a different one', () => {
+        const item = makeItem();
+        const seed = itemToFormSeeds(item);
+        const form = { ...seed, brief: 'Typed locally' };
+        const incoming = itemToFormSeeds(item, makeBrief({ text: 'Written remotely' }));
+
+        const { merged, conflicts } = mergeItemForms(form, seed, incoming);
+        expect(merged.brief).toBe('Typed locally');
+        expect(conflicts).toEqual(['Brief']);
+    });
+
+    it('a remote brief DELETE clears a clean field but never a dirty one', () => {
+        const item = makeItem();
+        const seed = itemToFormSeeds(item, makeBrief());
+        const incoming = itemToFormSeeds(item); // row gone
+
+        expect(mergeItemForms(seed, seed, incoming).merged.brief).toBe('');
+        const dirty = { ...seed, brief: 'Still typing' };
+        const { merged, conflicts } = mergeItemForms(dirty, seed, incoming);
+        expect(merged.brief).toBe('Still typing');
+        expect(conflicts).toEqual(['Brief']);
     });
 
     it('keeps a dirty status and reports the conflict when remote also changed it', () => {

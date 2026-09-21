@@ -172,6 +172,34 @@ describe('Push fan-out via deviceUsers join', () => {
         expect(mockSendNotification).not.toHaveBeenCalled();
     });
 
+    it('never pushes for itemBrief ops (derived metadata), but still announces the other ops in the batch', async () => {
+        await seedSubscribedDevice('device-1');
+        mockSendNotification.mockResolvedValue({ statusCode: 201, body: '', headers: {} });
+        const briefOp = makeOp({
+            entityType: 'itemBrief',
+            opType: 'create',
+            snapshot: {
+                _id: 'x',
+                user: TEST_USER,
+                itemId: 'x',
+                text: 'Passport renewal still blocked',
+                origin: 'agent',
+                sourceHash: 'h',
+                generatedTs: '',
+                createdTs: '',
+                updatedTs: '',
+            },
+        });
+
+        await notifyViaWebPush(TEST_USER, null, [briefOp], dayjs().toISOString());
+        expect(mockSendNotification).not.toHaveBeenCalled();
+
+        await notifyViaWebPush(TEST_USER, null, [briefOp, makeOp()], dayjs().toISOString());
+        expect(mockSendNotification).toHaveBeenCalledTimes(1);
+        const payload = JSON.parse(String(mockSendNotification.mock.calls[0]?.[1])) as { ops: Array<{ entityType: string; name: string | null }> };
+        expect(payload.ops).toEqual([{ entityType: 'item', opType: 'create', name: 'Test' }]);
+    });
+
     it('sends no push when called with zero ops, even with subscribed devices', async () => {
         // A 0-op webhook sync (GCal fired but nothing changed locally) must not buzz any device.
         // This is the chokepoint guard for the staging notification storm — see notifyViaWebPush.

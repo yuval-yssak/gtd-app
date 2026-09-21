@@ -35,6 +35,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
+import { cascadeItemBriefRemoval } from '../lib/itemBriefCascade.js';
 import { recordOperation } from '../lib/operationHelpers.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { CalendarIntegrationInterface, ItemInterface, RoutineInterface } from '../types/entities.js';
@@ -279,6 +280,7 @@ async function deleteOneItem(item: ItemInterface, opts: CliOptions, providers: M
     // Record op BEFORE DB delete — if we crash between, devices still learn of the delete on pull.
     await recordOperation(userId, { entityType: 'item', entityId: item._id, snapshot: null, opType: 'delete', now: dayjs().toISOString() });
     await itemsDAO.deleteByOwner(item._id, userId);
+    await cascadeItemBriefRemoval(userId, item._id);
     return { ...tallied, dbItemsDeleted: tallied.dbItemsDeleted + 1 };
 }
 

@@ -27,6 +27,11 @@ describe('decorateWithUrls', () => {
         expect(result).toEqual({ _id: 'abc123', title: 'buy milk', url: `${STAGING}/item/abc123` });
     });
 
+    it('stamps an item deep link on the gtd_set_brief response (it returns the projected item)', () => {
+        const result = decorateWithUrls('gtd_set_brief', { _id: 'abc123', brief: { text: 'x' } }, STAGING);
+        expect(result).toMatchObject({ _id: 'abc123', url: `${STAGING}/item/abc123` });
+    });
+
     it('stamps a routine deep link on a single-routine response', () => {
         const result = decorateWithUrls('gtd_create_routine', { _id: 'r1', name: 'water plants' }, STAGING);
         expect(result).toEqual({ _id: 'r1', name: 'water plants', url: `${STAGING}/routine/r1` });

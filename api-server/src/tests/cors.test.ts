@@ -8,6 +8,10 @@ import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { assistCors, publicCors, strictCors } from '../auth/corsProfiles.js';
 import { clientUrl } from '../config.js';
+import { v1RequestLogger } from '../lib/v1Logger.js';
+import { v1ClaudeRoutes } from '../routes/v1/claude.js';
+import { v1Routes } from '../routes/v1/index.js';
+import { v1BriefGenerateRoutes } from '../routes/v1/itemBriefGenerate.js';
 
 // `clientUrl` is captured at module-load time from process.env.CLIENT_URL — we use the captured
 // value directly so the test passes regardless of whether the env var was set before vitest started.
@@ -225,5 +229,58 @@ describe('combined application: /v1 cross-origin allowed, /sync/push not', () =>
             headers: { Origin: 'https://example.com', 'Access-Control-Request-Method': 'POST' },
         });
         expect(syncReq.headers.get('access-control-allow-origin')).toBeNull();
+    });
+});
+
+/**
+ * The REAL /v1 mount order from index.ts, with both cookie-authed exception routers. Guards the
+ * catch-all leak: a `.use('*')` inside `v1ClaudeRoutes` expands to `/v1/*` and, mounted first,
+ * would 401 every other /v1 preflight before its cors() runs.
+ */
+function buildRealV1App() {
+    return new Hono()
+        .use('/v1/claude/*', assistCors())
+        .use('/v1/claude/*', v1RequestLogger())
+        .route('/v1', v1ClaudeRoutes)
+        .use('/v1/items/:id/brief/generate', assistCors())
+        .use('/v1/items/:id/brief/generate', v1RequestLogger())
+        .route('/v1', v1BriefGenerateRoutes)
+        .use('/v1/*', publicCors())
+        .use('/v1/*', v1RequestLogger())
+        .route('/v1', v1Routes);
+}
+
+function preflight(app: Hono, path: string) {
+    return app.request(path, {
+        method: 'OPTIONS',
+        headers: { Origin: 'http://localhost:4173', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Content-Type' },
+    });
+}
+
+describe('/v1 mount order (index.ts) — cookie-authed exception routers do not leak onto sibling paths', () => {
+    beforeEach(() => {
+        vi.stubEnv('NODE_ENV', 'development');
+    });
+
+    it('answers the brief-generate preflight with the credentialed profile (was 401 with no CORS headers)', async () => {
+        const res = await preflight(buildRealV1App(), '/v1/items/x/brief/generate');
+        expect(res.status).toBe(204);
+        expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:4173');
+        expect(res.headers.get('access-control-allow-credentials')).toBe('true');
+    });
+
+    it('answers the claude-assist preflight with the credentialed profile', async () => {
+        const res = await preflight(buildRealV1App(), '/v1/claude/assist');
+        expect(res.status).toBe(204);
+        expect(res.headers.get('access-control-allow-credentials')).toBe('true');
+    });
+
+    it('keeps every other /v1 path on the relaxed public profile', async () => {
+        for (const path of ['/v1/people/x', '/v1/items/x', '/v1/items/x/brief', '/v1/items']) {
+            const res = await preflight(buildRealV1App(), path);
+            expect(res.status).toBe(204);
+            expect(res.headers.get('access-control-allow-origin')).toBe('*');
+            expect(res.headers.get('access-control-allow-credentials')).toBeNull();
+        }
     });
 });

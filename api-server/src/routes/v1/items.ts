@@ -8,11 +8,13 @@ import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
 import routinesDAO from '../../dataAccess/routinesDAO.js';
 import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
+import type { BriefState } from '../../lib/briefSource.js';
+import { clearBrief, loadBrief, loadBriefsByItemId, matchesBriefStateFilter, parseBriefBody, writeAuthoredBrief } from '../../lib/itemBriefs.js';
 import { isDuplicateKeyError } from '../../lib/mongoErrors.js';
 import { advanceRoutineAfterDisposal } from '../../lib/routineItemGeneration.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
-import { type ItemInterface, ItemStatus } from '../../types/entities.js';
-import { presentItem } from './projections/item.js';
+import { type ItemBriefInterface, type ItemInterface, ItemStatus } from '../../types/entities.js';
+import { type PublicItem, presentItem } from './projections/item.js';
 
 // 24h content-dedupe window: covers retries / double-taps without collapsing genuine recurring
 // captures. Callers wanting strict idempotency should provide externalId instead.
@@ -31,6 +33,31 @@ const MAX_BULK_CHUNK_SIZE = 500;
 const COMPLETABLE_FROM: ReadonlyArray<ItemInterface['status']> = ['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done'];
 
 const ITEM_STATUSES = new Set<ItemInterface['status']>(Object.values(ItemStatus));
+const BRIEF_STATES = new Set<BriefState>(['none', 'declined', 'fresh', 'pinnedStale']);
+
+/** Rows read from Mongo always carry `_id`; the optional on `ItemInterface` exists only for pre-insert shapes. */
+function persistedId(item: ItemInterface): string {
+    if (!item._id) {
+        throw new Error('persisted item row is missing _id');
+    }
+    return item._id;
+}
+
+/** Projects an item together with its brief sidecar (one lookup — used by every single-item response). */
+async function presentWithBrief(userId: string, item: ItemInterface): Promise<PublicItem> {
+    return presentItem(item, await loadBrief(userId, persistedId(item)));
+}
+
+/**
+ * Projects a page of items with their briefs fetched in ONE `$in` query, never per item, applying
+ * the optional `briefState` post-filter (see `ListQuery.briefState`) on the raw rows first.
+ */
+async function presentPageWithBriefs(userId: string, page: ItemInterface[], wanted: BriefState | undefined): Promise<PublicItem[]> {
+    const briefs = await loadBriefsByItemId(userId, page.map(persistedId));
+    const paired = page.map((item) => ({ item, brief: briefs.get(persistedId(item)) ?? null }));
+    const kept = wanted ? paired.filter(({ item, brief }) => matchesBriefStateFilter(item, brief, wanted)) : paired;
+    return kept.map(({ item, brief }) => presentItem(item, brief));
+}
 
 interface CreateItemBody {
     title?: unknown;
@@ -284,40 +311,91 @@ interface ListQuery {
     since?: string;
     limit: number;
     cursor?: { updatedTs: string; id: string };
+    /**
+     * Post-filter applied to each fetched page (the state is derived from a hash of the item's
+     * current content, so it cannot be a Mongo predicate). A filtered page can come back short
+     * or empty while `nextCursor` is still present — callers paginate through.
+     */
+    briefState?: BriefState;
 }
 
-type ListQueryError = { code: 'invalid_status' | 'invalid_limit' | 'invalid_cursor'; message: string };
+type ListQueryError = { code: 'invalid_status' | 'invalid_limit' | 'invalid_cursor' | 'invalid_brief_state'; message: string };
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 
-/** Parses & validates list query params. Pure. */
-function parseListQuery(url: URL): { ok: true; value: ListQuery } | { ok: false; error: ListQueryError } {
-    const q = url.searchParams.get('q') ?? undefined;
-    const statusParam = url.searchParams.get('status');
-    const statuses = statusParam ? statusParam.split(',').map((s) => s.trim()) : undefined;
-    if (statuses) {
-        const invalid = statuses.find((s) => !ITEM_STATUSES.has(s as ItemInterface['status']));
-        if (invalid !== undefined) {
-            return { ok: false, error: { code: 'invalid_status', message: `unknown status "${invalid}"` } };
-        }
+type ListParamResult<T> = { ok: true; value: T } | { ok: false; error: ListQueryError };
+
+/** `status=a,b` → validated status list; `undefined` when absent. */
+function parseStatusesParam(raw: string | null): ListParamResult<ItemInterface['status'][] | undefined> {
+    if (!raw) {
+        return { ok: true, value: undefined };
     }
-    const limitParam = url.searchParams.get('limit');
-    const limit = limitParam ? Number.parseInt(limitParam, 10) : DEFAULT_LIMIT;
+    const statuses = raw.split(',').map((s) => s.trim());
+    const invalid = statuses.find((s) => !ITEM_STATUSES.has(s as ItemInterface['status']));
+    if (invalid !== undefined) {
+        return { ok: false, error: { code: 'invalid_status', message: `unknown status "${invalid}"` } };
+    }
+    return { ok: true, value: statuses as ItemInterface['status'][] };
+}
+
+function parseLimitParam(raw: string | null): ListParamResult<number> {
+    const limit = raw ? Number.parseInt(raw, 10) : DEFAULT_LIMIT;
     if (!Number.isFinite(limit) || limit < 1 || limit > MAX_LIMIT) {
         return { ok: false, error: { code: 'invalid_limit', message: `limit must be between 1 and ${MAX_LIMIT}` } };
     }
-    const cursor = parseCursor(url.searchParams.get('cursor'));
+    return { ok: true, value: limit };
+}
+
+function parseCursorParam(raw: string | null): ListParamResult<ListQuery['cursor']> {
+    const cursor = parseCursor(raw);
     if (cursor === 'invalid') {
         return { ok: false, error: { code: 'invalid_cursor', message: 'cursor is malformed' } };
     }
-    const value: ListQuery = { limit };
-    if (q !== undefined) value.q = q;
-    if (statuses) value.statuses = statuses as ItemInterface['status'][];
-    const since = url.searchParams.get('since');
-    if (since) value.since = since;
-    if (cursor) value.cursor = cursor;
-    return { ok: true, value };
+    return { ok: true, value: cursor ?? undefined };
+}
+
+function parseBriefStateParam(raw: string | null): ListParamResult<BriefState | undefined> {
+    if (raw === null) {
+        return { ok: true, value: undefined };
+    }
+    if (!BRIEF_STATES.has(raw as BriefState)) {
+        return { ok: false, error: { code: 'invalid_brief_state', message: `briefState must be one of: ${[...BRIEF_STATES].join(', ')}` } };
+    }
+    return { ok: true, value: raw as BriefState };
+}
+
+/** Parses & validates list query params. Pure. */
+function parseListQuery(url: URL): ListParamResult<ListQuery> {
+    const statuses = parseStatusesParam(url.searchParams.get('status'));
+    if (!statuses.ok) {
+        return statuses;
+    }
+    const limit = parseLimitParam(url.searchParams.get('limit'));
+    if (!limit.ok) {
+        return limit;
+    }
+    const cursor = parseCursorParam(url.searchParams.get('cursor'));
+    if (!cursor.ok) {
+        return cursor;
+    }
+    const briefState = parseBriefStateParam(url.searchParams.get('briefState'));
+    if (!briefState.ok) {
+        return briefState;
+    }
+    const q = url.searchParams.get('q') ?? undefined;
+    const since = url.searchParams.get('since') || undefined;
+    return {
+        ok: true,
+        value: {
+            limit: limit.value,
+            ...(q !== undefined ? { q } : {}),
+            ...(statuses.value ? { statuses: statuses.value } : {}),
+            ...(since ? { since } : {}),
+            ...(cursor.value ? { cursor: cursor.value } : {}),
+            ...(briefState.value ? { briefState: briefState.value } : {}),
+        },
+    };
 }
 
 /** Encodes the last item's (updatedTs, _id) as an opaque base64url cursor. */
@@ -688,6 +766,30 @@ function sanitizeStaleFields(merged: ItemInterface, callerRaw: Record<string, un
     return out;
 }
 
+interface BriefBodyContext {
+    userId: string;
+    /** Route param — the id the DAO lookup just proved matches `item`. */
+    itemId: string;
+    item: ItemInterface;
+    /** Trimmed brief text, or `null` to clear. */
+    text: string | null;
+    deviceId: string;
+}
+
+/**
+ * Dispatches a parsed PUT body: `null` clears the row, a string upserts an agent-authored brief.
+ * Accepted TOCTOU: the item was read one round-trip earlier, and item hard-delete is not reachable
+ * from the public API, so a concurrent delete landing in that window (leaving a brief row with no
+ * item) is a first-party-only race — the cascade has already fired, and the orphan is harmless.
+ */
+async function applyBriefBody({ userId, itemId, item, text, deviceId }: BriefBodyContext): Promise<ItemBriefInterface | null> {
+    if (text === null) {
+        await clearBrief(userId, itemId, deviceId);
+        return null;
+    }
+    return writeAuthoredBrief({ userId, itemId, item, text, origin: 'agent', deviceId });
+}
+
 /**
  * Used by `completeItem` for the POST /complete shortcut. The caller explicitly asked for a
  * complete, so all stale fields are dropped (no caller-supplied conflicts possible).
@@ -746,7 +848,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
         if (replayed) {
             c.header('X-Idempotent-Replay', 'true');
         }
-        return c.json(presentItem(item), 201);
+        return c.json(await presentWithBrief(userId, item), 201);
     })
 
     // ── GET /v1/items — list / search ───────────────────────────────────────
@@ -763,8 +865,10 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
         const hasMore = rows.length > query.limit;
         const page = hasMore ? rows.slice(0, query.limit) : rows;
         const last = page.at(-1);
+        // The cursor is derived from the UNFILTERED page so a briefState post-filter never skips rows.
         const nextCursor = hasMore && last ? encodeCursor(last) : undefined;
-        return c.json({ items: page.map(presentItem), ...(nextCursor ? { nextCursor } : {}) });
+        const items = await presentPageWithBriefs(userId, page, query.briefState);
+        return c.json({ items, ...(nextCursor ? { nextCursor } : {}) });
     })
 
     // ── GET /v1/items/:id ───────────────────────────────────────────────────
@@ -775,7 +879,28 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
         if (!item) {
             return c.json({ error: 'item not found', code: 'not_found' }, 404);
         }
-        return c.json(presentItem(item));
+        return c.json(await presentWithBrief(userId, item));
+    })
+
+    // ── PUT /v1/items/:id/brief — author (or clear) the item's brief ────────
+    // Bearer callers are agents by definition, so the row is stamped `origin: 'agent'` (pinned:
+    // the generation sweep never overwrites it). The first-party client writes `origin: 'user'`
+    // rows through /sync/push instead. `sourceHash` is taken from the item's CURRENT title +
+    // notes so the brief reads as `fresh` until the item changes. `{ brief: null }` deletes the
+    // row (recorded delete op); clearing an item that has no brief is a no-op, not an error.
+    .put('/items/:id/brief', requireScope('items.write'), async (c) => {
+        const { userId, tokenId } = c.var.apiAuth;
+        const id = c.req.param('id');
+        const parsed = parseBriefBody(await c.req.json().catch(() => null));
+        if (!parsed.ok) {
+            return c.json({ error: parsed.error.message, code: parsed.error.code }, 400);
+        }
+        const item = await itemsDAO.findByOwnerAndId(id, userId);
+        if (!item) {
+            return c.json({ error: 'item not found', code: 'not_found' }, 404);
+        }
+        const brief = await applyBriefBody({ userId, itemId: id, item, text: parsed.value, deviceId: `api:${tokenId}` });
+        return c.json(presentItem(item, brief));
     })
 
     // ── PATCH /v1/items/:id — full-surface update ───────────────────────────
@@ -798,7 +923,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
                 result.error.status,
             );
         }
-        return c.json(presentItem(result.item));
+        return c.json(await presentWithBrief(userId, result.item));
     })
 
     // ── POST /v1/items/:id/complete ─────────────────────────────────────────
@@ -812,7 +937,7 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
         if (result.alreadyDone) {
             c.header('X-Idempotent-Replay', 'true');
         }
-        return c.json(presentItem(result.item));
+        return c.json(await presentWithBrief(userId, result.item));
     })
 
     // ── POST /v1/items/:id/trash ────────────────────────────────────────────
@@ -830,5 +955,5 @@ export const v1ItemsRoutes = new Hono<{ Variables: BearerVariables }>()
         if (result.alreadyTrashed) {
             c.header('X-Idempotent-Replay', 'true');
         }
-        return c.json(presentItem(result.item));
+        return c.json(await presentWithBrief(userId, result.item));
     });

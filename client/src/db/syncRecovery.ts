@@ -23,9 +23,17 @@ export async function countQueuedOpsForUser(db: IDBPDatabase<MyDB>, userId: stri
     return (await readQueuedOpsForUser(db, userId)).length;
 }
 
+/** The display text of a queued snapshot: items/routines carry a title, people/contexts/inboxes a name, briefs their text. */
+function snapshotLabel(snapshot: NonNullable<SyncOperation['snapshot']>): string | null {
+    if ('title' in snapshot) {
+        return snapshot.title;
+    }
+    return 'name' in snapshot ? snapshot.name : snapshot.text;
+}
+
 /** One human-readable line per queued op, e.g. `create item: "Buy milk"` — used by exports + the flush-failure dialog. */
 export function describeQueuedOp(op: SyncOperation): string {
-    const label = op.snapshot && ('title' in op.snapshot ? op.snapshot.title : op.snapshot.name);
+    const label = op.snapshot && snapshotLabel(op.snapshot);
     return label ? `${op.opType} ${op.entityType}: "${label}"` : `${op.opType} ${op.entityType} ${op.entityId}`;
 }
 

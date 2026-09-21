@@ -4,6 +4,7 @@ import type { CalendarMeta, NextActionMeta, SomedayMaybeMeta, WaitingForMeta } f
 import type {
     StoredDeviceMeta,
     StoredItem,
+    StoredItemBrief,
     StoredPerson,
     StoredReviewInbox,
     StoredRoutine,
@@ -156,6 +157,44 @@ const gtdImpl = {
 
     removeItem: (page: Page, itemId: string): Promise<void> =>
         page.evaluate((id) => (window as unknown as { __gtd: { removeItem(id: string): Promise<void> } }).__gtd.removeItem(id), itemId),
+
+    // ── Item briefs ──────────────────────────────────────────────────────────
+    getItemBrief: (page: Page, itemId: string): Promise<StoredItemBrief | undefined> =>
+        page.evaluate(
+            (id) => (window as unknown as { __gtd: { getItemBrief(id: string): Promise<StoredItemBrief | undefined> } }).__gtd.getItemBrief(id),
+            itemId,
+        ),
+
+    setUserBrief: (page: Page, item: StoredItem, text: string): Promise<StoredItemBrief | null> =>
+        page.evaluate(
+            ([i, t]) =>
+                (
+                    window as unknown as {
+                        __gtd: { setUserBrief(i: StoredItem, t: string): Promise<StoredItemBrief | null> };
+                    }
+                ).__gtd.setUserBrief(i as StoredItem, t as string),
+            [item, text] as const,
+        ),
+
+    clearBrief: (page: Page, itemId: string): Promise<void> =>
+        page.evaluate((id) => (window as unknown as { __gtd: { clearBrief(id: string): Promise<void> } }).__gtd.clearBrief(id), itemId),
+
+    /**
+     * Seeds the text-less brief row a server generation would deliver, hashed against the item's
+     * current text so it renders as `declined`. Seeded rather than generated: `model` / `skipped`
+     * rows are server-written only, and under `BRIEF_FAKE_MODEL=1` the fake model always returns
+     * text, so generating can never produce one.
+     */
+    seedDeclinedBrief: (page: Page, item: StoredItem, origin: 'model' | 'skipped'): Promise<StoredItemBrief> =>
+        page.evaluate(
+            ([i, o]) =>
+                (
+                    window as unknown as {
+                        __gtd: { seedDeclinedBrief(i: StoredItem, o: 'model' | 'skipped'): Promise<StoredItemBrief> };
+                    }
+                ).__gtd.seedDeclinedBrief(i as StoredItem, o as 'model' | 'skipped'),
+            [item, origin] as const,
+        ),
 
     // ── People ───────────────────────────────────────────────────────────────
     createPerson: (page: Page, fields: { name: string; email?: string; phone?: string }): Promise<StoredPerson> =>

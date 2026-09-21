@@ -99,6 +99,11 @@
     flex: none;
 }
 
+/* The MUI label's default outer margins would misalign it with the sibling icon buttons. */
+.briefsToggle {
+    margin: 0;
+}
+
 .headerRow {
     display: flex;
     align-items: flex-start;

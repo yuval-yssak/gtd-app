@@ -1,6 +1,8 @@
 import type { MiddlewareHandler } from 'hono';
 import { auth } from '../loaders/mainLoader.js';
+import type { ApiTokenScope } from '../types/entities.js';
 import { type BearerVariables, resolveBearerApiAuth } from './bearerMiddleware.js';
+import { anonymousRejection } from './rateLimitMiddleware.js';
 
 /**
  * Dual-auth middleware for the Claude-assist routes (`/v1/claude/*`).
@@ -22,20 +24,33 @@ import { type BearerVariables, resolveBearerApiAuth } from './bearerMiddleware.j
  * This is the FIRST cookie-authed route under `/v1`. The credentialed cross-origin request it
  * enables requires the `assistCors()` profile (see `corsProfiles.ts`), not the relaxed `publicCors`.
  */
-export const authenticateBearerOrSession: MiddlewareHandler<{ Variables: BearerVariables }> = async (c, next) => {
-    const bearerAuth = await resolveBearerApiAuth(c.req.header('Authorization'));
-    if (bearerAuth) {
-        c.set('apiAuth', bearerAuth);
+/**
+ * Builds the dual-auth middleware for one cookie-authed `/v1` surface. `sessionScopes` are the
+ * capabilities a first-party session implicitly carries on that surface — the user acting on their
+ * own data — so the route's `requireScope(...)` gate passes without being weakened for bearer
+ * callers, who must still hold the scope on their token.
+ */
+export function authenticateBearerOrSessionWith(sessionScopes: ApiTokenScope[]): MiddlewareHandler<{ Variables: BearerVariables }> {
+    return async (c, next) => {
+        const bearerAuth = await resolveBearerApiAuth(c.req.header('Authorization'));
+        if (bearerAuth) {
+            c.set('apiAuth', bearerAuth);
+            await next();
+            return;
+        }
+
+        const session = await auth.api.getSession({ headers: c.req.raw.headers });
+        if (!session) {
+            // Same IP-keyed anon bucket `authenticateBearer` charges on a failed auth, so an
+            // unauthenticated flood of a dual-auth route is throttled like any other /v1 route.
+            return anonymousRejection(c) ?? c.json({ error: 'Unauthorized', code: 'unauthorized' }, 401);
+        }
+
+        c.set('apiAuth', { userId: session.user.id, tokenId: `session:${session.session.id}`, scopes: sessionScopes });
         await next();
         return;
-    }
+    };
+}
 
-    const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    if (!session) {
-        return c.json({ error: 'Unauthorized', code: 'unauthorized' }, 401);
-    }
-
-    c.set('apiAuth', { userId: session.user.id, tokenId: `session:${session.session.id}`, scopes: ['claude.assist'] });
-    await next();
-    return;
-};
+/** The Claude-assist flavour: a session synthesises `claude.assist`. */
+export const authenticateBearerOrSession = authenticateBearerOrSessionWith(['claude.assist']);

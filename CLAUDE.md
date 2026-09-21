@@ -4,11 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Full-stack GTD (Getting Things Done) productivity app — monorepo with:
+Full-stack offline-first GTD (Getting Things Done) productivity app — monorepo with:
 - `api-server/` — Node.js/Hono/TypeScript backend on port 4000
-- `client/` — React 19/TypeScript/Vite frontend on port 4173
+- `client/` — React 19/TypeScript/Vite PWA frontend on port 4173
+- `e2e/` — Playwright end-to-end suite (drives the real client + API)
+- `mcp-server/` — local MCP server exposing GTD tools over the public `/v1` API
+- `workers/api-proxy/` — Cloudflare Worker fronting the API domains
 
-Full data model reference: [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md)
+Full data model, item statuses, tickler rules, sync and calendar reference: [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md).
+Public API reference: [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md). Deploy/infra runbook: [`docs/gcp-deploy-plan.md`](docs/gcp-deploy-plan.md).
 
 ### GTD Workflow Phases
 
@@ -25,97 +29,125 @@ Full data model reference: [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md)
 ```bash
 npm run dev          # Start dev server with tsx watch (hot reload)
 npm run build        # Compile TypeScript to build/
+npm start            # Run compiled server
 npm run test         # Run Vitest tests
 npm run lint         # Biome lint check
 npm run lint:fix     # Auto-fix lint + format (Biome)
 npm run typecheck    # tsc --noEmit
 ```
 
+API tests need a local Mongo. Use a throwaway container: `docker run -d --rm --name gtd-test-mongo -p 27017:27017 mongo:8.0`.
+
 ### Client (`cd client`)
 ```bash
-npm run dev          # Watch build + preview server (port 4173)
-npm run build        # tsc + vite build
-npm run lint         # Biome lint check
-npm run lint:fix     # Auto-fix lint + format (Biome)
-npm run typecheck    # tsc -b --noEmit
-npm run preview      # Preview production build
+npm run dev                          # Watch build + preview server (port 4173)
+npm run build                        # generate-typed-css-modules + vite build + tsc -b
+npm run generate-typed-css-modules   # Regenerate .css.d.ts for CSS Modules
+npm run test                         # Run Vitest tests
+npm run lint                         # Biome lint check
+npm run lint:fix                     # Auto-fix lint + format (Biome)
+npm run typecheck                    # tsc -b --noEmit
+npm run preview                      # Preview production build
+npm run storybook                    # Storybook on port 6006
 ```
+
+### E2E (`cd e2e`)
+```bash
+npm run test                    # Full Playwright suite (slow)
+npx playwright test <spec>      # Single spec — the inner loop
+npm run lint:fix                # Biome format + lint
+```
+
+Playwright's `webServer` starts the API with `TZ=UTC BRIEF_FAKE_MODEL=1` and the client via `npm run dev`.
+
+**Always `await gtd.flush()` before `page.goto()`** after a `gtd.*` mutation — navigating mid-flush wedges the IndexedDB flush lock for 30s.
+
+If e2e fails although the change is present in the built bundle, port 4173 is being served by a stale `vite preview` (it caches the startup `index.html`) or by another worktree's dev server. Restart the preview and verify the served bundle hash.
 
 ## Architecture
 
 ### Auth Flow
-Better Auth — Google and GitHub OAuth. Accounts with matching emails are linked to one user. Session stored in MongoDB; HTTP-only cookie `better-auth.session_token`. Client tracks login state in IndexedDB (`activeAccount` store) rather than React state.
+Better Auth — Google and GitHub OAuth. Accounts with matching emails are linked to one user. Session stored in MongoDB; HTTP-only cookie `better-auth.session_token`. Client tracks login state in IndexedDB (`accounts` / `activeAccount` stores) rather than React state.
+
+A second, parallel auth path — bearer tokens (`gtd_<random>`) — serves the public `/v1/*` API, the MCP server and external integrations. Both paths resolve to the same Better Auth user id. See `api-server/CLAUDE.md`.
 
 ### Offline-First Design
-The client is PWA-capable with a Service Worker. All items are stored in **IndexedDB** (via `idb`) with a `syncOperations` store for queueing changes when offline. The router context passes `db`, `auth`, and `items` to all routes.
+The client is a PWA with a Service Worker. All entities are stored in **IndexedDB** (via `idb`) with a `syncOperations` store for queueing changes when offline. The router context passes `db` to all routes.
 
 ### Routing
 Uses `@tanstack/react-router` with file-based routing under `client/src/routes/`. Routes under `_authenticated/` are protected. Root layout is in `__root.tsx`.
 
 ### Data Access (API)
-`abstractDAO.ts` wraps MongoDB — `ItemsDAO` extends it and is initialized in `loaders/mainLoader.ts` as a singleton. Better Auth owns the `user` collection; `UsersDAO` no longer exists.
+`abstractDAO.ts` wraps MongoDB — one DAO per collection under `api-server/src/dataAccess/`, each initialized as a singleton in `loaders/mainLoader.ts`. Better Auth owns the `user` collection; `UsersDAO` no longer exists.
 
 ### Key Types
 
-All server-side interfaces live in `api-server/src/types/entities.ts`. Client-side mirrors (prefixed `Stored*`) live in `client/src/types/MyDB.ts`.
+All server-side interfaces live in `api-server/src/types/entities.ts`. Client-side mirrors (prefixed `Stored*`) live in `client/src/types/MyDB.ts`. Field-level reference lives in [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) § Schema Reference — read it rather than re-deriving field lists.
+
+**Synced entities** (`EntityType`, replicated to devices through the operations log):
 
 | Entity | Collection | Purpose |
 |---|---|---|
 | `ItemInterface` | `items` | Core GTD task. Status drives which optional fields apply. |
-| `RoutineInterface` | `routines` | Recurring task template. Generates `nextAction` items on a schedule. |
+| `RoutineInterface` | `routines` | Recurring task template. Generates `nextAction` / `calendar` items on a schedule. |
 | `PersonInterface` | `people` | Named contact. Referenced by `peopleIds` and `waitingForPersonId` on items. |
 | `WorkContextInterface` | `workContexts` | Condition tag (e.g. "near a phone"). Referenced by `workContextIds` on items. |
-| `OperationInterface` | `operations` | Server-side sync log entry. Stores full entity snapshot per change. |
-| `DeviceSyncStateInterface` | `deviceSyncState` | Per-device sync cursor. Drives operation log purging. |
-| `CalendarIntegrationInterface` | `calendarIntegrations` | OAuth credentials + calendar ID for Google Calendar sync. |
-| `CalendarSyncConfigInterface` | `calendarSyncConfigs` | Per-calendar sync state within an integration (calendar ID, sync cursor, echo avoidance). |
+| `ReviewInboxInterface` | `reviewInboxes` | Weekly Review session state (staged batches, progress). |
+| `ItemBriefInterface` | `itemBriefs` | One-to-one AI/user brief sidecar for an item (`_id === item._id`). |
 
-**Item status → relevant fields:**
-- `inbox` — title only
-- `nextAction` — `workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`
-- `calendar` — `timeStart`, `timeEnd`, `calendarEventId`, `calendarIntegrationId`
-- `waitingFor` — `waitingForPersonId` (optional — an item can be blocked on something other than a named person), `peopleIds`, `expectedBy`, `ignoreBefore`
-- `somedayMaybe` — `expectedBy`, `ignoreBefore` (optional; both omittable for a plain title-only parked item)
-- `done` / `trash` — no additional fields
+Everything else (`operations`, `deviceSyncState`, `calendarIntegrations`, `apiTokens`, `briefBatches`, …) is **server-only** and never reaches a client; one DAO per collection under `api-server/src/dataAccess/` is the inventory.
 
-**Tickler pattern:** `ignoreBefore` (ISO date) hides an item from all lists until that date. It applies to `nextAction`, `waitingFor`, and `somedayMaybe` items — `calendar` items ignore `ignoreBefore` entirely (it has no effect on visibility or filtering). Separate from calendar `timeStart` to avoid semantic overloading.
-
-**Routine-generated next-action items** are always created with `ignoreBefore = expectedBy`, so they stay in the tickler until their due date. There is no configurable lead-days offset.
+Adding a synced entity is a **client change too**: `client/src/db/syncHelpers.ts` needs the new `case` arm and the IDB store, or pre-upgrade tabs silently skip the ops.
 
 ### Sync Architecture
 
 All mutations are recorded as `OperationInterface` documents on the server. Each operation stores the **full entity snapshot** at the time of the change (not a diff), making last-write-wins conflict resolution trivial: the operation with the latest `ts` wins.
 
 Client-side flow:
-1. Change written to IndexedDB → `SyncOperation` queued with `entityType`, `entityId`, `opType`, and snapshot
+1. Change written to IndexedDB → `SyncOperation` queued with `userId`, `entityType`, `entityId`, `opType`, and snapshot
 2. On reconnect → `flushSyncQueue()` replays ops to the server in `queuedAt` order
-3. Device pulls new ops from server since its `lastSyncedTs` and applies them locally
+3. Device pulls new ops from server since its sync cursor and applies them locally
 
-**Purge rule:** operations older than `min(lastSyncedTs)` across all of a user's devices are safe to delete.
+**Purge rule:** operations older than the purge floor (`min` cursor across all of a user's devices) are safe to delete.
 
 All entities carry `updatedTs` (ISO datetime) as the conflict-resolution anchor. Client IDs are stable UUIDs generated on first launch (`deviceId` in `DeviceSyncStateInterface`).
 
+**Op snapshot schemas (`api-server/src/schemas/operations/`) must stay a strict superset of the entity interface.** A schema narrower than the interface 400s the whole `/sync/push` batch and permanently jams the client's push queue.
+
 ### Calendar Integration
 
-`CalendarIntegrationInterface` holds OAuth credentials (encrypted at rest) and a target `calendarId` for a Google Calendar account.
+`CalendarIntegrationInterface` holds OAuth credentials (encrypted at rest); `CalendarSyncConfigInterface` holds per-calendar sync state within an integration.
 
 - **Items:** a `calendar` item linked to Google Calendar carries `calendarEventId` + `calendarIntegrationId`. Changes sync bidirectionally.
-- **Routines:** a `fixedSchedule` routine can own or attach to a Google Calendar recurring event series via `calendarEventId`. The app can either create a new series or import an existing one.
+- **Routines:** a `calendar` routine can own or attach to a Google Calendar recurring event series via `calendarEventId`. The app can either create a new series or import an existing one.
 
-### Backend Entry Points
-- `api-server/src/index.ts` — builds Hono app, starts server, loads DB and auth
+The unique index on `calendarEventId` is scoped to `status: 'calendar'` — `trash` rows keep their `calendarEventId` so a revive can relink.
 
-### Frontend Entry Points
+### Item Briefs (AI)
+
+A **brief** is a one-line, review-oriented condensation of an item's title + notes, shown in place of the notes preview during the Weekly Review. It is a **sidecar synced entity** (`itemBrief`, `_id === item._id`), never a field on `items` — a server-written brief on the item itself would beat an unpushed offline edit under LWW.
+
+- `sourceHash` (`briefSourceHash`, mirrored in `api-server/src/lib/briefSource.ts` ↔ `client/src/lib/briefSource.ts` with a parity test) gates display: a `model` brief is shown only while it matches the item's current title+notes hash, otherwise it degrades to the notes preview.
+- `origin`: `model` / `skipped` are server-written only; `user` / `agent` are **pinned** and the sweeper never overwrites them.
+- Generation paths: the Message Batches sweep (`lib/brief/briefBatch.ts`, `POST /maintenance/briefs/sweep`, driven by a Cloud Scheduler job), on-demand `POST /v1/items/:id/brief/generate`, and authored writes via `PUT /v1/items/:id/brief` / MCP.
+- Model is `BRIEF_MODEL` in `lib/brief/briefPrompt.ts`. `BRIEF_FAKE_MODEL=1` returns a deterministic stand-in for e2e (production refuses to boot with it set); `BRIEF_INLINE_ON_WRITE=1` is an off-by-default operator escape hatch that regenerates after each item write.
+
+Design detail: [`docs/plans/item-brief.md`](docs/plans/item-brief.md); schema: [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) § Item briefs.
+
+### Entry Points
+- `api-server/src/index.ts` — builds the Hono app, starts the server, loads DB and auth
 - `client/src/main.tsx` — initializes IndexedDB, renders app
 - `client/src/App.tsx` — sets up router context
+- `client/src/serviceWorker.ts` — custom Workbox Service Worker (background sync + push)
 
 ## Code Style
 - Biome: 160-char line width, 4-space indent, single quotes
 - TypeScript strict mode enabled
-- Production API CORS origin: `https://getting-things.done.app`
 - Biome handles all formatting and linting automatically (`npm run lint:fix`). Do not manually fix formatting, import order, or other issues that Biome enforces — just run `lint:fix`.
 
 ## Coding Standards
+
+These apply repo-wide. `client/CLAUDE.md` and `api-server/CLAUDE.md` add only project-specific rules on top.
 
 ### Comments
 
@@ -175,6 +207,9 @@ Whenever making a code change that is not immediately obvious — e.g. a workaro
 ### Dates
 - Use `dayjs` for all date parsing, formatting, manipulation, duration arithmetic, and timestamp comparisons. Do not use the native `Date` API or other date libraries.
 
+### Tests
+Every implementation step adds unit **and** Playwright e2e coverage. Lint/typecheck/existing tests passing is not enough.
+
 ## Post-Change Checklist
 
 After any code change — bug fix, feature, or refactor — run the following cycle for each affected project. **Repeat from step 1 until every step passes.**
@@ -196,7 +231,7 @@ After any code change — bug fix, feature, or refactor — run the following cy
 1. `cd e2e && npm run lint:fix`
 2. `npx playwright test <changed specs>` — only specs that actually changed; full suite is too slow for the inner loop
 
-A stop hook (`scripts/post-change-checks.sh`) runs the client / api-server / e2e blocks **in parallel** after each Claude response. It exits 2 (blocking) on any failure so Claude is automatically re-invoked until everything is green.
+A stop hook (`scripts/post-change-checks.sh`) runs the client / api-server / e2e blocks **in parallel** after each Claude response. It exits 2 (blocking) on any failure so Claude is automatically re-invoked until everything is green. It skips entirely unless a PostToolUse hook touched the `.claude/.edited-this-turn` sentinel — a manual rerun after the sentinel is consumed is a silent no-op.
 
 **Lint warnings count as failures.** Biome warnings printed by `lint:fix` (typically `noNonNullAssertion` and other "unsafe fix" categories) must be cleaned up in the same turn that surfaces them. Do not finish a turn while warnings remain, even if the script exits 0. The preferred fix for `arr[0]!` in tests is destructure-then-narrow:
 ```ts
@@ -209,11 +244,15 @@ if (!call) throw new Error('expected one X');
 
 **The code-reviewer subagents are mandatory and non-negotiable.** Never consider a task complete until the relevant reviewer has been invoked and returned "Approved". If it returns "Changes requested", fix all issues and repeat the full cycle from step 1.
 
+**Never commit or push without explicit per-change approval.** Auto mode authorizes work, not shipping.
+
 ### Why two agents (and where they live)
 
-The two reviewers are kept separate because they encode different stack-specific knowledge (React 19/MUI/IDB vs. Hono/MongoDB/Better Auth). Each canonical definition lives next to the code it reviews (`client/.claude/agents/`, `api-server/.claude/agents/`).
+The two reviewers are kept separate because they encode different stack-specific knowledge (React 19/MUI/IDB vs. Hono/MongoDB/Better Auth). Each canonical definition lives next to the code it reviews (`client/.claude/agents/code-reviewer.md`, `api-server/.claude/agents/code-reviewer.md`).
 
-For sessions started at the monorepo root, both agents are also exposed via symlinks at `/Users/yuvalyssak/gtd/.claude/agents/` (`client-code-reviewer.md` → client, `api-code-reviewer.md` → api-server). Edit the canonical files in the subdirectories — the symlinks track them automatically. The frontmatter `name:` fields (`client-code-reviewer`, `api-code-reviewer`) match the filenames, so each file resolves to one and only one agent regardless of which directory the session was started from.
+For sessions started at the monorepo root, both are exposed via symlinks at `.claude/agents/` (`client-code-reviewer.md` → client, `api-code-reviewer.md` → api-server). Edit the canonical files in the subdirectories — the symlinks track them automatically. The frontmatter `name:` fields (`client-code-reviewer`, `api-code-reviewer`) match the symlink filenames, so each resolves to one and only one agent regardless of which directory the session was started from.
+
+Commit additions under `api-server/.claude/agent-memory/` — do not gitignore them.
 
 ## Running Locally
 
@@ -229,10 +268,10 @@ cd client && npm run dev
 
 ### Environments
 
-| Environment | App URL | API URL |
-|---|---|---|
-| production | https://getting-things-done.app | https://api.getting-things-done.app |
-| staging | https://staging.getting-things-done.app | https://api-staging.getting-things-done.app |
+| Environment | App URL | API URL | Cloud Run service |
+|---|---|---|---|
+| production | https://getting-things-done.app | https://api.getting-things-done.app | `gtd-api` |
+| staging | https://staging.getting-things-done.app | https://api-staging.getting-things-done.app | `gtd-api-staging` |
 
 ### How to Deploy
 
@@ -240,24 +279,27 @@ cd client && npm run dev
 - **Manual**: `./scripts/deploy.sh api staging|production` — triggers the same workflow via `gh workflow run`
 - Track progress: https://github.com/yuval-yssak/gtd-app/actions/workflows/deploy-api.yml
 
+`gh` write operations on this repo need the active account `yuval-yssak` (not `yuval-winn-ai`). A working `git push` does not imply `gh` is on the right account.
+
 ### GitHub Environments
 
-Configured at https://github.com/yuval-yssak/gtd-app/settings/environments — two environments (`production`, `staging`), each holding its own GCP secrets and vars.
+Configured at https://github.com/yuval-yssak/gtd-app/settings/environments — two environments (`production`, `staging`), each holding its own GCP secrets and vars. The workflow selects one by branch name (push) or `inputs.environment` (manual dispatch).
 
 ### Infrastructure
 
-- **Backend**: Google Cloud Run — `gtd-api` (production) and `gtd-api-staging` (staging), region `us-central1`
-- **API proxy**: Cloudflare Worker (`workers/api-proxy/`) routes `api.getting-things-done.app` and `api-staging.getting-things-done.app` to the respective Cloud Run service
-- **Docker images**: built from `api-server/Dockerfile` and pushed to Google Artifact Registry
+- **Backend**: Google Cloud Run, region `us-central1`, `--max-instances=1` and scales to zero — **no in-process timers**; anything periodic is a Cloud Scheduler job hitting an endpoint with the `x-cron-secret` header (value = `CRON_SECRET`).
+- **API proxy**: Cloudflare Worker (`workers/api-proxy/`) routes both API domains to the respective Cloud Run service. The free tier's daily request limit can take staging offline; bypass via the raw Cloud Run URL + bearer token.
+- **Docker images**: built from `api-server/Dockerfile` (build context is the repo root) and pushed to Google Artifact Registry.
+- Full runbook, env-var inventory and Scheduler job setup: [`docs/gcp-deploy-plan.md`](docs/gcp-deploy-plan.md).
+
+### Branch topology
+
+`production` is an **unrelated history** that `main` supersedes (no merge-base). `staging` re-diverges from `main` because integration uses merge commits. `staging` and `production` carry classic branch protection with `allow_force_pushes: false` — the approved procedure is toggle it true, push with `--force-with-lease`, then restore false, sending the FULL config on the PUT.
 
 ### Service Worker (PWA)
 
-The client is a PWA using `vite-plugin-pwa` with Workbox (`registerType: 'autoUpdate'` in `client/vite.config.ts`). On each build, Workbox generates a new precache manifest with hashed filenames.
+The client is a PWA using `vite-plugin-pwa` with `strategies: 'injectManifest'` and a hand-written Service Worker at `client/src/serviceWorker.ts` (`client/vite.config.ts`). With `injectManifest`, **the `workbox:` option block is silently ignored** — precache globs must go under `injectManifest:`, or fonts fall out of the manifest and the offline shell cannot render.
 
-When a new version is deployed, `vite-plugin-pwa` injects `skipWaiting()` + `clientsClaim()` into the generated `sw.js`, so the new SW activates immediately and takes over all open tabs. **Users need to reload their tab once** to start running the new JS/CSS.
-
-**Known risk (offline edge case):** if a user is offline when the new SW activates, the old JS may try to lazy-load code-split chunks whose hashed URLs are no longer in the new precache, resulting in a broken page until they reload. This is an inherent risk of `skipWaiting` in an offline-first app.
-
-**Recommended improvement:** switch to `registerType: 'prompt'` with a custom "Update available — reload?" toast. This delays SW activation until the user acknowledges, eliminating the mid-session breakage risk.
+`registerType: 'autoUpdate'` means the new SW activates immediately and takes over all open tabs, so **users need to reload once** to run the new JS/CSS. Known risk: a user offline at activation may have old JS lazy-load chunk URLs that are no longer precached, breaking the page until reload — inherent to `skipWaiting` in an offline-first app.
 
 For development/debugging: DevTools → Application → Service Workers → "Update on reload".

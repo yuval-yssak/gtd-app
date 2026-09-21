@@ -1,7 +1,8 @@
 import webPush from 'web-push';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import pushSubscriptionsDAO from '../dataAccess/pushSubscriptionsDAO.js';
-import type { EntitySnapshot, OperationInterface, PushSubscriptionRecord } from '../types/entities.js';
+import type { OperationInterface, PushSubscriptionRecord } from '../types/entities.js';
+import { entityDisplayName } from './entityDisplayName.js';
 
 const { VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT } = process.env;
 
@@ -19,10 +20,6 @@ export async function sendPushToSubscription(record: PushSubscriptionRecord, pay
         return;
     }
     await webPush.sendNotification({ endpoint: record.endpoint, keys: record.keys }, JSON.stringify(payload));
-}
-
-function entityDisplayName(snapshot: EntitySnapshot): string {
-    return 'title' in snapshot ? snapshot.title : snapshot.name;
 }
 
 /**
@@ -51,12 +48,19 @@ export async function notifyViaWebPush(userId: string, excludeDeviceId: string |
     if (!ops.length) {
         return;
     }
-    const opSummaries = ops.map((op) => ({
+    // Item briefs are derived metadata — "Added: <brief text>" as an OS notification is noise on
+    // an authored write and a storm once the generation sweep runs. Devices still learn about them
+    // through SSE / the next pull; only the push leg is skipped.
+    const announced = ops.filter((op) => op.entityType !== 'itemBrief');
+    if (!announced.length) {
+        return;
+    }
+    const opSummaries = announced.map((op) => ({
         entityType: op.entityType,
         opType: op.opType,
-        name: op.snapshot ? entityDisplayName(op.snapshot) : null,
+        name: (op.snapshot ? entityDisplayName(op.snapshot) : undefined) ?? null,
     }));
-    console.log(`[push] notifying ${userId} of ${ops.length} ops${excludeDeviceId ? ` (excluding device ${excludeDeviceId})` : ''}`);
+    console.log(`[push] notifying ${userId} of ${announced.length} ops${excludeDeviceId ? ` (excluding device ${excludeDeviceId})` : ''}`);
     const pushSubs = await findSubscribedDevicesForUser(userId, excludeDeviceId);
     console.log(`[push] found ${pushSubs.length} subscriptions for user ${userId}`);
     const pushResults = await Promise.allSettled(pushSubs.map((sub) => sendPushToSubscription(sub, { type: 'update', ts: now, ops: opSummaries })));
