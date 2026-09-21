@@ -1,4 +1,5 @@
 import { API_SERVER } from '../constants/globals';
+import { isBrowserOffline } from '../lib/onlineStatus';
 import type { BriefOrigin, StoredItemBrief } from '../types/MyDB';
 
 /**
@@ -151,4 +152,79 @@ export async function generateBrief(itemId: string, { force = false }: { force?:
         throw await toBriefApiError(response);
     }
     return parseGenerateBriefBody(await response.json());
+}
+
+// ── Review-start sweep (`POST /maintenance/briefs/sweep-mine`) ───────────────
+
+/**
+ * What the review-start sweep did, as the caller needs to know it:
+ * - `started`   — the server queued `started` background generations (`cooldown: false`).
+ * - `cooldown`  — the caller already swept within the server's window; expected, not an error.
+ * - `skipped`   — the client never asked (offline).
+ * - `failed`    — the request or its body did not come back usable. Advisory only: nothing to show.
+ *
+ * Deliberately a RESULT, not an exception: the sweep is a best-effort freshness nudge behind the
+ * review, so every failure mode has to be expressible without a `try` at the call site.
+ */
+export type ReviewSweepResult =
+    | { outcome: 'started'; started: number; skippedWritten: number }
+    | { outcome: 'cooldown' }
+    | { outcome: 'skipped'; reason: 'offline' }
+    | { outcome: 'failed'; status: number | undefined };
+
+/**
+ * The server returns once the cheap skip rows are written (the model generations continue in the
+ * background), so this only has to cover a slow item-set walk. Kept BELOW `withSessionGate`'s
+ * 10 s escape hatch (`db/syncHelpers.ts`): a request that outlived the gate would trip its
+ * "task exceeded" release while still holding a pivoted session cookie — exactly the drift the
+ * gate exists to prevent.
+ */
+const REVIEW_SWEEP_TIMEOUT_MS = 8_000;
+
+/** Narrows the 200 body; a body that does not match the contract reads as `failed`, never as `started: NaN`. */
+function parseReviewSweepBody(body: unknown): ReviewSweepResult {
+    const row = asLooseObject<'started' | 'skippedWritten' | 'cooldown'>(body);
+    if (row?.cooldown === true) {
+        return { outcome: 'cooldown' };
+    }
+    // `cooldown` is the server's discriminant, so the success branch keys on it rather than on
+    // field presence — a body missing it is not the contract, whatever else it carries.
+    if (row?.cooldown === false && typeof row.started === 'number' && typeof row.skippedWritten === 'number') {
+        return { outcome: 'started', started: row.started, skippedWritten: row.skippedWritten };
+    }
+    return { outcome: 'failed', status: 200 };
+}
+
+/**
+ * Asks the server to refresh the caller's briefs whose title + notes checksum moved (open decision
+ * 5 in `docs/plans/item-brief.md`). Fire-and-forget from the Weekly Review: the generated briefs
+ * arrive later as ordinary `itemBrief` sync ops, so NOTHING in this response is applied locally —
+ * it is only logged. Never rejects; every failure is an `outcome` the caller can ignore.
+ *
+ * The offline check here is the LAST line of defence, not the real gate: the wizard's caller pins
+ * the session first (`withOwnerSession` makes its own network call), so it has to decide offline
+ * before ever reaching this function — see `reviewBriefSweep.ts`'s `isOnline` port. This keeps a
+ * direct caller from firing a pointless request.
+ */
+export async function startReviewBriefSweep(): Promise<ReviewSweepResult> {
+    if (isBrowserOffline()) {
+        return { outcome: 'skipped', reason: 'offline' };
+    }
+    try {
+        // credentials: 'include' — session-cookie authed, same as the other /maintenance routes.
+        const response = await fetch(`${API_SERVER}/maintenance/briefs/sweep-mine`, {
+            method: 'POST',
+            credentials: 'include',
+            signal: AbortSignal.timeout(REVIEW_SWEEP_TIMEOUT_MS),
+        });
+        if (!response.ok) {
+            return { outcome: 'failed', status: response.status };
+        }
+        // `.catch` here, not on the whole call: an unreadable 200 body is a contract failure of a
+        // successful request, so it keeps the 200 rather than reading as a network error.
+        return parseReviewSweepBody(await response.json().catch(() => undefined));
+    } catch {
+        // Network error or the deadline abort: advisory call, so it dies here.
+        return { outcome: 'failed', status: undefined };
+    }
 }

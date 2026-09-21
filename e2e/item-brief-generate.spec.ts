@@ -22,6 +22,18 @@ function briefInputOf(scope: Page | Locator) {
     return scope.getByTestId('briefField').getByRole('textbox', { name: 'Brief' });
 }
 
+/**
+ * Opening the weekly review also fires the review-start sweep, which under BRIEF_FAKE_MODEL=1
+ * would write this item's brief before the card renders — leaving nothing for the BUTTON to do.
+ * Answering with the server's ordinary cooldown body keeps the button the only thing generating
+ * here; the sweep itself is covered by `weekly-review-brief-sweep.spec.ts`.
+ */
+async function stubReviewSweepAsCooldown(page: Page): Promise<void> {
+    await page.route('**/maintenance/briefs/sweep-mine', (route) =>
+        route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ started: 0, cooldown: true }) }),
+    );
+}
+
 test.describe('item brief — generated on demand', () => {
     test('Generate writes a model brief that the field shows and a second device receives; Regenerate over a typed brief asks first', async ({ browser }) => {
         const email = `brief-generate-${dayjs().valueOf()}@example.com`;
@@ -84,6 +96,7 @@ test.describe('item brief — generated on demand', () => {
             const item = await gtd.clarifyToNextAction(page, { ...captured, notes: LONG_NOTES }, {});
             await gtd.flush(page);
 
+            await stubReviewSweepAsCooldown(page);
             await page.goto('/weekly-review?stage=nextActions');
             await page.getByTestId('startReviewButton').click();
             const card = page.getByTestId('focusStage');

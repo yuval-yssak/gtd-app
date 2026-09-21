@@ -2,7 +2,7 @@
  * Same harness as `assistApi.test.ts` — global fetch replaced per-test, then restored.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BriefApiError, generateBrief, type ServerItemBriefSnapshot } from '../api/briefApi';
+import { BriefApiError, generateBrief, type ServerItemBriefSnapshot, startReviewBriefSweep } from '../api/briefApi';
 
 interface FetchCall {
     url: string;
@@ -156,5 +156,83 @@ describe('generateBrief', () => {
         respondWith(makeJsonResponse({ code: 'something_new' }, 500));
         const err = await captureError(() => generateBrief('item-1'));
         expect(err.code).toBeUndefined();
+    });
+});
+
+describe('startReviewBriefSweep', () => {
+    /** The setup stub reports online; each offline case flips it and puts it back. */
+    function withNavigatorOnLine<T>(onLine: boolean, run: () => T): T {
+        const previous = navigator.onLine;
+        Object.defineProperty(navigator, 'onLine', { value: onLine, configurable: true });
+        try {
+            return run();
+        } finally {
+            Object.defineProperty(navigator, 'onLine', { value: previous, configurable: true });
+        }
+    }
+
+    it('POSTs to the session-authed /maintenance route with credentials and no body', async () => {
+        respondWith(makeJsonResponse({ started: 7, skippedWritten: 3, cooldown: false }));
+        const result = await startReviewBriefSweep();
+        expect(result).toEqual({ outcome: 'started', started: 7, skippedWritten: 3 });
+        const [call] = fetchCalls;
+        if (!call) throw new Error('expected one fetch call');
+        expect(call.url).toContain('/maintenance/briefs/sweep-mine');
+        expect(call.init?.method).toBe('POST');
+        expect(call.init?.credentials).toBe('include');
+        expect(call.init?.body).toBeUndefined();
+        expect(call.init?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('reads started: 0 as a real (empty) sweep, not a failure', async () => {
+        respondWith(makeJsonResponse({ started: 0, skippedWritten: 0, cooldown: false }));
+        expect(await startReviewBriefSweep()).toEqual({ outcome: 'started', started: 0, skippedWritten: 0 });
+    });
+
+    it('reports the server cooldown as its own outcome rather than an error', async () => {
+        respondWith(makeJsonResponse({ started: 0, cooldown: true }));
+        expect(await startReviewBriefSweep()).toEqual({ outcome: 'cooldown' });
+    });
+
+    it('swallows a non-2xx response and reports its status', async () => {
+        respondWith(makeJsonResponse({ error: 'no session' }, 401));
+        expect(await startReviewBriefSweep()).toEqual({ outcome: 'failed', status: 401 });
+    });
+
+    it('swallows a network failure', async () => {
+        fetchSpy.mockImplementationOnce((input: RequestInfo | URL, init?: RequestInit) => {
+            recordFetchCall(input, init);
+            return Promise.reject(new TypeError('Failed to fetch'));
+        });
+        expect(await startReviewBriefSweep()).toEqual({ outcome: 'failed', status: undefined });
+    });
+
+    it('treats a 200 body that matches no contract variant as failed, never as started: NaN', async () => {
+        respondWith(makeJsonResponse({ nothing: 'useful' }));
+        expect(await startReviewBriefSweep()).toEqual({ outcome: 'failed', status: 200 });
+    });
+
+    it('treats a cooldown:false body missing skippedWritten as failed', async () => {
+        respondWith(makeJsonResponse({ started: 7, cooldown: false }));
+        expect(await startReviewBriefSweep()).toEqual({ outcome: 'failed', status: 200 });
+    });
+
+    it('requires the cooldown discriminant: numbers alone are not the contract', async () => {
+        respondWith(makeJsonResponse({ started: 7, skippedWritten: 2 }));
+        expect(await startReviewBriefSweep()).toEqual({ outcome: 'failed', status: 200 });
+    });
+
+    it('treats a non-JSON 200 body as failed', async () => {
+        respondWith(new Response('<html>ok?</html>', { status: 200 }));
+        expect(await startReviewBriefSweep()).toEqual({ outcome: 'failed', status: 200 });
+    });
+
+    // Defence-in-depth only: the wizard decides offline above the session pivot (see
+    // `reviewBriefSweep.ts`), so this guard protects a hypothetical direct caller.
+    it('skips the request entirely when the browser reports offline', async () => {
+        const result = await withNavigatorOnLine(false, () => startReviewBriefSweep());
+        expect(result).toEqual({ outcome: 'skipped', reason: 'offline' });
+        expect(fetchCalls).toHaveLength(0);
+        expect(fetchSpy).not.toHaveBeenCalled();
     });
 });

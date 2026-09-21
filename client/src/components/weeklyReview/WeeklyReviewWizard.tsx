@@ -17,12 +17,14 @@ import classNames from 'classnames';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useOnline } from '../../hooks/useOnline';
 import { useTodayIso } from '../../hooks/useTodayIso';
 import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
 import type { MyDB } from '../../types/MyDB';
 import { ClarifyStage } from './ClarifyStage';
 import { FocusStage } from './FocusStage';
 import { InboxChecklistStage } from './InboxChecklistStage';
+import { reviewSweepKey, runReviewBriefSweepOnce, sweepPinnedToOwner } from './reviewBriefSweep';
 import {
     advanceStage,
     currentStage,
@@ -56,7 +58,9 @@ interface WeeklyReviewWizardProps {
 
 /** Guided multi-step weekly review. One stage at a time, one item at a time inside each stage. */
 export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizardProps) {
-    const { account, items, routines, allReviewInboxes } = useAppData();
+    const { account, items, routines, allReviewInboxes, loggedInAccounts, withOwnerSession } = useAppData();
+    const accountId = account?.id;
+    const isOnline = useOnline();
     // Item advances and stage changes unmount the focused button — restore keyboard focus onto
     // its equivalent in the new view instead of letting it fall to <body>.
     const wizardRootRef = useRef<HTMLDivElement | null>(null);
@@ -73,7 +77,7 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
     const [isHeaderExpandedByUser, setIsHeaderExpandedByUser] = useState(false);
     const hasStageActivity = queue !== undefined && walkedEntryCount(queue) > 0;
     const isHeaderCollapsed = stage !== null && stage.kind !== 'checklist' && !isHeaderExpandedByUser;
-    const inboxIds = allReviewInboxes.filter((inbox) => inbox.userId === account?.id).map((inbox) => inbox._id);
+    const inboxIds = allReviewInboxes.filter((inbox) => inbox.userId === accountId).map((inbox) => inbox._id);
     // Review-wide position for the strip's mini dots — precomputed so the strip itself never
     // touches review-wide state (only display data crosses its props).
     const stageDots = REVIEW_STAGES.map((stageDefinition, index) => ({
@@ -113,6 +117,32 @@ export function WeeklyReviewWizard({ db, flow, onFlowChange }: WeeklyReviewWizar
             onFlowChange((prev) => withStageQueue(prev, stage.id, refresh(prev.queues[stage.id])));
         }
     }, [stage, items, routines, today, flow, onFlowChange]);
+
+    // Kick off the server-side brief sweep for this review run: items whose title + notes checksum
+    // moved since their brief get a fresh one. Fire-and-forget — the briefs arrive later as
+    // ordinary `itemBrief` sync ops, so nothing here waits, blocks a render, or is shown to the
+    // user (the server's "you already swept" cooldown is a normal answer). The module-level guard
+    // in `reviewBriefSweep.ts`, keyed on account + `flow.startedTs`, is what makes it exactly one
+    // request per review run across StrictMode double-effects and wizard remounts. `isOnline` is a
+    // dep, not just a guard: a review opened offline sweeps the moment connectivity returns,
+    // without waiting for the user to reopen it.
+    const reviewStartedTs = flow.startedTs;
+    const isMultiAccountDevice = loggedInAccounts.length > 1;
+    useEffect(() => {
+        if (!accountId) {
+            return;
+        }
+        void runReviewBriefSweepOnce(reviewSweepKey(accountId, reviewStartedTs), {
+            isOnline: () => isOnline,
+            requestSweep: () => sweepPinnedToOwner({ accountId, isMultiAccountDevice, withOwnerSession }),
+            onError: (error) => console.warn('[weekly-review] brief sweep failed', error),
+            onOutcome: (outcome) => {
+                if (outcome === 'failed') {
+                    console.warn('[weekly-review] brief sweep did not run — the 15-minute server sweep is the backstop');
+                }
+            },
+        });
+    }, [accountId, isMultiAccountDevice, isOnline, reviewStartedTs, withOwnerSession]);
 
     if (!stage) {
         return null;

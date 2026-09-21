@@ -34,3 +34,5 @@
 - [Ref-mirror stale on same-tick commit](project_ref_mirror_stale_same_tick_commit.md) — clear/reset buttons that onChange+commit in one tick read a stale formRefs mirror and silently no-op; pass the value as an argument.
 - [Shared entityId collapse collision](project_shared_entityid_collapse_collision.md) — queueSyncOp collapses by entityId alone; a sidecar reusing the parent _id (itemBrief) annihilates the parent's queued ops.
 - [Uncommitted editor text vs server AI call](project_uncommitted_text_vs_server_ai_call.md) — assist/generate-brief buttons fire before the 800ms notes autosave flushes; NotesSection never flushes on blur, so the model reads stale text.
+- [Offline guard below session pivot](project_offline_guard_below_session_pivot.md) — isBrowserOffline inside an API wrapper is dead code when the caller wraps it in withOwnerSession; the pivot's listDeviceSessions rejects first and burns idempotence claims.
+- [Node-env tests hit real localhost](project_node_env_tests_hit_real_localhost.md) — VITE_API_SERVER is reachable in vitest, so an unstubbed fetch in a test passes while making a live call; tell is a test 10x slower than its neighbours.
