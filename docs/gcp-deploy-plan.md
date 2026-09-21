@@ -232,6 +232,18 @@ locally and never sent). While a batch is `processing` the sweep submits nothing
 can be as tight as you like without piling up requests. Bookkeeping lives in the `briefBatches` /
 `briefBatchRequests` collections (`docs/DATA_MODEL.md`).
 
+**Only OPEN items are targeted** — `inbox`, `nextAction`, `calendar`, `waitingFor`, `somedayMaybe`.
+A brief is a Weekly-Review affordance and a `done` / `trash` item is never reviewed, so generating
+one is spend that can never be read. Briefs already written for closed items are kept (an item can
+be revived), they are simply never regenerated. See `docs/plans/item-brief.md` § Targeting scope.
+
+**Target selection is an indexed lookup, not a scan.** `items.briefStale` marks the items whose
+title/notes/status may have moved since their brief row; `ItemsDAO` stamps it on every write and
+the brief writers settle it, so the sweep reads only what is marked, through the partial index
+`brief_stale_targets` (`{user, briefStale, status}`). Settled items carry `briefStale: false`,
+which the partial filter excludes — in the steady state the index holds zero keys and the selection
+examines zero documents.
+
 The endpoint is gated by `requireCronSecret` — the same `CRON_SECRET` / `x-cron-secret` pair as
 webhook renewal — and is NOT session-authed. Body `{ "limit": N }` (1–2000, default 2000) is
 optional. Two overlapping hits serialize in-process; the later one finds the batch in flight.
@@ -244,48 +256,76 @@ pipeline and does not charge the on-demand per-user cap.
 
 ### Jobs
 
-> **The sweep job must target the raw Cloud Run URL, not the public API domain.** As of
-> 2026-09-21 a sweep with nothing to do still takes ~89s (the cost is `findBriefTargets`'
-> cross-user scan, not the work), and the Cloudflare Worker fronting both API domains cuts the
-> connection at 100s — every attempt through it finished `UNKNOWN` at ~70s. Get the URL with
-> `gcloud run services describe gtd-api-staging --region us-central1 --format="value(status.url)"`.
-> The endpoint is cron-secret gated, so bypassing the proxy costs nothing in access control.
-> This is a **workaround**: the endpoint should return promptly instead — tracked as a GTD item
-> ("Make the brief sweep endpoint return fast"). Once fixed, point the job back at the public
-> domain with a normal deadline. Failing attempts are harmless meanwhile: the one-batch-in-flight
-> guard is DB-backed, so a timed-out tick just retries on the next one.
+The job targets the **public API domain** with a normal deadline. It did not always: between
+2026-09-21 and the `briefStale` fix below it had to bypass Cloudflare via the raw Cloud Run URL
+with a 900 s deadline, because selection re-derived the whole backlog on every tick.
 
+<details>
+<summary>History — why the raw-Cloud-Run workaround existed, and why it is gone</summary>
+
+Measured on staging on 2026-09-21, hitting Cloud Run directly: 300.0 s → **504**, 249.3 s → 200,
+103.0 s → 200, 88.5 s → 200, 300.0 s → **504**. Roughly half of all attempts hit Cloud Run's own
+`timeoutSeconds: 300`, and the Cloudflare Worker fronting both API domains cut at 100 s well
+before that. An 89 s run did **zero** work (`harvested: 0`, `submitted: 0`, `inFlight: true`) —
+the cost was target selection, not generation.
+
+Root cause: "does this item need a brief?" could not be a database predicate. The comparison hash
+was computed in Node from the item's title + notes, so `findBriefTargets` fetched and hashed EVERY
+item of every user on every tick — 23 852 documents per tick on the staging corpus (11 926 items
+across 2 users, walked once per status group), ~12 MB over the wire from a throttled Atlas M0.
+
+Fixed by two changes that compose: the `items.briefStale` marker (selection is now a bounded
+indexed lookup) and restricting targeting to open statuses (90 % of the staging corpus is
+`done`/`trash`). On the same seeded corpus, documents examined per tick went 23 852 → 1 204 with
+work to do → **0** in the steady state.
+</details>
 
 ```bash
-# staging — note the RAW CLOUD RUN URL, not the Cloudflare-fronted domain (see the warning below)
+# staging
 gcloud scheduler jobs create http gtd-staging-brief-sweep \
   --project gtd-app-project-491308 --location us-central1 \
   --schedule="*/15 * * * *" --time-zone="Etc/UTC" \
-  --uri="https://gtd-api-staging-xi26ftoh4a-uc.a.run.app/maintenance/briefs/sweep" \
+  --uri="https://api-staging.getting-things-done.app/maintenance/briefs/sweep" \
   --http-method=POST \
   --headers "x-cron-secret=<value>,Content-Type=application/json" \
   --message-body='{}' \
-  --attempt-deadline=900s
+  --attempt-deadline=300s
 
 # production (create only once ANTHROPIC_API_KEY + CRON_SECRET are set there)
 gcloud scheduler jobs create http gtd-production-brief-sweep \
   --project <production-project> --location us-central1 \
   --schedule="*/15 * * * *" --time-zone="Etc/UTC" \
-  --uri="<raw Cloud Run URL for gtd-api>/maintenance/briefs/sweep" \
+  --uri="https://api.getting-things-done.app/maintenance/briefs/sweep" \
   --http-method=POST \
   --headers "x-cron-secret=<value>,Content-Type=application/json" \
   --message-body='{}' \
-  --attempt-deadline=900s
+  --attempt-deadline=300s
 ```
 
-`--attempt-deadline` is generous on purpose: a harvest of 2 000 results is 2 000 sequential
-compare-and-set writes on an M0 cluster, on top of the target scan. Targeting Cloud Run directly
-means the 100 s Cloudflare cap no longer applies; if an attempt ever exceeds the deadline anyway,
-lower `limit` in the message body (`{"limit":500}`) rather than loosening the schedule.
+Selection is now negligible, so what is left to bound is the HARVEST: 2 000 results is 2 000
+sequential compare-and-set writes on an M0 cluster. 300 s is ample for that and matches Cloud
+Run's own ceiling; if an attempt ever approaches it, lower `limit` in the message body
+(`{"limit":500}`) rather than loosening the schedule.
+
+**The staging job is currently PAUSED** — it was paused while half its attempts 504'd. Resume it
+after deploying this fix:
+
+```bash
+gcloud scheduler jobs resume gtd-staging-brief-sweep --project gtd-app-project-491308 --location us-central1
+# and point it back at the public domain with a normal deadline:
+gcloud scheduler jobs update http gtd-staging-brief-sweep \
+  --project gtd-app-project-491308 --location us-central1 \
+  --uri="https://api-staging.getting-things-done.app/maintenance/briefs/sweep" \
+  --attempt-deadline=300s
+```
+
+The first tick after the deploy has more to do than usual: the boot-time backfill marks every
+pre-existing item, and the sweep then drains that backlog 2 000 at a time over the following ticks.
+Selection stays bounded throughout — the backlog lives in the index, not in a scan.
 
 | Environment | Job | Schedule | Status |
 |---|---|---|---|
-| staging | `gtd-staging-brief-sweep` | `*/15 * * * *` UTC | live since 2026-09-21 (raw Cloud Run URL, 900 s deadline) |
+| staging | `gtd-staging-brief-sweep` | `*/15 * * * *` UTC | **paused** — resume after deploying the `briefStale` fix (public domain, 300 s deadline) |
 | production | `gtd-production-brief-sweep` | `*/15 * * * *` UTC | **not wired yet** — needs `CRON_SECRET` + `ANTHROPIC_API_KEY` in the production environment first |
 
 ### Rollout + verify
@@ -301,10 +341,21 @@ gcloud scheduler jobs run gtd-staging-brief-sweep --project gtd-app-project-4913
 
 # Watch the batch land (status flips processing → harvested within ~1 h typically, ≤ 24 h):
 mongosh "$STAGING_URI" --quiet --eval 'db.getSiblingDB("gtdStagingDB").briefBatches.find().sort({createdTs:-1}).limit(3)'
+
+# How much backlog is left (0 ⇒ converged; this is the sweep's own progress signal):
+mongosh "$STAGING_URI" --quiet --eval 'db.getSiblingDB("gtdStagingDB").items.countDocuments({briefStale:true})'
 ```
 
-Backfill is just the first few ticks (2 000 targets each) — no separate script. Check the
-Anthropic Console for spend after the first harvested batch before creating the production job.
+The curl must return in **well under 10 s**, with or without work to do. If it does not, selection
+has regressed — check that the `brief_stale_targets` index exists
+(`db.items.getIndexes()`) and that `briefStale` is not set on the whole collection.
+
+Backfill is automatic: `loadDataAccess` marks every pre-marker item at boot (one server-side
+`updateMany`, no separate script) and the following ticks drain it 2 000 at a time. It is
+**convergent**, not just idempotent — it claims only items that have never carried the field, so
+the many cold starts a scale-to-zero service goes through never re-mark a settled item.
+Check the Anthropic Console for spend after the first harvested batch before creating the
+production job.
 
 ---
 

@@ -59,6 +59,13 @@ export const ItemSnapshotSchema = z
         urgent: z.boolean().optional(),
         externalId: nonEmptyString.optional(),
         contentHash: nonEmptyString.optional(),
+        // Server-owned brief-sweep marker (`lib/brief/briefStaleMarker.ts`). Accepted here ONLY
+        // because this schema must stay a strict superset of `ItemInterface`: a server-originated
+        // op snapshots a row read from Mongo, which carries the field, and a `.strict()` schema
+        // narrower than the interface 400s the whole /sync/push batch and jams the client's push
+        // queue. Its value is never trusted — `ItemsDAO` re-stamps it from the document on every
+        // write, and `stripBriefStale` drops whatever a client sends.
+        briefStale: z.boolean().optional(),
         // GCal-mirror fields (Phase 1a). Server-overwritten on inbound pulls; update ops that
         // round-trip through /sync/push include these so the strict schema must accept them.
         allDay: z.boolean().optional(),

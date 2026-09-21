@@ -190,6 +190,20 @@ export interface ItemInterface {
      * a new one. Recomputed only on create — later edits do not update it.
      */
     contentHash?: string;
+    /**
+     * Brief-sweep selection marker: `true` while this item's title + notes may have moved on from
+     * its `itemBriefs` row (or it never had one). Server-owned and stamped by `ItemsDAO` on every
+     * write — never sent by a client, never returned by the public API, and NOT a second authority:
+     * `briefWriter`'s compare-and-set still re-reads the item and hashes for real. The marker only
+     * decides WHICH items the sweep looks at, so a spurious `true` costs one extra hash and a
+     * missing `true` is what the backfill repairs.
+     *
+     * Tri-state: `true` = needs a sweep, `false` = swept and settled, ABSENT = written before this
+     * field existed. `false` and absent are deliberately NOT the same — the boot backfill claims
+     * exactly the absent ones, so collapsing them would make it re-mark the whole collection on
+     * every Cloud Run cold start. See `lib/brief/briefStaleMarker.ts`.
+     */
+    briefStale?: boolean;
 }
 
 export interface RoutineItemTemplate {

@@ -8,6 +8,7 @@ import { issueApiToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
+import { findBriefTargets } from '../lib/brief/briefTargets.js';
 import { briefSourceHash } from '../lib/briefSource.js';
 import { BRIEF_MAX_CHARS } from '../lib/itemBriefs.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
@@ -102,6 +103,11 @@ async function seedItem(userId: string, overrides: Partial<ItemInterface> = {}):
     return item;
 }
 
+/** The sweep-selection marker, read straight off the collection. */
+async function markerOf(itemId: string): Promise<boolean | undefined> {
+    return (await db.collection<ItemInterface>('items').findOne({ _id: itemId } as never))?.briefStale;
+}
+
 async function seedBrief(item: ItemInterface, origin: BriefOrigin, overrides: Partial<ItemBriefInterface> = {}): Promise<ItemBriefInterface> {
     const now = dayjs().toISOString();
     const brief: ItemBriefInterface = {
@@ -177,6 +183,35 @@ describe('PUT /v1/items/:id/brief', () => {
         expect(((await res.json()) as PublicItem).brief).toBeNull();
         expect(await itemBriefsDAO.findByOwnerAndId(item._id!, actor.userId)).toBeNull();
         expect((await briefOps(actor.userId)).map((op) => op.opType)).toEqual(['create', 'delete']);
+    });
+
+    it('PUT null leaves the item SELECTABLE again — clearing a brief must not strand it', async () => {
+        // `briefStale` answers a question about the itemBriefs SIDECAR, but the DAO choke point
+        // that maintains it only sees writes to `items`. Removing a brief is the user-facing
+        // gesture for exactly that, so without an explicit re-mark a settled item ends up with no
+        // brief row AND no marker — invisible to every future sweep until its content changes.
+        const actor = await alice();
+        const item = await seedItem(actor.userId);
+        await putBrief(actor, item._id!, 'to be cleared');
+        // Authoring settles nothing by itself, so drive the item to the settled steady state first.
+        await itemsDAO.clearBriefStale(item._id!, actor.userId, { title: TITLE, notes: NOTES, status: 'inbox' });
+        expect(await markerOf(item._id!)).toBe(false);
+
+        await putBrief(actor, item._id!, null);
+
+        expect(await markerOf(item._id!)).toBe(true);
+        expect((await findBriefTargets(10)).map((target) => target.item._id)).toContain(item._id);
+    });
+
+    it('authoring a brief marks the item, so unpinning it later cannot strand it', async () => {
+        const actor = await alice();
+        const item = await seedItem(actor.userId);
+        await itemsDAO.clearBriefStale(item._id!, actor.userId, { title: TITLE, notes: NOTES, status: 'inbox' });
+        await putBrief(actor, item._id!, 'mine');
+        expect(await markerOf(item._id!)).toBe(true);
+        // Still not a target while it stays pinned — the marker only makes it visible, the hash
+        // comparison keeps refusing to replace an authored brief.
+        expect(await findBriefTargets(10)).toEqual([]);
     });
 
     it('PUT null on an item without a brief is a no-op (no op recorded)', async () => {

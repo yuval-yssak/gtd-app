@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import { withBriefGenerationDrain } from './briefDrain.js';
 import { executePlan, executePlansSerially, type ModelPlan, type PartitionedPlans, partitionPlans } from './briefPlans.js';
-import { findUserBriefTargets, LIVE_STATUSES } from './briefTargets.js';
+import { findUserBriefTargets } from './briefTargets.js';
 
 /**
  * Review-start sweep (docs/plans/item-brief.md, open decision 5): when the Weekly Review opens,
@@ -13,6 +13,14 @@ import { findUserBriefTargets, LIVE_STATUSES } from './briefTargets.js';
  */
 
 export const BRIEF_REVIEW_SWEEP_MAX = 50;
+/**
+ * Ceiling on the targets ONE review-start sweep selects. The skip leg runs synchronously before
+ * the response, so an unbounded backlog would sit in front of the user opening their review — and
+ * the backlog is genuinely large exactly once, on the first review after the boot backfill marks a
+ * whole pre-existing corpus. The cron sweep drains the rest at its own cadence; this route only
+ * has to make the review the user is opening right now look right.
+ */
+export const BRIEF_REVIEW_SWEEP_SELECTION_MAX = 500;
 export const BRIEF_REVIEW_SWEEP_DEFAULT_COOLDOWN_MS = 10 * 60 * 1000;
 const DEVICE_ID = 'server:brief-sweep-mine';
 const LOG_PREFIX = '[brief-sweep-mine]';
@@ -50,14 +58,17 @@ function isInCooldown(userId: string, nowMs: number): boolean {
 }
 
 /**
- * Walks the user's WHOLE item set once (the page query is hinted to `{ user, updatedTs }`, so the
- * live-status filter is a residual on an index walk, not an index bound) so every stale
- * short-note item gets its skip row. Accepted for a user-triggered route: the walk is bounded by
- * the user's own item count, is exactly what the cron sweep pays per user, and needs no
- * in-memory sort; a user with a huge archive pays it once per cooldown window.
+ * Plans the caller's outstanding targets, so even the stale short-note items get their skip row.
+ * Shares `findUserBriefTargets` with the cron sweep — deliberately ONE selection implementation —
+ * so it inherits the `briefStale` index bound: what used to be a walk of the user's whole item set
+ * is now a lookup over just the items marked since their last brief, in the open statuses only.
+ *
+ * Bounded by `BRIEF_REVIEW_SWEEP_SELECTION_MAX` rather than unbounded: in the steady state the
+ * marked set is a handful of items and the cap never binds, but right after the boot backfill it
+ * is the user's entire corpus — and the skip leg below writes synchronously before responding.
  */
 async function planUserTargets(userId: string): Promise<PartitionedPlans> {
-    return partitionPlans(await findUserBriefTargets(userId, LIVE_STATUSES, Number.POSITIVE_INFINITY));
+    return partitionPlans(await findUserBriefTargets(userId, BRIEF_REVIEW_SWEEP_SELECTION_MAX));
 }
 
 /** One model plan through the drain; a failure is logged and the next plan still runs. */

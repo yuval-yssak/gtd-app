@@ -73,6 +73,36 @@ describe('inline brief hook wiring', () => {
         expect((await itemBriefsDAO.findByOwnerAndId('c', USER))?.origin).toBe('skipped');
     });
 
+    it('never generates for a done or trash item, even though the write itself schedules a timer', async () => {
+        const now = dayjs().toISOString();
+        const snapshot: ItemInterface = {
+            _id: 'closed-1',
+            user: USER,
+            status: 'done',
+            title: 'Item closed-1',
+            notes: LONG_NOTES,
+            createdTs: now,
+            updatedTs: now,
+        };
+        await applyAndPublishOperation(USER, { entityType: 'item', entityId: 'closed-1', opType: 'create', snapshot }, { deviceId: 'dev-1' });
+        await __flushInlineBriefTimersForTests();
+        expect(await itemBriefsDAO.findByOwnerAndId('closed-1', USER)).toBeNull();
+        expect(await inlineBriefOps()).toHaveLength(0);
+    });
+
+    it('generates once a closed item is revived to a live status', async () => {
+        const now = dayjs().toISOString();
+        const base: ItemInterface = { _id: 'revive-1', user: USER, status: 'trash', title: 'Item revive-1', notes: LONG_NOTES, createdTs: now, updatedTs: now };
+        await applyAndPublishOperation(USER, { entityType: 'item', entityId: 'revive-1', opType: 'create', snapshot: base }, { deviceId: 'dev-1' });
+        await __flushInlineBriefTimersForTests();
+        expect(await itemBriefsDAO.findByOwnerAndId('revive-1', USER)).toBeNull();
+
+        const revived: ItemInterface = { ...base, status: 'nextAction', updatedTs: dayjs().add(1, 'second').toISOString() };
+        await applyAndPublishOperation(USER, { entityType: 'item', entityId: 'revive-1', opType: 'update', snapshot: revived }, { deviceId: 'dev-1' });
+        await __flushInlineBriefTimersForTests();
+        expect(await itemBriefsDAO.findByOwnerAndId('revive-1', USER)).toMatchObject({ origin: 'model' });
+    });
+
     it('server-stamped writes and a disabled flag schedule nothing', async () => {
         await applyAndPublishOperation(USER, itemCreate('gcal'), { deviceId: 'server' });
         vi.stubEnv('BRIEF_INLINE_ON_WRITE', '');

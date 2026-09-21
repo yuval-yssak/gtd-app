@@ -65,6 +65,30 @@ test.describe('weekly review — brief sweep on start', () => {
         });
     });
 
+    test('the sweep briefs the open items and never the done or trashed ones', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-sweep-scope-${dayjs().valueOf()}@example.com`, async (page) => {
+            // Long enough to reach the (fake) model rather than the short-notes skip rule.
+            const notes =
+                'Renewal form is half filled in — the personal details section is done but the travel history page is still blank. ' +
+                'Two new photos are needed, and the June trip is the hard deadline given four-to-six week processing.';
+            const open = await gtd.collect(page, 'Renew passport');
+            await gtd.clarifyToNextAction(page, { ...open, notes }, {});
+            const done = await gtd.collect(page, 'Already finished');
+            await gtd.updateItem(page, { ...done, notes, status: 'done' });
+            const trashed = await gtd.collect(page, 'Thrown away');
+            await gtd.updateItem(page, { ...trashed, notes, status: 'trash' });
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await startReview(page);
+
+            // The open item gets a model brief; the closed two are never even considered, so no
+            // row of any kind appears for them — not a brief, not a skip marker.
+            await expect.poll(async () => (await gtd.getItemBrief(page, open._id))?.origin, { timeout: 20_000 }).toBe('model');
+            expect(await gtd.getItemBrief(page, done._id)).toBeUndefined();
+            expect(await gtd.getItemBrief(page, trashed._id)).toBeUndefined();
+        });
+    });
+
     test('the wizard opens and stays usable when the sweep request fails', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-sweep-fail-${dayjs().valueOf()}@example.com`, async (page) => {
             const captured = await gtd.collect(page, 'Renew passport');
