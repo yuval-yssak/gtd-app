@@ -244,37 +244,49 @@ pipeline and does not charge the on-demand per-user cap.
 
 ### Jobs
 
+> **The sweep job must target the raw Cloud Run URL, not the public API domain.** As of
+> 2026-09-21 a sweep with nothing to do still takes ~89s (the cost is `findBriefTargets`'
+> cross-user scan, not the work), and the Cloudflare Worker fronting both API domains cuts the
+> connection at 100s — every attempt through it finished `UNKNOWN` at ~70s. Get the URL with
+> `gcloud run services describe gtd-api-staging --region us-central1 --format="value(status.url)"`.
+> The endpoint is cron-secret gated, so bypassing the proxy costs nothing in access control.
+> This is a **workaround**: the endpoint should return promptly instead — tracked as a GTD item
+> ("Make the brief sweep endpoint return fast"). Once fixed, point the job back at the public
+> domain with a normal deadline. Failing attempts are harmless meanwhile: the one-batch-in-flight
+> guard is DB-backed, so a timed-out tick just retries on the next one.
+
+
 ```bash
-# staging
+# staging — note the RAW CLOUD RUN URL, not the Cloudflare-fronted domain (see the warning below)
 gcloud scheduler jobs create http gtd-staging-brief-sweep \
   --project gtd-app-project-491308 --location us-central1 \
   --schedule="*/15 * * * *" --time-zone="Etc/UTC" \
-  --uri="https://api-staging.getting-things-done.app/maintenance/briefs/sweep" \
+  --uri="https://gtd-api-staging-xi26ftoh4a-uc.a.run.app/maintenance/briefs/sweep" \
   --http-method=POST \
   --headers "x-cron-secret=<value>,Content-Type=application/json" \
   --message-body='{}' \
-  --attempt-deadline=180s
+  --attempt-deadline=900s
 
 # production (create only once ANTHROPIC_API_KEY + CRON_SECRET are set there)
 gcloud scheduler jobs create http gtd-production-brief-sweep \
   --project <production-project> --location us-central1 \
   --schedule="*/15 * * * *" --time-zone="Etc/UTC" \
-  --uri="https://api.getting-things-done.app/maintenance/briefs/sweep" \
+  --uri="<raw Cloud Run URL for gtd-api>/maintenance/briefs/sweep" \
   --http-method=POST \
   --headers "x-cron-secret=<value>,Content-Type=application/json" \
   --message-body='{}' \
-  --attempt-deadline=180s
+  --attempt-deadline=900s
 ```
 
 `--attempt-deadline` is generous on purpose: a harvest of 2 000 results is 2 000 sequential
-compare-and-set writes on an M0 cluster. The Cloudflare proxy still caps a request at 100 s; if a
-harvest ever hits that, lower `limit` in the message body (`{"limit":500}`) rather than the
-schedule.
+compare-and-set writes on an M0 cluster, on top of the target scan. Targeting Cloud Run directly
+means the 100 s Cloudflare cap no longer applies; if an attempt ever exceeds the deadline anyway,
+lower `limit` in the message body (`{"limit":500}`) rather than loosening the schedule.
 
 | Environment | Job | Schedule | Status |
 |---|---|---|---|
-| staging | `gtd-staging-brief-sweep` | `*/15 * * * *` UTC | **to create** after the rename steps above |
-| production | `gtd-production-brief-sweep` | `*/15 * * * *` UTC | **not wired yet** |
+| staging | `gtd-staging-brief-sweep` | `*/15 * * * *` UTC | live since 2026-09-21 (raw Cloud Run URL, 900 s deadline) |
+| production | `gtd-production-brief-sweep` | `*/15 * * * *` UTC | **not wired yet** — needs `CRON_SECRET` + `ANTHROPIC_API_KEY` in the production environment first |
 
 ### Rollout + verify
 
