@@ -23,12 +23,14 @@ import { getOrCreateDeviceId } from '../db/deviceId';
 import { reconcileActiveSessionCookie, syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
-import { closeSseConnections, openSseConnections } from '../db/sseClient';
+import { closeSseConnections, openSseConnections, reopenSseConnections } from '../db/sseClient';
 import { flushSyncQueue, pullFromServer } from '../db/syncHelpers';
 import { recoverFromBootstrapRequired } from '../db/syncRecovery';
 import { prefetchCalendarOptions } from '../hooks/useCalendarOptions';
 import { useOnline } from '../hooks/useOnline';
+import { subscribeToAppResume } from '../lib/appResume';
 import { authClient } from '../lib/authClient';
+import { isBrowserOffline } from '../lib/onlineStatus';
 import { shouldRaiseInitialSync } from '../lib/syncIndicators';
 import type {
     MyDB,
@@ -560,6 +562,42 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         // offline→online transition would set the flag back to true (via the offline run's
         // cleanup), making the online run skip entirely — silently dropping the reconnect flush.
     }, [isOnline, db, syncAndRefresh, onSseUpdateForUser]);
+
+    // Resume trigger: an installed PWA (iOS especially) is frozen while backgrounded and comes back
+    // with no sync of any kind. Boot only fires on a cold launch, `online` never fires because the
+    // network didn't actually drop, and the SSE socket was torn down while frozen — so without this
+    // the app sits on stale data until the user force-quits it. See lib/appResume.ts.
+    useEffect(() => {
+        let unmounted = false;
+        const stopListening = subscribeToAppResume(() => {
+            if (isBrowserOffline()) {
+                // Nothing to do while offline, and the isOnline effect already owns the reconnect
+                // for the moment connectivity returns. A resume that finds the device offline is
+                // therefore a no-op by design, not a dropped sync.
+                return;
+            }
+            // Unconditional reopen: a socket frozen with the web view can report OPEN while being
+            // attached to a connection the OS already dropped, so its readyState proves nothing.
+            getOrCreateDeviceId(db)
+                .then((deviceId) => {
+                    // The boot cleanup's closeSseConnections() may have run while this IDB read was
+                    // in flight; reopening after it would leak channels nothing closes.
+                    if (unmounted) {
+                        return;
+                    }
+                    reopenSseConnections(onSseUpdateForUser, deviceId, loggedInUserIdsRef.current);
+                })
+                .catch((err) => console.error('[resume] sse reopen failed:', err));
+            // Routed through syncAndRefresh (not a direct pull) so the multi-account session pivot,
+            // the session gate and the per-account reauth/bootstrap recovery paths all still apply.
+            // It self-serializes: a call landing mid-sync sets syncRequestedWhileBusy and returns.
+            syncAndRefresh().catch((err) => console.error('[resume] sync failed:', err));
+        });
+        return () => {
+            unmounted = true;
+            stopListening();
+        };
+    }, [db, syncAndRefresh, onSseUpdateForUser]);
 
     return (
         <AppResourceProvider db={db} userIds={loggedInUserIds}>

@@ -22,11 +22,38 @@ interface UpdatePayload {
  */
 export function openSseConnections(onUpdate: OnUpdateCallback, localDeviceId: string | undefined, userIds: string[]): void {
     closeStaleConnections(userIds);
+    dropDeadConnections();
     for (const userId of userIds) {
         if (!eventSources.has(userId)) {
             openSingleChannel(userId, onUpdate, localDeviceId);
         }
     }
+}
+
+/**
+ * Evicts channels whose socket is permanently CLOSED so the reopen loop below re-creates them.
+ * Without this, `eventSources.has(userId)` reports a channel as live purely because the entry is
+ * still in the Map, and a dead socket is never replaced — the tab silently stops receiving updates
+ * until a full reload. iOS hits this every time it freezes a backgrounded PWA's web view and tears
+ * the connection down; `onerror` alone can't clean up, since EventSource also reports recoverable
+ * (auto-reconnecting) failures through it, which must NOT be evicted.
+ */
+function dropDeadConnections(): void {
+    for (const [userId, source] of eventSources.entries()) {
+        if (source.readyState === EventSource.CLOSED) {
+            eventSources.delete(userId);
+        }
+    }
+}
+
+/**
+ * Force-reopens every channel regardless of readyState. A frozen-then-resumed web view can leave a
+ * socket that reports CONNECTING/OPEN but is attached to a connection the OS already dropped, so
+ * readyState alone can't prove liveness — on resume we discard unconditionally and reconnect.
+ */
+export function reopenSseConnections(onUpdate: OnUpdateCallback, localDeviceId: string | undefined, userIds: string[]): void {
+    closeSseConnections();
+    openSseConnections(onUpdate, localDeviceId, userIds);
 }
 
 /** Closes every channel and clears the registry. Called on unmount and when going offline. */

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeSseConnections, getOpenSseUserIds, openSseConnections } from '../db/sseClient';
+import { closeSseConnections, getOpenSseUserIds, openSseConnections, reopenSseConnections } from '../db/sseClient';
 
 // Mock the API_SERVER constant so URLs are predictable in assertions.
 vi.mock('../constants/globals', () => ({ API_SERVER: 'http://test.local' }));
@@ -34,7 +34,12 @@ beforeEach(() => {
         }
         close(): void {
             this.closed = true;
+            this.readyState = StubEventSource.CLOSED;
         }
+        // The real EventSource exposes these as statics; dropDeadConnections reads EventSource.CLOSED.
+        static readonly CONNECTING = 0;
+        static readonly OPEN = 1;
+        static readonly CLOSED = 2;
     }
     (globalThis as unknown as { EventSource: typeof StubEventSource }).EventSource = StubEventSource;
 });
@@ -111,5 +116,91 @@ describe('closeSseConnections', () => {
 
         expect(created.every((s) => s.closed)).toBe(true);
         expect(getOpenSseUserIds()).toEqual([]);
+    });
+});
+
+describe('dead-channel eviction', () => {
+    it('replaces a channel whose socket closed underneath us (iOS freezing a backgrounded PWA)', () => {
+        const onUpdate = vi.fn();
+        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        const [frozen] = created;
+        if (!frozen) throw new Error('expected one channel');
+
+        // Simulate the OS tearing the connection down without the app closing it.
+        frozen.readyState = 2;
+        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+
+        // Pre-fix this was a no-op: the Map still had the entry, so `has(userId)` reported it live
+        // and the dead socket was never replaced.
+        expect(created).toHaveLength(2);
+        expect(getOpenSseUserIds()).toEqual(['user-a']);
+    });
+
+    it('evicts only the dead channel on a multi-account device', () => {
+        const onUpdate = vi.fn();
+        openSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+        const [deadA, liveB] = created;
+        if (!deadA || !liveB) throw new Error('expected two channels');
+
+        deadA.readyState = 2;
+        openSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+
+        // Only user-a is replaced; user-b's healthy socket is left untouched.
+        expect(created).toHaveLength(3);
+        expect(liveB.closed).toBe(false);
+        expect(getOpenSseUserIds().sort()).toEqual(['user-a', 'user-b']);
+    });
+
+    it('leaves a merely-reconnecting channel alone (CONNECTING is recoverable, not dead)', () => {
+        const onUpdate = vi.fn();
+        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        const [reconnecting] = created;
+        if (!reconnecting) throw new Error('expected one channel');
+
+        reconnecting.readyState = 0;
+        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+
+        expect(created).toHaveLength(1);
+    });
+});
+
+describe('reopenSseConnections', () => {
+    it('discards and recreates every channel regardless of a healthy-looking readyState', () => {
+        const onUpdate = vi.fn();
+        openSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+        const [staleA, staleB] = created;
+
+        // Both still claim OPEN — a resumed web view can report this for a dropped connection.
+        reopenSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+
+        expect(staleA?.closed).toBe(true);
+        expect(staleB?.closed).toBe(true);
+        expect(created).toHaveLength(4);
+        expect(getOpenSseUserIds().sort()).toEqual(['user-a', 'user-b']);
+    });
+
+    it('closes everything and opens nothing when no accounts are logged in', () => {
+        const onUpdate = vi.fn();
+        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        const [existing] = created;
+
+        // Reachable on resume: loggedInUserIdsRef starts empty and a resume can beat the effect
+        // that mirrors the account list into it.
+        reopenSseConnections(onUpdate, 'dev-1', []);
+
+        expect(existing?.closed).toBe(true);
+        expect(created).toHaveLength(1);
+        expect(getOpenSseUserIds()).toEqual([]);
+    });
+
+    it('routes messages from the fresh channel to onUpdate', () => {
+        const onUpdate = vi.fn();
+        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        reopenSseConnections(onUpdate, 'dev-1', ['user-a']);
+
+        const fresh = created[1];
+        fresh?.onmessage?.({ data: JSON.stringify({ type: 'update' }) } as MessageEvent);
+
+        expect(onUpdate).toHaveBeenCalledWith('user-a');
     });
 });

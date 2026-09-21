@@ -40,7 +40,7 @@ import { getRoutinesByUser } from './routineHelpers';
 import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
-import { getOpenSseUserIds } from './sseClient';
+import { closeSseConnections, getOpenSseUserIds } from './sseClient';
 import { flushSyncQueue, waitForPendingFlush } from './syncHelpers';
 import { getWorkContextsByUser } from './workContextHelpers';
 import { createWorkContext } from './workContextMutations';
@@ -206,6 +206,11 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // multi-account-sync e2e spec to assert the device opened one channel per account.
         sseChannelUserIds: () => getOpenSseUserIds(),
 
+        // Test-only: drops every SSE channel without going offline, reproducing the state iOS
+        // leaves a PWA in after freezing its web view (socket gone, app still "online"). The
+        // pwa-resume-sync spec uses it to prove the resume trigger reconnects and re-syncs.
+        closeSse: () => closeSseConnections(),
+
         // ── Reassign (Step 5) ──────────────────────────────────────────────────
         // Drives the cross-account move via /sync/reassign. Returns the discriminated server
         // response so e2e specs can assert ok/error branches without network introspection.
@@ -240,6 +245,8 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         '\n  __gtd.flush()                          → push queue to server',
         '\n  __gtd.pull()                           → pull from server',
         '\n  __gtd.syncState()                      → device cursor + deviceId',
+        '\n  __gtd.sseChannelUserIds()              → userIds with a live SSE channel',
+        '\n  __gtd.closeSse()                       → drop SSE channels (simulates an OS freeze)',
         '\n  __gtd.queuedOps()                      → pending offline queue',
     );
 }
