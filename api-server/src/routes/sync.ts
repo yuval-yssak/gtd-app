@@ -24,6 +24,21 @@ import type { AuthVariables } from '../types/authTypes.js';
 import { type DeviceSyncStateInterface, deviceSyncStateId, type EntitySnapshot, type EntityType, type OpType, type RsvpOpPayload } from '../types/entities.js';
 import { syncIssuesRoutes } from './syncIssues.js';
 
+// Cap on a single SSE stream's lifetime. Chosen well under Cloud Run's 300s request timeout so
+// streams end by our own clean close rather than being cut off by the platform; EventSource then
+// reconnects on its own. See the /events handler for why bounded streams matter to deploys.
+//
+// 120s rather than something tighter because each reconnect is a billed request through the
+// Cloudflare Worker in front of the API, whose free tier has a daily cap this project has hit
+// before: across ~13 open tabs, 60s would cost ~18.7k req/day versus ~9.4k here. A reconnect
+// carries no follow-on pull (the `: connected` frame is a comment, not an `update` message), so
+// this is the entire cost. Halving the cap doubles it, for drain the deploy no longer waits on.
+const SSE_MAX_LIFETIME_MS = 120_000;
+
+// Reconnect delay advertised to EventSource via the stream's `retry:` field, so steady-state
+// request volume is the same on every engine rather than depending on browser defaults.
+const SSE_RECONNECT_DELAY_MS = 3_000;
+
 // Shape of each operation as sent by the client — mirrors the client SyncOperation type.
 // Snapshot uses `userId` (IndexedDB field name); the server remaps it to `user`.
 interface ClientOp {
@@ -486,18 +501,33 @@ export const syncRoutes = new Hono<{ Variables: AuthVariables }>()
             start(controller) {
                 addSseConnection(channelUserId, controller);
 
-                // Initial comment keeps the connection open and confirms it's alive to the client
-                controller.enqueue(new TextEncoder().encode(': connected\n\n'));
+                // `retry:` pins the reconnect delay instead of leaving it to each engine's default
+                // (spec'd at 3s, but not contractual). The lifetime cap below makes reconnects a
+                // routine event rather than an error path, so the interval now drives steady-state
+                // request volume through the Cloudflare Worker and should not vary by browser.
+                // The trailing comment keeps the connection open and confirms it's alive.
+                controller.enqueue(new TextEncoder().encode(`retry: ${SSE_RECONNECT_DELAY_MS}\n: connected\n\n`));
 
-                // Remove from map when client disconnects; EventSource will auto-reconnect
-                c.req.raw.signal.addEventListener('abort', () => {
+                const release = () => {
+                    clearTimeout(lifetimeTimer);
                     removeSseConnection(channelUserId, controller);
                     try {
                         controller.close();
                     } catch {
                         /* already closed */
                     }
-                });
+                };
+
+                // Retire the stream well before Cloud Run's 300s request timeout would kill it.
+                // Streams held open to that limit keep the instance busy, and with
+                // --max-instances=1 a busy instance blocks the next revision from starting at all
+                // (observed 2026-09-22: a deploy took 59m because tabs kept the old instance
+                // alive). Closing cleanly lets EventSource reconnect on its own, so the client
+                // sees no gap, while the instance gets regular windows in which it can drain.
+                const lifetimeTimer = setTimeout(release, SSE_MAX_LIFETIME_MS);
+
+                // Remove from map when client disconnects; EventSource will auto-reconnect
+                c.req.raw.signal.addEventListener('abort', release);
             },
         });
 

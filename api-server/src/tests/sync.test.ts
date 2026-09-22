@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordOperation } from '../lib/operationHelpers.js';
 import { STALE_DEVICE_DAYS } from '../lib/purgeFloor.js';
+import { sseConnectionCountForUser } from '../lib/sseConnections.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
 import { deviceSyncStateId, type EntityType, MAX_OP_ID, type OpType } from '../types/entities.js';
@@ -1701,10 +1702,94 @@ describe('GET /sync/events', () => {
         const reader = res.body!.getReader();
         const { value } = await reader.read();
         const text = new TextDecoder().decode(value);
-        expect(text).toBe(': connected\n\n');
+        // `retry:` pins the reconnect delay across engines; the comment frame proves liveness.
+        expect(text).toBe('retry: 3000\n: connected\n\n');
 
         // Cancel the stream to avoid leaving an open SSE connection in the test runner
         await reader.cancel();
+    });
+
+    // Streams must end on their own well before Cloud Run's 300s request timeout: a stream held to
+    // that limit keeps the instance busy, and under --max-instances=1 a busy instance blocks the
+    // next revision from starting (a deploy on 2026-09-22 took 59m for exactly this reason).
+    it('closes the stream on its own once the lifetime cap elapses', async () => {
+        vi.useFakeTimers();
+        try {
+            const cookie = await loginAsAlice();
+            const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/events', sessionCookie: cookie });
+
+            const reader = res.body!.getReader();
+            // Initial `: connected` frame, enqueued synchronously on start.
+            const first = await reader.read();
+            expect(new TextDecoder().decode(first.value)).toBe('retry: 3000\n: connected\n\n');
+
+            // Nothing closes the stream before the cap.
+            await vi.advanceTimersByTimeAsync(119_000);
+            const beforeCap = await Promise.race([reader.read(), Promise.resolve('still-open' as const)]);
+            expect(beforeCap).toBe('still-open');
+
+            // Crossing the cap ends the stream cleanly, which is what lets EventSource reconnect.
+            await vi.advanceTimersByTimeAsync(2_000);
+            const afterCap = await reader.read();
+            expect(afterCap.done).toBe(true);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    // The abort path must cancel the pending lifetime timer. Without the clearTimeout, every
+    // short-lived connection would leave a live handle holding its controller closure alive for
+    // the full cap -- a slow leak on a single-instance service with many tabs. Neither test above
+    // would notice, since both let the timer fire.
+    it('cancels the lifetime timer when the client disconnects first', async () => {
+        vi.useFakeTimers();
+        try {
+            const cookie = await loginAsAlice();
+            const userId = await getUserId(cookie);
+            const disconnect = new AbortController();
+            const res = await app.fetch(
+                new Request('http://localhost:4000/sync/events', {
+                    headers: { Cookie: `${SESSION_COOKIE}=${cookie}` },
+                    signal: disconnect.signal,
+                }),
+            );
+
+            const reader = res.body!.getReader();
+            await reader.read();
+
+            // Drive the request's abort signal directly: that is what Cloud Run does when the
+            // client socket goes away, and it is the only thing the handler listens for.
+            // `reader.cancel()` alone tears down the reader without firing it.
+            disconnect.abort();
+            await Promise.resolve();
+
+            expect(sseConnectionCountForUser(userId)).toBe(0);
+            // The load-bearing assertion: distinguishes "timer cleared" from "timer still pending
+            // but its effects happen to be idempotent".
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('drops the connection from the registry when the lifetime cap closes the stream', async () => {
+        vi.useFakeTimers();
+        try {
+            const cookie = await loginAsAlice();
+            const userId = await getUserId(cookie);
+            const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/events', sessionCookie: cookie });
+
+            const reader = res.body!.getReader();
+            await reader.read();
+            expect(sseConnectionCountForUser(userId)).toBe(1);
+
+            await vi.advanceTimersByTimeAsync(121_000);
+
+            // Left registered, notifyUserViaSse would keep enqueueing into a dead controller.
+            expect(sseConnectionCountForUser(userId)).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 

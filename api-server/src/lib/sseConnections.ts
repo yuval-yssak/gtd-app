@@ -19,6 +19,11 @@ export function removeSseConnection(userId: string, controller: ReadableStreamDe
     console.log(`[debug-gcal-sync][server] removeSseConnection | userId=${userId} totalForUser=${remaining}`);
 }
 
+/** Open controller count for a user. Lets tests assert the registry is not leaking dead streams. */
+export function sseConnectionCountForUser(userId: string): number {
+    return connections.get(userId)?.size ?? 0;
+}
+
 export function notifyUserViaSse(userId: string, payload: object): void {
     const chunk = encoder.encode(`data: ${JSON.stringify(payload)}\n\n`);
     const controllers = connections.get(userId);

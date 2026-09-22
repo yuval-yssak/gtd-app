@@ -309,7 +309,7 @@ describe('applyAndPublishOperation — strict-mode validation', () => {
 });
 
 describe('applyAndPublishOperations — batch', () => {
-    it('persists multiple ops and stamps the same ts on each', async () => {
+    it('persists multiple ops and stamps ordered, distinct identities', async () => {
         const { ops } = await applyAndPublishOperations(
             userId,
             [
@@ -319,7 +319,15 @@ describe('applyAndPublishOperations — batch', () => {
             { deviceId: 'device-abc' },
         );
         expect(ops).toHaveLength(2);
-        expect(ops[0]!.ts).toBe(ops[1]!.ts);
+        // NOT asserting the two ops share one `ts`: restampOpIdentities calls allocateOpIdentity
+        // per op and each reads the real wall clock (opIdentity.ts), so a batch can straddle a
+        // millisecond boundary. Same root cause as 1d50877. What the batch path must guarantee is
+        // ordering — distinct, monotonic identities whose `_id` ms-prefix agrees with `ts`.
+        const [first, second] = ops;
+        if (!first || !second) throw new Error('expected two ops');
+        expect(first._id).not.toBe(second._id);
+        expect(second.ts >= first.ts).toBe(true);
+        expect(second._id > first._id).toBe(true);
 
         const stored = await itemsDAO.findArray({ user: userId });
         expect(stored).toHaveLength(2);

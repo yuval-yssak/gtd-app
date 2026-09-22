@@ -94,10 +94,64 @@ jobs:
                   # webhook-triggered notifications when the webhook lands on an instance that
                   # doesn't hold the user's SSE controller. Revisit when sseConnections.ts moves
                   # to Redis pub/sub.
+                  # Deployed with --no-traffic, then promoted in the next step. With
+                  # --max-instances=1 the whole service is capped at one instance, so Cloud Run
+                  # cannot start the new revision until the old one drains -- and open browser
+                  # tabs holding long-lived SSE streams keep it busy indefinitely. Letting
+                  # `gcloud run deploy` also migrate traffic made it block on that drain and time
+                  # out (observed 2026-09-22: 59m rollout, gcloud gave up at ~56m and exited 1,
+                  # although the revision came up healthy on its own). Splitting the two keeps
+                  # this step bounded by image rollout alone.
                   gcloud run deploy $SERVICE \
                     --image=$IMAGE \
                     --region=${{ env.REGION }} \
                     --platform=managed \
                     --allow-unauthenticated \
                     --max-instances=1 \
+                    --no-traffic \
                     --env-vars-file=env.yaml
+
+            # Traffic migration is a separate step so the deploy above cannot time out on it:
+            # with --max-instances=1 the new revision only starts once the old instance drains,
+            # and open SSE streams can hold that off for tens of minutes. The wait lives here,
+            # bounded, instead of being folded into an unbounded `gcloud run deploy`.
+            #
+            # This step is REQUIRED, not an optimization: --no-traffic pins traffic to the
+            # specific revision that was live before the deploy and turns off the service's
+            # "float to LATEST" behaviour, so skipping it would leave the old revision serving
+            # indefinitely while the job still looked green. --to-latest restores floating.
+            - name: Route traffic to the new revision
+              run: |
+                  set -euo pipefail
+                  # Bounded wait, not --async: --async returns as soon as the intent is
+                  # recorded, so a revision that fails readiness would leave the old one serving
+                  # with this job still green -- and because --no-traffic pinned the split, that
+                  # silent failure would wedge every later deploy too. 5m is far longer than a
+                  # traffic flip needs and far shorter than the drain that broke `run deploy`.
+                  timeout 300 gcloud run services update-traffic $SERVICE \
+                    --region=${{ env.REGION }} \
+                    --platform=managed \
+                    --to-latest
+
+            # Proves traffic actually landed on the revision we just built. update-traffic
+            # returning 0 only means Cloud Run accepted the request; this asserts the serving
+            # revision is the latest ready one, so a rollout that silently stalled -- leaving the
+            # service pinned to an old revision by --no-traffic -- fails the job instead of
+            # passing it.
+            - name: Verify traffic reached the new revision
+              run: |
+                  set -euo pipefail
+                  for _ in $(seq 1 30); do
+                      serving=$(gcloud run services describe $SERVICE --region=${{ env.REGION }} \
+                        --platform=managed --format='value(status.traffic[0].revisionName)')
+                      latest=$(gcloud run services describe $SERVICE --region=${{ env.REGION }} \
+                        --platform=managed --format='value(status.latestReadyRevisionName)')
+                      if [ -n "$serving" ] && [ "$serving" = "$latest" ]; then
+                          echo "traffic serving $serving"
+                          exit 0
+                      fi
+                      echo "waiting: serving=${serving:-<none>} latest=${latest:-<none>}"
+                      sleep 10
+                  done
+                  echo "traffic never migrated to ${latest:-<unknown>}" >&2
+                  exit 1
