@@ -12,6 +12,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import type { BriefState } from '../../lib/briefSource';
+import { collapseToSingleLine } from '../../lib/singleLineText';
 import type { BriefOrigin } from '../../types/MyDB';
 import {
     BRIEF_LABEL,
@@ -45,14 +46,15 @@ export interface BriefSectionProps {
     /** The AI "Generate brief" button's state machine — see `useBriefGeneration`. */
     generation: BriefGeneration;
     /**
-     * `field` — the always-editable single-line input (the editor's default).
+     * `field` — the always-editable input (the editor's default). It wraps over as many lines as
+     *   the brief needs, but Enter commits rather than inserting a newline.
      * `line` — review presentation: the brief reads as a plain line under the title; clicking it
      * (or pressing Enter/Space on it) opens the field in place, and committing returns to the line.
      */
     variant?: 'field' | 'line';
 }
 
-/** Single-line brief under the title. Saves on blur/Enter through the host's `onCommit`. */
+/** The brief under the title — wraps to as many lines as it needs. Saves on blur/Enter through the host's `onCommit`. */
 export function BriefSection({ value, state, origin, onChange, onCommit, generation, variant = 'field' }: BriefSectionProps) {
     const [isLineEditing, setIsLineEditing] = useState(false);
     const isLine = variant === 'line' && !isLineEditing;
@@ -85,7 +87,9 @@ export function BriefSection({ value, state, origin, onChange, onCommit, generat
                 label={BRIEF_LABEL}
                 placeholder={BRIEF_PLACEHOLDER}
                 value={value}
-                onChange={(e) => onChange(e.target.value)}
+                // The field wraps (multiline), so a pasted newline would otherwise survive into a
+                // brief that renders as one line everywhere. Typed Enter commits (below) instead.
+                onChange={(e) => onChange(collapseToSingleLine(e.target.value))}
                 onBlur={() => commit(value)}
                 onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -93,6 +97,9 @@ export function BriefSection({ value, state, origin, onChange, onCommit, generat
                         commit(value);
                     }
                 }}
+                // Wraps instead of scrolling horizontally so a full brief is readable beside the
+                // title without scrolling. Enter still commits (handled above), so no newline lands.
+                multiline
                 fullWidth
                 size="small"
                 // Only the line→field transition auto-focuses: a freshly opened editor must not
@@ -100,6 +107,9 @@ export function BriefSection({ value, state, origin, onChange, onCommit, generat
                 autoFocus={isLineEditing}
                 slotProps={{
                     input: {
+                        // A multiline field grows downward; the buttons belong on the first line,
+                        // not floating at the vertical centre of a tall box.
+                        sx: { alignItems: 'flex-start' },
                         endAdornment: (
                             <InputAdornment position="end">
                                 {value && (

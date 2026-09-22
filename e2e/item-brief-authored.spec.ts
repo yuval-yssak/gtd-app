@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { closeContextQuietly, withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { briefInputOf } from './helpers/itemEditorLocators';
 import { loginAs } from './helpers/login';
 
 // A brief is a one-line review-oriented condensation of an item, stored as a sidecar synced entity
@@ -18,7 +19,7 @@ test.describe('item brief — authored in the editor', () => {
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
             await page.goto(`/item/${item._id}`);
-            const briefInput = page.getByTestId('briefField').getByRole('textbox', { name: 'Brief' });
+            const briefInput = briefInputOf(page);
             await expect(briefInput).toHaveValue('');
             // No clear affordance while the field is empty.
             await expect(page.getByTestId('briefClearButton')).toHaveCount(0);
@@ -35,9 +36,7 @@ test.describe('item brief — authored in the editor', () => {
             // Reload: the field re-seeds from the persisted row; a fresh (hash-matching) brief
             // shows no stale marker.
             await page.reload();
-            await expect(page.getByTestId('briefField').getByRole('textbox', { name: 'Brief' })).toHaveValue(
-                'Passport before the June trip — photos are the blocker',
-            );
+            await expect(briefInputOf(page)).toHaveValue('Passport before the June trip — photos are the blocker');
             await expect(page.getByTestId('briefStaleMarker')).toHaveCount(0);
 
             // Second device for the same user: the brief arrives via bootstrap/sync.
@@ -48,18 +47,16 @@ test.describe('item brief — authored in the editor', () => {
                     .poll(async () => (await gtd.getItemBrief(page2, item._id))?.text, { timeout: 15_000 })
                     .toBe('Passport before the June trip — photos are the blocker');
                 await page2.goto(`/item/${item._id}`);
-                await expect(page2.getByTestId('briefField').getByRole('textbox', { name: 'Brief' })).toHaveValue(
-                    'Passport before the June trip — photos are the blocker',
-                );
+                await expect(briefInputOf(page2)).toHaveValue('Passport before the June trip — photos are the blocker');
 
                 // Clear on device 1 via the (x) adornment → delete op → gone on device 2 too.
                 await page.getByTestId('briefClearButton').click();
-                await expect(page.getByTestId('briefField').getByRole('textbox', { name: 'Brief' })).toHaveValue('');
+                await expect(briefInputOf(page)).toHaveValue('');
                 await expect.poll(async () => await gtd.getItemBrief(page, item._id)).toBeUndefined();
                 await gtd.flush(page);
                 await expect.poll(async () => await gtd.getItemBrief(page2, item._id), { timeout: 15_000 }).toBeUndefined();
                 // The open editor on device 2 adopts the deletion into its clean field silently.
-                await expect(page2.getByTestId('briefField').getByRole('textbox', { name: 'Brief' })).toHaveValue('');
+                await expect(briefInputOf(page2)).toHaveValue('');
                 await expect(page2.getByTestId('itemEditorConflictNotice')).toHaveCount(0);
             } finally {
                 await closeContextQuietly(ctx2);
@@ -74,7 +71,7 @@ test.describe('item brief — authored in the editor', () => {
             await gtd.flush(page1);
 
             await page1.goto(`/item/${item._id}`);
-            const briefInput = page1.getByTestId('briefField').getByRole('textbox', { name: 'Brief' });
+            const briefInput = briefInputOf(page1);
             await briefInput.fill('Overdue cleaning; insurance resets in January');
             await briefInput.press('Enter');
             await expect.poll(async () => (await gtd.getItemBrief(page1, item._id))?.text).toBe('Overdue cleaning; insurance resets in January');

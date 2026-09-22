@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { briefInputOf } from './helpers/itemEditorLocators';
 
 // Weekly-review presentation of item briefs: a review card with a brief on show leads with the
 // brief line and folds the notes behind "Show notes"; the header's "Show briefs" switch restores
@@ -62,9 +63,7 @@ test.describe('weekly review — briefs', () => {
             await expect(card.getByTestId('showNotesButton')).toHaveCount(0);
             await expect(card.getByTestId('pageNotesPreview')).toBeVisible();
             await expect(card.getByTestId('briefLine')).toHaveCount(0);
-            await expect(card.getByTestId('briefField').getByRole('textbox', { name: 'Brief' })).toHaveValue(
-                'Passport before the June trip — photos are the blocker',
-            );
+            await expect(briefInputOf(card)).toHaveValue('Passport before the June trip — photos are the blocker');
 
             // Toggle back on → brief-first again (the preference is live, no reload needed). The
             // notes stay expanded: the disclosure was already opened on this card, and expanding is
@@ -102,7 +101,7 @@ test.describe('weekly review — briefs', () => {
             await expect(card.getByTestId('showNotesButton')).toHaveCount(0);
             await expect(card.getByTestId('briefLine')).toHaveCount(0);
             // The brief field is still there to author one.
-            await expect(card.getByTestId('briefField').getByRole('textbox', { name: 'Brief' })).toHaveValue('');
+            await expect(briefInputOf(card)).toHaveValue('');
             // Opening the review runs the review-start sweep, which writes a `skipped` row for
             // these short notes — so this card ends up `declined`, worded for that origin. Either
             // way there is no brief LINE and the layout is not brief-first; that is what this
@@ -141,7 +140,7 @@ test.describe('weekly review — briefs', () => {
 
             // Typing their own brief clears the caption on the FIRST keystroke — before any blur,
             // commit or save; the stored row is still the text-less one at that instant.
-            const field = page.getByTestId('briefField').getByRole('textbox', { name: 'Brief' });
+            const field = briefInputOf(page);
             await expect(field).toHaveValue('');
             await field.click();
             // Focus alone keeps the caption: with nothing typed it still reads as a hint.

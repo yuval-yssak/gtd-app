@@ -496,7 +496,10 @@ test.describe('weekly review', () => {
             // The ⓘ actually carries the guidance text — an empty tooltip title would pass a bare
             // visibility check while silently deleting the coaching copy.
             await page.getByTestId('stageGuidanceInfo').hover();
-            await expect(page.getByRole('tooltip')).toContainText('Still the right next step?');
+            // Scope to THIS tooltip: the nav button's "Next stage" tooltip from the click above can
+            // still be fading out, and a bare getByRole('tooltip') then hits two elements and
+            // fails strict mode.
+            await expect(page.getByRole('tooltip', { name: /Still the right next step\?/ })).toBeVisible();
 
             // Sticky across STAGES too: traveling on keeps the expanded header.
             await page.getByTestId('stageTravelNext').click();

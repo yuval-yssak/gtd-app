@@ -17,13 +17,11 @@ test.describe('Item editor — page mode UX', () => {
             await page.goto(`/item/${item._id}`);
             await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
 
-            // The title input must not own focus — auto-focus pins the cursor at the end of long
-            // titles, scrolling the start out of view.
-            const titleHasFocus = await page.evaluate(() => {
-                const input = document.querySelector('input[type="text"]') as HTMLInputElement | null;
-                return input !== null && document.activeElement === input;
-            });
-            expect(titleHasFocus).toBe(false);
+            // The title field must not own focus — auto-focus pins the cursor at the end of long
+            // titles, scrolling the start out of view. (The field is a wrapping textarea, not an
+            // `input`, so assert against the located element rather than a tag selector — a tag
+            // selector that matches nothing would pass for the wrong reason.)
+            await expect(page.getByRole('textbox', { name: 'Title' })).not.toBeFocused();
         });
     });
 

@@ -1,7 +1,8 @@
-import { expect, type Locator, type Page, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { briefInputOf } from './helpers/itemEditorLocators';
 
 // The on-demand "Generate brief" button (sparkle) in the item editor and on the weekly-review
 // card. Playwright starts the API server with BRIEF_FAKE_MODEL=1, so the model is a deterministic
@@ -17,10 +18,6 @@ const LONG_NOTES = [
 ].join(' ');
 const FAKE_BRIEF = `[fake] ${FIRST_SENTENCE}`;
 const SHORT_NOTES = 'Call the clinic and ask for the earliest slot.';
-
-function briefInputOf(scope: Page | Locator) {
-    return scope.getByTestId('briefField').getByRole('textbox', { name: 'Brief' });
-}
 
 /**
  * Opening the weekly review also fires the review-start sweep, which under BRIEF_FAKE_MODEL=1

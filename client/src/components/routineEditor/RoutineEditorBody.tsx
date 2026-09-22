@@ -37,6 +37,7 @@ import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
 import { computeSplitDate, routineHasPastItems } from '../../lib/routineSplitUtils';
 import { RruleExhaustedError } from '../../lib/rruleUtils';
+import { collapseToSingleLine } from '../../lib/singleLineText';
 import { offerUndo } from '../../lib/undoStore';
 import type { EnergyLevel, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { GCAL_OWNED_ROUTINE_KEYS } from '../../types/MyDB';
@@ -918,10 +919,23 @@ export function RoutineEditorBody({ db, userId, workContexts, people, routine, o
                 label="Title"
                 value={form.title}
                 onChange={(e) => {
-                    patch({ title: e.target.value });
-                    textAutosave.onChange({ title: e.target.value, notes: formRef.current.notes });
+                    // Collapse first: the field wraps (multiline), so a paste can carry newlines
+                    // into a title that renders on one line everywhere it is shown.
+                    const nextTitle = collapseToSingleLine(e.target.value);
+                    patch({ title: nextTitle });
+                    textAutosave.onChange({ title: nextTitle, notes: formRef.current.notes });
                 }}
                 onBlur={() => void textAutosave.flush()}
+                // Wraps instead of scrolling horizontally, so a long routine title is readable in
+                // full — including on the weekly review's routine cards.
+                multiline
+                // Enter would insert a newline in a multiline field; commit instead.
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void textAutosave.flush();
+                    }
+                }}
                 fullWidth
                 required
                 autoFocus={chrome === 'dialog'}

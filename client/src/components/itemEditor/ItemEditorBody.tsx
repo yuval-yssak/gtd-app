@@ -52,6 +52,7 @@ import { briefState } from '../../lib/briefSource';
 import { omitArchived } from '../../lib/entityUsage';
 import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
+import { collapseToSingleLine } from '../../lib/singleLineText';
 import { offerUndo } from '../../lib/undoStore';
 import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
@@ -470,7 +471,11 @@ export function ItemEditorBody({
     // commit re-seeds, the flag stays put in state — the acknowledgement survives the commit.
     const [hasTextEdits, setHasTextEdits] = useState(false);
 
-    function onTitleChange(nextTitle: string) {
+    function onTitleChange(rawTitle: string) {
+        // The field wraps (multiline) so a pasted newline would otherwise survive into the stored
+        // title, which is a single-line value everywhere it is shown. Typed Enter is swallowed by
+        // the field's own onKeyDown; this covers paste, drop and autofill.
+        const nextTitle = collapseToSingleLine(rawTitle);
         setTitle(nextTitle);
         setHasTextEdits(nextTitle !== seedForms.title || formRefs.current.notes !== seedForms.notes);
         if (textAutosaveEnabled) {
@@ -1051,6 +1056,18 @@ export function ItemEditorBody({
                 value={title}
                 onChange={(e) => onTitleChange(e.target.value)}
                 onBlur={() => void textAutosave.flush()}
+                // Wraps instead of scrolling horizontally: a long title must be readable in full
+                // without scrolling, in the editor and in the weekly review (which reuses this body).
+                multiline
+                // Enter would insert a newline in a multiline field — titles are single-line values,
+                // so swallow it and commit what is typed so far. For meetings with attendees the
+                // flush is a no-op: that text waits for an explicit Save (see textAutosaveEnabled).
+                onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        void textAutosave.flush();
+                    }
+                }}
                 fullWidth
                 required
                 {...(shouldAutoFocus ? { autoFocus: true } : {})}

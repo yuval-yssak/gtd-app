@@ -2,6 +2,7 @@ import { expect, type Page, type Request, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { briefInputOf } from './helpers/itemEditorLocators';
 
 /**
  * Review-start brief sweep (`docs/plans/item-brief.md` § 3.1, open decision 5): opening the
@@ -111,7 +112,7 @@ test.describe('weekly review — brief sweep on start', () => {
             await expect(page.getByRole('alert')).toHaveCount(0);
             const titleInput = card.getByRole('textbox', { name: 'Title' });
             await titleInput.fill('Renew passport this week');
-            await card.getByTestId('briefField').getByRole('textbox', { name: 'Brief' }).click();
+            await briefInputOf(card).click();
             await expect.poll(async () => (await gtd.listItems(page)).find((row) => row._id === item._id)?.title).toBe('Renew passport this week');
         });
     });
