@@ -36,6 +36,7 @@ import {
     sortAnchorOccurrence,
 } from './routineReviewCardLogic';
 import { StageActionBar, type StageTravel } from './StageActionBar';
+import { StageCardScroller } from './StageCardScroller';
 import { StageNavButtons } from './StageNavButtons';
 import stageStyles from './stageLayout.module.css';
 
@@ -158,52 +159,54 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
 
     return (
         <Box className={stageStyles.stageRoot} data-testid="routineReviewCard">
-            <Paper elevation={3} className={stageStyles.editorCard}>
-                <RoutineReviewBanner routine={routine} isException={false} routineId={routine._id} />
-                {whenLabel && (
-                    <Box className={styles.whenRow}>
-                        <Typography variant="h6" component="p" data-testid="routineCardWhen">
-                            {whenLabel}
-                        </Typography>
-                        {relativeLabel && (
-                            <Typography variant="body2" color="text.secondary" data-testid="routineCardWhenRelative">
-                                {relativeLabel}
+            <StageCardScroller>
+                <Paper elevation={3} className={stageStyles.editorCard}>
+                    <RoutineReviewBanner routine={routine} isException={false} routineId={routine._id} />
+                    {whenLabel && (
+                        <Box className={styles.whenRow}>
+                            <Typography variant="h6" component="p" data-testid="routineCardWhen">
+                                {whenLabel}
                             </Typography>
-                        )}
-                        {isAnchorOverdue && <Chip label="Overdue" color="warning" size="small" data-testid="routineCardOverdueChip" />}
-                    </Box>
-                )}
-                {/* No repeat icon here: the banner above already carries it — a second one made the
+                            {relativeLabel && (
+                                <Typography variant="body2" color="text.secondary" data-testid="routineCardWhenRelative">
+                                    {relativeLabel}
+                                </Typography>
+                            )}
+                            {isAnchorOverdue && <Chip label="Overdue" color="warning" size="small" data-testid="routineCardOverdueChip" />}
+                        </Box>
+                    )}
+                    {/* No repeat icon here: the banner above already carries it — a second one made the
                     title read as a different KIND of entry than the one-offs around it. */}
-                <Box className={styles.titleRow}>
-                    <Typography variant="h5" data-testid="routineCardTitle">
-                        {routine.title}
+                    <Box className={styles.titleRow}>
+                        <Typography variant="h5" data-testid="routineCardTitle">
+                            {routine.title}
+                        </Typography>
+                        <Tooltip title="Open routine page">
+                            <IconButton
+                                size="small"
+                                onClick={(e) => navigateOrNewTab(e, { to: '/routine/$routineId', params: { routineId: routine._id } })}
+                                data-testid="routineCardOpenPage"
+                            >
+                                <OpenInNewIcon fontSize="small" />
+                            </IconButton>
+                        </Tooltip>
+                    </Box>
+                    <Typography variant="body2" color="text.secondary" className={styles.occurrences} data-testid="routineCardOccurrences">
+                        {occurrenceSummary(occurrences, anchor)}
                     </Typography>
-                    <Tooltip title="Open routine page">
-                        <IconButton
-                            size="small"
-                            onClick={(e) => navigateOrNewTab(e, { to: '/routine/$routineId', params: { routineId: routine._id } })}
-                            data-testid="routineCardOpenPage"
-                        >
-                            <OpenInNewIcon fontSize="small" />
-                        </IconButton>
-                    </Tooltip>
-                </Box>
-                <Typography variant="body2" color="text.secondary" className={styles.occurrences} data-testid="routineCardOccurrences">
-                    {occurrenceSummary(occurrences, anchor)}
-                </Typography>
-                {notes && (
-                    <Box className={styles.notes} data-testid="routineCardNotes">
-                        <MarkdownPreview markdown={notes} />
-                    </Box>
-                )}
-                {eventItem && (
-                    <Box className={styles.eventDetails}>
-                        <CalendarEventLinks item={eventItem} calendarOptions={calendarOptions} />
-                        <MeetingDetails item={eventItem} db={db} readOnly onRsvp={noopAsync} onAttendeesChange={noopAsync} />
-                    </Box>
-                )}
-            </Paper>
+                    {notes && (
+                        <Box className={styles.notes} data-testid="routineCardNotes">
+                            <MarkdownPreview markdown={notes} />
+                        </Box>
+                    )}
+                    {eventItem && (
+                        <Box className={styles.eventDetails}>
+                            <CalendarEventLinks item={eventItem} calendarOptions={calendarOptions} />
+                            <MeetingDetails item={eventItem} db={db} readOnly onRsvp={noopAsync} onAttendeesChange={noopAsync} />
+                        </Box>
+                    )}
+                </Paper>
+            </StageCardScroller>
             <StageActionBar travel={lockedTravel}>
                 <StageNavButtons {...nav.liveNavProps(isBusy)} />
                 {actionable && (

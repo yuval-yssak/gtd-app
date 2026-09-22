@@ -23,6 +23,7 @@ import {
     stageEndTitle,
 } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
+import { StageCardScroller } from './StageCardScroller';
 import { StageEmptyCard } from './StageEmptyCard';
 import { StageNavButtons } from './StageNavButtons';
 import styles from './stageLayout.module.css';
@@ -174,25 +175,27 @@ export function FocusStage({ stage, queue, db, onQueueChange, onStageFinished, t
 
     return (
         <Box className={styles.stageRoot} data-testid="focusStage">
-            <Paper elevation={3} className={styles.editorCard}>
-                {currentItem.routineId && <RoutineReviewBanner routine={itemRoutine} isException={isExceptionItem} routineId={currentItem.routineId} />}
-                <ItemEditorBody
-                    key={currentItem._id}
-                    item={currentItem}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    onClose={nav.closeAsDecisionOrSkip}
-                    onSaved={refreshItems}
-                    onSaveCommitted={nav.markSaveCommitted}
-                    onDirtyLockChange={setIsEditorLocked}
-                    onFromGmailReadOnly={() => setToast(FROM_GMAIL_READONLY_MESSAGE)}
-                    chrome="page"
-                    presentation="review"
-                    renderActions={renderActions}
-                    actionsContainer={actionsBarEl}
-                />
-            </Paper>
+            <StageCardScroller>
+                <Paper elevation={3} className={styles.editorCard}>
+                    {currentItem.routineId && <RoutineReviewBanner routine={itemRoutine} isException={isExceptionItem} routineId={currentItem.routineId} />}
+                    <ItemEditorBody
+                        key={currentItem._id}
+                        item={currentItem}
+                        db={db}
+                        people={people}
+                        workContexts={workContexts}
+                        onClose={nav.closeAsDecisionOrSkip}
+                        onSaved={refreshItems}
+                        onSaveCommitted={nav.markSaveCommitted}
+                        onDirtyLockChange={setIsEditorLocked}
+                        onFromGmailReadOnly={() => setToast(FROM_GMAIL_READONLY_MESSAGE)}
+                        chrome="page"
+                        presentation="review"
+                        renderActions={renderActions}
+                        actionsContainer={actionsBarEl}
+                    />
+                </Paper>
+            </StageCardScroller>
             <StageActionBar onBarMounted={setActionsBarEl} travel={lockedTravel}>
                 {reassignInFlight && <StageNavButtons {...nav.blockedNavProps('focusBlockedSkip')} />}
             </StageActionBar>

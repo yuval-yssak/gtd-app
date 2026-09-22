@@ -12,6 +12,7 @@ import { type ItemEditorActionsApi, ItemEditorBody } from '../itemEditor/ItemEdi
 import { RevisitDecisionCard } from './RevisitDecisionCard';
 import { currentQueueItemId, type StageDecisionUndo, type StageQueue, stageEndTitle } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
+import { StageCardScroller } from './StageCardScroller';
 import { StageEmptyCard } from './StageEmptyCard';
 import { StageNavButtons } from './StageNavButtons';
 import styles from './stageLayout.module.css';
@@ -74,38 +75,40 @@ export function ClarifyStage({ queue, db, onQueueChange, onStageFinished, travel
 
     return (
         <Box className={styles.stageRoot} data-testid="clarifyStage">
-            <Paper elevation={3} className={styles.editorCard}>
-                <ItemEditorBody
-                    key={currentItem._id}
-                    item={currentItem}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    // A committed clarify IS the decision (onSaveCommitted → post-save onClose);
-                    // an Escape-driven onClose steps past the item instead (still undecided).
-                    onClose={nav.closeAsDecisionOrSkip}
-                    onSaved={refreshItems}
-                    onSaveCommitted={nav.markSaveCommitted}
-                    onDirtyLockChange={setIsEditorLocked}
-                    onFromGmailReadOnly={() => setToast(FROM_GMAIL_READONLY_MESSAGE)}
-                    chrome="page"
-                    presentation="review"
-                    renderActions={(api: ItemEditorActionsApi) => (
-                        <>
-                            <StageNavButtons {...nav.liveNavProps(api.isSaving)} />
-                            <Button
-                                variant="contained"
-                                disabled={api.saveDisabled}
-                                onClick={() => nav.armExplicitSave(api.isRoutineDestination ? undefined : captureUndo(), api.triggerSave)}
-                                data-testid="clarifySaveNext"
-                            >
-                                Save & next
-                            </Button>
-                        </>
-                    )}
-                    actionsContainer={actionsBarEl}
-                />
-            </Paper>
+            <StageCardScroller>
+                <Paper elevation={3} className={styles.editorCard}>
+                    <ItemEditorBody
+                        key={currentItem._id}
+                        item={currentItem}
+                        db={db}
+                        people={people}
+                        workContexts={workContexts}
+                        // A committed clarify IS the decision (onSaveCommitted → post-save onClose);
+                        // an Escape-driven onClose steps past the item instead (still undecided).
+                        onClose={nav.closeAsDecisionOrSkip}
+                        onSaved={refreshItems}
+                        onSaveCommitted={nav.markSaveCommitted}
+                        onDirtyLockChange={setIsEditorLocked}
+                        onFromGmailReadOnly={() => setToast(FROM_GMAIL_READONLY_MESSAGE)}
+                        chrome="page"
+                        presentation="review"
+                        renderActions={(api: ItemEditorActionsApi) => (
+                            <>
+                                <StageNavButtons {...nav.liveNavProps(api.isSaving)} />
+                                <Button
+                                    variant="contained"
+                                    disabled={api.saveDisabled}
+                                    onClick={() => nav.armExplicitSave(api.isRoutineDestination ? undefined : captureUndo(), api.triggerSave)}
+                                    data-testid="clarifySaveNext"
+                                >
+                                    Save & next
+                                </Button>
+                            </>
+                        )}
+                        actionsContainer={actionsBarEl}
+                    />
+                </Paper>
+            </StageCardScroller>
             <StageActionBar onBarMounted={setActionsBarEl} travel={lockedTravel}>
                 {reassignInFlight && <StageNavButtons {...nav.blockedNavProps('clarifyBlockedSkip')} />}
             </StageActionBar>

@@ -243,11 +243,11 @@ function mergeKeyOf(itemTs: string, briefTs: string | undefined): string {
 }
 
 /** Resolves the body-class for the chrome variant. dialog/page render the bare flex column;
- *  expand and popover add their own padding/borders. */
-function bodyClassFor(chrome: ItemEditorChrome): string {
-    if (chrome === 'expand') return styles.bodyExpand;
-    if (chrome === 'popover') return styles.bodyPopover;
-    return styles.body;
+ *  expand and popover add their own padding/borders. The review presentation adds a density
+ *  modifier on top (tighter section gap, no notes-preview height floor). */
+export function bodyClassFor(chrome: ItemEditorChrome, presentation: EditorPresentation): string {
+    const base = chrome === 'expand' ? styles.bodyExpand : chrome === 'popover' ? styles.bodyPopover : styles.body;
+    return classNames(base, { [styles.bodyReview]: presentation === 'review' });
 }
 
 /**
@@ -1006,7 +1006,7 @@ export function ItemEditorBody({
         // Dialog wrapper short-circuits to ReassignInFlightDialog before mounting the body, so this
         // branch only fires under popover/expand/page.
         return (
-            <Box className={bodyClassFor(chrome)}>
+            <Box className={bodyClassFor(chrome, presentation)}>
                 <ReassignInFlightInline onClose={closeEditor} />
             </Box>
         );
@@ -1036,7 +1036,7 @@ export function ItemEditorBody({
         );
 
     return (
-        <Box className={bodyClassFor(chrome)}>
+        <Box className={bodyClassFor(chrome, presentation)}>
             {conflictFields.length > 0 && (
                 <Alert
                     severity="info"
@@ -1173,6 +1173,7 @@ export function ItemEditorBody({
                         workContexts={pickerWorkContexts}
                         people={pickerPeople}
                         usage={entityUsage}
+                        dense={presentation === 'review'}
                     />
                 </>
             )}

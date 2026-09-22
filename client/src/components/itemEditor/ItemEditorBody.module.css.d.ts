@@ -2,6 +2,7 @@ declare const styles: {
     readonly body: string;
     readonly bodyExpand: string;
     readonly bodyPopover: string;
+    readonly bodyReview: string;
     readonly briefLine: string;
     readonly empty: string;
     readonly inlineActions: string;

@@ -7,3 +7,12 @@
 .timeField {
     width: 11.25rem;
 }
+
+/* Dense (weekly review) layout: the small controls — tickler date, energy toggle, time estimate,
+ * urgent/focus checkboxes, expected-by date — are all far narrower than the card, so the grid in
+ * NextActionFields pairs them into two columns, reclaiming vertical space without shrinking any
+ * control. The chip clouds opt out here: they genuinely use the full width, and a wider row wraps
+ * less. Applied only in the dense layout — there is no grid to span in the single-column one. */
+.fullSpan {
+    grid-column: 1 / -1;
+}

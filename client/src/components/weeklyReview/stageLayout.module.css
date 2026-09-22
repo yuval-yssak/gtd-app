@@ -12,24 +12,46 @@
     width: 100%;
 }
 
-/* Natural height while it fits; shrinks and scrolls internally when the item content is taller
- * than the space above the action bar (min-height: 0 lets it shrink past its content). */
-.editorCard {
-    width: 100%;
-    max-width: 40rem;
-    padding: 1.5rem;
+/* The scrollport, and the reason it is a wrapper rather than the card itself: the card is capped
+ * at 44rem and centered, so scrolling the card left the gutters beside it over a non-scrollable
+ * ancestor — a wheel with the pointer in the margin did nothing. This spans the full column
+ * width, so those gutters scroll the review content too. It must stay a SIBLING of the pinned
+ * action bar (not an ancestor), or the bar would scroll away with the content. */
+.cardScroller {
+    flex: 1;
     min-height: 0;
+    width: 100%;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
 }
 
-/* Fills the space above the bar so short content (empty state) centers instead of hugging the top. */
+/* Grows to its natural height inside .cardScroller; flex-shrink: 0 stops the flex parent from
+ * squashing a tall card instead of letting it overflow into the scroll. */
+.editorCard {
+    width: 100%;
+    /* Wide enough for the review's two-column metadata grid (see NextActionFields.module.css) —
+       the small date/number/toggle controls pair up instead of each owning a full row. */
+    max-width: 44rem;
+    padding: 1.5rem;
+    flex-shrink: 0;
+}
+
+/* Fills the space above the bar so short content (empty state) centers instead of hugging the top.
+ * Scrolls for the same reason as .cardScroller: it spans the full column width, so a wheel in the
+ * gutters beside a centered card still scrolls. */
 .centeredArea {
     flex: 1;
     min-height: 0;
     width: 100%;
     display: flex;
-    align-items: center;
+    /* `safe` centers only while the content fits; once it is taller than the area it degrades to
+     * flex-start. Plain `center` puts the card's top at a NEGATIVE offset, which scrollTop cannot
+     * reach (it floors at 0) — with overflow:auto those pixels are clipped away entirely. */
+    align-items: safe center;
     justify-content: center;
+    overflow-y: auto;
 }
 
 /* Anchors the item-level ◀ ▶ pair to the content slot's left edge while the decision buttons
@@ -48,7 +70,8 @@
     margin-top: auto;
     flex-shrink: 0;
     width: 100%;
-    max-width: 40rem;
+    /* Matches .editorCard so the decision buttons stay flush with the card's right edge. */
+    max-width: 44rem;
     padding: 0.75rem 1rem;
     display: flex;
     align-items: center;
@@ -57,11 +80,11 @@
 
 /* The fixed quick-capture FAB (3.5rem circle at right:1.25rem, fixed to the VIEWPORT) floats over
  * the bar's right end until the viewport is wide enough for the bar to clear it. Mobile (no
- * drawer): the 40rem bar centers in the viewport → overlap below ~49.5rem. Desktop (permanent
+ * drawer): the 44rem bar centers in the viewport → overlap below ~53.5rem. Desktop (permanent
  * 15rem drawer + 1.5rem padding from min-width 56.25rem): the bar centers in the CONTENT column,
- * shifted right → overlap below ~64.5rem. Gate the reserve on the larger threshold; above it the
+ * shifted right → overlap below ~68.5rem. Gate the reserve on the larger threshold; above it the
  * padding stays symmetric. */
-@media (max-width: 66rem) {
+@media (max-width: 70rem) {
     .actionBar {
         padding-right: 5rem;
     }

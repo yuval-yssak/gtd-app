@@ -14,6 +14,7 @@ import styles from './InboxChecklistStage.module.css';
 import { ManageInboxesDialog } from './ManageInboxesDialog';
 import { isChecklistComplete } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
+import { StageCardScroller } from './StageCardScroller';
 import layoutStyles from './stageLayout.module.css';
 
 interface InboxChecklistStageProps {
@@ -45,31 +46,33 @@ export function InboxChecklistStage({ db, tickedInboxIds, onToggleTick, onStageF
 
     return (
         <Box className={layoutStyles.stageRoot} data-testid="inboxChecklistStage">
-            <Paper elevation={2} className={styles.checklistCard}>
-                {hasExternalInboxes ? (
-                    myInboxes.map((inbox) => (
-                        <FormControlLabel
-                            key={inbox._id}
-                            control={<Checkbox checked={tickedInboxIds.includes(inbox._id)} onChange={() => onToggleTick(inbox._id)} />}
-                            label={<Typography>{inbox.name}</Typography>}
-                            data-testid="reviewInboxRow"
-                        />
-                    ))
-                ) : (
-                    <Typography color="text.secondary" data-testid="emptyChecklistMessage">
-                        No external inboxes to clear — add one with “Edit inboxes”, or just continue.
-                    </Typography>
-                )}
-                <Button
-                    size="small"
-                    startIcon={<EditIcon />}
-                    className={styles.manageButton}
-                    onClick={() => setIsManaging(true)}
-                    data-testid="manageInboxesButton"
-                >
-                    Edit inboxes
-                </Button>
-            </Paper>
+            <StageCardScroller>
+                <Paper elevation={2} className={styles.checklistCard}>
+                    {hasExternalInboxes ? (
+                        myInboxes.map((inbox) => (
+                            <FormControlLabel
+                                key={inbox._id}
+                                control={<Checkbox checked={tickedInboxIds.includes(inbox._id)} onChange={() => onToggleTick(inbox._id)} />}
+                                label={<Typography>{inbox.name}</Typography>}
+                                data-testid="reviewInboxRow"
+                            />
+                        ))
+                    ) : (
+                        <Typography color="text.secondary" data-testid="emptyChecklistMessage">
+                            No external inboxes to clear — add one with “Edit inboxes”, or just continue.
+                        </Typography>
+                    )}
+                    <Button
+                        size="small"
+                        startIcon={<EditIcon />}
+                        className={styles.manageButton}
+                        onClick={() => setIsManaging(true)}
+                        data-testid="manageInboxesButton"
+                    >
+                        Edit inboxes
+                    </Button>
+                </Paper>
+            </StageCardScroller>
             {/* Same pinned bar position as every other stage's primary action / Continue. The
                 travel ▶ lets the user move on without ticking every bucket (no skip mark). */}
             <StageActionBar travel={travel}>

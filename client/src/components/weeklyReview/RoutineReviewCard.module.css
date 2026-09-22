@@ -20,7 +20,7 @@
     margin-top: 0.25rem;
 }
 
-/* Same long-notes ceiling as the item editor's preview: the card's own scroll (.editorCard) would
+/* Same long-notes ceiling as the item editor's preview: the stage scroll (.cardScroller) would
  * otherwise have to be dragged past the whole notes block to reach the rest of the card. */
 .notes {
     margin-top: 1rem;

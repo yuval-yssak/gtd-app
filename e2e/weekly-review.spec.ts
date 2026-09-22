@@ -225,7 +225,7 @@ test.describe('weekly review', () => {
         });
     });
 
-    test('decision buttons stay pinned at one screen position: long items scroll inside their card, empty-stage Continue lands in the same bar', async ({
+    test('decision buttons stay pinned at one screen position: long items scroll inside the stage area, empty-stage Continue lands in the same bar', async ({
         browser,
     }) => {
         await withOneLoggedInDevice(browser, `wr-pinned-${dayjs().valueOf()}@example.com`, async (page) => {
@@ -247,21 +247,24 @@ test.describe('weekly review', () => {
             const viewport = page.viewportSize();
             if (!viewport) throw new Error('expected a viewport');
             const focusStage = page.getByTestId('focusStage');
-            const editorCardOverflow = () =>
+            // A full-width wrapper around the card owns the scroll, not the card itself: the card
+            // is capped at 44rem and centered, so scrolling it left the side gutters dead to the
+            // wheel. The wrapper is a SIBLING of the pinned bar, so the bar still never scrolls.
+            const stageScrollOverflow = () =>
                 focusStage.evaluate((stage) => {
-                    const card = stage.firstElementChild;
-                    return card ? card.scrollHeight - card.clientHeight : -1;
+                    const scroller = stage.querySelector('[data-testid="stageCardScroller"]');
+                    return scroller ? scroller.scrollHeight - scroller.clientHeight : -1;
                 });
 
             // Item 1: primary button fully visible with zero scrolling, and living in the pinned
-            // bar — NOT inside the scrolling editor card (pins the portal destination).
+            // bar — NOT inside the scrolling stage area (pins the portal destination).
             await expect(focusStage.getByRole('textbox', { name: 'Title' })).toBeVisible();
             await expect(page.getByTestId('focusKeep')).toBeInViewport();
             await expect(page.getByTestId('stageActionBar').getByTestId('focusKeep')).toBeVisible();
             const barOnFirstItem = await page.getByTestId('stageActionBar').boundingBox();
             if (!barOnFirstItem) throw new Error('expected the action bar to render');
             expect(barOnFirstItem.y + barOnFirstItem.height).toBeLessThanOrEqual(viewport.height);
-            const firstItemOverflow = await editorCardOverflow();
+            const firstItemOverflow = await stageScrollOverflow();
             // Portal ordering: portaled actions land in the content slot, LEFT of the ⏩ travel
             // arrow — a revert to portaling into the bar element itself would append them after it.
             const keepBox = await page.getByTestId('focusKeep').boundingBox();
@@ -280,11 +283,11 @@ test.describe('weekly review', () => {
             await expect(focusStage.getByRole('textbox', { name: 'Title' })).toBeVisible();
             const barOnSecondItem = await page.getByTestId('stageActionBar').boundingBox();
             expect(barOnSecondItem?.y).toBeCloseTo(barOnFirstItem.y, 0);
-            const secondItemOverflow = await editorCardOverflow();
+            const secondItemOverflow = await stageScrollOverflow();
             // Discrimination guard: the long item genuinely overflowed its card (otherwise this
             // test would pass trivially with content that happens to fit).
             expect(Math.max(firstItemOverflow, secondItemOverflow)).toBeGreaterThan(0);
-            // NOTHING outside the card scrolls — neither the layout container nor the document
+            // NOTHING outside the stage area scrolls — neither the layout container nor the document
             // (the document is what a stray in-flow element, e.g. a de-fixed FAB, would grow).
             const mainOverflow = await page.evaluate(() => {
                 const main = document.querySelector('main');

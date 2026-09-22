@@ -12,6 +12,7 @@ import { ItemEditorBody } from '../itemEditor/ItemEditorBody';
 import { DisabledCapableTooltip } from './DisabledCapableTooltip';
 import { routineIdOfEntry, type StageDecision } from './reviewFlowState';
 import { StageActionBar, type StageTravel } from './StageActionBar';
+import { StageCardScroller } from './StageCardScroller';
 import { StageNavButtons } from './StageNavButtons';
 import styles from './stageLayout.module.css';
 
@@ -111,54 +112,59 @@ export function RevisitDecisionCard({
 
     return (
         <Box className={styles.stageRoot} data-testid="revisitDecisionCard">
-            <Paper elevation={3} className={styles.editorCard}>
-                <Typography variant="overline" color="text.secondary" data-testid="revisitPositionLabel">
-                    Already reviewed · {position.index} of {position.total}
-                </Typography>
-                <ItemEditorBody
-                    key={item._id}
-                    item={item}
-                    db={db}
-                    people={people}
-                    workContexts={workContexts}
-                    onClose={onExit}
-                    onSaved={refreshItems}
-                    onDirtyLockChange={setIsEditorLocked}
-                    chrome="page"
-                    renderActions={(api) => (
-                        <>
-                            {/* Arrows lock while a structural edit is pending — navigating away here
+            <StageCardScroller>
+                <Paper elevation={3} className={styles.editorCard}>
+                    <Typography variant="overline" color="text.secondary" data-testid="revisitPositionLabel">
+                        Already reviewed · {position.index} of {position.total}
+                    </Typography>
+                    <ItemEditorBody
+                        key={item._id}
+                        item={item}
+                        db={db}
+                        people={people}
+                        workContexts={workContexts}
+                        onClose={onExit}
+                        onSaved={refreshItems}
+                        onDirtyLockChange={setIsEditorLocked}
+                        chrome="page"
+                        // Same density as the live stages: this is the review, and without it a
+                        // long-notes item overflows the card here exactly as it did there.
+                        presentation="review"
+                        renderActions={(api) => (
+                            <>
+                                {/* Arrows lock while a structural edit is pending — navigating away here
                                 is a state change, not a router navigation, so the unsaved-changes
                                 guard would never prompt and the edit would silently drop. */}
-                            <StageNavButtons {...navProps(api.isDirty || api.isSaving)} />
-                            {/* Always rendered — disabled (with the reason) when the decision
+                                <StageNavButtons {...navProps(api.isDirty || api.isSaving)} />
+                                {/* Always rendered — disabled (with the reason) when the decision
                                 recorded no undo — so the bar's buttons never shift position while
                                 stepping through the history. */}
-                            <DisabledCapableTooltip
-                                title={decision.undo ? '' : 'This decision changed more than a snapshot can restore'}
-                                wrapperTestId="revisitUndoWrapper"
-                            >
-                                <Button
-                                    color="inherit"
-                                    onClick={onUndoDecision}
-                                    disabled={!decision.undo || isUndoing || api.isSaving}
-                                    data-testid="revisitUndoDecision"
+                                <DisabledCapableTooltip
+                                    title={decision.undo ? '' : 'This decision changed more than a snapshot can restore'}
+                                    wrapperTestId="revisitUndoWrapper"
                                 >
-                                    Undo decision
-                                </Button>
-                            </DisabledCapableTooltip>
-                            {/* Manual-fix path: structural edits (e.g. flipping a wrong Done's status
+                                    <Button
+                                        color="inherit"
+                                        onClick={onUndoDecision}
+                                        disabled={!decision.undo || isUndoing || api.isSaving}
+                                        data-testid="revisitUndoDecision"
+                                    >
+                                        Undo decision
+                                    </Button>
+                                </DisabledCapableTooltip>
+                                {/* Manual-fix path: structural edits (e.g. flipping a wrong Done's status
                                 chip) commit here; text edits autosave and need no explicit save.
                                 Note: a manual save does NOT refresh the decision's undo snapshot —
                                 a subsequent Undo reverts past the manual fix too. */}
-                            <Button variant="contained" disabled={!api.isDirty || api.saveDisabled} onClick={api.triggerSave} data-testid="revisitSave">
-                                Save
-                            </Button>
-                        </>
-                    )}
-                    actionsContainer={actionsBarEl}
-                />
-            </Paper>
+                                <Button variant="contained" disabled={!api.isDirty || api.saveDisabled} onClick={api.triggerSave} data-testid="revisitSave">
+                                    Save
+                                </Button>
+                            </>
+                        )}
+                        actionsContainer={actionsBarEl}
+                    />
+                </Paper>
+            </StageCardScroller>
             <StageActionBar onBarMounted={setActionsBarEl} travel={lockedTravel} />
         </Box>
     );

@@ -7,9 +7,10 @@
     width: 100%;
     max-width: 34rem;
     padding: 1.5rem 2rem;
-    /* Scrolls internally (many inboxes) instead of pushing the pinned action bar off-screen. */
-    min-height: 0;
-    overflow-y: auto;
+    /* Scrolling belongs to the .cardScroller wrapper (the gutters beside the card must scroll
+     * too). Without flex-shrink: 0 this card would shrink to fit that wrapper and scroll
+     * internally again, leaving the wrapper — and so the gutters — inert. */
+    flex-shrink: 0;
 }
 
 .manageButton {

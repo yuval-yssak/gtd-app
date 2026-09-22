@@ -1,6 +1,7 @@
 declare const styles: {
     readonly actionBar: string;
     readonly actionBarContent: string;
+    readonly cardScroller: string;
     readonly centeredArea: string;
     readonly editorCard: string;
     readonly navArrows: string;

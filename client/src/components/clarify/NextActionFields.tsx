@@ -23,9 +23,11 @@ interface Props {
     people: StoredPerson[];
     /** Ranks the chip clouds most-used-first and drives their collapse; omit for alphabetical-only (stories/tests). */
     usage?: UsageIndex;
+    /** Weekly review: pair the narrow controls into two columns so the whole item fits without scrolling. */
+    dense?: boolean;
 }
 
-export function NextActionFields({ value, onChange, workContexts, people, usage = EMPTY_USAGE_INDEX }: Props) {
+export function NextActionFields({ value, onChange, workContexts, people, usage = EMPTY_USAGE_INDEX, dense = false }: Props) {
     function toggleWorkContext(id: string) {
         const ids = value.workContextIds.includes(id) ? value.workContextIds.filter((x) => x !== id) : [...value.workContextIds, id];
         onChange({ workContextIds: ids });
@@ -46,9 +48,14 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
 
     return (
         <Stack
-            sx={{
-                gap: 2,
-            }}
+            sx={
+                // Dense grid via sx, not a CSS-module class: Stack's own `gap` is an emotion style
+                // that would out-specify a plain module class's column-gap.
+                dense
+                    ? // Below `sm` the Stack's own `display: flex` column stands — two columns would squeeze the date inputs.
+                      { gap: 2, display: { sm: 'grid' }, gridTemplateColumns: { sm: '1fr 1fr' }, columnGap: { sm: 3 }, alignItems: { sm: 'start' } }
+                    : { gap: 2 }
+            }
         >
             {/* Tickler field shown first — "ignoreBefore" hides the item until that date.
                 Placing it at the top makes the snooze intent explicit before filling other fields. */}
@@ -63,16 +70,19 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                         Tickler — hide until
                     </Typography>
                 </FormLabel>
-                <Typography
-                    variant="caption"
-                    sx={{
-                        color: 'text.secondary',
-                        display: 'block',
-                        mb: 0.5,
-                    }}
-                >
-                    Item stays hidden from Next Actions until this date
-                </Typography>
+                {/* The explainer costs a full line; in the review the label alone carries it. */}
+                {!dense && (
+                    <Typography
+                        variant="caption"
+                        sx={{
+                            color: 'text.secondary',
+                            display: 'block',
+                            mb: 0.5,
+                        }}
+                    >
+                        Item stays hidden from Next Actions until this date
+                    </Typography>
+                )}
                 <TextField
                     type="date"
                     value={value.ignoreBefore}
@@ -82,7 +92,7 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                 />
             </Box>
             {workContexts.length > 0 && (
-                <Box>
+                <Box className={dense ? styles.fullSpan : undefined}>
                     <FormLabel>
                         <Typography
                             variant="caption"
@@ -114,7 +124,7 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                 </Box>
             )}
             {people.length > 0 && (
-                <Box>
+                <Box className={dense ? styles.fullSpan : undefined}>
                     <FormLabel>
                         <Typography
                             variant="caption"

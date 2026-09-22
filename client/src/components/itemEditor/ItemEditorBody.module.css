@@ -5,6 +5,20 @@
     gap: 1rem;
 }
 
+/* Weekly review: ~10 stacked sections turn the 1rem gap into ~160px of pure whitespace inside a
+ * card whose visible height is only about 100dvh - 13.6rem. Halving it is the single biggest
+ * vertical saving available without touching any content. */
+.bodyReview {
+    gap: 0.5rem;
+    /* The global 60vh ceiling is sized for the item PAGE, where notes own the viewport. In the
+     * review the card is already capped at ~100dvh - 13.6rem and the title, brief, status chips
+     * and metadata must fit beside the notes: at 929px tall, 60vh of notes (557px) leaves only
+     * ~154px for everything else, so long notes pushed the metadata out of view. 30vh keeps the
+     * notes the largest single section while leaving room for the rest. Redefining the variable
+     * (rather than the rule) re-caps the rendered preview AND the CodeMirror scroller at once. */
+    --gtd-notes-max-height: 30vh;
+}
+
 /* Expand variant renders below a row, so it needs a top border separator and tighter padding */
 .bodyExpand {
     padding: 0.5rem 1rem 1rem;
@@ -58,6 +72,13 @@
 
 .previewClickable:hover {
     border-color: var(--mui-palette-action-active, rgba(0, 0, 0, 0.54));
+}
+
+/* Review: the 7.5rem floor is a comfortable editing target but pure waste when scanning — a
+ * 3-line note should occupy 3 lines. The review's 30vh scroll cap (set on .bodyReview) still
+ * applies above. */
+.bodyReview .previewClickable {
+    min-height: 0;
 }
 
 .previewClickable:focus-visible {
