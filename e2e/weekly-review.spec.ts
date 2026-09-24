@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
@@ -1114,6 +1114,50 @@ test.describe('weekly review', () => {
         });
     });
 
+    test('calendar stage: Done holds one screen slot, directly left of "Looks good", on routine and one-off cards alike', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `wr-cal-done-slot-${dayjs().valueOf()}@example.com`, async (page) => {
+            const routine = await gtd.createRoutine(page, {
+                title: 'Morning gym',
+                routineType: 'calendar',
+                rrule: 'FREQ=DAILY',
+                startDate: dayjs().format('YYYY-MM-DD'),
+                calendarItemTemplate: { timeOfDay: '06:00', duration: 30 },
+                template: {},
+                active: true,
+            });
+            await gtd.generateCalendarItemsToHorizon(page, routine._id);
+            const start = dayjs().add(2, 'day').hour(14).minute(0).second(0).millisecond(0);
+            const oneOff = await gtd.collect(page, 'Dentist');
+            await gtd.clarifyToCalendar(page, oneOff, {
+                timeStart: start.format('YYYY-MM-DDTHH:mm:ss'),
+                timeEnd: start.add(1, 'hour').format('YYYY-MM-DDTHH:mm:ss'),
+            });
+            await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
+
+            await page.goto('/weekly-review');
+            await page.getByTestId('startReviewButton').click();
+            await page.getByTestId('stageTravelNext').click();
+            await page.getByTestId('stageTravelNext').click();
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Calendar');
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('0 of 2');
+
+            // Walk both entries whatever their order, measuring each card kind's Done button.
+            const firstSlot = await measureCalendarDoneSlot(page);
+            await page.getByTestId(firstSlot.isRoutineCard ? 'routineCardLooksGood' : 'focusKeep').click();
+            await expect(page.getByTestId('reviewStageCounter')).toContainText('1 of 2');
+            const secondSlot = await measureCalendarDoneSlot(page);
+            expect(secondSlot.isRoutineCard).not.toBe(firstSlot.isRoutineCard);
+
+            for (const slot of [firstSlot, secondSlot]) {
+                // Nothing wedged between Done and "Looks good" (Pause/Edit sit further left).
+                expect(slot.gapToKeep).toBeGreaterThanOrEqual(0);
+                expect(slot.gapToKeep).toBeLessThan(12);
+            }
+            // Done's right edge is the anchored one — labels differ in width, the slot does not.
+            expect(Math.abs(firstSlot.doneRight - secondSlot.doneRight)).toBeLessThan(1);
+        });
+    });
+
     test('the routine card completes its lead occurrence in place, overdue included', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-routine-done-${dayjs().valueOf()}@example.com`, async (page) => {
             const routine = await gtd.createRoutine(page, {
@@ -1236,3 +1280,14 @@ test.describe('weekly review', () => {
         });
     });
 });
+
+/** Geometry of the calendar stage's Done button relative to the "Looks good" primary, for whichever card kind is current. */
+async function measureCalendarDoneSlot(page: Page) {
+    const isRoutineCard = await page.getByTestId('routineReviewCard').isVisible();
+    const done = await page.getByTestId(isRoutineCard ? 'routineCardMarkOccurrenceDone' : 'focusDone').boundingBox();
+    const keep = await page.getByTestId(isRoutineCard ? 'routineCardLooksGood' : 'focusKeep').boundingBox();
+    if (!done || !keep) {
+        throw new Error('expected Done and "Looks good" in the pinned bar');
+    }
+    return { isRoutineCard, doneRight: done.x + done.width, gapToKeep: keep.x - (done.x + done.width) };
+}

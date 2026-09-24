@@ -209,6 +209,16 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
             </StageCardScroller>
             <StageActionBar travel={lockedTravel}>
                 <StageNavButtons {...nav.liveNavProps(isBusy)} />
+                {routine.active && (
+                    <Button disabled={isBusy || reassignInFlight} onClick={() => setIsPauseConfirmOpen(true)} data-testid="routineCardPause">
+                        Pause
+                    </Button>
+                )}
+                <Button disabled={isBusy || reassignInFlight} onClick={() => setIsEditorOpen(true)} data-testid="routineCardEdit">
+                    Edit
+                </Button>
+                {/* Done sits directly left of "Looks good" — the same slot the plain calendar item's
+                    Done occupies — so it holds still as the calendar stage alternates card kinds. */}
                 {actionable && (
                     <Button
                         startIcon={<CheckCircleOutlineIcon />}
@@ -219,14 +229,6 @@ export function RoutineReviewCard({ routine, db, nav, travel }: RoutineReviewCar
                         {isActionableOverdue ? 'Mark overdue done' : 'Mark done'}
                     </Button>
                 )}
-                {routine.active && (
-                    <Button disabled={isBusy || reassignInFlight} onClick={() => setIsPauseConfirmOpen(true)} data-testid="routineCardPause">
-                        Pause
-                    </Button>
-                )}
-                <Button disabled={isBusy || reassignInFlight} onClick={() => setIsEditorOpen(true)} data-testid="routineCardEdit">
-                    Edit
-                </Button>
                 <Button variant="contained" disabled={isBusy} onClick={() => nav.recordDecision({})} data-testid="routineCardLooksGood">
                     Looks good
                 </Button>
