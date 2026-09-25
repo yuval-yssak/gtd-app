@@ -566,7 +566,7 @@ export interface OperationInterface {
      * Stable device UUID generated on first app launch. Identifies the originating device.
      */
     deviceId: string;
-    ts: string; // ISO datetime — when the change was made on the device
+    ts: string; // ISO datetime — server-stamped at insert time together with `_id` (see `restampOpIdentities`); the device clock is not trusted
     entityType: EntityType;
     entityId: string;
     opType: OpType;
@@ -597,7 +597,11 @@ export interface OperationInterface {
      * RSVP payload for opType === 'rsvp'. Required when opType === 'rsvp'; absent otherwise.
      */
     rsvp?: RsvpOpPayload;
-    /** Set true when the GCal-side effect failed after retry. Surfaced via SyncIssuesPanel. */
+    /**
+     * Set true when the op's GCal side-effect threw (pushback has no retry loop; only the RSVP replay
+     * does), or — with `failureReason: 'entity_missing'` — when `applyEntityOp` found no target row.
+     * Surfaced via SyncIssuesPanel. Never set for a push skipped on a suspended/revoked integration.
+     */
     syncFailed?: boolean;
     failureReason?: OpFailureReason;
     failureDetail?: string;
@@ -750,11 +754,16 @@ export interface CalendarIntegrationInterface {
     /**
      * OAuth auth state. Absent ⇒ treated as `'active'`. Lifecycle:
      *  - `'active'`: tokens believed valid; sync + pushback proceed normally.
-     *  - `'suspended'`: a refresh attempt failed with `invalid_grant`; warning email sent. Sync still
-     *     attempts (the failure may have been transient); after 24h elapsed since `suspendedAt` the
-     *     escalation flips status to `'revoked'`.
-     *  - `'revoked'`: soft-deleted. Sync/pushback skip; sync endpoint returns HTTP 410. Reconnect via
-     *     OAuth (`upsertEncrypted`) clears status back to `'active'`.
+     *  - `'suspended'`: a refresh attempt failed with `invalid_grant`; warning email sent. The client-driven
+     *     `POST /calendar/integrations/:id/sync` (and other user-driven routes such as calendar listing and
+     *     routine linking) still call Google — the failure may have been transient — while webhook
+     *     deliveries, the renew cron and outbound pushback all skip: `resolvePushContext` returns null for
+     *     any non-active status and the op is left without failure markers. The first `invalid_grant` seen
+     *     at least 24h after `suspendedAt` flips status to `'revoked'`.
+     *  - `'revoked'`: soft-deleted. Sync and pushback both skip; sync endpoint returns HTTP 410. Reconnect via
+     *     OAuth (`upsertEncrypted`) clears status back to `'active'`; dropped pushes are only replayed by the
+     *     outbound backfill + missed-push sweep inside `POST /calendar/integrations/:id/sync`, which the
+     *     client calls on every sync cycle.
      */
     status?: 'active' | 'suspended' | 'revoked';
     /**

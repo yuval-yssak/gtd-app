@@ -20,7 +20,8 @@ type ProviderFactory = (integration: CalendarIntegrationInterface, userId: strin
  *     change. The "prior" value is read off the item just before the GCal call — see the multi-op
  *     race note inline below.
  *   - scope_missing / edit_conflict / calendar_missing: mark op `syncFailed` so the SyncIssuesPanel
- *     can surface a Reconnect / Pick calendar / Retry remediation. No local revert (the next pull
+ *     can surface a retryable row (the user reconnects / picks a calendar in Settings, then presses
+ *     Retry). No local revert (the next pull
  *     surfaces the GCal-canonical state to all devices).
  *   - transient_exhausted (5xx/429/network, after 3 retries): same as recoverable — mark `syncFailed`
  *     with Retry semantics.

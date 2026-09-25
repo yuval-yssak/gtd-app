@@ -121,7 +121,11 @@ All entities carry `updatedTs` (ISO datetime) as the conflict-resolution anchor.
 - **Items:** a `calendar` item linked to Google Calendar carries `calendarEventId` + `calendarIntegrationId`. Changes sync bidirectionally.
 - **Routines:** a `calendar` routine can own or attach to a Google Calendar recurring event series via `calendarEventId`. The app can either create a new series or import an existing one.
 
-The unique index on `calendarEventId` is scoped to `status: 'calendar'` — `trash` rows keep their `calendarEventId` so a revive can relink.
+The unique index on `calendarEventId` is scoped to `status: 'calendar'` — `trash` rows keep their `calendarEventId` so a revive can relink. The `(user, calendarInstanceEventId)` unique index is **not** status-scoped (presence-partial only): a done routine occurrence, or one the user trashed (in-app, or via `POST /v1/items/:id/trash` / MCP `gtd_trash_item`), keeps owning its instance id — only sync-engine trash paths (routine delete, regeneration, inbound cancellation, dead-twin demotion) `$unset` it — so an orphan insert for that instance raises E11000.
+
+- **Done/trash markers:** completing a linked item keeps the Google event and marks it (`✓ ` title prefix + sage `colorId`); trashing deletes a standalone event or cancels the single routine occurrence. A routine's series master is never patched or deleted from an item push.
+- **Pushback failures** are recorded on the op (`syncFailed`, `failureReason`) and surfaced in the SyncIssuesPanel with Retry (retryable reasons) or Dismiss only. Pushes against a `suspended`/`revoked` integration are dropped without any marker; the only repair is `POST /calendar/integrations/:id/sync` (run by the client on every sync cycle, and by "Sync now"): its outbound backfill creates Google events for entities that never got a link, and its missed-push sweep re-pushes standalone `calendar`/`done` items and routine occurrences that carry a client-written `modified` exception — not trash rows.
+- Pushback internals: `api-server/README.md` § Calendar Pushback; rules for changing it: `api-server/CLAUDE.md` § Calendar pushback.
 
 ### Item Briefs (AI)
 

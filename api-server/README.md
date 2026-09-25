@@ -108,6 +108,9 @@ src/
 | `POST` | `/sync/push` | Yes | Client pushes `{ deviceId, ops[] }` — last-write-wins |
 | `GET` | `/sync/events` | Yes | SSE stream — real-time change notifications |
 | `GET` | `/sync/config` | No | Returns `{ vapidPublicKey }` for Web Push |
+| `GET` | `/sync/issues` | Yes | Ops whose GCal side-effect failed (`syncFailed`), with entity title + `failureReason` — backs the SyncIssuesPanel |
+| `POST` | `/sync/issues/:opId/retry` | Yes | Republishes the op under a fresh `(ts, _id)`, awaits the re-fired pushback (`maybePushToGCal`, or `replayRsvpOp` for `rsvp` ops), then deletes the fresh row on success or leaves it re-marked `syncFailed` when the retry fails again |
+| `POST` | `/sync/issues/:opId/dismiss` | Yes | Deletes the failed op row (owner-scoped); nothing is retried |
 
 ### Web Push
 
@@ -125,6 +128,9 @@ src/
 | `GET` | `/calendar/auth/google/callback` | No | OAuth callback — exchanges code for tokens |
 | `PATCH` | `/calendar/integrations/:id` | Yes | Update integration (e.g. change target calendar) |
 | `DELETE` | `/calendar/integrations/:id?action=...` | Yes | Unlink integration (`keepEvents`, `deleteEvents`, `deleteAll`) |
+| `POST` | `/calendar/integrations/:id/sync` | Yes | Inbound pull per enabled calendar → outbound backfill of never-linked entities → missed-push sweep (see below). Called by the client for every integration on each sync cycle, and by the Settings "Sync now" button. `410` when the integration is `revoked` |
+
+Repair endpoints for calendar state (`/maintenance/relink-calendar-markers`, `heal-duplicate-calendar-items`, `heal-stuck-gcal-routines`, `heal-split-successor-routines`, `sync-doctor`) live in `src/routes/maintenance.ts`; the Settings "Repair sync" button calls the relink one.
 
 ### Public API (`/v1/*`)
 
@@ -252,24 +258,48 @@ Operations older than `min(lastSyncedTs)` across all of a user's devices are pur
 
 ### Calendar Pushback
 
-When items change in the app, the server pushes changes to Google Calendar:
+When items change in the app, `notifyChange` fires `maybePushToGCal` (`src/lib/calendarPushback.ts`) fire-and-forget — it never blocks the sync response. What reaches Google depends on the entity and the status transition:
 
 | App Action | Google Calendar Effect |
 |---|---|
 | Create `calendar` item | Create Google event |
-| Edit `calendar` item | Update Google event |
-| Complete/trash `calendar` item | Delete Google event |
-| Create `fixedSchedule` routine | Create recurring event series (RRULE) |
+| Edit `calendar` item | Update Google event (title/time/description/attendees; `colorId: null` clears a prior done colour) |
+| Complete standalone `calendar` item | Event **kept**, title prefixed `✓ `, `colorId` set to sage (`DONE_COLOR_ID`, `src/lib/doneMarker.ts`). The stored title stays clean. Reopen reverts both |
+| Trash standalone `calendar` item | Delete Google event (`events.delete` with no `sendUpdates` parameter — Google's default applies) |
+| Complete routine-generated item | Per-instance override on the series: `✓ ` title + sage colour on that occurrence only. Never touches the master |
+| Trash routine-generated item | Cancel that single occurrence (`status: 'cancelled'` on the instance, always `sendUpdates: 'none'`). Skipped when the routine is inactive or the occurrence lies beyond the master's `UNTIL` cap |
+| `calendar` → `inbox`/`nextAction`/`waitingFor`/`somedayMaybe` | Event deleted (or occurrence cancelled) using the op's `detachedCalendar` sidecar — the client strips the link fields off the snapshot, so `hydrateCalendarDetachSnapshots` captures the pre-update row onto the op before `applyEntityOp` overwrites it |
+| Create / edit / pause / resume `calendar` routine | Create or patch the recurring series (RRULE); pause caps the master with `UNTIL`, resume clears it. An edit while the routine is inactive is a no-op |
+| Delete `calendar` routine | Trash the generated items, then delete the whole series (`deleteRecurringEvent`) |
 
-Calendar pushback is fire-and-forget — it doesn't block the sync response. Errors are logged but not thrown.
+Instance pushes patch the stored `calendarInstanceEventId` directly (a date-window `events.instances` lookup misses already-modified occurrences). An item that points at a routine's **master** id is rerouted to a single-instance override — a master patch would smear the ✓ across every attendee's series. `sendUpdates` on **item** creates and updates (standalone and instance overrides) comes from the op's `gcalMeta` (the SendUpdatesDialog choice) and defaults to `'none'`; deletes, cancellations and every routine-series push ignore `gcalMeta`.
+
+**Failure surfacing.** Each push branch is wrapped by `captureFailedOutcome`; anything it throws (a Google error, or a config/timezone lookup failure) is bucketed by `src/lib/gcalErrorCategorization.ts` into an `OpFailureReason` and recorded on the op via `markOpFailed` (`syncFailed`, `failureReason`, `failureDetail`, `failedTs`). There is no retry loop in pushback itself. The apply pipeline (`markOpNotApplied` in `lib/applyOperation.ts`) stamps the same markers with `entity_missing` plus `notApplied` when `applyEntityOp` reports that an op's target row no longer exists. `GET /sync/issues` lists these rows for the SyncIssuesPanel: `transient_exhausted`, `scope_missing`, `edit_conflict` and `calendar_missing` rows get Retry + Dismiss, `terminal` and `entity_missing` rows Dismiss only. There is no in-panel Reconnect — for `scope_missing` the user reconnects in Settings, then presses Retry.
+
+**Suspended / revoked integrations.** When the integration is not `active`, `resolvePushContext` logs `[calendar-pushback] skipping <status> integration <id>` and returns `null`, and every push branch returns without marking the op: no `syncFailed`, no panel row, no retry. Routine deletion is the exception — it trashes the generated items before resolving the context, so that part still happens. Done/trash markers made in that window reach Google only if the missed-push sweep below picks the row up after reconnect; entities created in that window (no `calendarEventId`) are repaired by the outbound backfill instead.
+
+### Missed-push sweep ("Sync now")
+
+`POST /calendar/integrations/:id/sync` is the only place that repairs pushes dropped earlier; nothing server-side (webhook, OAuth callback, cron) runs it, but the client calls it for every integration on each `syncAndRefresh` (mount, back online, PWA resume, service-worker sync-complete) as well as from the Settings "Sync now" button. It runs, in order: the inbound pull for every enabled calendar (under the per-calendar sync lock) → `runOutboundBackfill` (on the default calendar only: creates events/series for app-created entities that have no Google link, matching a routine onto an existing Google master instead of cloning it; rows carrying `lastKnown*` markers are excluded) → SSE + web-push fan-out → `runMissedPushSweep`.
+
+The sweep re-pushes linked rows whose local edit post-dates every sync anchor: `isMissedPush` is `updatedTs > max(lastPushedToGCalTs, lastSyncedFromGCalTs, fallback)`, fenced by `updatedTs < before` (the inbound pass's start stamp) so rows the sync itself just wrote are never pushed back out. Candidates:
+
+- standalone linked items with status `calendar` or `done` (not `trash`);
+- routine-generated items only when the routine holds a `modified` `routineException` carrying `itemId` — which the client writes on an in-app move and inbound sync never writes. A routine occurrence that was completed or trashed but never moved in-app is not a candidate, and neither is any trash row, so those markers stay missing on Google after a reconnect.
+
+`pushRoutineInstanceOverride` always sends `timeStart`/`timeEnd`, so a sweep re-push of a row whose Google instance moved afterwards moves it back to the app's time.
+
+Pushes are paced at `MISSED_PUSH_PACE_MS` (150 ms) and every success stamps `lastPushedToGCalTs` so the row leaves the candidate set.
 
 ### `invalid_grant` escalation
 
 When Google rejects a refresh token (revoke, password change, idle, admin policy), the integration is escalated through a 24-hour, time-based state machine in `src/lib/calendarAuthEscalation.ts`:
 
-1. First detected `invalid_grant` → status flips `active` → `suspended`, warning email sent. Sync still attempts (the failure may have been transient).
-2. Still failing 24 h after `suspendedAt` → status flips `suspended` → `revoked`, final email sent. Sync/pushback skip; the sync endpoint returns HTTP 410 Gone with `{ error: 'integration_revoked', integrationId, suspendedAt, revokedAt }`.
-3. Reconnect via OAuth (`upsertEncrypted`) clears status back to `active` and unsets all escalation timestamps.
+1. First detected `invalid_grant` → status flips `active` → `suspended`, warning email sent. The client-driven `POST /calendar/integrations/:id/sync` and other user-driven routes (calendar listing, routine linking) still call Google (the failure may have been transient), while **webhook deliveries, the renew cron and outbound pushback all skip**: `resolvePushContext` treats any non-`active` status as a no-op and logs `[calendar-pushback] skipping suspended integration …` without marking the op (no `syncFailed`) — see "Suspended / revoked integrations" under Calendar Pushback.
+2. Still failing 24 h after `suspendedAt` → status flips `suspended` → `revoked`, final email sent. Sync and pushback both skip; the sync endpoint returns HTTP 410 Gone with `{ error: 'integration_revoked', integrationId, suspendedAt, revokedAt }`.
+3. Reconnect via OAuth (`upsertEncrypted`) clears status back to `active` and unsets all escalation timestamps. Dropped pushes are replayed only by the outbound backfill + missed-push sweep inside `POST /calendar/integrations/:id/sync`, which the client runs on its next sync cycle (or the user triggers with "Sync now").
+
+`integrationStatus()` (`src/lib/calendarIntegrationStatus.ts`) coerces a missing `status` to `active`; use it rather than reading the field directly.
 
 The grace window can be shortened for dev/tests via `CALENDAR_AUTH_GRACE_MS` (milliseconds; default 24 h). Detection is centralized in `isInvalidGrantError` (`src/calendarProviders/GoogleCalendarProvider.ts`) and applied at provider call sites with `withAuthFailureHandling(integrationId, () => provider.*)`.
 
@@ -459,6 +489,6 @@ npx tsx --env-file=.env src/scripts/importFacileThings.ts \
 - **SSE is single-process:** The connection registry is in-memory. Scaling to multiple instances requires a shared pub/sub layer (e.g. Redis).
 - **`skipLibCheck: true`** in tsconfig — required because Better Auth's `.d.mts` files have unresolved Bun/Cloudflare/Zod type dependencies.
 - **`noPropertyAccessFromIndexSignature`** — add new env vars to `src/env.d.ts` to use dot notation on `process.env`. Never use bracket notation.
-- **Calendar pushback is fire-and-forget** — errors are logged but never block the sync response. Check server logs if calendar events aren't syncing.
+- **Calendar pushback is fire-and-forget** — it never blocks the sync response. Provider errors land on the op as `syncFailed` + `failureReason` and show in the SyncIssuesPanel; a push skipped because the integration is `suspended`/`revoked` is logged only (`grep 'skipping suspended integration'`), so check server logs when done/trash markers made around an auth failure are missing on Google.
 - **Operation purging** — once ops are purged, a device that hasn't synced must use `/sync/bootstrap` instead of `/sync/pull`. The server handles this transparently.
 - **Token encryption key rotation** — changing `CALENDAR_ENCRYPTION_KEY` invalidates all stored OAuth tokens. Users would need to re-authorize their calendar integrations.

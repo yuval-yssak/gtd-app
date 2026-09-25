@@ -3,12 +3,12 @@ import type { OpFailureReason } from '../types/entities.js';
 
 /**
  * Maps a GCal API error (or anything thrown by the provider) to the OpFailureReason enum the
- * SyncIssuesPanel surfaces. The categorization is what drives the panel's per-row remediation
- * action (Reconnect, Pick calendar, Resolve conflict, Dismiss).
+ * SyncIssuesPanel surfaces. The categorization decides whether the row is retryable
+ * (`RETRYABLE_REASONS` in `routes/syncIssues.ts` → Retry + Dismiss buttons) or Dismiss-only.
  *
  * Buckets:
- *  - `scope_missing`   → token revoked / invalid_grant / lost write scope. Panel asks the user to
- *                        re-consent.
+ *  - `scope_missing`   → token revoked / invalid_grant / lost write scope. Retryable — the user
+ *                        reconnects via Settings, then presses Retry.
  *  - `terminal`        → 404/410 (event gone), 403 (uninvited / attendee mutation rejected), 400
  *                        (Google rejected the request itself — e.g. cancelling an instance that
  *                        fell outside the recurrence after an UNTIL cap; replaying the identical
@@ -18,13 +18,15 @@ import type { OpFailureReason } from '../types/entities.js';
  *                        won't self-heal and reverting the chip is the honest UX.
  *                        EXCEPT rate-limit 403s — see `isRateLimit403` — which are retryable and
  *                        bucket as transient_exhausted.
- *  - `calendar_missing`→ 404 on the calendar resource itself. Panel asks the user to pick a calendar.
- *                        Currently differentiated from generic 404 only by caller intent — callers
+ *  - `calendar_missing`→ 404 on the calendar resource itself. Retryable; the row's label suggests
+ *                        picking another calendar in Settings (the panel itself has no picker).
+ *                        Differentiated from generic 404 only by caller intent — callers
  *                        that want this discrimination must categorize before invoking this helper,
  *                        since the wire-format error doesn't distinguish event-404 from calendar-404.
  *  - `edit_conflict`   → 409. Panel offers Retry after surfacing the conflict.
- *  - `transient_exhausted` → 5xx / 429 / network — but only AFTER `retryWithBackoff` has burned its
- *                            three attempts. Panel offers Retry.
+ *  - `transient_exhausted` → 5xx / 429 / network. For the RSVP replay this is reached only after
+ *                            `retryWithBackoff` has burned its three attempts; pushback has no retry
+ *                            loop and lands here on the first throw. Panel offers Retry.
  *
  * Everything that doesn't match a bucket bucket falls back to `'transient_exhausted'` — safest
  * default since the panel shows a Retry button there and "unknown but maybe transient" is closer to

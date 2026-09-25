@@ -131,10 +131,11 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
 
 /**
  * Marks the driving op `syncFailed` when its GCal push failed so the failure lands in the
- * SyncIssuesPanel with the right remediation affordance. The raw provider error is categorized
- * via `categorizeGCalError` (same convention as rsvpReplay): invalid_grant → scope_missing
- * ("Reconnect"), 404/410/plain 403 → terminal (Dismiss-only), rate-limit 403/unknown/network →
- * transient_exhausted (Retry, which re-fires the idempotent push via `maybePushToGCal`).
+ * SyncIssuesPanel with the right remediation. The raw provider error is categorized via
+ * `categorizeGCalError` (same convention as rsvpReplay): invalid_grant → scope_missing (retryable
+ * once the user has reconnected in Settings), 404/410/plain 403 → terminal (Dismiss-only),
+ * rate-limit 403/unknown/network → transient_exhausted (Retry, which re-fires the idempotent push
+ * via `maybePushToGCal`). No retry loop runs here — the first throw is surfaced.
  */
 async function surfacePushFailure(op: OperationInterface, outcome: PushOutcome | undefined): Promise<void> {
     if (outcome?.status !== 'failed') {

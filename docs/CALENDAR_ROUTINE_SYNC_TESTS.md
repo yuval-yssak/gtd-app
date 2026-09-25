@@ -843,29 +843,31 @@ Cases I1–I6 cover deactivation triggered by deleting the GCal master (server-s
 **When** the user revokes access in https://myaccount.google.com/permissions, then a sync runs
 **Then**
 - Token refresh fails with `invalid_grant`
-- The integration is marked as needing re-authentication (e.g. a `needsReauth` flag — confirm field name)
+- The integration's `status` flips to `'suspended'` (`suspendedAt` stamped, warning email); the next `invalid_grant` seen at least 24 h after `suspendedAt` flips it to `'revoked'` (`revokedAt`, final email) — `lib/calendarAuthEscalation.ts`
 - Sync stops gracefully; no exceptions propagate to the user
-- Routines and items remain intact locally; outbound pushes are queued or dropped (confirm)
+- Routines and items remain intact locally
+- Outbound pushes are **dropped, not queued**: `resolvePushContext` returns `null` for any non-`active` status, every push branch returns without marking the op (no `syncFailed`, no SyncIssuesPanel row), and the only trace is the `skipping suspended integration` log line
 - The UI surfaces a "reconnect Google Calendar" prompt
-- No further sync attempts until reconnected
+- The client-driven sync endpoint keeps attempting while `suspended` (webhook deliveries and the renew cron skip); once `revoked` the sync endpoint returns 410
 
-**Test location:** `api-server/src/tests/calendar.test.ts` + `client/src/tests/syncHelpers.test.ts`
+**Test location:** `api-server/src/tests/calendarAuthEscalation.test.ts` (status machine) + `calendar.splitDetection.test.ts` ("pushback against a suspended integration is a no-op", revoked 410, reconnect reset)
 
 ---
 
 ### J6. User reconnects after revocation
-**Given** integration in `needsReauth` state from J5
+**Given** integration in `suspended`/`revoked` state from J5
 **When** the user re-authenticates via OAuth flow
 **Then**
-- New tokens are stored on the existing `CalendarIntegration` (preserving `_id` and routine links)
-- `needsReauth` flag is cleared
-- A fresh sync runs:
+- New tokens are stored on the existing `CalendarIntegration` (preserving `_id` and routine links); `upsertEncrypted` resets `status` to `active` and unsets the escalation timestamps
+- Once the status is back to `active`, inbound catch-up and webhook re-registration can run server-side (the renew cron's `renewWebhookAndCatchUp`, or a delivery on a still-live channel). The outbound backfill and missed-push sweep run only on the client's next sync cycle or "Sync now" (both call `POST /calendar/integrations/:id/sync`). A fresh sync there:
   - `syncToken` may be invalid → 410 fallback (J1)
   - `webhook` is re-registered
-- All changes that occurred during the disconnected window are picked up
+  - the missed-push sweep (`runMissedPushSweep`) re-pushes local edits whose `updatedTs` post-dates every sync anchor
+- Google-side changes from the disconnected window are picked up by the inbound pass
+- App-side changes from the window: standalone `calendar`/`done` items, and `calendar`/`done` routine occurrences that were moved in-app (client-written `modified` exception with `itemId`), are re-pushed. Trashed routine occurrences (moved in-app or not), completed occurrences that were never moved in-app, and trashed standalone items are not sweep candidates and stay unmarked on Google
 - Routines previously linked to this integration resume bidirectional sync seamlessly
 
-**Test location:** `api-server/src/tests/calendar.test.ts`
+**Test location:** `api-server/src/tests/missedPushSweep.test.ts` + `calendar.pushback.test.ts`
 
 ---
 
@@ -977,4 +979,4 @@ These questions surfaced while writing the matrix. Resolving them will sharpen s
 6. **G1/G2 — wall-clock vs. absolute time on TZ change:** What's the intended user experience?
 7. **H1 — auto-deactivation on UNTIL:** Does `R.active` flip to `false` when UNTIL is passed, or does it stay `true` indefinitely? _(Partially answered by the pause feature — I7 introduces explicit app-side deactivation via the Pause button. Automatic deactivation when UNTIL is naturally reached is still open.)_
 8. **I1 — preserving link metadata after deactivation:** Do `calendarEventId` etc. get cleared, or kept for audit? _(The I7 app-side pause keeps `calendarEventId` populated so resume via I8 can reuse it; I1 GCal-side deletion still clears it.)_
-9. **J5 — outbound push behavior during `needsReauth`:** Are queued ops dropped, retried later, or held forever?
+9. **J5 — outbound push behavior while `suspended`/`revoked`:** answered — the op is persisted and fanned out to devices normally, but its GCal push is dropped at `resolvePushContext` with no failure marker. Only the outbound backfill + missed-push sweep inside the next `POST /calendar/integrations/:id/sync` (run by the client each sync cycle) replays it, and only for the candidate shapes listed in J6.
