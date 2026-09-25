@@ -82,9 +82,7 @@ export function itemToWaitingForForm(item: StoredItem): WaitingForFormState {
     return {
         waitingForPersonId: item.waitingForPersonId ?? '',
         expectedBy: item.expectedBy ?? '',
-        // WaitingFor no longer exposes an `Ignore before` input — seed it empty so editing a waiting
-        // item never re-persists a hidden tickler date the user can't see.
-        ignoreBefore: '',
+        ignoreBefore: item.ignoreBefore ?? '',
     };
 }
 

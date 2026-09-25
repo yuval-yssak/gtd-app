@@ -47,7 +47,7 @@ describe('itemToFormSeeds', () => {
     });
 
     it('seeds every form group from the item', () => {
-        const seeds = itemToFormSeeds(makeItem({ notes: 'note', time: 15, expectedBy: '2026-07-10' }));
+        const seeds = itemToFormSeeds(makeItem({ notes: 'note', time: 15, expectedBy: '2026-07-10', ignoreBefore: '2026-07-05' }));
         expect(seeds.title).toBe('Original title');
         expect(seeds.notes).toBe('note');
         expect(seeds.status).toBe('nextAction');
@@ -55,8 +55,8 @@ describe('itemToFormSeeds', () => {
         expect(seeds.na.time).toBe('15');
         expect(seeds.na.workContextIds).toEqual(['ctx-1']);
         expect(seeds.sm.expectedBy).toBe('2026-07-10');
-        // WaitingFor never re-seeds a hidden tickler date.
-        expect(seeds.wf.ignoreBefore).toBe('');
+        expect(seeds.sm.ignoreBefore).toBe('2026-07-05');
+        expect(seeds.wf.ignoreBefore).toBe('2026-07-05');
     });
 });
 
@@ -88,6 +88,25 @@ describe('mergeFormGroup', () => {
 });
 
 describe('mergeItemForms', () => {
+    it('adopts a remote waitingFor tickler date into a clean field silently', () => {
+        const seed = itemToFormSeeds(makeItem({ status: 'waitingFor', ignoreBefore: '2026-07-05' }));
+        const incoming = itemToFormSeeds(makeItem({ status: 'waitingFor', ignoreBefore: '2026-07-20' }));
+
+        const { merged, conflicts } = mergeItemForms(seed, seed, incoming);
+        expect(merged.wf.ignoreBefore).toBe('2026-07-20');
+        expect(conflicts).toEqual([]);
+    });
+
+    it('keeps a dirty waitingFor tickler date and reports the conflict', () => {
+        const seed = itemToFormSeeds(makeItem({ status: 'waitingFor', ignoreBefore: '2026-07-05' }));
+        const incoming = itemToFormSeeds(makeItem({ status: 'waitingFor', ignoreBefore: '2026-07-20' }));
+        const dirty = { ...seed, wf: { ...seed.wf, ignoreBefore: '2026-07-09' } };
+
+        const { merged, conflicts } = mergeItemForms(dirty, seed, incoming);
+        expect(merged.wf.ignoreBefore).toBe('2026-07-09');
+        expect(conflicts).toEqual(['Ignore before']);
+    });
+
     it('adopts a remote title into a clean form and reports no conflict', () => {
         const item = makeItem();
         const seed = itemToFormSeeds(item);

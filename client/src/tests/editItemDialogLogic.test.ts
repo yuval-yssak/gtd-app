@@ -27,6 +27,7 @@ import {
     shouldHandlePageEscape,
     stripRoutineId,
 } from '../components/editItemDialogLogic';
+import { itemToWaitingForForm } from '../components/itemEditor/itemEditorLiveMerge';
 import type { CalendarOption } from '../hooks/useCalendarOptions';
 import type { StoredItem } from '../types/MyDB';
 
@@ -335,10 +336,21 @@ describe('mergeFormsIntoItem', () => {
         expect('ignoreBefore' in merged).toBe(false);
     });
 
-    // The waitingFor form no longer exposes an `Ignore before` input, so its ignoreBefore always seeds
-    // empty. Editing a waitingFor item that carries a legacy tickler date must therefore clear it —
-    // never silently re-persist a value the user can no longer see or edit.
-    it('clears a previously-set waitingFor ignoreBefore (field no longer shown, seeds empty)', () => {
+    // Regression: the waitingFor form used to seed ignoreBefore empty, so any save silently dropped a
+    // snoozed waiting item's tickler date and it jumped back onto /waiting-for.
+    it('keeps a waitingFor ignoreBefore when the form is seeded from the item and left untouched', () => {
+        const waiting: StoredItem = { ...BASE_ITEM, status: 'waitingFor', ignoreBefore: '2026-08-01' };
+        const merged = mergeFormsIntoItem(waiting, 'waitingFor', formsWith({ wf: itemToWaitingForForm(waiting) }), []);
+        expect(merged.ignoreBefore).toBe('2026-08-01');
+    });
+
+    it("carries a snoozed nextAction's ignoreBefore into waitingFor on a status switch", () => {
+        const snoozed: StoredItem = { ...BASE_ITEM, status: 'nextAction', workContextIds: ['ctx-1'], ignoreBefore: '2026-08-01' };
+        const merged = mergeFormsIntoItem(snoozed, 'waitingFor', formsWith({ wf: itemToWaitingForForm(snoozed) }), []);
+        expect(merged.ignoreBefore).toBe('2026-08-01');
+    });
+
+    it('clears a previously-set waitingFor ignoreBefore when the form blanks it', () => {
         const waiting: StoredItem = { ...BASE_ITEM, status: 'waitingFor', ignoreBefore: '2026-08-01' };
         const merged = mergeFormsIntoItem(waiting, 'waitingFor', formsWith({ wf: emptyWaitingFor }), []);
         expect('ignoreBefore' in merged).toBe(false);
@@ -489,6 +501,12 @@ describe('buildEditPatch', () => {
         expectedBy: '2026-12-31',
     };
 
+    /** NEXT_ACTION_ITEM re-statused to waitingFor, minus the nextAction-only fields. */
+    function waitingForItem(overrides: Partial<StoredItem> = {}): StoredItem {
+        const { workContextIds: _wc, peopleIds: _p, ...rest } = NEXT_ACTION_ITEM;
+        return { ...rest, status: 'waitingFor', ...overrides };
+    }
+
     function calForm(date: string, startTime: string, endTime: string, configId = ''): typeof emptyCalendar {
         return { ...emptyCalendar, date, startTime, endTime, calendarSyncConfigId: configId };
     }
@@ -633,33 +651,33 @@ describe('buildEditPatch', () => {
     });
 
     it('emits waitingForPersonId when changed (waitingFor status)', () => {
-        const wfItem: StoredItem = {
-            ...NEXT_ACTION_ITEM,
-            status: 'waitingFor',
-            waitingForPersonId: 'p-1',
-        };
-        delete wfItem.workContextIds;
-        delete wfItem.peopleIds;
+        const wfItem = waitingForItem({ waitingForPersonId: 'p-1' });
         const wf = { waitingForPersonId: 'p-2', expectedBy: '2026-12-31', ignoreBefore: '' };
         const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf }));
         expect(patch.waitingForPersonId).toBe('p-2');
     });
 
     it('emits waitingForPersonId="" (clear sentinel) when the person is removed', () => {
-        const wfItem: StoredItem = { ...NEXT_ACTION_ITEM, status: 'waitingFor', waitingForPersonId: 'p-1' };
-        delete wfItem.workContextIds;
-        delete wfItem.peopleIds;
+        const wfItem = waitingForItem({ waitingForPersonId: 'p-1' });
         const wf = { waitingForPersonId: '', expectedBy: '', ignoreBefore: '' };
         const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf }));
         expect(patch.waitingForPersonId).toBe('');
     });
 
-    // The waitingFor form seeds ignoreBefore empty (the `Ignore before` input was removed), so editing
-    // a waitingFor item that already carries a tickler date must emit the clear sentinel to unset it.
-    it('emits ignoreBefore="" (clear sentinel) for a waitingFor item that had a tickler date', () => {
-        const wfItem: StoredItem = { ...NEXT_ACTION_ITEM, status: 'waitingFor', ignoreBefore: '2026-08-01' };
-        delete wfItem.workContextIds;
-        delete wfItem.peopleIds;
+    it('omits ignoreBefore for a waitingFor item whose seeded tickler date is unchanged', () => {
+        const wfItem = waitingForItem({ ignoreBefore: '2026-08-01' });
+        const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf: itemToWaitingForForm(wfItem) }));
+        expect('ignoreBefore' in patch).toBe(false);
+    });
+
+    it("emits the new ignoreBefore when a waitingFor item's tickler date changes", () => {
+        const wfItem = waitingForItem({ ignoreBefore: '2026-08-01' });
+        const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf: { ...emptyWaitingFor, ignoreBefore: '2026-09-01' } }));
+        expect(patch.ignoreBefore).toBe('2026-09-01');
+    });
+
+    it('emits ignoreBefore="" (clear sentinel) when a waitingFor item\'s tickler date is blanked', () => {
+        const wfItem = waitingForItem({ ignoreBefore: '2026-08-01' });
         const patch = buildEditPatch(wfItem, wfItem.title, '', 'waitingFor', formsWith({ wf: emptyWaitingFor }));
         expect(patch.ignoreBefore).toBe('');
     });
