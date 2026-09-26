@@ -9,6 +9,7 @@ import App from './App';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { RouteFallback } from './components/RouteFallback';
 import { openAppDB } from './db/indexedDB';
+import { APP_NAME } from './lib/appName';
 
 // Pre-React notice: openAppDB is still awaiting a schema upgrade blocked by an older connection
 // (a stale tab or PWA window running the previous bundle), so React cannot mount yet. Once the
@@ -22,7 +23,7 @@ function showUpgradeBlockedNotice() {
     notice.className = 'dbUpgradeBlockedNotice';
     notice.setAttribute('data-testid', 'dbUpgradeBlockedNotice');
     notice.textContent =
-        'A new version of Getting Things Done needs to update its local database. ' +
+        `A new version of ${APP_NAME} needs to update its local database. ` +
         'Close any other tabs or windows running this app — or fully close and reopen the app — to continue.';
     rootEl.replaceChildren(notice);
 }

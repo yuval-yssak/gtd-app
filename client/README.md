@@ -1,6 +1,6 @@
-# GTD Client
+# Done — Client
 
-Frontend for the [Getting Things Done](https://gettingthingsdone.com/) productivity app. Built with **React 19**, **TypeScript**, **Vite**, and **Material UI**. Designed as an **offline-first PWA** — all data lives in IndexedDB and syncs to the server when online.
+Frontend for **Done**, a productivity app built around the [Getting Things Done](https://gettingthingsdone.com/) method. Built with **React 19**, **TypeScript**, **Vite**, and **Material UI**. Designed as an **offline-first PWA** — all data lives in IndexedDB and syncs to the server when online.
 
 ## Quick Start
 

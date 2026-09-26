@@ -18,6 +18,7 @@ import { SyncRecoveryDialog } from '../components/SyncRecoveryDialog';
 import { UndoSnackbar } from '../components/UndoSnackbar';
 import { AppDataProvider } from '../contexts/AppDataProvider';
 import { PendingReassignProvider } from '../contexts/PendingReassignProvider';
+import { APP_NAME } from '../lib/appName';
 import styles from './-_authenticated.module.css';
 import { authenticatedRouteGuard } from './-authenticatedRouteGuard';
 
@@ -53,8 +54,8 @@ export function AuthenticatedLayout() {
                     >
                         <MenuIcon />
                     </IconButton>
-                    <Typography variant="h6" className={styles.appBarTitle}>
-                        GTD
+                    <Typography variant="h6" className={styles.appBarTitle} data-testid="appBrand">
+                        {APP_NAME}
                     </Typography>
                     <AccountSwitcher db={db} />
                 </Toolbar>

@@ -28,7 +28,7 @@ const clearable = <T extends z.ZodTypeAny>(schema: T) => schema.nullable().optio
 const capture = defineTool({
     name: 'gtd_capture',
     description:
-        'Capture a new inbox item in GTD. Always lands in `inbox` regardless of any status sent. ' +
+        'Capture a new inbox item. Always lands in `inbox` regardless of any status sent. ' +
         'Optional `externalId` provides strict idempotency (caller-supplied dedupe key, e.g. an email Message-Id). ' +
         'Without externalId, identical (title, notes) within 24h are best-effort de-duped.',
     inputSchema: {

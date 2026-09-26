@@ -22,8 +22,8 @@ const me = defineTool({
     name: 'gtd_me',
     description:
         'Identify the account a single token is linked to. Returns the configured `account` label, ' +
-        "the GTD `environment` (local / staging / production / custom) plus `apiBase` so the model can't " +
-        "confuse environments when multiple GTD MCP servers are wired in, and the user's `userId`, " +
+        "the `environment` (local / staging / production / custom) plus `apiBase` so the model can't " +
+        "confuse environments when multiple MCP servers for this app are wired in, and the user's `userId`, " +
         'token `label`, and `email`. Defaults to the `default` account; pass `account` to introspect a specific one.',
     inputSchema: { account: accountSchema },
     handler: async (args, api) => {

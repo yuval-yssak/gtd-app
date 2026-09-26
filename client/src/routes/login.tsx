@@ -4,6 +4,7 @@ import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, isRedirect, Link, redirect } from '@tanstack/react-router';
 import { useState } from 'react';
+import { APP_NAME } from '../lib/appName';
 import { authClient } from '../lib/authClient';
 import type { OAuthProvider } from '../types/MyDB';
 import styles from './-login.module.css';
@@ -61,7 +62,7 @@ function LoginPage() {
                         mb: 1,
                     }}
                 >
-                    Getting Things Done
+                    {APP_NAME}
                 </Typography>
                 {/* Doubles as the public homepage description Google's OAuth reviewers check for:
                     signed-out visits to / land here, and the page must say what the app does. */}

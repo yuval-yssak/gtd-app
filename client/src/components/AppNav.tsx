@@ -29,6 +29,7 @@ import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { createLink, useLocation } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
+import { APP_NAME } from '../lib/appName';
 import { useNewTabAwareNavigate } from '../lib/newTabNavigation';
 import type { FileRouteTypes } from '../routeTree.gen';
 import type { MyDB } from '../types/MyDB';
@@ -129,8 +130,9 @@ function DrawerContent({ onItemClick, db }: DrawerContentProps) {
                     sx={{
                         fontWeight: 700,
                     }}
+                    data-testid="appBrand"
                 >
-                    GTD
+                    {APP_NAME}
                 </Typography>
             </Box>
             {/* Spacer on mobile so nav list starts below the fixed AppBar */}

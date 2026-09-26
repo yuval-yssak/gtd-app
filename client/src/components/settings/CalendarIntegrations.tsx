@@ -1054,7 +1054,7 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected, withAc
                         label={
                             <Box>
                                 <Typography variant="body2">
-                                    Keep calendar items and calendar routines in GTD. Google Calendar events will not be touched.
+                                    Keep calendar items and calendar routines in the app. Google Calendar events will not be touched.
                                 </Typography>
                             </Box>
                         }
@@ -1070,7 +1070,7 @@ function DisconnectDialog({ open, integrationId, onClose, onDisconnected, withAc
                                         color: 'error.main',
                                     }}
                                 >
-                                    Remove calendar items and calendar routines from GTD. Google Calendar events will not be touched.
+                                    Remove calendar items and calendar routines from the app. Google Calendar events will not be touched.
                                 </Typography>
                             </Box>
                         }

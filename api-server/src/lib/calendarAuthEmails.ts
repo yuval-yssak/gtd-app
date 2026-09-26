@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { CalendarIntegrationInterface } from '../types/entities.js';
+import { APP_NAME } from './appName.js';
 
 interface BuiltEmail {
     subject: string;
@@ -11,7 +12,7 @@ interface BuiltEmail {
  * user they have ~24h to reconnect before the integration is auto-disconnected. Plain text only;
  * HTML templating belongs with the real email provider.
  */
-export function buildCalendarAuthWarningEmail(integration: CalendarIntegrationInterface, gracePeriodEndsAt: string): BuiltEmail {
+export function buildCalendarAuthWarningEmail(integration: Pick<CalendarIntegrationInterface, 'provider'>, gracePeriodEndsAt: string): BuiltEmail {
     const friendlyDeadline = dayjs(gracePeriodEndsAt).format('YYYY-MM-DD HH:mm UTC');
     const body = [
         'Hi,',
@@ -25,7 +26,7 @@ export function buildCalendarAuthWarningEmail(integration: CalendarIntegrationIn
         'To reconnect: open Settings → Calendar Integrations and click "Reconnect" on the affected account.',
         '',
         'Thanks,',
-        'GTD',
+        APP_NAME,
     ].join('\n');
     return {
         subject: 'Action required: reconnect your Google Calendar',
@@ -37,7 +38,7 @@ export function buildCalendarAuthWarningEmail(integration: CalendarIntegrationIn
  * Final email — sent when the 24h grace period has elapsed and the integration was auto-revoked.
  * Reassures the user that calendar items are preserved locally and explains the reconnect path.
  */
-export function buildCalendarAuthRevokedEmail(integration: CalendarIntegrationInterface): BuiltEmail {
+export function buildCalendarAuthRevokedEmail(integration: Pick<CalendarIntegrationInterface, 'provider'>): BuiltEmail {
     const body = [
         'Hi,',
         '',
@@ -48,7 +49,7 @@ export function buildCalendarAuthRevokedEmail(integration: CalendarIntegrationIn
         'To reconnect: open Settings → Calendar Integrations and connect the same account again.',
         '',
         'Thanks,',
-        'GTD',
+        APP_NAME,
     ].join('\n');
     return {
         subject: 'Your Google Calendar integration was disconnected',

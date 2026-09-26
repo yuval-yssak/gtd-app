@@ -1,6 +1,6 @@
-# GTD API Server
+# Done — API Server
 
-Backend for the [Getting Things Done](https://gettingthingsdone.com/) productivity app. Built with **Hono**, **MongoDB**, and **TypeScript**.
+Backend for **Done**, a productivity app built around the [Getting Things Done](https://gettingthingsdone.com/) method. Built with **Hono**, **MongoDB**, and **TypeScript**.
 
 ## Quick Start
 

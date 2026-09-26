@@ -3,6 +3,7 @@ import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { APP_NAME } from './src/lib/appName';
 
 const commitHash = (() => {
     try {
@@ -28,8 +29,8 @@ export default defineConfig({
             filename: 'serviceWorker.ts',
             registerType: 'autoUpdate',
             manifest: {
-                name: 'Getting Things Done',
-                short_name: 'GTD',
+                name: APP_NAME,
+                short_name: APP_NAME,
                 theme_color: '#1976d2',
                 background_color: '#ffffff',
                 display: 'standalone',

@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
-import { closeContextQuietly } from './helpers/context';
+import dayjs from 'dayjs';
+import { closeContextQuietly, withOneLoggedInDevice } from './helpers/context';
 
 const CLIENT_URL = 'http://localhost:4173';
 
@@ -75,5 +76,50 @@ test.describe('legal pages', () => {
         } finally {
             await closeContextQuietly(ctx);
         }
+    });
+});
+
+// The product name on the sign-in card, the browser tab and the app bar must match the Google OAuth
+// consent screen ("Done") — reviewers compare them — and must not be the trademarked "Getting
+// Things Done" / "GTD".
+test.describe('product name', () => {
+    test('the sign-in screen and the tab title carry the product name, and the terms name the trademark holder', async ({ browser }) => {
+        const ctx = await browser.newContext();
+        try {
+            const page = await ctx.newPage();
+            await page.goto(`${CLIENT_URL}/login`);
+            await expect(page).toHaveTitle('Done');
+            await expect(page.getByRole('heading', { name: 'Done', exact: true })).toBeVisible();
+            await expect(page.getByRole('heading', { name: 'Getting Things Done' })).toHaveCount(0);
+            await page.getByTestId('loginTermsLink').click();
+            await expect(page.getByRole('heading', { level: 2, name: 'Trademarks' })).toBeVisible();
+            await expect(page.getByText('The Service is called "Done"')).toBeVisible();
+        } finally {
+            await closeContextQuietly(ctx);
+        }
+    });
+});
+
+test.describe('product name inside the app', () => {
+    test('the app bar, the manifest and the Settings About line carry the product name', async ({ browser }) => {
+        const email = `product-name-${dayjs().valueOf()}@example.com`;
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            // The brand is rendered up to three times (desktop drawer, keep-mounted mobile drawer, mobile
+            // app bar); at least one is visible and none may carry the old name.
+            const brands = page.getByTestId('appBrand');
+            await expect(
+                brands
+                    .filter({ visible: true })
+                    .filter({ hasText: /^Done$/ })
+                    .first(),
+            ).toBeVisible();
+            await expect(brands.filter({ hasNotText: /^Done$/ })).toHaveCount(0);
+            await expect(page.getByText('GTD', { exact: true })).toHaveCount(0);
+            // The installed-PWA name comes from the served manifest, not the page.
+            const manifest = await page.request.get(`${CLIENT_URL}/manifest.webmanifest`);
+            expect(await manifest.json()).toMatchObject({ name: 'Done', short_name: 'Done' });
+            await page.goto(`${CLIENT_URL}/settings`);
+            await expect(page.getByText(/^Done — an offline-first productivity app built around the GTD method\.$/)).toBeVisible();
+        });
     });
 });

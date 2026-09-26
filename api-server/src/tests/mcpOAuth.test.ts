@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { hashToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
+import { APP_NAME } from '../lib/appName.js';
 import { pkceS256Challenge, verifyPkceS256 } from '../lib/mcpOAuth.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { mcpRoutes } from '../routes/mcp.js';
@@ -141,6 +142,33 @@ describe('metadata documents', () => {
         const rs = (await rsRes.json()) as { resource: string; authorization_servers: string[] };
         expect(rs.resource).toMatch(/\/mcp$/);
         expect(rs.authorization_servers).toHaveLength(1);
+    });
+});
+
+describe('sign-in and consent pages', () => {
+    it('name the product, never the GTD mark, on the page a human sees', async () => {
+        const clientId = await registerClient();
+        const query = new URLSearchParams({
+            response_type: 'code',
+            client_id: clientId,
+            redirect_uri: REDIRECT_URI,
+            code_challenge: CHALLENGE,
+            code_challenge_method: 'S256',
+            scope: 'items.read',
+            state: 'xyz',
+        });
+        const signedOut = await app.fetch(new Request(`${ORIGIN}/mcp-oauth/authorize?${query}`));
+        expect(signedOut.status).toBe(200);
+        const signInHtml = await signedOut.text();
+        expect(signInHtml).toContain(`<h1>Sign in to ${APP_NAME}</h1>`);
+        expect(signInHtml).not.toMatch(/\bGTD\b/);
+
+        const sessionCookie = await loginCookie();
+        const signedIn = await app.fetch(new Request(`${ORIGIN}/mcp-oauth/authorize?${query}`, { headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` } }));
+        expect(signedIn.status).toBe(200);
+        const consentHtml = await signedIn.text();
+        expect(consentHtml).toContain(`wants to access your ${APP_NAME} account`);
+        expect(consentHtml).not.toMatch(/\bGTD\b/);
     });
 });
 

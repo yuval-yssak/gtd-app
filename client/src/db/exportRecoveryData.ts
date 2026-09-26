@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { APP_NAME } from '../lib/appName';
 import type { MyDB, SyncOperation } from '../types/MyDB';
 import { describeQueuedOp, readQueuedOpsForUser } from './syncRecovery';
 
@@ -28,7 +29,7 @@ function countBy<T>(rows: T[], keyOf: (row: T) => string): string {
 
 function pendingOpsSummary(userId: string, ops: SyncOperation[]): string[] {
     return [
-        'GTD pending offline changes export',
+        `${APP_NAME} pending offline changes export`,
         `User: ${userId}`,
         `Exported: ${dayjs().toISOString()}`,
         `Total pending operations: ${ops.length}`,
@@ -58,7 +59,7 @@ export async function buildLocalSnapshotExportFile(db: IDBPDatabase<MyDB>, userI
         db.getAllFromIndex('itemBriefs', 'userId', userId),
     ]);
     const summaryLines = [
-        'GTD local data snapshot export',
+        `${APP_NAME} local data snapshot export`,
         `User: ${userId}`,
         `Exported: ${dayjs().toISOString()}`,
         `items: ${items.length}`,

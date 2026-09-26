@@ -253,7 +253,7 @@ test.describe('calendar disconnect — removeLinkedEntities', () => {
             await page.getByRole('button', { name: 'Disconnect' }).first().click();
             const dialog = page.getByRole('dialog', { name: 'Disconnect Google Calendar' });
             await expect(dialog).toBeVisible();
-            await dialog.getByText(/Remove calendar items and calendar routines from GTD/).click();
+            await dialog.getByText(/Remove calendar items and calendar routines from the app/).click();
             await dialog.getByRole('button', { name: 'Disconnect' }).click();
 
             await expect.poll(() => readServerIntegrationCount(userId)).toBe(0);

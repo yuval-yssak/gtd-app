@@ -8,6 +8,7 @@ import { fetchSessionUserId, flushQueueForSessionUser, pullForSessionUser } from
 // withAppDB (not a bare openAppDB) — the SW outlives individual events, and a connection left
 // open here holds the schema version and blocks the next upgrade in every tab.
 import { withAppDB } from './db/indexedDB';
+import { APP_NAME } from './lib/appName';
 import { hasAtLeastOne } from './lib/typeUtils';
 
 /** Posted to open tabs so they can call `dispatchAccountNeedsReauth` — the SW has no `window` to dispatch on directly. */
@@ -155,7 +156,7 @@ self.addEventListener('push', (event) => {
                 }),
             )
             .then(() =>
-                self.registration.showNotification('Getting Things Done', {
+                self.registration.showNotification(APP_NAME, {
                     body: buildNotificationBody(payload?.ops ?? []),
                     icon: '/icon.svg',
                     // Unique tag per push so each notification is shown separately rather than

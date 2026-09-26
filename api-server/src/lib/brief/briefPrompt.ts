@@ -20,7 +20,7 @@ const MAX_TOKENS = 256;
 
 export type BriefSourceItem = Pick<ItemInterface, 'title' | 'notes' | 'status'>;
 
-const SYSTEM_PROMPT = `You write the one-line "brief" for a task in a Getting Things Done (GTD) app. The brief is read during the user's weekly review, where they scan every open commitment quickly and decide what to do with it.
+const SYSTEM_PROMPT = `You write the one-line "brief" for a task in an app built on the Getting Things Done (GTD) method. The brief is read during the user's weekly review, where they scan every open commitment quickly and decide what to do with it.
 
 Given a task's title and notes, answer in ONE sentence: what is this commitment, and why is it still open? The task's status is given for context. Aim for at most ${BRIEF_TARGET_MAX_CHARS} characters; going a little over to finish the thought is better than stopping mid-sentence.
 

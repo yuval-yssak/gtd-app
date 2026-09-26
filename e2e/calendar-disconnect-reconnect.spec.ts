@@ -78,7 +78,7 @@ async function clickDisconnectInSettings(page: Page, removeLinkedEntities: boole
     const dialog = page.getByRole('dialog', { name: 'Disconnect Google Calendar' });
     await expect(dialog).toBeVisible();
     if (removeLinkedEntities) {
-        await dialog.getByText(/Remove calendar items and calendar routines from GTD/).click();
+        await dialog.getByText(/Remove calendar items and calendar routines from the app/).click();
     }
     await dialog.getByRole('button', { name: 'Disconnect' }).click();
     // Settings row disappears once the DELETE completes.

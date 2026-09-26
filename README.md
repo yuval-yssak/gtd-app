@@ -1,6 +1,6 @@
-# GTD App
+# Done
 
-A full-stack offline-first productivity app implementing the [Getting Things Done](https://gettingthingsdone.com/) methodology.
+**Done** is a full-stack offline-first productivity app built around the [Getting Things Done](https://gettingthingsdone.com/) method. (Getting Things Done® and GTD® are trademarks of the David Allen Company; this is an independent project, and the codebase keeps the `gtd` shorthand in package and repository names.)
 
 Items flow through four phases — **Collect → Clarify → Review → Do** — across statuses (`inbox`, `nextAction`, `calendar`, `waitingFor`, `done`, `trash`), with support for routines, work contexts, people, and bidirectional Google Calendar sync. All mutations are queued as operations and synced across devices with last-write-wins conflict resolution.
 

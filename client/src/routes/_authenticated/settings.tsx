@@ -24,6 +24,7 @@ import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
+import { APP_NAME, METHOD_NAME } from '../../lib/appName';
 import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
 import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
@@ -203,7 +204,7 @@ function SettingsPage() {
                             color: 'text.secondary',
                         }}
                     >
-                        Getting Things Done — offline-first GTD productivity app.
+                        {APP_NAME} — an offline-first productivity app built around the {METHOD_NAME} method.
                     </Typography>
                     <Typography
                         variant="caption"

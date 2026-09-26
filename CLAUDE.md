@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Full-stack offline-first GTD (Getting Things Done) productivity app — monorepo with:
+Full-stack offline-first productivity app built around the GTD (Getting Things Done) method. The product is branded **"Done"** (`client/src/lib/appName.ts`; matches the Google OAuth consent screen) — "Getting Things Done"/"GTD" are David Allen Company marks and are only ever used to describe the method, never as the app's name. Monorepo with:
 - `api-server/` — Node.js/Hono/TypeScript backend on port 4000
 - `client/` — React 19/TypeScript/Vite PWA frontend on port 4173
 - `e2e/` — Playwright end-to-end suite (drives the real client + API)

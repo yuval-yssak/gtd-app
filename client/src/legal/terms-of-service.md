@@ -1,12 +1,12 @@
-These terms govern your use of Getting Things Done ("the Service", "we", "us"), a personal productivity app operated by Yuval Yssak, an individual based in Israel. By signing in you agree to them and to our [Privacy Policy](/privacy). If you do not agree, do not use the Service.
+These terms govern your use of Done ("the Service", "we", "us"), a personal productivity app operated by Yuval Yssak, an individual based in Israel. By signing in you agree to them and to our [Privacy Policy](/privacy). If you do not agree, do not use the Service.
 
 ## The Service
 
-Getting Things Done helps you capture, clarify, organise and review your commitments, optionally syncing with Google Calendar and offering AI-generated summaries. It is currently provided free of charge (see "Fees" below) and is under active development: features may change, be added or be removed at any time.
+Done helps you capture, clarify, organise and review your commitments, optionally syncing with Google Calendar and offering AI-generated summaries. It is currently provided free of charge (see "Fees" below) and is under active development: features may change, be added or be removed at any time.
 
 ## Trademarks
 
-Getting Things Done® and GTD® are registered trademarks of the David Allen Company. This Service is an independent project and is not affiliated with, endorsed by or sponsored by the David Allen Company.
+Getting Things Done® and GTD® are registered trademarks of the David Allen Company. The Service is called "Done". It follows the GTD method but is an independent project, not affiliated with, endorsed by or sponsored by the David Allen Company.
 
 ## Your account
 

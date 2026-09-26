@@ -1,4 +1,4 @@
-Getting Things Done ("the Service", "we", "us") is a personal productivity app operated by Yuval Yssak, an individual based in Israel. This policy explains what personal data the Service handles, why, where it is stored and who else processes it. It applies to the web app at getting-things-done.app, its public API and the MCP server.
+Done ("the Service", "we", "us") is a personal productivity app operated by Yuval Yssak, an individual based in Israel. This policy explains what personal data the Service handles, why, where it is stored and who else processes it. It applies to the web app at getting-things-done.app, its public API and the MCP server.
 
 If anything here is unclear, write to [yuval.yssak@gmail.com](mailto:yuval.yssak@gmail.com).
 
@@ -51,7 +51,7 @@ We want to learn where the Service helps and where it gets in the way. To do tha
 
 ## Google API Services disclosure
 
-Getting Things Done's use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes), including the Limited Use requirements. Calendar data is used only to provide user-facing features of the app: calendar sync, and — as described under "AI processing" — item briefs for calendar items and the event context the "clarify with AI" assistant uses when you ask it to. It is never used for advertising, never sold, never used to train machine-learning models, and only read by a person with your consent (for example, to answer a support request you raised), for security purposes such as investigating abuse, or when required by law. For product research it is used only in aggregated, anonymised form and is never read by a person.
+Done's use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes), including the Limited Use requirements. Calendar data is used only to provide user-facing features of the app: calendar sync, and — as described under "AI processing" — item briefs for calendar items and the event context the "clarify with AI" assistant uses when you ask it to. It is never used for advertising, never sold, never used to train machine-learning models, and only read by a person with your consent (for example, to answer a support request you raised), for security purposes such as investigating abuse, or when required by law. For product research it is used only in aggregated, anonymised form and is never read by a person.
 
 Disconnecting the calendar in Settings deletes the tokens we hold, which ends our access. To remove the grant from your Google Account as well, use [your Google Account permissions](https://myaccount.google.com/permissions).
 

@@ -15,6 +15,7 @@
 import dayjs from 'dayjs';
 import { type Context, Hono } from 'hono';
 import oauthClientsDAO from '../dataAccess/oauthClientsDAO.js';
+import { APP_NAME } from '../lib/appName.js';
 import {
     confineScopes,
     issueAuthCode,
@@ -124,7 +125,7 @@ function renderLoginPage(queryString: string): string {
     const hiddenFields = [...hidden.entries()].map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('');
     const button = (provider: string, label: string) =>
         `<form method="post" action="/mcp-oauth/authorize/login" style="margin:0.5rem 0">${hiddenFields}<input type="hidden" name="provider" value="${provider}"><button type="submit" style="width:100%;padding:0.75rem;font-size:1rem;cursor:pointer">${escapeHtml(label)}</button></form>`;
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Sign in to GTD</title></head><body style="font-family:system-ui;max-width:24rem;margin:4rem auto;padding:0 1rem"><h1>Sign in to GTD</h1><p>An MCP client wants to connect to your GTD account.</p>${button('google', 'Sign in with Google')}${button('github', 'Sign in with GitHub')}</body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Sign in to ${APP_NAME}</title></head><body style="font-family:system-ui;max-width:24rem;margin:4rem auto;padding:0 1rem"><h1>Sign in to ${APP_NAME}</h1><p>An MCP client wants to connect to your ${APP_NAME} account.</p>${button('google', 'Sign in with Google')}${button('github', 'Sign in with GitHub')}</body></html>`;
 }
 
 /** Consent page: shows the client + requested scopes with Allow/Deny, POSTing to /authorize/decision. */
@@ -133,7 +134,7 @@ function renderConsentPage(client: OAuthClientInterface, scopes: ApiTokenScope[]
     const hiddenFields = [...hidden.entries()].map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('');
     const clientLabel = client.clientName ?? client._id;
     const scopeList = scopes.map((s) => `<li><code>${escapeHtml(s)}</code></li>`).join('');
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Authorize MCP access</title></head><body style="font-family:system-ui;max-width:28rem;margin:4rem auto;padding:0 1rem"><h1>Authorize access</h1><p><strong>${escapeHtml(clientLabel)}</strong> wants to access your GTD account (<code>${escapeHtml(userEmail)}</code>) with:</p><ul>${scopeList}</ul><div style="display:flex;gap:0.75rem;margin-top:1.5rem"><form method="post" action="/mcp-oauth/authorize/decision" style="flex:1">${hiddenFields}<input type="hidden" name="decision" value="allow"><button type="submit" style="width:100%;padding:0.75rem;cursor:pointer">Allow</button></form><form method="post" action="/mcp-oauth/authorize/decision" style="flex:1">${hiddenFields}<input type="hidden" name="decision" value="deny"><button type="submit" style="width:100%;padding:0.75rem;cursor:pointer">Deny</button></form></div></body></html>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Authorize MCP access</title></head><body style="font-family:system-ui;max-width:28rem;margin:4rem auto;padding:0 1rem"><h1>Authorize access</h1><p><strong>${escapeHtml(clientLabel)}</strong> wants to access your ${APP_NAME} account (<code>${escapeHtml(userEmail)}</code>) with:</p><ul>${scopeList}</ul><div style="display:flex;gap:0.75rem;margin-top:1.5rem"><form method="post" action="/mcp-oauth/authorize/decision" style="flex:1">${hiddenFields}<input type="hidden" name="decision" value="allow"><button type="submit" style="width:100%;padding:0.75rem;cursor:pointer">Allow</button></form><form method="post" action="/mcp-oauth/authorize/decision" style="flex:1">${hiddenFields}<input type="hidden" name="decision" value="deny"><button type="submit" style="width:100%;padding:0.75rem;cursor:pointer">Deny</button></form></div></body></html>`;
 }
 
 interface AuthorizeParams {
