@@ -47,11 +47,14 @@ describe('GET /calendar/auth/google', () => {
         expect(res.status).toBe(302);
         const location = res.headers.get('location') ?? '';
         expect(location).toContain('accounts.google.com');
-        // Both scopes must be requested: `calendar` for events, `userinfo.email` so the
-        // callback can verify the authorized account matches the active session.
+        // The granular trio plus userinfo.email (so the callback can verify the authorized account
+        // matches the active session) — and never the full `auth/calendar` scope.
         const scope = new URL(location).searchParams.get('scope') ?? '';
-        expect(scope).toContain('https://www.googleapis.com/auth/calendar');
+        expect(scope).toContain('https://www.googleapis.com/auth/calendar.events');
+        expect(scope).toContain('https://www.googleapis.com/auth/calendar.calendarlist.readonly');
+        expect(scope).toContain('https://www.googleapis.com/auth/calendar.calendars.readonly');
         expect(scope).toContain('https://www.googleapis.com/auth/userinfo.email');
+        expect(scope).not.toMatch(/auth\/calendar(?![.\w])/);
         // state must be present and HMAC-signed (verified below in callback test)
         expect(new URL(location).searchParams.get('state')).toBeTruthy();
     });
@@ -433,6 +436,95 @@ describe('GET /calendar/auth/google/callback', () => {
         const [integration] = integrations;
         if (!integration) throw new Error('expected an integration');
         expect(integration.grantedScopes).toEqual(['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']);
+    });
+
+    it('persists an integration when Google grants the full granular trio', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const redirectRes = await authenticatedRequest(app, { method: 'GET', path: '/calendar/auth/google', sessionCookie });
+        const state = new URL(redirectRes.headers.get('location') ?? '').searchParams.get('state') ?? '';
+
+        const granularScopes =
+            'https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.calendars.readonly https://www.googleapis.com/auth/userinfo.email';
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: { access_token: 'granular-at', refresh_token: 'granular-rt', expiry_date: dayjs().add(1, 'hour').valueOf(), scope: granularScopes },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnected=');
+
+        const integrations = await calendarIntegrationsDAO.findByUserDecrypted(userId);
+        expect(integrations).toHaveLength(1);
+        const [integration] = integrations;
+        if (!integration) throw new Error('expected an integration');
+        expect(integration.grantedScopes).toEqual(granularScopes.split(' '));
+    });
+
+    it('rejects a partial grant — revokes the token and persists nothing', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const redirectRes = await authenticatedRequest(app, { method: 'GET', path: '/calendar/auth/google', sessionCookie });
+        const state = new URL(redirectRes.headers.get('location') ?? '').searchParams.get('state') ?? '';
+
+        // The user unticked "events" on Google's granular consent screen: the picker scopes came
+        // back but the one scope every sync and push needs did not.
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: {
+                access_token: 'partial-at',
+                refresh_token: 'partial-rt',
+                expiry_date: dayjs().add(1, 'hour').valueOf(),
+                scope: 'https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.calendars.readonly https://www.googleapis.com/auth/userinfo.email',
+            },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+        const revokeSpy = vi.spyOn(google.auth.OAuth2.prototype, 'revokeToken').mockResolvedValue({} as never);
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        expect(res.status).toBe(302);
+        expect(res.headers.get('location')).toContain('calendarConnectError=scope_missing');
+        // No revoke: it would wipe the whole app grant for this Google account, including the
+        // refresh token of an existing working integration being re-consented over.
+        expect(revokeSpy).not.toHaveBeenCalled();
+        expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toEqual([]);
+    });
+
+    it('rejects a partial grant on the RSVP re-consent popup with a scope_missing message', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        const redirectRes = await authenticatedRequest(app, { method: 'GET', path: '/calendar/auth/google?intent=rsvp', sessionCookie });
+        const state = new URL(redirectRes.headers.get('location') ?? '').searchParams.get('state') ?? '';
+
+        vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockResolvedValueOnce({
+            tokens: {
+                access_token: 'partial-rsvp-at',
+                refresh_token: 'partial-rsvp-rt',
+                expiry_date: dayjs().add(1, 'hour').valueOf(),
+                scope: 'https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/userinfo.email',
+            },
+        } as never);
+        mockUserInfoEmail('alice@example.com');
+
+        const res = await app.fetch(
+            new Request(`http://localhost:4000/calendar/auth/google/callback?code=auth-code&state=${state}`, {
+                headers: { Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
+            }),
+        );
+        // The popup closer is a 200 HTML page that posts the failure to window.opener.
+        expect(res.status).toBe(200);
+        const html = await res.text();
+        expect(html).toContain('gtd-rsvp-reconsent');
+        expect(html).toContain('"reason":"scope_missing"');
+        expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toEqual([]);
     });
 
     it('leaves grantedScopes undefined when tokens.scope is absent', async () => {

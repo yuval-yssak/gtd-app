@@ -143,7 +143,8 @@ export function CalendarIntegrations() {
     const [chooseCalendarFor, setChooseCalendarFor] = useState<CalendarIntegration | null>(null);
     const navigate = useNavigate();
     // calendarConnected and calendarConnectError are set by the OAuth callback redirect; the first
-    // auto-opens the calendar picker, the second renders a mismatch error inline.
+    // auto-opens the calendar picker, the second renders an inline connect error (account mismatch,
+    // or a partial grant with scopes unticked).
     const { calendarConnected, calendarConnectError } = useSearch({ from: '/_authenticated/settings' });
 
     // Drops the resource cache and re-reads. The new promise is swapped in inside a transition so
@@ -169,7 +170,7 @@ export function CalendarIntegrations() {
         navigate({ to: '/settings', search: (prev) => ({ ...prev, calendarConnected: undefined }), replace: true }).catch(() => {});
     }, [calendarConnected, details, navigate]);
 
-    function dismissMismatchError() {
+    function dismissConnectError() {
         // Clear the query param via navigate(replace) so refreshing the page doesn't re-show the error.
         navigate({ to: '/settings', search: (prev) => ({ ...prev, calendarConnectError: undefined }), replace: true }).catch(() => {});
     }
@@ -189,7 +190,8 @@ export function CalendarIntegrations() {
     return (
         <Box>
             <ActiveAccountScopeNotice account={account} hasMultipleAccounts={loggedInAccounts.length > 1} />
-            {calendarConnectError === 'mismatch' && <ConnectMismatchError onDismiss={dismissMismatchError} />}
+            {calendarConnectError === 'mismatch' && <ConnectMismatchError onDismiss={dismissConnectError} />}
+            {calendarConnectError === 'scope_missing' && <ScopeMissingError onDismiss={dismissConnectError} />}
             {details.length === 0 && (
                 <Typography
                     variant="body2"
@@ -265,7 +267,29 @@ function ActiveAccountScopeNotice({ account, hasMultipleAccounts }: { account: S
     );
 }
 
-function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
+/**
+ * Rendered when the OAuth callback rejected a PARTIAL grant: Google's granular consent screen lets
+ * the user untick individual scopes, and the server refuses to persist an integration that would
+ * 403 on its first sync (the tokens were already revoked server-side). Exported for the unit test.
+ */
+export function ScopeMissingError({ onDismiss }: { onDismiss: () => void }) {
+    return (
+        <Box sx={{ mb: 2, p: 1.5, border: 1, borderColor: 'error.main', borderRadius: 1 }} data-testid="calendarScopeMissingError">
+            <Typography variant="body2" sx={{ color: 'error.main', fontWeight: 500, mb: 0.5 }}>
+                Google Calendar wasn't connected — some permissions were unticked
+            </Typography>
+            <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block' }}>
+                Calendar sync needs all three calendar permissions on Google's consent screen. Nothing was saved — try connecting again and leave every checkbox
+                ticked.
+            </Typography>
+            <Button size="small" sx={{ mt: 1 }} onClick={onDismiss}>
+                Dismiss
+            </Button>
+        </Box>
+    );
+}
+
+export function ConnectMismatchError({ onDismiss }: { onDismiss: () => void }) {
     return (
         <Box sx={{ mb: 2, p: 1.5, border: 1, borderColor: 'error.main', borderRadius: 1 }}>
             <Typography

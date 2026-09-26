@@ -25,10 +25,14 @@ describe('privacy policy', () => {
     });
 
     it('names the Google scopes verbatim — reviewers grep for the literal scope URL', () => {
-        expect(privacy.markdown).toContain('https://www.googleapis.com/auth/calendar');
+        expect(privacy.markdown).toContain('https://www.googleapis.com/auth/calendar.events');
+        expect(privacy.markdown).toContain('https://www.googleapis.com/auth/calendar.calendarlist.readonly');
+        expect(privacy.markdown).toContain('https://www.googleapis.com/auth/calendar.calendars.readonly');
         expect(privacy.markdown).toContain('https://www.googleapis.com/auth/userinfo.email');
-        // Each scope carries its own justification — reviewers ask for a purpose per scope.
+        // Each scope carries its own justification — reviewers ask for a purpose per scope. The
+        // full read-everything `auth/calendar` scope must not be named: the app no longer requests it.
         expect(privacy.markdown).toContain('only to confirm which Google account you authorised');
+        expect(privacy.markdown).not.toMatch(/auth\/calendar(?![.\w])/);
     });
 
     it('carries the verbatim Google API Services Limited Use disclosure', () => {

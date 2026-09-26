@@ -779,7 +779,9 @@ export interface CalendarIntegrationInterface {
     /**
      * OAuth scopes actually granted by Google on the most recent consent. Populated from
      * `tokens.scope` in the OAuth callback. Absent on legacy integrations → treated as permissive
-     * (those users authorized the full `auth/calendar` scope). New consents stamp it explicitly.
+     * (those users authorized the full `auth/calendar` scope). New consents stamp it explicitly;
+     * since 2026-09-27 they carry the granular calendar.events + calendarlist.readonly +
+     * calendars.readonly set instead of the full scope.
      */
     grantedScopes?: string[];
     createdTs: string;

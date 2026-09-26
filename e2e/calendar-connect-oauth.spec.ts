@@ -95,6 +95,22 @@ test.describe('calendar connect — OAuth mismatch error', () => {
         });
     });
 
+    test('hitting calendarConnectError=scope_missing shows the partial-grant banner and dismiss clears it', async ({ browser }) => {
+        const email = `connect-scope-missing-${dayjs().valueOf()}@example.com`;
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            // The server's partial-grant guard redirects here after revoking the tokens; driving the
+            // URL directly exercises the same client path without a dev simulate endpoint.
+            await page.goto(`${SETTINGS_URL}?calendarConnectError=scope_missing`);
+            const banner = page.getByTestId('calendarScopeMissingError');
+            await expect(banner).toBeVisible({ timeout: 10_000 });
+            await expect(banner).toContainText('all three calendar permissions');
+
+            await banner.getByRole('button', { name: 'Dismiss', exact: true }).click();
+            await expect(page).toHaveURL(/\/settings($|\?(?!.*calendarConnectError))/);
+            await expect(banner).not.toBeVisible();
+        });
+    });
+
     test('dismissing the mismatch error clears the query param so refresh does not re-show it', async ({ browser }) => {
         const email = `connect-mismatch-dismiss-${dayjs().valueOf()}@example.com`;
         await withOneLoggedInDevice(browser, email, async (page) => {

@@ -15,7 +15,7 @@
  *
  * Prerequisites (add to the Google Cloud OAuth client used by the app):
  *   - Authorized redirect URI: http://localhost:4466/callback
- *   - Scope: https://www.googleapis.com/auth/calendar
+ *   - Scopes: the granular calendar.events + calendarlist.readonly + calendars.readonly trio
  */
 
 import { writeFileSync } from 'node:fs';
@@ -104,7 +104,13 @@ async function main(): Promise<void> {
     const authUrl = oauth2.generateAuthUrl({
         access_type: 'offline',
         prompt: 'consent',
-        scope: ['https://www.googleapis.com/auth/calendar', 'email'],
+        // Granular set — matches what production requests, so the audit runs under the same permissions.
+        scope: [
+            'https://www.googleapis.com/auth/calendar.events',
+            'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+            'https://www.googleapis.com/auth/calendar.calendars.readonly',
+            'email',
+        ],
     });
 
     console.log('\nOpen this URL in your browser and authorize the dedicated test Google account:');

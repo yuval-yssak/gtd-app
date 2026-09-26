@@ -1856,6 +1856,32 @@ describe('POST /calendar/items/:itemId/rsvp', () => {
         expect(patchSpy).not.toHaveBeenCalled();
     });
 
+    it('accepts the granular calendar.events grant — what every consent since 2026-09-27 carries', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId, {
+            grantedScopes: [
+                'https://www.googleapis.com/auth/calendar.events',
+                'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+                'https://www.googleapis.com/auth/calendar.calendars.readonly',
+                'https://www.googleapis.com/auth/userinfo.email',
+            ],
+        });
+        await insertLinkedCalendarItem(userId);
+
+        vi.spyOn(GoogleCalendarProvider.prototype, 'getMyEmail').mockResolvedValueOnce('alice@example.com');
+        const patchSpy = vi.spyOn(GoogleCalendarProvider.prototype, 'patchEventAttendees').mockResolvedValueOnce(undefined);
+
+        const res = await authenticatedRequest(app, {
+            method: 'POST',
+            path: '/calendar/items/item-rsvp-1/rsvp',
+            sessionCookie,
+            body: { responseStatus: 'accepted' },
+        });
+        expect(res.status).toBe(200);
+        expect(patchSpy).toHaveBeenCalledOnce();
+    });
+
     it('treats absent grantedScopes as permissive (legacy integrations)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

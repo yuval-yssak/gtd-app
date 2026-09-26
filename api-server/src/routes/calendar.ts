@@ -297,13 +297,42 @@ calendarRoutes.get('/auth/google', authenticateRequest, (c) => {
         // identity, so the callback's email-mismatch guard rejects the connect ("authorized account
         // didn't match the one you selected"). `consent` is kept so we still always get a refresh token.
         prompt: 'select_account consent',
-        scope: ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email'],
+        scope: [...REQUIRED_CALENDAR_SCOPES, USERINFO_EMAIL_SCOPE],
         state: signState({ userId, ...(loginHint ? { loginHint } : {}), ...(intent ? { intent } : {}) }),
         ...(loginHint ? { login_hint: loginHint } : {}),
     });
 
     return c.redirect(url);
 });
+
+/**
+ * The granular consent trio every connect must grant — narrower than the legacy full `auth/calendar`
+ * (every API call the app makes is events-level, audited 2026-09-26, except the picker's
+ * calendarList.list and the timeZone calendars.get), so the grant screen is less alarming and the
+ * Google verification review lighter.
+ */
+const REQUIRED_CALENDAR_SCOPES = [
+    'https://www.googleapis.com/auth/calendar.events',
+    'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
+    'https://www.googleapis.com/auth/calendar.calendars.readonly',
+] as const;
+/** Required so the callback can verify the authorized account matches the selected one. */
+const USERINFO_EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email';
+/** Legacy full read/write scope — consents from before 2026-09-27 carry it and cover the trio above. */
+const FULL_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar';
+
+/**
+ * Google's granular consent screen lets the user untick individual scopes. A partial grant must not
+ * be persisted: the integration would look healthy (picker works) and then 403 on its first events
+ * call — categorised terminal, so every push lands in the SyncIssuesPanel as Dismiss-only instead of
+ * a reconnect prompt. Absent scopes ⇒ legacy token response shape, which was full-scope in practice.
+ */
+function grantCoversRequiredScopes(granted: string[] | undefined) {
+    if (!granted) {
+        return true;
+    }
+    return granted.includes(FULL_CALENDAR_SCOPE) || REQUIRED_CALENDAR_SCOPES.every((scope) => granted.includes(scope));
+}
 
 calendarRoutes.get('/auth/google/callback', async (c) => {
     const code = c.req.query('code');
@@ -346,6 +375,18 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
             return renderPopupCloser(c, { ok: false, reason: 'mismatch' });
         }
         return c.redirect(`${clientUrl}/settings?calendarConnectError=mismatch`);
+    }
+
+    // Reject partial grants: nothing is persisted and the user is sent back to retry. Deliberately
+    // NO revokeToken here (unlike the mismatch path, where the wrong account authorized): revoking
+    // wipes the app's whole grant for this Google account, which would kill the refresh token of an
+    // already-working integration when the user re-consents over it and unticks a box. The partial
+    // token is simply dropped; `prompt: consent` on retry re-asks for everything anyway.
+    if (!grantCoversRequiredScopes(grantedScopes)) {
+        if (intent === 'rsvp') {
+            return renderPopupCloser(c, { ok: false, reason: 'scope_missing' });
+        }
+        return c.redirect(`${clientUrl}/settings?calendarConnectError=scope_missing`);
     }
 
     const now = dayjs().toISOString();
@@ -5467,7 +5508,8 @@ export async function reconcileAndApplyRoutineExceptions(routine: RoutineInterfa
 // sync flush on reconnect — the replay path (added in Phase 4) calls into the same helper
 // (`applyRsvpToItem`) so the on-wire behavior is identical.
 
-/** Google Calendar scopes that authorize attendee writes (RSVP is an attendee mutation). */
+/** Google Calendar scopes that authorize attendee writes (RSVP is an attendee mutation). The full
+ * scope appears only on legacy grants; new consents carry `calendar.events` — keep both entries. */
 const CALENDAR_WRITE_SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/calendar.events'] as const;
 
 /** Allowed `responseStatus` values for the RSVP body — `needsAction` is the absence of a response, not a request. */
