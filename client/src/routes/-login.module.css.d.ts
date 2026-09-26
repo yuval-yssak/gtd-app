@@ -3,5 +3,6 @@ declare const styles: {
     readonly card: string;
     readonly legalFooter: string;
     readonly page: string;
+    readonly subtitle: string;
 };
 export = styles;

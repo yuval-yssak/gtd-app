@@ -8,7 +8,7 @@ If anything here is unclear, write to [yuval.yssak@gmail.com](mailto:yuval.yssak
 
 **Your content.** Everything you put into the Service: items (titles, notes, dates, energy/time/focus tags), routines, work contexts, weekly-review state, and the people you add — including any name, email address, phone number and notes you record about them. Notes can contain anything you choose to write, so please treat them as you would any private document.
 
-**Calendar data (only if you connect Google Calendar).** With your explicit consent we read and write the calendars you select: event titles, times, descriptions, locations, meeting links, organizer and attendee names, email addresses and RSVP status. We store the OAuth access and refresh tokens Google issues so sync can keep running while you are away; those tokens are encrypted at rest with AES-256-GCM.
+**Calendar data (only if you connect Google Calendar).** With your explicit consent — the `https://www.googleapis.com/auth/calendar` scope, and `https://www.googleapis.com/auth/userinfo.email` only to confirm which Google account you authorised — we read and write the calendars you select: event titles, times, descriptions, locations, meeting links, organizer and attendee names, email addresses and RSVP status. We store the OAuth access and refresh tokens Google issues so sync can keep running while you are away; those tokens are encrypted at rest with AES-256-GCM.
 
 **Device and session data.** A random device identifier, a browser label (for example "Chrome on macOS"), an optional name you give the device, your time zone, and — if you enable notifications — the push endpoint your browser vendor assigns. Sign-in sessions record the IP address and user agent that created them.
 

@@ -63,6 +63,9 @@ test.describe('legal pages', () => {
         try {
             const page = await ctx.newPage();
             await page.goto(`${CLIENT_URL}/login`);
+            // The sign-in card doubles as the public homepage Google's reviewers visit: it must
+            // describe the app, not just ask for credentials.
+            await expect(page.getByTestId('loginAppDescription')).toContainText('personal productivity app');
             await expect(page.getByTestId('loginPrivacyLink')).toHaveAttribute('href', '/privacy');
             await page.getByTestId('loginTermsLink').click();
             await expect(page).toHaveURL(/\/terms$/);

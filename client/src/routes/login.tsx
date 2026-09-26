@@ -63,13 +63,13 @@ function LoginPage() {
                 >
                     Getting Things Done
                 </Typography>
-                <Typography
-                    variant="body2"
-                    sx={{
-                        color: 'text.secondary',
-                        mb: 4,
-                    }}
-                >
+                {/* Doubles as the public homepage description Google's OAuth reviewers check for:
+                    signed-out visits to / land here, and the page must say what the app does. */}
+                <Typography variant="body2" className={styles.subtitle} sx={{ mb: 2 }} data-testid="loginAppDescription">
+                    A personal productivity app for capturing, organising and reviewing your tasks — with offline-first sync across your devices and optional
+                    Google Calendar integration.
+                </Typography>
+                <Typography variant="body2" className={styles.subtitle} sx={{ mb: 4 }}>
                     Sign in to your account
                 </Typography>
                 <div className={styles.buttonGroup}>

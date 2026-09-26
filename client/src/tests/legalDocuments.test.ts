@@ -24,6 +24,13 @@ describe('privacy policy', () => {
         }
     });
 
+    it('names the Google scopes verbatim — reviewers grep for the literal scope URL', () => {
+        expect(privacy.markdown).toContain('https://www.googleapis.com/auth/calendar');
+        expect(privacy.markdown).toContain('https://www.googleapis.com/auth/userinfo.email');
+        // Each scope carries its own justification — reviewers ask for a purpose per scope.
+        expect(privacy.markdown).toContain('only to confirm which Google account you authorised');
+    });
+
     it('carries the verbatim Google API Services Limited Use disclosure', () => {
         expect(privacy.markdown).toContain(
             'use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy]',
