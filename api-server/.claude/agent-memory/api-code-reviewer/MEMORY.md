@@ -118,3 +118,4 @@
 - ["Sync now" is auto-invoked by the client](project_sync_now_is_auto_invoked_by_client.md) — web client POSTs /calendar/integrations/:id/sync every syncAndRefresh; panel has no Reconnect; dismiss deletes the op; webhooks skip suspended; suspended skip IS tested.
 - [Mongo CSOT timeoutMS verified behaviour](project_mongodb_csot_timeoutms_verified_behaviour.md) — per-op timeoutMS bounds connected-client ops (~1s, verified); NOT auto-connect of an unconnected client (30s).
 - [Prod env provisioning lags staging](project_prod_env_provisioning_lags_staging.md) — prod has no CRON_SECRET/Scheduler/VAPID; removing a prod fallback for Scheduler silently kills the feature. `gh secret list --env production`.
+- [Log redaction misses error-object dumps](feedback_log_redaction_error_object_dumps.md) — console.error(msg, err) prints GaxiosError config.body (event text, attendee emails); GCal calendarId is an email

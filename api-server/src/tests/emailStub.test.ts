@@ -40,7 +40,7 @@ describe('sendEmail', () => {
         expect(row.sentAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     });
 
-    it('logs `[email-stub]` with kind, recipient, and subject', async () => {
+    it('logs `[email-stub]` with kind, user id and subject — never the recipient address', async () => {
         const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
         await sendEmail({
             userId: 'user-2',
@@ -52,8 +52,14 @@ describe('sendEmail', () => {
 
         const stubLogs = logSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('[email-stub]'));
         expect(stubLogs).toHaveLength(1);
-        expect(stubLogs[0]).toContain('kind=calendar_auth_revoked');
-        expect(stubLogs[0]).toContain('to=bob@example.com');
-        expect(stubLogs[0]).toContain('subject="Disconnected"');
+        const [stubLog] = stubLogs;
+        if (!stubLog) {
+            throw new Error('expected one [email-stub] log line');
+        }
+        expect(stubLog).toContain('kind=calendar_auth_revoked');
+        expect(stubLog).toContain('userId=user-2');
+        // stdout reaches Cloud Logging, which the privacy policy says never holds email addresses.
+        expect(stubLog).not.toContain('bob@example.com');
+        expect(stubLog).toContain('subject="Disconnected"');
     });
 });

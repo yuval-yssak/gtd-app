@@ -29,5 +29,7 @@ export async function sendEmail(args: SendEmailArgs): Promise<void> {
         kind: args.kind,
         sentAt,
     });
-    console.log(`[email-stub] kind=${args.kind} to=${args.to} subject=${JSON.stringify(args.subject)}`);
+    // userId, not the address: stdout lands in Cloud Logging, which the privacy policy describes as
+    // holding identifiers only. The recipient stays queryable through the sentEmails audit row.
+    console.log(`[email-stub] kind=${args.kind} userId=${args.userId} subject=${JSON.stringify(args.subject)}`);
 }

@@ -18,3 +18,12 @@
     flex-direction: column;
     gap: 1rem;
 }
+
+.legalFooter {
+    margin-top: 2rem;
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+}
+
+.legalFooter a {
+    color: inherit;
+}

@@ -11,12 +11,17 @@ const { RRule } = rrule;
 
 dayjs.extend(utc);
 
+import { installGoogleErrorRedactor } from '../lib/googleErrorRedactor.js';
 import { markdownToHtml } from '../lib/markdownHtml.js';
 import { normalizeMasterEventId } from '../lib/routineItemRegeneration.js';
 import { extractUntilFromRrule, parseRfc5545DateTime } from '../lib/rruleHelpers.js';
 import type { CalendarIntegrationInterface, GCalAttendee, GCalEventType, GCalPerson, GCalResponseStatus, RoutineInterface } from '../types/entities.js';
 import type { CalendarProvider, CreatedCalendarEvent, EventSyncResult, GCalEvent, GCalException, MasterContent } from './CalendarProvider.js';
 import { SyncTokenInvalidError } from './CalendarProvider.js';
+
+// Every google.calendar() client in this file inherits it: a failed push would otherwise carry the
+// event body on the thrown error, straight into the `console.error(…, err)` sites in the pushback path.
+installGoogleErrorRedactor();
 
 const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -410,7 +415,8 @@ export class GoogleCalendarProvider implements CalendarProvider {
         const cal = google.calendar({ version: 'v3', auth: this.auth });
         const response = await cal.calendars.get({ calendarId });
         if (!response.data.timeZone) {
-            console.warn(`[GoogleCalendarProvider] calendars.get returned no timeZone for ${calendarId} — falling back to UTC`);
+            // The calendar id is the account's email address for a primary calendar — keep it out of the logs.
+            console.warn('[GoogleCalendarProvider] calendars.get returned no timeZone — falling back to UTC');
         }
         return response.data.timeZone ?? 'UTC';
     }

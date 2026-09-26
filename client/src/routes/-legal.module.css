@@ -1,0 +1,73 @@
+.page {
+    min-height: 100vh;
+    background-color: var(--mui-palette-background-default, #f5f5f5);
+    padding: 2rem 1rem 4rem;
+}
+
+.card {
+    max-width: 44rem;
+    margin: 0 auto;
+    padding: 2.5rem 2rem;
+}
+
+@media (max-width: 600px) {
+    .card {
+        padding: 1.5rem 1.25rem;
+    }
+}
+
+.title {
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.effectiveDate {
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    margin-bottom: 1.5rem;
+}
+
+.nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.contents {
+    margin: 0 0 2rem;
+    padding-left: 1.25rem;
+    columns: 2;
+    column-gap: 2rem;
+}
+
+@media (max-width: 600px) {
+    .contents {
+        columns: 1;
+    }
+}
+
+.contents li {
+    break-inside: avoid;
+    margin-bottom: 0.25rem;
+}
+
+/* react-markdown emits bare tags; the notes preview leaves headings and tables unstyled. */
+.card :global(h2) {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin: 2rem 0 0.75rem;
+    scroll-margin-top: 1rem;
+}
+
+.card :global(table) {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+}
+
+.card :global(th),
+.card :global(td) {
+    vertical-align: top;
+    padding: 0.5rem 0.75rem;
+}

@@ -2,7 +2,7 @@ import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
-import { createFileRoute, isRedirect, redirect } from '@tanstack/react-router';
+import { createFileRoute, isRedirect, Link, redirect } from '@tanstack/react-router';
 import { useState } from 'react';
 import { authClient } from '../lib/authClient';
 import type { OAuthProvider } from '../types/MyDB';
@@ -99,6 +99,18 @@ function LoginPage() {
                         {signInError}
                     </Typography>
                 )}
+                {/* Google's OAuth consent-screen review checks that the policy is reachable from the sign-in flow. */}
+                <Typography variant="caption" component="p" className={styles.legalFooter}>
+                    By signing in you agree to the{' '}
+                    <Link to="/terms" data-testid="loginTermsLink">
+                        Terms of Service
+                    </Link>{' '}
+                    and{' '}
+                    <Link to="/privacy" data-testid="loginPrivacyLink">
+                        Privacy Policy
+                    </Link>
+                    .
+                </Typography>
             </Paper>
         </div>
     );

@@ -221,9 +221,7 @@ async function removeItemGCalPresence(snapshot: ItemInterface, userId: string, b
         if (!ctx) {
             return;
         }
-        console.log(
-            `[gcal-pushback] deleting GCal event for removed/detached item | eventId=${snapshot.calendarEventId} itemId=${snapshot._id} title=${snapshot.title}`,
-        );
+        console.log(`[gcal-pushback] deleting GCal event for removed/detached item | eventId=${snapshot.calendarEventId} itemId=${snapshot._id}`);
         await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.deleteEvent(ctx.config.calendarId, snapshot.calendarEventId as string));
         return;
     }
@@ -498,7 +496,7 @@ async function pushExistingItemToGCal(
     const { provider, config, timeZone, integration } = ctx;
 
     if (snapshot.status === 'trash') {
-        console.log(`[gcal-pushback] deleting GCal event | eventId=${eventId} itemId=${itemId} title=${snapshot.title}`);
+        console.log(`[gcal-pushback] deleting GCal event | eventId=${eventId} itemId=${itemId}`);
         await withAuthFailureHandling(integration._id, () => provider.deleteEvent(config.calendarId, eventId));
         await stampItemLastPushed(userId, itemId);
         return;
@@ -509,7 +507,7 @@ async function pushExistingItemToGCal(
     // (status → 'calendar') is handled by the generic-update branch below, which sends a clean
     // title and colorId: null to revert both.
     if (snapshot.status === 'done') {
-        console.log(`[gcal-pushback] marking GCal event done | eventId=${eventId} itemId=${itemId} title=${snapshot.title}`);
+        console.log(`[gcal-pushback] marking GCal event done | eventId=${eventId} itemId=${itemId}`);
         await withAuthFailureHandling(integration._id, () =>
             provider.updateEvent(
                 config.calendarId,
@@ -534,7 +532,7 @@ async function pushExistingItemToGCal(
         return;
     }
 
-    console.log(`[gcal-pushback] updating existing item | eventId=${eventId} title=${snapshot.title} status=${snapshot.status}`);
+    console.log(`[gcal-pushback] updating existing item | eventId=${eventId} itemId=${snapshot._id} status=${snapshot.status}`);
     // colorId: null clears any prior done-marker color (sage) so a reopened item reverts to the
     // calendar's default color. Idempotent for items that never carried a colorId.
     await withAuthFailureHandling(integration._id, () =>
@@ -713,7 +711,7 @@ export async function pushItemToGCalWithContext(
         // retry after a partial failure (GCal succeeded, DB write failed) collides on 409 instead
         // of creating a second event.
         const deterministicId = buildDeterministicGCalId(snapshot._id, integration._id);
-        console.log(`[gcal-pushback] creating new GCal event | itemId=${snapshot._id} title=${snapshot.title} gcalId=${deterministicId}`);
+        console.log(`[gcal-pushback] creating new GCal event | itemId=${snapshot._id} gcalId=${deterministicId}`);
         const sendUpdates = options?.sendUpdates ?? 'none';
         const { eventId: calendarEventId, htmlLink } = await createOr409Relink(
             integration._id,

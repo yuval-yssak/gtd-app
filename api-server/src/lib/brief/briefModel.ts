@@ -97,7 +97,9 @@ export function parseBriefResponse(response: Anthropic.Message): string | null {
         return fitBriefText(parseBriefOutput(response));
     } catch (err) {
         if (err instanceof SyntaxError) {
-            throw new BriefGenerationError('malformed_output', `response text is not JSON: ${err.message}`);
+            // The parser's message quotes a snippet of the input — model output derived from item text — and
+            // this detail ends up in the sweep logs, so report the failure class only.
+            throw new BriefGenerationError('malformed_output', `response text is not JSON (${err.name})`);
         }
         throw err;
     }

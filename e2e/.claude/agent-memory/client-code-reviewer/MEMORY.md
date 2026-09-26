@@ -64,3 +64,4 @@
 - [Shared-preview cap lands on one host only](feedback_shared_preview_fix_applied_to_one_host.md) — `MarkdownPreview` has 4 wrapper classes; capping `.previewClickable` leaves RoutineReviewCard/QuickCapture/dialog uncapped.
 - [DOM predicates faked in node-env unit tests](feedback_dom_predicate_faked_in_node_tests.md) — Stubbing `closest` makes the test re-assert the stub; demand the semantic cases in Playwright.
 - [Don't prescribe min(Nvh, 100%) for nested caps](feedback_percentage_maxheight_against_indefinite_parent.md) — Percentage max-height resolves to `none` on indefinite-height parents, silently killing the cap; raise nested-scroll as "verify", not a fix.
+- [Legal text claims vs code](feedback_legal_text_claims_vs_code.md) — Policy copy promises controls that are missing or display-only (brief opt-out, empty trash); grep every "you can" claim.

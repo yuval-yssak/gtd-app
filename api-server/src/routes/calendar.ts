@@ -2211,9 +2211,7 @@ async function reconcileVanishedCalendarItems(source: CalendarSource, events: GC
     const vanished = linkedItems.filter((item) => isVanishedInWindow(item, presentEventIds, timeMin, ctx.now));
     await Promise.all(
         vanished.map((item) => {
-            console.log(
-                `[gcal-sync] reconcile: trashing orphaned calendar item — GCal event vanished | itemId=${item._id} eventId=${item.calendarEventId} title="${item.title}"`,
-            );
+            console.log(`[gcal-sync] reconcile: trashing orphaned calendar item — GCal event vanished | itemId=${item._id} eventId=${item.calendarEventId}`);
             return trashItem(item, ctx, { cancelledByGCal: true });
         }),
     );
@@ -2505,7 +2503,7 @@ async function importRecurringEventAsRoutine(
     }
 
     if (event.status === 'cancelled') {
-        console.log(`[gcal-sync] deactivating routine | eventId=${event.id} title=${event.title}`);
+        console.log(`[gcal-sync] deactivating routine | eventId=${event.id}`);
         await deactivateRoutineFromGCal(existing, ctx);
         // A successor stranded on this same bare id is retired by `reapOrphanedSeriesSuccessors`, which
         // runs once the whole batch is imported — see its docstring for why it cannot happen here.
@@ -2554,26 +2552,24 @@ async function importRecurringEventAsRoutine(
         // that wedged whole-integration syncing and blocked unrelated cancellation tombstones for days.)
         const activeOnSeries = await findActiveRoutineOnSeries(event.id, source, ctx);
         if (activeOnSeries) {
-            console.log(
-                `[gcal-sync] updating split-successor routine (active-series match) | rebasedId=${rawEvent.id} routineId=${activeOnSeries._id} title=${event.title}`,
-            );
+            console.log(`[gcal-sync] updating split-successor routine (active-series match) | rebasedId=${rawEvent.id} routineId=${activeOnSeries._id}`);
             const rekeyed = await rekeySuccessorRebasedId(activeOnSeries, rawEvent.id, ctx);
             await updateRoutineFromGCal(rekeyed, event, rrule, source, ctx);
             return;
         }
         const parentId = await resolveSplitParentId(event.id, source, ctx);
-        console.log(`[gcal-sync] creating split-successor routine | eventId=${event.id} title=${event.title} rrule=${rrule} parent=${parentId ?? 'none'}`);
+        console.log(`[gcal-sync] creating split-successor routine | eventId=${event.id} rrule=${rrule} parent=${parentId ?? 'none'}`);
         await createRoutineFromGCal(event, rrule, source, ctx, { rebasedEventId: rawEvent.id, ...(parentId ? { splitFromRoutineId: parentId } : {}) });
         return;
     }
 
     if (existing) {
-        console.log(`[gcal-sync] updating routine | eventId=${event.id} title=${event.title} routineId=${existing._id}`);
+        console.log(`[gcal-sync] updating routine | eventId=${event.id} routineId=${existing._id}`);
         await updateRoutineFromGCal(existing, event, rrule, source, ctx);
         return;
     }
 
-    console.log(`[gcal-sync] creating routine | eventId=${event.id} title=${event.title} rrule=${rrule}`);
+    console.log(`[gcal-sync] creating routine | eventId=${event.id} rrule=${rrule}`);
     await createRoutineFromGCal(event, rrule, source, ctx);
 }
 
@@ -3203,9 +3199,7 @@ async function restoreRoutineCalendarLink(
         // regeneration pass reconciles these rows instead of duplicating them.
         ctx.ops.push(...(await regenerateFutureRoutineItems(restored, ctx.userId, ctx.now, source.config.timeZone ?? 'UTC')));
     }
-    console.log(
-        `[gcal-sync] restored routine from lastKnownCalendarEventId | routineId=${candidate._id} eventId=${event.id} reactivated=${reactivate} title="${event.title}"`,
-    );
+    console.log(`[gcal-sync] restored routine from lastKnownCalendarEventId | routineId=${candidate._id} eventId=${event.id} reactivated=${reactivate}`);
     return restored;
 }
 
@@ -3239,7 +3233,7 @@ async function relinkRoutineToEvent(
         return undefined;
     }
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'routine', entityId: routine._id, snapshot: relinked, opType: 'update', now: ctx.now }));
-    console.log(`[gcal-sync] relinked naked routine to GCal event | routineId=${routine._id} eventId=${event.id} title="${event.title}"`);
+    console.log(`[gcal-sync] relinked naked routine to GCal event | routineId=${routine._id} eventId=${event.id}`);
     return relinked;
 }
 
@@ -4134,7 +4128,7 @@ async function tryRestoreFromLastKnownEventId(event: CalendarEvent, source: Cale
         return undefined;
     }
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: restored, opType: 'update', now: ctx.now }));
-    console.log(`[gcal-sync] restored item from lastKnownCalendarEventId | itemId=${itemId} eventId=${event.id} title="${event.title}"`);
+    console.log(`[gcal-sync] restored item from lastKnownCalendarEventId | itemId=${itemId} eventId=${event.id}`);
     return restored;
 }
 
@@ -4219,7 +4213,7 @@ async function relinkBestNakedCandidate(
         return undefined;
     }
     ctx.ops.push(await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: relinked, opType: 'update', now: ctx.now }));
-    console.log(`[gcal-sync] relinked naked item to GCal event | itemId=${itemId} eventId=${event.id} title="${event.title}"`);
+    console.log(`[gcal-sync] relinked naked item to GCal event | itemId=${itemId} eventId=${event.id}`);
     return relinked;
 }
 
@@ -4232,7 +4226,7 @@ export async function upsertCalendarItem(event: CalendarEvent, source: CalendarS
     let existing = await findCalendarItemByEventId(event, ctx);
 
     console.log(
-        `[debug-gcal-sync][server] upsertCalendarItem | eventId=${event.id} title="${event.title}" status=${event.status} eventUpdated=${event.updated} existing=${!!existing} existingUpdatedTs=${existing?.updatedTs ?? 'n/a'} existingStatus=${existing?.status ?? 'n/a'} lastPushedToGCalTs=${existing?.lastPushedToGCalTs ?? 'n/a'}`,
+        `[debug-gcal-sync][server] upsertCalendarItem | eventId=${event.id} status=${event.status} eventUpdated=${event.updated} existing=${!!existing} existingUpdatedTs=${existing?.updatedTs ?? 'n/a'} existingStatus=${existing?.status ?? 'n/a'} lastPushedToGCalTs=${existing?.lastPushedToGCalTs ?? 'n/a'}`,
     );
 
     // Echo detection: if the item was recently pushed to GCal by the app, skip re-importing
@@ -4306,7 +4300,7 @@ async function reviveTrashedCalendarItem(existing: ItemInterface, event: Calenda
     // preserve the done semantics instead of resurrecting the item as a live calendar entry.
     // Title is also the only persisted signal we have; `lastDoneTs` is not tracked.
     if (existing.title.startsWith(DONE_PREFIX) || (event.title.startsWith(DONE_PREFIX) && existing.title === stripDoneMarker(event.title))) {
-        console.warn(`[gcal-sync] refusing to revive trashed item with done marker | itemId=${itemId} eventId=${event.id} title="${existing.title}"`);
+        console.warn(`[gcal-sync] refusing to revive trashed item with done marker | itemId=${itemId} eventId=${event.id}`);
         // Same GCal-owned merge as the live-revive path below — done-marker revive is rare but
         // must not leave stale attendees/organizer/etc. behind once they're first-class fields.
         const { cancelledByGCal: _cleared, ...withoutCancelledFlag } = existing;
@@ -5413,7 +5407,7 @@ async function syncRoutineExceptions(routine: RoutineInterface, provider: Google
     };
     const exceptions = await provider.getExceptions(routine.calendarEventId, ctx.calendarId, ctx.since, masterContent);
 
-    console.log(`[gcal-sync] syncing routine exceptions | routineId=${routine._id} title=${routine.title} exceptionCount=${exceptions.length}`);
+    console.log(`[gcal-sync] syncing routine exceptions | routineId=${routine._id} exceptionCount=${exceptions.length}`);
 
     const syncCtx: SyncContext = { userId: ctx.userId, now: ctx.now, ops: ctx.ops, ...(ctx.timeZone ? { timeZone: ctx.timeZone } : {}) };
     await reconcileAndApplyRoutineExceptions(routine, exceptions, ctx.since, syncCtx);
@@ -5705,7 +5699,7 @@ async function renewWebhookAndCatchUp(
     if (!fresh) {
         return;
     }
-    console.log(`[calendar-webhook] channel had lapsed — running catch-up sync | configId=${fresh._id} calendarId=${fresh.calendarId}`);
+    console.log(`[calendar-webhook] channel had lapsed — running catch-up sync | configId=${fresh._id}`);
     // Serialize against concurrent webhook/manual syncs for the same calendar — see withSyncLock,
     // which also supplies the clock stamp for the SyncContext.
     const ctx = await withSyncLock(fresh, (startedAt) => runLockedSync(fresh, integration, provider, startedAt));
@@ -5809,9 +5803,7 @@ calendarRoutes.post('/webhooks/google', async (c) => {
     // Respond immediately — Google expects a fast 200. Sync runs asynchronously.
     const response = c.text('OK', 200);
 
-    console.log(
-        `[gcal-webhook] received | channelId=${channelId} resourceId=${resourceId} state=${resourceState} configId=${config._id} calendarId=${config.calendarId}`,
-    );
+    console.log(`[gcal-webhook] received | channelId=${channelId} resourceId=${resourceId} state=${resourceState} configId=${config._id}`);
 
     const shouldStart = tryStartWebhookSync(channelId);
     if (!shouldStart) {
@@ -5852,7 +5844,7 @@ async function runWebhookSyncLoop(config: CalendarSyncConfigInterface, channelId
 
 /** Runs an incremental sync for a single calendar config, triggered by a webhook notification. */
 async function runWebhookSync(config: CalendarSyncConfigInterface): Promise<void> {
-    console.log(`[gcal-webhook-sync] starting | configId=${config._id} calendarId=${config.calendarId}`);
+    console.log(`[gcal-webhook-sync] starting | configId=${config._id}`);
     const integration = await calendarIntegrationsDAO.findByOwnerAndIdDecrypted(config.integrationId, config.user);
     if (!integration) {
         console.warn(`[calendar-webhook] integration ${config.integrationId} not found for config ${config._id} — skipping sync`);

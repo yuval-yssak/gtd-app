@@ -42,3 +42,4 @@
 - [E2E asserts textContent for a visual bug](project_e2e_asserts_textcontent_for_visual_bug.md) — toHaveText/toHaveValue survive clipping and nowrap; only geometric assertions prove a layout fix.
 - [Flex center + overflow clips content](project_flex_center_overflow_clip_trap.md) — adding overflow-y:auto to an align-items:center flex container puts tall content above scrollTop 0, permanently unreachable; use `safe center`.
 - [New scrollport leaves inner scroller](project_new_scrollport_leaves_inner_scroller.md) — relocating scroll to a wrapper is inert on any card that keeps its own overflow-y:auto without flex-shrink:0.
+- [Legal text claims vs code](feedback_legal_text_claims_vs_code.md) — Policy copy promises controls that are missing or display-only (brief opt-out, empty trash); grep every "you can" claim.
