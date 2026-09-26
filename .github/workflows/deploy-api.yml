@@ -56,6 +56,12 @@ jobs:
                   echo "IMAGE=$IMAGE" >> $GITHUB_ENV
                   echo "SERVICE=$SERVICE" >> $GITHUB_ENV
 
+            # --startup-probe: GET /health (a bounded Mongo ping, routes/health.ts) replaces the default
+            # TCP probe. A Mongo that is unreachable at boot already fails the revision — start() rejects
+            # before it listens, and the `[boot] startup failed` line says why; the probe adds the case
+            # where the pool dies between boot and readiness, and gives uptime checks a URL that means
+            # "can serve", not just "process is up". 48 x 5 s keeps the default 240 s startup budget:
+            # start() runs migrations + index builds before it listens.
             - name: Deploy to Cloud Run
               run: |
                   # Write env vars to a YAML file to safely handle special characters in values
@@ -108,6 +114,7 @@ jobs:
                     --platform=managed \
                     --allow-unauthenticated \
                     --max-instances=1 \
+                    --startup-probe=httpGet.path=/health,periodSeconds=5,timeoutSeconds=3,failureThreshold=48 \
                     --no-traffic \
                     --env-vars-file=env.yaml
 

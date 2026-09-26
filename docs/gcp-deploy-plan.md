@@ -119,6 +119,7 @@ The workflow:
 4. Builds the image from repo root (`docker build -f api-server/Dockerfile .`) and tags it with the commit SHA
 5. Pushes the image to Artifact Registry
 6. Deploys to Cloud Run with environment variables written to a YAML file (avoids shell escaping issues with special characters in secrets)
+7. Registers `GET /health` as the revision's **startup probe** (`--startup-probe`, 5 s period, 48 attempts = the default 240 s budget). The endpoint round-trips a 2 s-bounded Mongo `ping` (`api-server/src/routes/health.ts`). A Mongo that is unreachable at boot already fails the revision on its own — `start()` rejects before the port opens and logs one `[boot] startup failed` line with the cause (grep for it under the failed revision) — so the probe's value is the pool dying between boot and readiness, and giving uptime checks a URL that means "can serve" rather than "process is up" (`/version`).
 
 The environment selection (`production` or `staging`) determines:
 - Which GitHub Environment's secrets/variables are used
@@ -144,7 +145,9 @@ calendar changes. Watch channels expire after ~7 days, so something must renew t
 Cloud Run scales to zero, the renewal must survive the server being asleep. Two layers exist:
 
 1. **In-process timer** (`api-server/src/lib/webhookRenewal.ts`) — hourly sweep + one sweep at every
-   cold start. Free, but only runs while an instance is awake, so it cannot be the only mechanism.
+   cold start. Since 2026-09-26 `config.ts` `shouldStartWebhookRenewalTimer` turns it off in deployed
+   environments (`NODE_ENV=production`) **once `CRON_SECRET` is set** — the sign that layer 2 can run — so a
+   production deploy that has not been provisioned yet keeps this best-effort path instead of losing renewal.
 2. **Cloud Scheduler job** — Google-managed cron that POSTs
    `https://<api-domain>/calendar/webhooks/renew` hourly with the `x-cron-secret` header.
    The incoming request wakes a sleeping instance, which is the whole point.
@@ -153,6 +156,10 @@ Both layers renew expiring/lapsed channels and, when a channel had already lapse
 gap existed), run a catch-up sync to drain changes Google made while no webhooks were flowing.
 
 ### The shared secret
+
+**Create both jobs together when provisioning an environment:** once `CRON_SECRET` is set the server turns
+its in-process renewal fallback off (`config.ts` `shouldStartWebhookRenewalTimer`, boot log
+`[boot] webhook renewal timer off`), so a secret set for the brief sweep alone leaves nothing renewing watch channels.
 
 `CRON_SECRET` is ONE secret per environment shared by every scheduler-driven endpoint (webhook
 renewal here, the brief sweep below — both gate on `auth/cronSecret.ts` `requireCronSecret`). It
@@ -187,7 +194,7 @@ environment (staging first, production when calendar sync goes live there):
      --update-headers "x-cron-secret=<value>" --remove-headers "x-webhook-cron-secret"
    ```
    The old server code ignores the new header and 401s the job until step 3 lands — an hour of
-   missed renewals is harmless (the in-process timer covers it).
+   missed renewals is harmless (channels last ~7 days).
 3. Deploy (`./scripts/deploy.sh api staging`) — `deploy-api.yml` now writes `CRON_SECRET`.
 4. Verify: the `curl` in "Verify it works" below returns 200 with `-H "x-cron-secret: $SECRET"`
    and 401 without.
@@ -200,7 +207,7 @@ environment (staging first, production when calendar sync goes live there):
 | Environment | Job | Schedule | Status |
 |---|---|---|---|
 | staging | `gtd-staging-calendar-webhook-renew` (project `gtd-app-project-491308`, `us-central1`) | `17 * * * *` UTC | live since 2026-07-02 |
-| production | — | — | **not wired yet** — create the job + secret when calendar sync goes to prod |
+| production | `gtd-prod-calendar-webhook-renew` | `17 * * * *` UTC | **to create** (2026-09-26 audit) — `gcloud scheduler jobs create http gtd-prod-calendar-webhook-renew --project gtd-app-project-491308 --location us-central1 --schedule "17 * * * *" --time-zone UTC --uri https://api.getting-things-done.app/calendar/webhooks/renew --http-method POST --attempt-deadline 300s --headers "x-cron-secret=<production CRON_SECRET>"`; the production `CRON_SECRET` must be a fresh value, never the staging one |
 
 ### Verify it works
 
@@ -325,8 +332,8 @@ Selection stays bounded throughout — the backlog lives in the index, not in a 
 
 | Environment | Job | Schedule | Status |
 |---|---|---|---|
-| staging | `gtd-staging-brief-sweep` | `*/15 * * * *` UTC | **paused** — resume after deploying the `briefStale` fix (public domain, 300 s deadline) |
-| production | `gtd-production-brief-sweep` | `*/15 * * * *` UTC | **not wired yet** — needs `CRON_SECRET` + `ANTHROPIC_API_KEY` in the production environment first |
+| staging | `gtd-staging-brief-sweep` | `*/15 * * * *` UTC | **live** (ENABLED, public domain, 300 s deadline — verified 2026-09-26) |
+| production | `gtd-prod-brief-sweep` | `*/15 * * * *` UTC | **to create** (2026-09-26 audit) — needs `CRON_SECRET` + `ANTHROPIC_API_KEY` in the production environment first; same flags as the staging job with `--uri https://api.getting-things-done.app/maintenance/briefs/sweep` and the production `CRON_SECRET` |
 
 ### Rollout + verify
 

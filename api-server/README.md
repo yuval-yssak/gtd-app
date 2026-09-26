@@ -93,6 +93,13 @@ src/
 
 ## API Endpoints
 
+### Operational
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/health` | No | `200 { status: 'ok' }` while a 2 s-bounded Mongo `ping` succeeds, else `503 { status: 'unavailable' }` — the Cloud Run startup probe target (`deploy-api.yml`) and what an uptime check should hit |
+| `GET` | `/version` | No | `{ commitHash }` of the running build — process-up only, says nothing about the database |
+
 ### Auth (Better Auth)
 
 | Method | Path | Description |

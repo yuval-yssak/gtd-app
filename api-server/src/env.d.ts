@@ -15,6 +15,10 @@ declare namespace NodeJS {
         GITHUB_CLIENT_SECRET?: string;
         CALENDAR_ENCRYPTION_KEY?: string;
         CALENDAR_WEBHOOK_URL?: string;
+        /** Web Push VAPID credentials (lib/webPush.ts). Push is disabled with a boot-time warning unless all three are set. */
+        VAPID_PUBLIC_KEY?: string;
+        VAPID_PRIVATE_KEY?: string;
+        VAPID_SUBJECT?: string;
         /** Shared secret every Cloud Scheduler job sends as `x-cron-secret` (webhook renewal, brief sweep). */
         CRON_SECRET?: string;
         CALENDAR_AUTH_GRACE_MS?: string;

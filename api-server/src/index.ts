@@ -3,12 +3,13 @@ import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { assistCors, publicCors, strictCors } from './auth/corsProfiles.js';
-import { assertBriefFakeModelNotInProduction } from './config.js';
+import { assertBriefFakeModelNotInProduction, assertSessionSecretConfiguredInProduction, shouldStartWebhookRenewalTimer } from './config.js';
 import { noStoreCache } from './lib/noStoreCache.js';
 import { v1RequestLogger } from './lib/v1Logger.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
 import { calendarRoutes } from './routes/calendar.js';
 import { deviceRoutes } from './routes/devices.js';
+import { createHealthRoutes } from './routes/health.js';
 import { maintenanceRoutes } from './routes/maintenance.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { authorizationServerMetadata, mcpOAuthRoutes, protectedResourceMetadata } from './routes/mcpOAuth.js';
@@ -93,6 +94,8 @@ const app = new Hono()
     // The MCP resource endpoint itself — bearer-gated (OAuth access token OR personal token).
     .use('/mcp', publicCors())
     .route('/mcp', mcpRoutes)
+    // Startup-probe / uptime target: 200 only while Mongo answers a bounded ping (see routes/health.ts).
+    .route('/health', createHealthRoutes())
     .get('/version', (c) => c.json({ commitHash: COMMIT_HASH }));
 
 // Exported for Hono RPC — client imports this type to get a fully-typed fetch client
@@ -100,6 +103,7 @@ export type AppType = typeof app;
 
 async function start() {
     assertBriefFakeModelNotInProduction(process.env);
+    assertSessionSecretConfiguredInProduction(process.env);
     await loadDataAccess();
 
     // Dynamic import so the module (and its production guard) is never evaluated in production.
@@ -111,10 +115,15 @@ async function start() {
         app.route('/dev', devLoginRoutes);
     }
 
-    // Keep Google Calendar webhook channels alive without Cloud Scheduler.
-    if (process.env.CALENDAR_WEBHOOK_URL) {
+    // Keep Google Calendar webhook channels alive without Cloud Scheduler — local dev, or a deployed
+    // environment whose Scheduler job cannot run yet because CRON_SECRET is unset (see config.ts).
+    if (shouldStartWebhookRenewalTimer(process.env)) {
         const { startWebhookRenewalTimer } = await import('./lib/webhookRenewal.js');
         startWebhookRenewalTimer();
+    } else if (process.env.CALENDAR_WEBHOOK_URL) {
+        // CRON_SECRET is shared with the brief sweep, so setting it for that alone silently hands renewal
+        // to a Scheduler job that may not exist yet — leave one line to grep for when channels lapse.
+        console.log('[boot] webhook renewal timer off — Cloud Scheduler must drive POST /calendar/webhooks/renew');
     }
 
     // Outbound webhook delivery worker. In dev/test the worker runs by default so e2e can
@@ -133,4 +142,10 @@ async function start() {
     serve({ fetch: app.fetch, port }, () => console.log(`Listening on port ${port}`));
 }
 
-start();
+// One prefixed, searchable line for a failed boot (missing secret, unreachable Mongo, migration error):
+// Cloud Run's "container failed to start" only says the port never opened, and Node's default
+// unhandled-rejection dump has no marker to grep for once the revision's logs are all that is left.
+start().catch((error) => {
+    console.error('[boot] startup failed', error);
+    process.exit(1);
+});
