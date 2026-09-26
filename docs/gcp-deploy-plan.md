@@ -207,7 +207,7 @@ environment (staging first, production when calendar sync goes live there):
 | Environment | Job | Schedule | Status |
 |---|---|---|---|
 | staging | `gtd-staging-calendar-webhook-renew` (project `gtd-app-project-491308`, `us-central1`) | `17 * * * *` UTC | live since 2026-07-02 |
-| production | `gtd-prod-calendar-webhook-renew` | `17 * * * *` UTC | **to create** (2026-09-26 audit) — `gcloud scheduler jobs create http gtd-prod-calendar-webhook-renew --project gtd-app-project-491308 --location us-central1 --schedule "17 * * * *" --time-zone UTC --uri https://api.getting-things-done.app/calendar/webhooks/renew --http-method POST --attempt-deadline 300s --headers "x-cron-secret=<production CRON_SECRET>"`; the production `CRON_SECRET` must be a fresh value, never the staging one |
+| production | `gtd-prod-calendar-webhook-renew` (same project + region) | `17 * * * *` UTC | live since 2026-09-26 (manual run → 200). Created with `gcloud scheduler jobs create http gtd-prod-calendar-webhook-renew --project gtd-app-project-491308 --location us-central1 --schedule "17 * * * *" --time-zone UTC --uri https://api.getting-things-done.app/calendar/webhooks/renew --http-method POST --attempt-deadline 300s --headers "x-cron-secret=<production CRON_SECRET>"`; the production `CRON_SECRET` is a distinct value from staging's |
 
 ### Verify it works
 
@@ -333,7 +333,7 @@ Selection stays bounded throughout — the backlog lives in the index, not in a 
 | Environment | Job | Schedule | Status |
 |---|---|---|---|
 | staging | `gtd-staging-brief-sweep` | `*/15 * * * *` UTC | **live** (ENABLED, public domain, 300 s deadline — verified 2026-09-26) |
-| production | `gtd-prod-brief-sweep` | `*/15 * * * *` UTC | **to create** (2026-09-26 audit) — needs `CRON_SECRET` + `ANTHROPIC_API_KEY` in the production environment first; same flags as the staging job with `--uri https://api.getting-things-done.app/maintenance/briefs/sweep` and the production `CRON_SECRET` |
+| production | `gtd-prod-brief-sweep` | `*/15 * * * *` UTC | live since 2026-09-26 (manual run → 200); same flags as the staging job with `--uri https://api.getting-things-done.app/maintenance/briefs/sweep` and the production `CRON_SECRET` |
 
 ### Rollout + verify
 
