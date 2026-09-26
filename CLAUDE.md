@@ -8,8 +8,9 @@ Full-stack offline-first GTD (Getting Things Done) productivity app — monorepo
 - `api-server/` — Node.js/Hono/TypeScript backend on port 4000
 - `client/` — React 19/TypeScript/Vite PWA frontend on port 4173
 - `e2e/` — Playwright end-to-end suite (drives the real client + API)
-- `mcp-server/` — local MCP server exposing GTD tools over the public `/v1` API
-- `workers/api-proxy/` — Cloudflare Worker fronting the API domains
+- `mcp-server/` — local stdio MCP server exposing GTD tools over the public `/v1` API (setup, multi-account and tool table: `mcp-server/README.md`)
+- `tools/mcp-gtd/` — **superseded** four-tool MCP predecessor, untouched since May 2026. `e2e/mcp-server.spec.ts` still spawns its `dist/`, so it must stay buildable, but new MCP work goes in `mcp-server/`.
+- `workers/api-proxy/` — Cloudflare Worker fronting the API domains (route map in `wrangler.toml`; no package.json)
 
 Full data model, item statuses, tickler rules, sync and calendar reference: [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md).
 Public API reference: [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md). Deploy/infra runbook: [`docs/gcp-deploy-plan.md`](docs/gcp-deploy-plan.md).
@@ -34,6 +35,7 @@ npm run test         # Run Vitest tests
 npm run lint         # Biome lint check
 npm run lint:fix     # Auto-fix lint + format (Biome)
 npm run typecheck    # tsc --noEmit
+npx vitest run src/tests/auth.test.ts   # single test file
 ```
 
 API tests need a local Mongo. Use a throwaway container: `docker run -d --rm --name gtd-test-mongo -p 27017:27017 mongo:8.0`.
@@ -44,6 +46,7 @@ npm run dev                          # Watch build + preview server (port 4173)
 npm run build                        # generate-typed-css-modules + vite build + tsc -b
 npm run generate-typed-css-modules   # Regenerate .css.d.ts for CSS Modules
 npm run test                         # Run Vitest tests
+npx vitest run src/tests/allDayDate.test.ts   # Single test file
 npm run lint                         # Biome lint check
 npm run lint:fix                     # Auto-fix lint + format (Biome)
 npm run typecheck                    # tsc -b --noEmit
@@ -56,13 +59,34 @@ npm run storybook                    # Storybook on port 6006
 npm run test                    # Full Playwright suite (slow)
 npx playwright test <spec>      # Single spec — the inner loop
 npm run lint:fix                # Biome format + lint
+npm run cleanup-e2e-seeds       # Drop calendar integrations leaked by /dev/calendar/seed-integration (mongosh, reads api-server/.env)
 ```
 
-Playwright's `webServer` starts the API with `TZ=UTC BRIEF_FAKE_MODEL=1` and the client via `npm run dev`.
+Playwright's `webServer` starts the API with `TZ=UTC BRIEF_FAKE_MODEL=1` and the client via `npm run dev`, but both entries set `reuseExistingServer: true`: a dev server you already have running keeps **its** environment. Timezone specs then run against your local TZ, and `item-brief-generate.spec.ts` gets `503 agent_unavailable` — restart the API under those env vars before working on those specs. `global-setup.ts` runs `vite build` (not `npm run build`) and builds `tools/mcp-gtd` once before workers spawn.
+
+Manual Google Calendar smoke-test plans (one Claude session per case, driven through Chrome) live under `e2e/gcal-sync-smoke/`; `CONTINUE_HERE.md` at the root is their index.
 
 **Always `await gtd.flush()` before `page.goto()`** after a `gtd.*` mutation — navigating mid-flush wedges the IndexedDB flush lock for 30s.
 
 If e2e fails although the change is present in the built bundle, port 4173 is being served by a stale `vite preview` (it caches the startup `index.html`) or by another worktree's dev server. Restart the preview and verify the served bundle hash.
+
+### MCP server (`cd mcp-server`)
+```bash
+npm run build        # tsc → dist/index.js (also runs on `npm install` via prepare)
+npm run dev          # tsx watch; reads GTD_API_BASE / GTD_API_TOKEN from the shell
+npm run test         # Vitest — fetch is mocked, no server needed
+npm run typecheck && npm run lint:fix
+```
+
+An MCP client (Claude CLI / Desktop) holds the `dist/` process for its whole session — after editing source, rebuild **and** restart the client or it keeps running the old code.
+
+### Verifying which build is running
+
+Every build is stamped with the git short hash: `git rev-parse --short HEAD` locally, Settings → App → "Version" in the browser, `GET /version` → `{ commitHash }` on the API. Compare all three before debugging a "fix didn't land" report.
+
+### Worktrees
+
+`./scripts/setup-worktree.sh` (run from the source checkout) copies the gitignored files a worktree needs — `api-server/.env`, `client/.env`, `.vscode/*`, per-package `.claude/settings.local.json`, the sync-audit secrets — into a chosen worktree and runs `npm i` in `api-server/` and `client/`. Without it a fresh worktree boots with no OAuth config.
 
 ## Architecture
 
@@ -145,7 +169,7 @@ Design detail: [`docs/plans/item-brief.md`](docs/plans/item-brief.md); schema: [
 - `client/src/serviceWorker.ts` — custom Workbox Service Worker (background sync + push)
 
 ## Code Style
-- Biome: 160-char line width, 4-space indent, single quotes
+- Biome: 160-char line width, 4-space indent, single quotes. One config for the whole repo (`biome.jsonc` at the root); each package runs its own `biome check`, so lint from inside the package you changed.
 - TypeScript strict mode enabled
 - Biome handles all formatting and linting automatically (`npm run lint:fix`). Do not manually fix formatting, import order, or other issues that Biome enforces — just run `lint:fix`.
 
@@ -282,6 +306,7 @@ cd client && npm run dev
 - **Push-triggered**: push to the `staging` or `production` branch when `api-server/**` changes → auto-runs `.github/workflows/deploy-api.yml`
 - **Manual**: `./scripts/deploy.sh api staging|production` — triggers the same workflow via `gh workflow run`
 - Track progress: https://github.com/yuval-yssak/gtd-app/actions/workflows/deploy-api.yml
+- CI (`.github/workflows/ci.yml`, on push to `main` and PRs) runs **only** the api-server typecheck/lint/test against a Mongo service container. Client, e2e and mcp-server checks run locally through the stop hook, not in CI. CI uses `npm install`, not `npm ci`, because macOS-generated lock files record unresolved optional WASM peers that `npm ci` rejects.
 
 `gh` write operations on this repo need the active account `yuval-yssak` (not `yuval-winn-ai`). A working `git push` does not imply `gh` is on the right account.
 
