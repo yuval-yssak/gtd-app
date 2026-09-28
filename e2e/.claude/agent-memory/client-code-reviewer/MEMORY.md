@@ -66,3 +66,4 @@
 - [Don't prescribe min(Nvh, 100%) for nested caps](feedback_percentage_maxheight_against_indefinite_parent.md) — Percentage max-height resolves to `none` on indefinite-height parents, silently killing the cap; raise nested-scroll as "verify", not a fix.
 - [Legal text claims vs code](feedback_legal_text_claims_vs_code.md) — Policy copy promises controls that are missing or display-only (brief opt-out, empty trash); grep every "you can" claim.
 - [Copy renames break other specs' locators](feedback_copy_rename_breaks_other_specs.md) — grep e2e/ for old phrases; source-grep `toContain` passes via substring overlap (`short_name:` ⊃ `name:`).
+- [Failure label assumes one entity type](feedback_failure_label_assumes_entity_type.md) — New FAILURE_LABELS wording names "item"/"calendar event" though the generic server path also fires for routines/externalId.

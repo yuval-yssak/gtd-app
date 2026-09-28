@@ -240,6 +240,59 @@ test.describe('public /v1 API', () => {
         });
     });
 
+    test('PATCH refuses a second link to a Google Calendar event another item owns; GET ?calendarEventId finds the owner', async ({ browser }) => {
+        const email = `cal-link-${dayjs().valueOf()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const { plaintext } = await mintTokenViaSession(page.context().request, 'cal-link');
+            const eventId = `ev-e2e-${dayjs().valueOf()}`;
+            const calendarBody = { status: 'calendar', timeStart: '2099-09-29T15:30:00', timeEnd: '2099-09-29T16:15:00', calendarEventId: eventId };
+
+            await withBearerOnlyContext(browser, async (apiContext) => {
+                const headers = { Authorization: `Bearer ${plaintext}` };
+                const createItem = async (title: string) => {
+                    const res = await apiContext.request.post(`${API_URL}/v1/items`, { headers, data: { title, externalId: `${eventId}-${title}` } });
+                    expect(res.status()).toBe(201);
+                    return ((await res.json()) as { _id: string })._id;
+                };
+                const ownerId = await createItem('owner');
+                const orphanId = await createItem('orphan');
+
+                // First link is free (no GCal integration in e2e — pushback is a no-op).
+                const linked = await apiContext.request.patch(`${API_URL}/v1/items/${ownerId}`, { headers, data: calendarBody });
+                expect(linked.status()).toBe(200);
+
+                // Second item pointing at the same event: refused, and the owner is named.
+                const refused = await apiContext.request.patch(`${API_URL}/v1/items/${orphanId}`, { headers, data: calendarBody });
+                expect(refused.status()).toBe(409);
+                const refusedBody = (await refused.json()) as { code: string; extra?: { ownerType: string; ownerId: string } };
+                expect(refusedBody.code).toBe('calendar_event_linked');
+                expect(refusedBody.extra).toEqual({ ownerType: 'item', ownerId });
+
+                // The orphan is untouched — still inbox, no linkage.
+                const orphan = await apiContext.request.get(`${API_URL}/v1/items/${orphanId}`, { headers });
+                const orphanBody = (await orphan.json()) as { status: string; calendarEventId?: string };
+                expect(orphanBody.status).toBe('inbox');
+                expect(orphanBody.calendarEventId).toBeUndefined();
+
+                // The lookup an integration should use instead of linking a second item.
+                const found = await apiContext.request.get(`${API_URL}/v1/items?calendarEventId=${eventId}`, { headers });
+                expect(found.status()).toBe(200);
+                const foundBody = (await found.json()) as { items: Array<{ _id: string }> };
+                expect(foundBody.items.map((i) => i._id)).toEqual([ownerId]);
+
+                // Re-sending the owner's own linkage is a plain update, not a conflict.
+                const renamed = await apiContext.request.patch(`${API_URL}/v1/items/${ownerId}`, {
+                    headers,
+                    data: { ...calendarBody, title: 'owner renamed' },
+                });
+                expect(renamed.status()).toBe(200);
+                expect(((await renamed.json()) as { title: string }).title).toBe('owner renamed');
+            });
+        });
+    });
+
     test('bulk import creates many items in one call and is idempotent on re-run', async ({ browser }) => {
         const email = `bulk-${dayjs().valueOf()}@example.com`;
         await resetServerForEmails([email]);

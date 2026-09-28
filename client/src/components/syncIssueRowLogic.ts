@@ -15,6 +15,7 @@ export const FAILURE_LABELS: Record<SyncIssueFailureReason, string> = {
     edit_conflict: 'The event changed in Google Calendar — retry to reapply the change.',
     terminal: 'Event was cancelled by the organizer or removed in Google Calendar.',
     entity_missing: 'This item no longer exists (it was deleted or moved to another account), so the change was not applied.',
+    entity_conflict: 'Another item or routine is already linked to this calendar event, so the change was not applied — edit that one instead.',
 };
 
 /** What failed, as a short verb phrase — keeps the panel scannable when several rows share a label. */

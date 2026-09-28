@@ -101,6 +101,16 @@ describe('item tools', () => {
         expect(call.path).toBe('/v1/items/abc%2Fdef');
     });
 
+    it('gtd_list_items forwards calendarEventId as a query param so an agent can find the item the sync already linked', async () => {
+        const { api, calls } = makeFakeApi({ items: [] });
+        await t.listItems.handler({ calendarEventId: 'm142anuelg45ob9nbucvt670qg', status: 'calendar,done' }, api);
+        const [call] = calls;
+        if (!call) throw new Error('expected one call');
+        expect(call.method).toBe('GET');
+        expect(call.path).toBe('/v1/items');
+        expect(call.query).toMatchObject({ calendarEventId: 'm142anuelg45ob9nbucvt670qg', status: 'calendar,done' });
+    });
+
     it('gtd_list_items forwards briefState as a query param', async () => {
         const { api, calls } = makeFakeApi({ items: [] });
         await t.listItems.handler({ briefState: 'none' }, api);

@@ -30,7 +30,9 @@ const capture = defineTool({
     description:
         'Capture a new inbox item. Always lands in `inbox` regardless of any status sent. ' +
         'Optional `externalId` provides strict idempotency (caller-supplied dedupe key, e.g. an email Message-Id). ' +
-        'Without externalId, identical (title, notes) within 24h are best-effort de-duped.',
+        'Without externalId, identical (title, notes) within 24h are best-effort de-duped. ' +
+        'Do NOT capture a Google Calendar event: the calendar sync creates and links its item automatically. ' +
+        'To annotate an existing event, find its item with gtd_list_items({ calendarEventId }) and gtd_update_item it.',
     inputSchema: {
         title: z.string().min(1).describe('Required. Non-empty after trim.'),
         notes: notesSchema,
@@ -56,7 +58,7 @@ const listItems = defineTool({
         'Filter by `briefState` to sweep items that still need a brief (`none` excludes items the server deliberately ' +
         'declined to brief because their notes were too short; ask for `declined` to list the ones it declined). ' +
         'The filter is applied per page, so a page can come back short or empty while `nextCursor` is still present; ' +
-        'keep paginating.',
+        'keep paginating. Filter by `calendarEventId` to find the item already linked to a Google Calendar event.',
     inputSchema: {
         q: z.string().optional().describe('Case-insensitive literal substring match against title and notes.'),
         status: z
@@ -66,6 +68,14 @@ const listItems = defineTool({
         since: z.string().optional().describe('ISO datetime. Only items with updatedTs > since.'),
         limit: z.number().int().positive().max(200).optional().describe('Defaults to 50. Max 200.'),
         cursor: z.string().optional().describe('Opaque cursor from a previous response.'),
+        calendarEventId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe(
+                "Exact Google Calendar event id — a standalone event, a series master, or a recurring occurrence's instance id. " +
+                    'Returns the item linked to it; completed items are included by default (only trash is excluded).',
+            ),
         briefState: z
             .enum(['none', 'declined', 'fresh', 'pinnedStale'])
             .optional()
@@ -77,7 +87,15 @@ const listItems = defineTool({
             'GET',
             '/v1/items',
             undefined,
-            { q: args.q, status: args.status, since: args.since, limit: args.limit, cursor: args.cursor, briefState: args.briefState },
+            {
+                q: args.q,
+                status: args.status,
+                since: args.since,
+                limit: args.limit,
+                cursor: args.cursor,
+                briefState: args.briefState,
+                calendarEventId: args.calendarEventId,
+            },
             requestOptsFromArgs({ account: args.account }),
         ),
 });
@@ -150,7 +168,10 @@ const updateItem = defineTool({
         '(except → trash, which is rejected). Field combinations must satisfy the status×field matrix:\n' +
         '- inbox: title/notes only\n' +
         '- nextAction: workContextIds, peopleIds, energy, time, focus, urgent, expectedBy, ignoreBefore\n' +
-        '- calendar: timeStart, timeEnd, calendarEventId, calendarIntegrationId, workContextIds, peopleIds\n' +
+        '- calendar: timeStart, timeEnd, workContextIds, peopleIds (calendarEventId / calendarIntegrationId are server-managed ' +
+        'linkage — never set them to "attach" an item to an existing Google event; the sync already created and linked ' +
+        'that item, so gtd_list_items({ calendarEventId }) and update it. A second link is refused with 409 calendar_event_linked ' +
+        'naming the owner in extra:{ownerType, ownerId}.)\n' +
         '- waitingFor: waitingForPersonId (optional — a waitingFor item need not name a person), peopleIds, expectedBy, ignoreBefore\n' +
         '- somedayMaybe: expectedBy, ignoreBefore\n' +
         'Caller-supplied fields incompatible with the target status return 400 status_field_violation with extra:{status,field}.\n' +

@@ -556,8 +556,18 @@ export interface RsvpOpPayload {
  * Reason an op's side effect could not be applied. UI maps each to a remediation action.
  * `entity_missing`: an update op whose target row was gone at apply time (deleted or moved to
  * another account) — quarantined via `notApplied`, never retryable (the entity is not coming back).
+ * `entity_conflict`: the snapshot claimed a unique key (e.g. a `calendarEventId` or
+ * `calendarInstanceEventId`) that a different row owns, so it can never apply — quarantined via
+ * `notApplied`, never retryable (the owning row is the one to edit).
  */
-export type OpFailureReason = 'transient_exhausted' | 'scope_missing' | 'calendar_missing' | 'edit_conflict' | 'terminal' | 'entity_missing';
+export type OpFailureReason =
+    | 'transient_exhausted'
+    | 'scope_missing'
+    | 'calendar_missing'
+    | 'edit_conflict'
+    | 'terminal'
+    | 'entity_missing'
+    | 'entity_conflict';
 
 export interface OperationInterface {
     _id: string; // server-generated UUID
@@ -608,9 +618,11 @@ export interface OperationInterface {
     failedTs?: string;
     /**
      * Set true when `applyEntityOp` skipped this op because its target row no longer exists
-     * (deleted or reassigned away). Quarantine marker: `/sync/pull` excludes `notApplied` ops so
-     * other devices never replay a change the server's collections never saw — replaying an
-     * update for a moved entity would resurrect it client-side under the old owner.
+     * (deleted or reassigned away) or because the snapshot claims a unique key another row owns.
+     * Quarantine marker: `/sync/pull` excludes `notApplied` ops so other devices never replay a
+     * change the server's collections never saw — replaying an update for a moved entity would
+     * resurrect it client-side under the old owner, and replaying a duplicate-key snapshot would
+     * leave devices showing a linkage the server refused (a phantom second calendar item).
      */
     notApplied?: boolean;
 }

@@ -47,6 +47,21 @@ describe('syncIssueRowText — reason', () => {
         const { reason } = syncIssueRowText(makeIssue({ opType: 'rsvp', failureReason: 'scope_missing' }));
         expect(reason).toBe('RSVP failed — Google needs additional permissions to complete this change.');
     });
+
+    it('explains an entity_conflict quarantine (a second item linked to an event another row owns) and points at the owner', () => {
+        const { reason, showDetail } = syncIssueRowText(makeIssue({ failureReason: 'entity_conflict', failureDetail: 'raw server detail' }));
+        expect(reason).toBe(
+            'Update failed — Another item or routine is already linked to this calendar event, so the change was not applied — edit that one instead.',
+        );
+        // Dismiss-only rows hide the raw server detail; the label already says what to do.
+        expect(showDetail).toBe(false);
+    });
+
+    it('reads sensibly for a routine row too — routines share the calendarEventId unique index and reach the same quarantine', () => {
+        const { title, reason } = syncIssueRowText(makeIssue({ entityType: 'routine', failureReason: 'entity_conflict' }));
+        expect(title).toBe('Routine');
+        expect(reason).toContain('Another item or routine is already linked');
+    });
 });
 
 describe('syncIssueRowText — meta timestamp', () => {

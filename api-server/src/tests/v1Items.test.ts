@@ -384,6 +384,40 @@ describe('GET /v1/items', () => {
         expect(body.code).toBe('invalid_status');
     });
 
+    it('filters by calendarEventId (exact match) so an integration can find the item already linked to an event', async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const linked = await seedItem({ userId, title: 'linked', status: 'calendar' });
+        await db.collection('items').updateOne({ _id: linked._id } as never, { $set: { calendarEventId: 'ev-shared', timeStart: '2099-04-01T10:00:00' } });
+        const other = await seedItem({ userId, title: 'other', status: 'calendar' });
+        await db.collection('items').updateOne({ _id: other._id } as never, { $set: { calendarEventId: 'ev-shared-2', timeStart: '2099-04-01T10:00:00' } });
+        await seedItem({ userId, title: 'unlinked' });
+
+        const res = await callApi({ method: 'GET', path: '/v1/items?calendarEventId=ev-shared', token: plaintext });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { items: ItemInterface[] };
+        expect(body.items.map((i) => i._id)).toEqual([linked._id]);
+    });
+
+    it("filters by calendarEventId against a routine occurrence's calendarInstanceEventId too (the sync stores instance ids there)", async () => {
+        const { plaintext, userId } = await newUserWithToken();
+        const occurrence = await seedItem({ userId, title: 'standup occurrence', status: 'calendar' });
+        await db.collection('items').updateOne({ _id: occurrence._id } as never, {
+            $set: { routineId: 'routine-1', calendarInstanceEventId: 'master-1_20990929T123000Z', timeStart: '2099-09-29T15:30:00' },
+        });
+
+        const res = await callApi({ method: 'GET', path: '/v1/items?calendarEventId=master-1_20990929T123000Z&q=standup', token: plaintext });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { items: ItemInterface[] };
+        expect(body.items.map((i) => i._id)).toEqual([occurrence._id]);
+    });
+
+    it('rejects a blank calendarEventId filter', async () => {
+        const { plaintext } = await newUserWithToken();
+        const res = await callApi({ method: 'GET', path: '/v1/items?calendarEventId=%20', token: plaintext });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('invalid_calendar_event_id');
+    });
+
     it('searches by q against title and notes (case-insensitive)', async () => {
         const { plaintext, userId } = await newUserWithToken();
         await seedItem({ userId, title: 'Call DENTIST about appt' });
@@ -841,6 +875,193 @@ describe('PATCH /v1/items/:id (Phase 3 full-surface update)', () => {
 //
 // PATCH is merge-style, so before this an optional field could never be unset once set: `""`
 // fails `nonEmptyString`, and omitting the key means "leave as is". `null` is the clear signal.
+
+describe('PATCH /v1/items/:id — calendarEventId already owned by another row (2026-09-27 duplicate-calendar-item incident)', () => {
+    const SHARED_EVENT = 'm142anuelg45ob9nbucvt670qg';
+    const CALENDAR_BODY = { status: 'calendar', timeStart: '2099-09-29T15:30:00', timeEnd: '2099-09-29T16:15:00', calendarEventId: SHARED_EVENT };
+
+    async function seedLinkedCalendarItem(userId: string, calendarEventId: string, status: ItemInterface['status'] = 'calendar'): Promise<ItemInterface> {
+        const owner = await seedItem({ userId, title: 'owner', status });
+        await db
+            .collection('items')
+            .updateOne({ _id: owner._id } as never, { $set: { calendarEventId, timeStart: '2099-09-29T15:30:00', timeEnd: '2099-09-29T16:15:00' } });
+        return owner;
+    }
+
+    /** Routines are not cleared between tests in this file, so every seed gets a fresh id. */
+    async function seedRoutine(userId: string, calendarEventId: string, active: boolean): Promise<string> {
+        const now = dayjs().toISOString();
+        const routineId = `routine-${crypto.randomUUID()}`;
+        await db.collection('routines').insertOne({
+            _id: routineId,
+            user: userId,
+            active,
+            title: 'Standup',
+            rrule: 'FREQ=WEEKLY;BYDAY=MO',
+            calendarEventId,
+            createdTs: now,
+            updatedTs: now,
+        } as never);
+        return routineId;
+    }
+
+    async function opsFor(userId: string, itemId: string | undefined) {
+        return db
+            .collection('operations')
+            .find({ user: userId, entityId: itemId } as never)
+            .toArray();
+    }
+
+    it('refuses to link a second item to an event another calendar item owns — 409 calendar_event_linked naming the owner, no op, row untouched', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const owner = await seedLinkedCalendarItem(userId, SHARED_EVENT);
+        const orphan = await seedItem({ userId, title: 'orphan' });
+
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${orphan._id}`, token: plaintext, body: CALENDAR_BODY });
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as { code: string; error: string; extra?: { ownerType: string; ownerId: string } };
+        expect(body.code).toBe('calendar_event_linked');
+        expect(body.extra).toEqual({ ownerType: 'item', ownerId: owner._id });
+        expect(body.error).toContain(SHARED_EVENT);
+
+        expect(await opsFor(userId, orphan._id)).toHaveLength(0);
+        const stored = await itemsDAO.findByOwnerAndId(orphan._id ?? '', userId);
+        expect(stored?.status).toBe('inbox');
+        expect(stored?.calendarEventId).toBeUndefined();
+    });
+
+    it("refuses to link an item to an active routine's series master, including the `_R` split-successor spelling", async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const routineId = await seedRoutine(userId, 'master-1', true);
+        const orphan = await seedItem({ userId, title: 'orphan' });
+
+        const res = await callApi({
+            method: 'PATCH',
+            path: `/v1/items/${orphan._id}`,
+            token: plaintext,
+            body: { ...CALENDAR_BODY, calendarEventId: 'master-1_R20260929T123000Z' },
+        });
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as { code: string; extra?: { ownerType: string; ownerId: string } };
+        expect(body.code).toBe('calendar_event_linked');
+        expect(body.extra).toEqual({ ownerType: 'routine', ownerId: routineId });
+        expect(await opsFor(userId, orphan._id)).toHaveLength(0);
+    });
+
+    it("refuses to link an item to a recurring occurrence's instance id owned by a generated item (calendarInstanceEventId)", async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const occurrence = await seedItem({ userId, title: 'occurrence', status: 'calendar' });
+        await db.collection('items').updateOne({ _id: occurrence._id } as never, {
+            $set: { routineId: 'routine-1', calendarInstanceEventId: 'master-1_20990929T123000Z', timeStart: '2099-09-29T15:30:00' },
+        });
+        const orphan = await seedItem({ userId, title: 'orphan' });
+
+        const res = await callApi({
+            method: 'PATCH',
+            path: `/v1/items/${orphan._id}`,
+            token: plaintext,
+            body: { ...CALENDAR_BODY, calendarEventId: 'master-1_20990929T123000Z' },
+        });
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as { code: string; extra?: { ownerType: string; ownerId: string } };
+        expect(body.code).toBe('calendar_event_linked');
+        expect(body.extra).toEqual({ ownerType: 'item', ownerId: occurrence._id });
+        expect(await opsFor(userId, orphan._id)).toHaveLength(0);
+    });
+
+    it('refuses an instance id whose master is an active routine even before any occurrence item exists', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const routineId = await seedRoutine(userId, 'master-1', true);
+        const orphan = await seedItem({ userId, title: 'orphan' });
+
+        const res = await callApi({
+            method: 'PATCH',
+            path: `/v1/items/${orphan._id}`,
+            token: plaintext,
+            body: { ...CALENDAR_BODY, calendarEventId: 'master-1_20990929T123000Z' },
+        });
+        expect(res.status).toBe(409);
+        expect(((await res.json()) as { extra?: { ownerType: string; ownerId: string } }).extra).toEqual({ ownerType: 'routine', ownerId: routineId });
+    });
+
+    it('an inactive routine on the same master does not block (the routine index is active-scoped)', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        await seedRoutine(userId, 'master-1', false);
+        const fresh = await seedItem({ userId, title: 'fresh' });
+
+        const res = await callApi({
+            method: 'PATCH',
+            path: `/v1/items/${fresh._id}`,
+            token: plaintext,
+            body: { ...CALENDAR_BODY, calendarEventId: 'master-1' },
+        });
+        expect(res.status).toBe(200);
+    });
+
+    it('a done item still owns its event (the ✓ marker would be wiped by a second link)', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const owner = await seedLinkedCalendarItem(userId, SHARED_EVENT, 'done');
+        const orphan = await seedItem({ userId, title: 'orphan' });
+
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${orphan._id}`, token: plaintext, body: CALENDAR_BODY });
+        expect(res.status).toBe(409);
+        expect(((await res.json()) as { extra?: { ownerType: string; ownerId: string } }).extra).toEqual({ ownerType: 'item', ownerId: owner._id });
+    });
+
+    it('a write that loses last-write-wins answers 409 stale_write and leaves the row unchanged', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        // A device clock that ran fast left the row's updatedTs in the future; server `now` loses LWW.
+        const item = await seedItem({ userId, title: 'future-stamped', updatedTs: '2099-01-01T00:00:00.000Z' });
+
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { title: 'renamed' } });
+        expect(res.status).toBe(409);
+        expect(((await res.json()) as { code: string }).code).toBe('stale_write');
+        expect((await itemsDAO.findByOwnerAndId(item._id ?? '', userId))?.title).toBe('future-stamped');
+    });
+
+    it("re-sending an item's own calendarEventId is not a conflict", async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const owner = await seedLinkedCalendarItem(userId, SHARED_EVENT);
+
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${owner._id}`, token: plaintext, body: { ...CALENDAR_BODY, title: 'renamed' } });
+        expect(res.status).toBe(200);
+        const stored = await itemsDAO.findByOwnerAndId(owner._id ?? '', userId);
+        expect(stored?.title).toBe('renamed');
+        expect(stored?.calendarEventId).toBe(SHARED_EVENT);
+    });
+
+    it('a trashed row holding the same calendarEventId does not block a relink (the unique index is status-scoped)', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        await seedLinkedCalendarItem(userId, SHARED_EVENT, 'trash');
+        const fresh = await seedItem({ userId, title: 'fresh' });
+
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${fresh._id}`, token: plaintext, body: CALENDAR_BODY });
+        expect(res.status).toBe(200);
+        expect((await itemsDAO.findByOwnerAndId(fresh._id ?? '', userId))?.calendarEventId).toBe(SHARED_EVENT);
+    });
+
+    it('backstop: when the pre-check races and the unique index rejects the write, PATCH answers 409 — never 200 with a snapshot that did not land', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const owner = await seedLinkedCalendarItem(userId, SHARED_EVENT);
+        const orphan = await seedItem({ userId, title: 'orphan' });
+        // Simulate the owner appearing between the pre-check and the apply: the pre-check's
+        // owner lookup comes back empty once, the index still has the owner.
+        const findOneSpy = vi.spyOn(itemsDAO, 'findOne').mockImplementationOnce(async () => null);
+
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${orphan._id}`, token: plaintext, body: CALENDAR_BODY });
+        // The intercepted call really was the ownership pre-check (findByOwnerAndId bypasses the DAO's findOne).
+        expect(findOneSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ user: userId, _id: { $ne: orphan._id } }));
+        expect(res.status).toBe(409);
+        const body = (await res.json()) as { code: string; extra?: { ownerType: string; ownerId: string } };
+        expect(body.code).toBe('calendar_event_linked');
+        expect(body.extra).toEqual({ ownerType: 'item', ownerId: owner._id });
+        // The refused snapshot is logged quarantined (audit + SyncIssuesPanel) but never pulled.
+        const [op] = await opsFor(userId, orphan._id);
+        if (!op) throw new Error('expected the refused op to be logged');
+        expect(op).toMatchObject({ notApplied: true, failureReason: 'entity_conflict' });
+        expect((await itemsDAO.findByOwnerAndId(orphan._id ?? '', userId))?.status).toBe('inbox');
+    });
+});
 
 describe('PATCH /v1/items/:id — null clears optional fields', () => {
     async function seedWaitingFor(userId: string): Promise<ItemInterface> {

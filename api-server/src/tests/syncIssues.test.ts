@@ -198,16 +198,19 @@ describe('GET /sync/issues', () => {
             makeFailedOp(userId, { failureReason: 'transient_exhausted' }),
             makeFailedOp(userId, { failureReason: 'scope_missing' }),
             makeFailedOp(userId, { failureReason: 'terminal' }),
+            makeFailedOp(userId, { failureReason: 'entity_conflict', opType: 'update', notApplied: true }),
         ]);
 
         const res = await authenticatedRequest(app, { method: 'GET', path: '/sync/issues', sessionCookie: cookie });
         expect(res.status).toBe(200);
         const body = (await res.json()) as { issues: Array<{ failureReason: OpFailureReason; retryable: boolean }> };
-        expect(body.issues).toHaveLength(3);
+        expect(body.issues).toHaveLength(4);
         const byReason = new Map(body.issues.map((i) => [i.failureReason, i.retryable]));
         expect(byReason.get('transient_exhausted')).toBe(true);
         expect(byReason.get('scope_missing')).toBe(true);
         expect(byReason.get('terminal')).toBe(false);
+        // A snapshot the collection refused (unique key owned by another row) can never apply on retry.
+        expect(byReason.get('entity_conflict')).toBe(false);
     });
 
     it('includes entityTitle from the op snapshot, with a live-item fallback for snapshot-less rsvp ops', async () => {

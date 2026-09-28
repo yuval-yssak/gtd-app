@@ -190,7 +190,7 @@ Completing a linked item does **not** delete the event: Google keeps it with a `
 `calendarIntegrations.status` is `active` (absent counts as active) → `suspended` on the first `invalid_grant` (the client-driven sync endpoint and other user-driven routes still call Google; webhook deliveries, the renew cron and outbound pushback skip) → `revoked` on the next `invalid_grant` seen at least 24 h after `suspendedAt` (everything skips, sync endpoint returns 410; any Google call outside pushback — the sync endpoint, calendar listing, routine linking — can trigger it). Reconnecting resets it to `active`; dropped pushes are replayed only by the outbound backfill + missed-push sweep inside `POST /calendar/integrations/:id/sync`, which the client runs on its next sync cycle.
 
 ### Pushback failures on the op
-A push whose GCal side-effect throws is recorded on the originating `operations` row (`syncFailed`, `failureReason`, `failureDetail`, `failedTs`) and listed by `GET /sync/issues` for the SyncIssuesPanel. `transient_exhausted`, `scope_missing`, `edit_conflict` and `calendar_missing` rows offer Retry and Dismiss; `terminal` and `entity_missing` rows offer Dismiss only (Dismiss deletes the op row). The panel has no Reconnect button — for `scope_missing` the user reconnects in Settings first, then retries.
+A push whose GCal side-effect throws is recorded on the originating `operations` row (`syncFailed`, `failureReason`, `failureDetail`, `failedTs`) and listed by `GET /sync/issues` for the SyncIssuesPanel. `transient_exhausted`, `scope_missing`, `edit_conflict` and `calendar_missing` rows offer Retry and Dismiss; `terminal`, `entity_missing` and `entity_conflict` rows offer Dismiss only (Dismiss deletes the op row). The panel has no Reconnect button — for `scope_missing` the user reconnects in Settings first, then retries.
 
 ### Routine-level sync
 A routine can be linked to a Google Calendar recurring event series (see [Routines](#routines-recurring-tasks) above).
@@ -453,16 +453,16 @@ interface OperationInterface {
 
     // ── Server-written outcome markers ──
     syncFailed?: boolean;            // GCal side-effect threw (no retry loop in pushback), or target row missing at apply — listed by GET /sync/issues
-    failureReason?: 'transient_exhausted' | 'scope_missing' | 'calendar_missing' | 'edit_conflict' | 'terminal' | 'entity_missing';
+    failureReason?: 'transient_exhausted' | 'scope_missing' | 'calendar_missing' | 'edit_conflict' | 'terminal' | 'entity_missing' | 'entity_conflict';
     failureDetail?: string;          // ≤ 200 chars
     failedTs?: string;
-    notApplied?: boolean;            // target row no longer existed at apply time; excluded from /sync/pull
+    notApplied?: boolean;            // apply skipped: target row gone, or unique key owned by another row; excluded from /sync/pull
 }
 ```
 
 MongoDB indexes: `{ user, ts }`, `{ user, entityType, entityId, ts }`
 
-The outcome markers are written when an op's GCal side-effect throws (a Google error or a failed config/timezone lookup inside the push), or with `failureReason: 'entity_missing'` plus `notApplied` when `applyEntityOp` finds no target row. A push skipped because the integration is `suspended`/`revoked` writes none of them — the op looks healthy and the only trace is the `skipping <status> integration` log line.
+The outcome markers are written when an op's GCal side-effect throws (a Google error or a failed config/timezone lookup inside the push), or with `notApplied` plus `failureReason: 'entity_missing'` (no target row) / `'entity_conflict'` (the snapshot claims a unique key such as `calendarEventId` that another row owns) when `applyEntityOp` skips the write. Quarantined ops are never delivered by `/sync/pull` and never reach GCal pushback; an op that merely lost last-write-wins (`skipped_stale`) is delivered but its GCal leg is skipped too, so a stale snapshot never overwrites the event. A push skipped because the integration is `suspended`/`revoked` writes none of them — the op looks healthy and the only trace is the `skipping <status> integration` log line.
 
 ---
 

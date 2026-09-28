@@ -7,11 +7,14 @@ import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
 import routinesDAO from '../../dataAccess/routinesDAO.js';
-import { applyAndPublishOperation, OperationValidationError } from '../../lib/applyOperation.js';
+import type { ApplyEntityOpOutcome } from '../../lib/applyEntityOp.js';
+import { applyAndPublishOperation, applyAndPublishOperationWithOutcome, OperationValidationError } from '../../lib/applyOperation.js';
 import type { BriefState } from '../../lib/briefSource.js';
 import { clearBrief, loadBrief, loadBriefsByItemId, matchesBriefStateFilter, parseBriefBody, writeAuthoredBrief } from '../../lib/itemBriefs.js';
 import { isDuplicateKeyError } from '../../lib/mongoErrors.js';
 import { advanceRoutineAfterDisposal } from '../../lib/routineItemGeneration.js';
+import { normalizeMasterEventId } from '../../lib/routineItemRegeneration.js';
+import { hasAtLeastOne } from '../../lib/typeUtils.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
 import { type ItemBriefInterface, type ItemInterface, ItemStatus } from '../../types/entities.js';
 import { type PublicItem, presentItem } from './projections/item.js';
@@ -309,6 +312,8 @@ interface ListQuery {
     q?: string;
     statuses?: ItemInterface['status'][];
     since?: string;
+    /** Exact match on the Google Calendar event id — lets integrations find the item already linked to an event. */
+    calendarEventId?: string;
     limit: number;
     cursor?: { updatedTs: string; id: string };
     /**
@@ -319,7 +324,7 @@ interface ListQuery {
     briefState?: BriefState;
 }
 
-type ListQueryError = { code: 'invalid_status' | 'invalid_limit' | 'invalid_cursor' | 'invalid_brief_state'; message: string };
+type ListQueryError = { code: 'invalid_status' | 'invalid_limit' | 'invalid_cursor' | 'invalid_brief_state' | 'invalid_calendar_event_id'; message: string };
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
@@ -365,6 +370,18 @@ function parseBriefStateParam(raw: string | null): ListParamResult<BriefState | 
     return { ok: true, value: raw as BriefState };
 }
 
+/** `calendarEventId=` must be non-blank when present; absent → no filter. */
+function parseCalendarEventIdParam(raw: string | null): ListParamResult<string | undefined> {
+    if (raw === null) {
+        return { ok: true, value: undefined };
+    }
+    const trimmed = raw.trim();
+    if (trimmed === '') {
+        return { ok: false, error: { code: 'invalid_calendar_event_id', message: 'calendarEventId must be a non-empty string when provided' } };
+    }
+    return { ok: true, value: trimmed };
+}
+
 /** Parses & validates list query params. Pure. */
 function parseListQuery(url: URL): ListParamResult<ListQuery> {
     const statuses = parseStatusesParam(url.searchParams.get('status'));
@@ -383,6 +400,10 @@ function parseListQuery(url: URL): ListParamResult<ListQuery> {
     if (!briefState.ok) {
         return briefState;
     }
+    const calendarEventId = parseCalendarEventIdParam(url.searchParams.get('calendarEventId'));
+    if (!calendarEventId.ok) {
+        return calendarEventId;
+    }
     const q = url.searchParams.get('q') ?? undefined;
     const since = url.searchParams.get('since') || undefined;
     return {
@@ -394,6 +415,7 @@ function parseListQuery(url: URL): ListParamResult<ListQuery> {
             ...(since ? { since } : {}),
             ...(cursor.value ? { cursor: cursor.value } : {}),
             ...(briefState.value ? { briefState: briefState.value } : {}),
+            ...(calendarEventId.value ? { calendarEventId: calendarEventId.value } : {}),
         },
     };
 }
@@ -420,8 +442,30 @@ function parseCursor(raw: string | null): { updatedTs: string; id: string } | nu
 }
 
 /**
+ * Google Calendar linkage lives in two fields: `calendarEventId` (standalone events, series
+ * masters) and `calendarInstanceEventId` (a routine occurrence's own instance id). An integration
+ * holding an id from Google cannot know which one the sync used, so both are matched.
+ */
+function calendarEventClause(eventId: string): Filter<ItemInterface> {
+    return { $or: [{ calendarEventId: eventId }, { calendarInstanceEventId: eventId }] };
+}
+
+/** Case-insensitive literal substring match on title and notes. Acceptable for the GTD scale — a full-text index would be the next step. */
+function searchClause(q: string): Filter<ItemInterface> {
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = { $regex: escaped, $options: 'i' };
+    return { $or: [{ title: regex }, { notes: regex }] };
+}
+
+/** Strictly-less-than (updatedTs, _id): updatedTs DESC primary key, _id DESC tiebreak so same-millisecond writes paginate deterministically. */
+function cursorClause(cursor: NonNullable<ListQuery['cursor']>): Filter<ItemInterface> {
+    return { $or: [{ updatedTs: { $lt: cursor.updatedTs } }, { updatedTs: cursor.updatedTs, _id: { $lt: cursor.id } }] };
+}
+
+/**
  * Builds the Mongo filter for `GET /items`. Status defaults to "everything except trash" so
- * scripts asking for the user's stuff don't have to filter trash explicitly.
+ * scripts asking for the user's stuff don't have to filter trash explicitly. Each optional
+ * predicate is its own `$or` clause, combined under `$and` so they never clobber each other.
  */
 function buildListFilter(userId: string, query: ListQuery): Filter<ItemInterface> {
     const filter: Filter<ItemInterface> = {
@@ -431,21 +475,13 @@ function buildListFilter(userId: string, query: ListQuery): Filter<ItemInterface
     if (query.since) {
         filter.updatedTs = { $gt: query.since };
     }
-    if (query.q) {
-        // Case-insensitive substring match on title and notes. Acceptable for the GTD scale.
-        // A full-text index would be the next step if user libraries get large.
-        const escaped = query.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = { $regex: escaped, $options: 'i' };
-        filter.$or = [{ title: regex }, { notes: regex }];
-    }
-    if (query.cursor) {
-        // Strictly-less-than (updatedTs, _id) using compound predicate. updatedTs DESC primary key,
-        // _id DESC tiebreak so two items written in the same millisecond paginate deterministically.
-        filter.$and = [
-            {
-                $or: [{ updatedTs: { $lt: query.cursor.updatedTs } }, { updatedTs: query.cursor.updatedTs, _id: { $lt: query.cursor.id } }],
-            },
-        ];
+    const clauses = [
+        ...(query.calendarEventId ? [calendarEventClause(query.calendarEventId)] : []),
+        ...(query.q ? [searchClause(query.q)] : []),
+        ...(query.cursor ? [cursorClause(query.cursor)] : []),
+    ];
+    if (hasAtLeastOne(clauses)) {
+        filter.$and = clauses;
     }
     return filter;
 }
@@ -662,7 +698,13 @@ function rejectPatchBody(raw: Record<string, unknown>, clearedFields: ReadonlyAr
     return null;
 }
 
-type PatchError = { status: 400 | 404 | 409; code: string; message: string; path?: ReadonlyArray<string | number>; extra?: { status: string; field: string } };
+type PatchError = {
+    status: 400 | 404 | 409;
+    code: string;
+    message: string;
+    path?: ReadonlyArray<string | number>;
+    extra?: { status: string; field: string } | CalendarEventOwner;
+};
 
 interface PatchContext {
     userId: string;
@@ -674,6 +716,133 @@ interface PatchContext {
 type PatchResult = { ok: true; item: ItemInterface } | { ok: false; error: PatchError };
 
 /**
+ * The row already linked to a Google Calendar event: a `calendar`/`done` item (standalone, or a
+ * routine occurrence holding the instance id) or an active routine's series.
+ */
+type CalendarEventOwner = { ownerType: 'item' | 'routine'; ownerId: string };
+
+/**
+ * Series master behind any spelling of an event id. Google instance ids are
+ * `<master>_<YYYYMMDD[THHMMSSZ]>` and split successors `<master>_R<anchor>`; the master itself is
+ * base32hex and never contains `_`, so stripping both suffixes is safe.
+ */
+function masterEventIdOf(eventId: string): string {
+    return normalizeMasterEventId(eventId.replace(/_\d{8}(T\d{6}Z?)?$/, ''));
+}
+
+/**
+ * Item-side ownership predicate. Mirrors both unique indexes in `itemsDAO.ts`: the status-scoped
+ * one on `calendarEventId` — widened to `done`, since a completed item keeps its Google event
+ * (✓ marker) and a second link would wipe that marker — and the presence-only one on
+ * `calendarInstanceEventId`, which even a trashed occurrence keeps. `trash` rows on
+ * `calendarEventId` are excluded on purpose: standalone trash deleted the event, so relinking is legitimate.
+ */
+function itemOwnerPredicate(userId: string, eventId: string, itemId: string): Filter<ItemInterface> {
+    return {
+        user: userId,
+        _id: { $ne: itemId },
+        $or: [{ status: { $in: ['calendar', 'done'] }, calendarEventId: eventId }, { calendarInstanceEventId: eventId }],
+    };
+}
+
+/**
+ * Finds who already owns `eventId` for this user, ignoring `itemId` itself (re-sending an item's
+ * own linkage is a no-op, not a conflict). Routines are matched by the derived master id, since
+ * an item pointing at a series master or one of its instances would be rerouted by pushback.
+ */
+async function findCalendarEventOwner(userId: string, eventId: string, itemId: string): Promise<CalendarEventOwner | null> {
+    const item = await itemsDAO.findOne(itemOwnerPredicate(userId, eventId, itemId));
+    if (item?._id) {
+        return { ownerType: 'item', ownerId: item._id };
+    }
+    const routine = await routinesDAO.findOne({ user: userId, active: true, calendarEventId: masterEventIdOf(eventId) });
+    return routine?._id ? { ownerType: 'routine', ownerId: routine._id } : null;
+}
+
+function calendarEventLinkedError(calendarEventId: string, owner: CalendarEventOwner | null): PatchError {
+    return {
+        status: 409,
+        code: 'calendar_event_linked',
+        message: `calendar event "${calendarEventId}" is already linked to another ${owner?.ownerType ?? 'entity'} — update that one instead of linking a second item`,
+        ...(owner ? { extra: owner } : {}),
+    };
+}
+
+/**
+ * Refuses a PATCH that would point this item at a Google Calendar event another live row already
+ * owns. The unique index would make the apply a silent `skipped_duplicate_key`; checking up front
+ * names the owner so an integration can update the right row instead of creating an orphan
+ * (the 2026-09-27 duplicate-calendar-item incident). Null when the linkage is free or unchanged.
+ */
+async function rejectConflictingCalendarLink(existing: ItemInterface, assignments: Record<string, unknown>): Promise<PatchError | null> {
+    const { calendarEventId: requested } = assignments;
+    if (typeof requested !== 'string' || requested === existing.calendarEventId) {
+        return null;
+    }
+    const owner = await findCalendarEventOwner(existing.user, requested, persistedId(existing));
+    return owner ? calendarEventLinkedError(requested, owner) : null;
+}
+
+/**
+ * Maps a non-`applied` outcome to the error the caller must see. The write never reached the
+ * collection, so answering 200 with the merged snapshot would misreport it as done.
+ */
+async function patchOutcomeError(outcome: Exclude<ApplyEntityOpOutcome, 'applied'>, ctx: PatchContext, attempted: ItemInterface): Promise<PatchError> {
+    switch (outcome) {
+        case 'skipped_missing':
+            return { status: 404, code: 'not_found', message: 'item not found' };
+        case 'skipped_stale':
+            return {
+                status: 409,
+                code: 'stale_write',
+                message: 'the item changed concurrently (its updatedTs is ahead of this write) — re-read it and retry',
+            };
+        case 'skipped_duplicate_key': {
+            // PATCH cannot write `calendarInstanceEventId`, so a duplicate key here is the event id
+            // the caller asked for; the generic branch is a defensive fallback only.
+            const calendarEventId = attempted.calendarEventId;
+            if (!calendarEventId) {
+                return { status: 409, code: 'entity_conflict', message: 'the write claims a unique key that another row owns — change not applied' };
+            }
+            return calendarEventLinkedError(calendarEventId, await findCalendarEventOwner(ctx.userId, calendarEventId, ctx.itemId));
+        }
+    }
+}
+
+function validationPatchError(err: OperationValidationError): PatchError {
+    return {
+        status: 400,
+        code: err.failure.code,
+        message: err.failure.message,
+        ...(err.failure.path ? { path: err.failure.path } : {}),
+        // Propagate `extra: { status, field }` for status_field_violation so callers can
+        // programmatically branch on the offending matrix cell.
+        ...(err.failure.code === 'status_field_violation' && err.failure.extra ? { extra: err.failure.extra } : {}),
+    };
+}
+
+/**
+ * Runs the merged snapshot through the strict apply pipeline. Returns the error the caller must
+ * see when the write was refused (schema/matrix violation) or never landed (non-`applied`
+ * outcome); null when it applied. `snapshot.updatedTs` is the server stamp for this write.
+ */
+async function applyPatchSnapshot(ctx: PatchContext, snapshot: ItemInterface): Promise<PatchError | null> {
+    try {
+        const { outcome } = await applyAndPublishOperationWithOutcome(
+            ctx.userId,
+            { entityType: 'item', opType: 'update', entityId: ctx.itemId, snapshot },
+            { deviceId: `api:${ctx.tokenId}`, now: snapshot.updatedTs, strict: true },
+        );
+        return outcome === 'applied' ? null : await patchOutcomeError(outcome, ctx, snapshot);
+    } catch (err) {
+        if (err instanceof OperationValidationError) {
+            return validationPatchError(err);
+        }
+        throw err;
+    }
+}
+
+/**
  * Applies the patch to the existing item via the shared apply pipeline. The pipeline's strict-
  * mode Zod validation is the single source of truth for which transitions and field combinations
  * are valid — the route layer only filters out non-writable keys (e.g. caller-supplied `user`).
@@ -682,7 +851,8 @@ type PatchResult = { ok: true; item: ItemInterface } | { ok: false; error: Patch
  * `schemas/operations/item.ts` enforces the destination status's field set; the apply pipeline
  * stamps `user`/`updatedTs` and `applyEntityOp`'s LWW guard handles concurrent writes.
  */
-async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promise<PatchResult> {
+async function patchItem(ctx: PatchContext): Promise<PatchResult> {
+    const { userId, tokenId, itemId, raw } = ctx;
     const { assignments, clearedFields } = partitionPatchBody(raw);
     const rejection = rejectPatchBody(raw, clearedFields);
     if (rejection) {
@@ -691,6 +861,10 @@ async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promis
     const existing = await itemsDAO.findByOwnerAndId(itemId, userId);
     if (!existing) {
         return { ok: false, error: { status: 404, code: 'not_found', message: 'item not found' } };
+    }
+    const linkConflict = await rejectConflictingCalendarLink(existing, assignments);
+    if (linkConflict) {
+        return { ok: false, error: linkConflict };
     }
     const now = dayjs().toISOString();
     // Merge the assignments onto existing, drop the `null`-cleared keys outright, then sanitize
@@ -706,28 +880,9 @@ async function patchItem({ userId, tokenId, itemId, raw }: PatchContext): Promis
     // pipeline's strict-mode Zod check rejecting any remaining shape errors.
     const merged = withClearedFieldsRemoved({ ...existing, ...assignments, updatedTs: now } as ItemInterface, clearedFields);
     const updated = sanitizeStaleFields(merged, assignments);
-    try {
-        await applyAndPublishOperation(
-            userId,
-            { entityType: 'item', opType: 'update', entityId: itemId, snapshot: updated },
-            { deviceId: `api:${tokenId}`, now, strict: true },
-        );
-    } catch (err) {
-        if (err instanceof OperationValidationError) {
-            return {
-                ok: false,
-                error: {
-                    status: 400,
-                    code: err.failure.code,
-                    message: err.failure.message,
-                    ...(err.failure.path ? { path: err.failure.path } : {}),
-                    // Propagate `extra: { status, field }` for status_field_violation so callers
-                    // can programmatically branch on the offending matrix cell.
-                    ...(err.failure.code === 'status_field_violation' && err.failure.extra ? { extra: err.failure.extra } : {}),
-                },
-            };
-        }
-        throw err;
+    const applyError = await applyPatchSnapshot(ctx, updated);
+    if (applyError) {
+        return { ok: false, error: applyError };
     }
     // PATCH→done parity with POST /complete: when a routine-linked item is patched to `done` (and
     // wasn't already done), advance the series. Skipped on already-done items so a re-PATCH from

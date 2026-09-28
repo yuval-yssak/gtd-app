@@ -20,6 +20,12 @@ export interface NotifyChangeOptions {
      * fan-out still fire so subscribers see the change.
      */
     suppressGCalPushback?: boolean;
+    /**
+     * Per-op variant for the batch path: ids of ops whose GCal leg is skipped while the rest of
+     * the batch still pushes. Set by `applyAndPublishOperations` for ops that lost last-write-wins
+     * (`skipped_stale`) — their snapshot is older than the row and must not overwrite the event.
+     */
+    suppressGCalPushbackFor?: ReadonlySet<string>;
 }
 
 /**
@@ -98,7 +104,7 @@ export async function notifyChanges(ops: OperationInterface[], opts: NotifyChang
 
     // GCal + webhook fan-out per op (each leg is fire-and-forget).
     for (const op of ops) {
-        if (!opts.suppressGCalPushback) {
+        if (!opts.suppressGCalPushback && !opts.suppressGCalPushbackFor?.has(op._id)) {
             void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
                 console.error('[notify-change] gcal pushback failed', { opId: op._id, opType: op.opType, err });
             });

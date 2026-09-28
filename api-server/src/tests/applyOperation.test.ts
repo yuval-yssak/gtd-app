@@ -5,7 +5,8 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { incomingWinsLww } from '../lib/applyEntityOp.js';
-import { applyAndPublishOperation, applyAndPublishOperations, OperationValidationError } from '../lib/applyOperation.js';
+import { applyAndPublishOperation, applyAndPublishOperations, applyAndPublishOperationWithOutcome, OperationValidationError } from '../lib/applyOperation.js';
+import * as calendarPushback from '../lib/calendarPushback.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 
@@ -532,6 +533,144 @@ describe('applyAndPublishOperation — stale ops against superseded entities (20
         const stale = await itemsDAO.findByOwnerAndId('stale-item', userId);
         expect(stale?.status).toBe('inbox');
         expect(await db.collection('items').countDocuments({ user: userId, calendarInstanceEventId: 'evt_abc_20260803T071500Z' })).toBe(1);
+        // The never-applied snapshot is quarantined, not delivered: replaying it would show devices a
+        // linkage the server refused.
+        const [persisted] = await operationsDAO.findArray({ user: userId, entityId: 'stale-item' });
+        if (!persisted) throw new Error('expected the skipped op to be logged');
+        expect(persisted.notApplied).toBe(true);
+        expect(persisted.failureReason).toBe('entity_conflict');
+        expect(await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).not.toContainEqual(expect.objectContaining({ _id: persisted._id }));
+    });
+});
+
+describe('applyAndPublishOperation — never-applied snapshots stay out of pull + GCal (2026-09-27 duplicate-calendar-item incident)', () => {
+    const SHARED_EVENT = 'm142anuelg45ob9nbucvt670qg';
+    const calendarSnapshot = (id: string, updatedTs: string): ItemInterface => ({
+        _id: id,
+        user: userId,
+        status: 'calendar',
+        title: 'Review PR #2241',
+        createdTs: '2026-09-27T12:36:00Z',
+        updatedTs,
+        timeStart: '2026-09-29T15:30:00',
+        timeEnd: '2026-09-29T16:15:00',
+        calendarEventId: SHARED_EVENT,
+    });
+
+    /** The owner of the shared event: what the inbound sync created 17 s before the orphan. */
+    async function seedOwnerAndOrphan(): Promise<void> {
+        await itemsDAO.insertOne(calendarSnapshot('owner-item', '2026-09-27T12:36:28Z'));
+        await itemsDAO.insertOne(baseInboxItem({ _id: 'orphan-item', updatedTs: '2026-09-27T12:36:45Z' }));
+    }
+
+    it("an update claiming another item's calendarEventId is quarantined (entity_conflict) and the row keeps its old state", async () => {
+        await seedOwnerAndOrphan();
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+
+        const { op, outcome } = await applyAndPublishOperationWithOutcome(
+            userId,
+            { entityType: 'item', opType: 'update', entityId: 'orphan-item', snapshot: calendarSnapshot('orphan-item', '2026-09-27T12:36:49Z') },
+            { deviceId: 'api:tok-1' },
+        );
+
+        expect(outcome).toBe('skipped_duplicate_key');
+        expect(op.notApplied).toBe(true);
+        expect(op.syncFailed).toBe(true);
+        expect(op.failureReason).toBe('entity_conflict');
+        const persisted = await operationsDAO.findOne({ _id: op._id });
+        expect(persisted?.notApplied).toBe(true);
+        expect(persisted?.failureReason).toBe('entity_conflict');
+        // Row untouched: still an inbox item with no linkage.
+        const orphan = await itemsDAO.findByOwnerAndId('orphan-item', userId);
+        expect(orphan?.status).toBe('inbox');
+        expect(orphan?.calendarEventId).toBeUndefined();
+        // Not delivered to devices — they would otherwise keep a phantom second calendar item.
+        expect(await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).not.toContainEqual(expect.objectContaining({ _id: op._id }));
+        // And never pushed to Google — the incident overwrote the real event with the orphan's notes.
+        expect(pushSpy).not.toHaveBeenCalled();
+    });
+
+    it('a stale update (lost LWW) is still delivered but its GCal leg is skipped', async () => {
+        await itemsDAO.insertOne(calendarSnapshot('owner-item', '2026-09-27T12:40:00Z'));
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+
+        const { op, outcome } = await applyAndPublishOperationWithOutcome(
+            userId,
+            {
+                entityType: 'item',
+                opType: 'update',
+                entityId: 'owner-item',
+                snapshot: { ...calendarSnapshot('owner-item', '2026-09-27T12:39:00Z'), title: 'older title' },
+            },
+            { deviceId: 'dev-1' },
+        );
+
+        expect(outcome).toBe('skipped_stale');
+        expect(op.notApplied).toBeUndefined();
+        expect((await itemsDAO.findByOwnerAndId('owner-item', userId))?.title).toBe('Review PR #2241');
+        expect(await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).toContainEqual(expect.objectContaining({ _id: op._id }));
+        expect(pushSpy).not.toHaveBeenCalled();
+    });
+
+    it('control: an applied update still reaches GCal pushback (the spy discriminates)', async () => {
+        await itemsDAO.insertOne(calendarSnapshot('owner-item', '2026-09-27T12:36:28Z'));
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+
+        const { op, outcome } = await applyAndPublishOperationWithOutcome(
+            userId,
+            {
+                entityType: 'item',
+                opType: 'update',
+                entityId: 'owner-item',
+                snapshot: { ...calendarSnapshot('owner-item', '2026-09-27T12:50:00Z'), title: 'newer title' },
+            },
+            { deviceId: 'dev-1' },
+        );
+
+        expect(outcome).toBe('applied');
+        expect(pushSpy).toHaveBeenCalledTimes(1);
+        expect(pushSpy.mock.calls[0]?.[0]._id).toBe(op._id);
+    });
+
+    it('batch path: quarantines the duplicate-key op, skips GCal for the stale op, and pushes only the applied one', async () => {
+        await seedOwnerAndOrphan();
+        await itemsDAO.insertOne(baseInboxItem({ _id: 'edited-item', updatedTs: '2026-09-27T12:00:00Z' }));
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue(undefined);
+
+        const { ops, outcomes } = await applyAndPublishOperations(
+            userId,
+            [
+                { entityType: 'item', opType: 'update', entityId: 'orphan-item', snapshot: calendarSnapshot('orphan-item', '2026-09-27T12:36:49Z') },
+                {
+                    entityType: 'item',
+                    opType: 'update',
+                    entityId: 'owner-item',
+                    snapshot: { ...calendarSnapshot('owner-item', '2026-09-27T12:30:00Z'), title: 'stale' },
+                },
+                {
+                    entityType: 'item',
+                    opType: 'update',
+                    entityId: 'edited-item',
+                    snapshot: baseInboxItem({ _id: 'edited-item', title: 'edited', updatedTs: '2026-09-27T12:01:00Z' }),
+                },
+            ],
+            { deviceId: 'dev-1' },
+        );
+
+        expect(outcomes).toEqual(['skipped_duplicate_key', 'skipped_stale', 'applied']);
+        const [conflictOp, staleOp, appliedOp] = ops;
+        if (!conflictOp || !staleOp || !appliedOp) throw new Error('expected three ops');
+        expect(conflictOp.notApplied).toBe(true);
+        expect(conflictOp.failureReason).toBe('entity_conflict');
+        expect((await operationsDAO.findOne({ _id: conflictOp._id }))?.notApplied).toBe(true);
+        expect(staleOp.notApplied).toBeUndefined();
+        expect(appliedOp.notApplied).toBeUndefined();
+        const delivered = (await operationsDAO.findOpsAfter(userId, dayjs(0).toISOString(), '')).map((op) => op._id);
+        expect(delivered).toContain(staleOp._id);
+        expect(delivered).toContain(appliedOp._id);
+        expect(delivered).not.toContain(conflictOp._id);
+        expect(pushSpy).toHaveBeenCalledTimes(1);
+        expect(pushSpy.mock.calls[0]?.[0]._id).toBe(appliedOp._id);
     });
 });
 

@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import { type ValidationFailure, validateOperation } from '../schemas/operations/index.js';
-import type { EntitySnapshot, EntityType, OperationInterface, OpType, RsvpOpPayload } from '../types/entities.js';
+import type { EntitySnapshot, EntityType, OperationInterface, OpFailureReason, OpType, RsvpOpPayload } from '../types/entities.js';
 import { type ApplyEntityOpOutcome, applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { maybeScheduleInlineBriefs } from './brief/briefInlineHook.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
@@ -195,6 +195,24 @@ export function toServerOperation(userId: string, raw: RawOperation, stamp: OpSt
  * Returns the persisted operation.
  */
 export async function applyAndPublishOperation(userId: string, raw: RawOperation, opts: ApplyOptions): Promise<OperationInterface> {
+    const { op } = await applyAndPublishOperationWithOutcome(userId, raw, opts);
+    return op;
+}
+
+/** Return shape of `applyAndPublishOperationWithOutcome`: the persisted op plus what `applyEntityOp` reported. */
+export interface ApplyOperationResult {
+    op: OperationInterface;
+    outcome: ApplyEntityOpOutcome;
+}
+
+/**
+ * Same pipeline as `applyAndPublishOperation`, also returning the apply outcome. Per-entity /v1
+ * routes use it to refuse a write the collection never accepted (`skipped_duplicate_key`,
+ * `skipped_stale`) instead of answering 200 with a snapshot that never landed — the 2026-09-27
+ * duplicate-calendar-item incident: a PATCH linking an item to a `calendarEventId` another item
+ * owned was reported as success, so the caller kept the orphan.
+ */
+export async function applyAndPublishOperationWithOutcome(userId: string, raw: RawOperation, opts: ApplyOptions): Promise<ApplyOperationResult> {
     // Step 1 — validation. Logged in permissive mode so the audit script (and runtime warnings)
     // surface client violations before strict-mode is flipped. Validate snapshot-carrying ops AND
     // rsvp ops (rsvp has snapshot:null but carries a structured `rsvp` payload that must conform
@@ -236,16 +254,18 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     // (The batch path below runs these in parallel as an accepted compromise inherited from the
     // `/sync/push` throughput target — single-batch ops should never target the same entityId.)
     const outcome = await applyEntityOp(userId, op);
-    // Quarantine: an update whose row is gone was NOT applied. The op is still inserted (audit
-    // trail + SyncIssuesPanel surface) but marked so `/sync/pull` never delivers it — other
-    // devices replaying it would resurrect an entity the server deleted or reassigned away.
-    if (outcome === 'skipped_missing') {
-        markOpNotApplied(op, now);
+    // Quarantine: an update whose row is gone, or whose snapshot claims a unique key another row
+    // owns, was NOT applied. The op is still inserted (audit trail + SyncIssuesPanel surface) but
+    // marked so `/sync/pull` never delivers it — other devices replaying it would resurrect an
+    // entity the server deleted, or keep a linkage the server refused.
+    const quarantineReason = quarantineReasonFor(outcome);
+    if (quarantineReason) {
+        markOpNotApplied(op, now, quarantineReason);
     }
     restampOpIdentities([op]);
     await operationsDAO.insertOne(op);
     if (op.notApplied) {
-        return op;
+        return { op, outcome };
     }
 
     // Step 5b — RSVP replay (offline-first). For `opType: 'rsvp'` ops the GCal push is part of
@@ -258,9 +278,12 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
 
     // Step 6 — fan-out. Awaiting only the in-process synchronous legs (SSE + push); GCal +
     // webhooks are fire-and-forget under the hood.
+    // A stale op (lost LWW) is still delivered — other devices' LWW skips it too — but its
+    // snapshot must never reach Google Calendar: pushing it would overwrite the event with the
+    // older state the collection just rejected.
     const notifyOpts: NotifyChangeOptions = {
         ...(opts.deviceId.startsWith('api:') ? {} : { excludeDeviceId: opts.deviceId }),
-        ...(opts.suppressGCalPushback ? { suppressGCalPushback: true } : {}),
+        ...(opts.suppressGCalPushback || outcome !== 'applied' ? { suppressGCalPushback: true } : {}),
     };
     await notifyChange(op, notifyOpts);
 
@@ -272,27 +295,57 @@ export async function applyAndPublishOperation(userId: string, raw: RawOperation
     // Step 8 — inline brief generation (flag-gated, debounced, fire-and-forget; never affects the response).
     maybeScheduleInlineBriefs([op], opts.deviceId);
 
-    return op;
+    return { op, outcome };
+}
+
+/** `outcomes` is index-aligned with the batch by construction; a hole is a broken invariant, never "applied". */
+function outcomeAt(outcomes: ApplyEntityOpOutcome[], idx: number, op: OperationInterface): ApplyEntityOpOutcome {
+    const outcome = outcomes[idx];
+    if (!outcome) {
+        throw new Error(`batch outcome missing for op ${idx} (${op.entityId})`);
+    }
+    return outcome;
+}
+
+/** The failure reasons that quarantine an op (`notApplied`); neither is retryable. */
+type QuarantineReason = Extract<OpFailureReason, 'entity_missing' | 'entity_conflict'>;
+
+const QUARANTINE_DETAIL: Record<QuarantineReason, string> = {
+    entity_missing: 'target entity no longer exists (deleted or reassigned away) — change not applied',
+    entity_conflict: 'snapshot claims a unique key (e.g. calendarEventId) that another row owns — change not applied',
+};
+
+/** Maps an apply outcome to the quarantine reason it warrants, or null when the op may be delivered. */
+function quarantineReasonFor(outcome: ApplyEntityOpOutcome): QuarantineReason | null {
+    switch (outcome) {
+        case 'skipped_missing':
+            return 'entity_missing';
+        case 'skipped_duplicate_key':
+            return 'entity_conflict';
+        default:
+            return null;
+    }
 }
 
 /**
  * Stamps the quarantine + failure markers onto an op whose apply was skipped because the target
- * row no longer exists. Mutates in place BEFORE insert so the persisted row and the in-memory op
- * (used for notify filtering) agree. `entity_missing` is deliberately NOT retryable — the entity
- * is not coming back; the SyncIssuesPanel offers Dismiss only.
+ * row no longer exists or the snapshot's unique key is owned by another row. Mutates in place
+ * BEFORE insert so the persisted row and the in-memory op (used for notify filtering) agree.
+ * Neither reason is retryable — the entity is not coming back / the other row is the one to edit;
+ * the SyncIssuesPanel offers Dismiss only.
  */
-function buildNotAppliedMarkers(now: string) {
+function buildNotAppliedMarkers(now: string, reason: QuarantineReason) {
     return {
         syncFailed: true as const,
-        failureReason: 'entity_missing' as const,
-        failureDetail: 'target entity no longer exists (deleted or reassigned away) — change not applied',
+        failureReason: reason,
+        failureDetail: QUARANTINE_DETAIL[reason],
         failedTs: now,
         notApplied: true as const,
     };
 }
 
-function markOpNotApplied(op: OperationInterface, now: string): void {
-    Object.assign(op, buildNotAppliedMarkers(now));
+function markOpNotApplied(op: OperationInterface, now: string, reason: QuarantineReason): void {
+    Object.assign(op, buildNotAppliedMarkers(now, reason));
 }
 
 /**
@@ -376,15 +429,20 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     restampOpIdentities(ops);
     const [, outcomes] = await Promise.all([operationsDAO.insertMany(ops), Promise.all(ops.map((op) => applyEntityOp(userId, op)))]);
 
-    // Quarantine skipped-missing ops (see the single-op path). Rows were already inserted by the
-    // parallel insertMany above, so the markers are written back with an update; the in-memory op
-    // is stamped too so the notify/cascade filters below see the same state.
-    const quarantined = ops.filter((_, idx) => outcomes[idx] === 'skipped_missing');
-    for (const op of quarantined) {
-        markOpNotApplied(op, now);
-        await operationsDAO.updateOne({ _id: op._id }, { $set: buildNotAppliedMarkers(now) });
+    // Quarantine skipped-missing / duplicate-key ops (see the single-op path). Rows were already
+    // inserted by the parallel insertMany above, so the markers are written back with an update;
+    // the in-memory op is stamped too so the notify/cascade filters below see the same state.
+    const quarantined = ops.flatMap((op, idx) => {
+        const reason = quarantineReasonFor(outcomeAt(outcomes, idx, op));
+        return reason ? [{ op, reason }] : [];
+    });
+    for (const { op, reason } of quarantined) {
+        markOpNotApplied(op, now, reason);
+        await operationsDAO.updateOne({ _id: op._id }, { $set: buildNotAppliedMarkers(now, reason) });
     }
     const appliedOps = ops.filter((op) => !op.notApplied);
+    // Stale ops (lost LWW) are delivered but must not reach Google Calendar — see the single-op path.
+    const staleOpIds = new Set(ops.filter((_, idx) => outcomes[idx] === 'skipped_stale').map((op) => op._id));
 
     // RSVP replay (offline-first). Awaited in queue order — every RSVP replays so the organizer
     // sees the full history, per plan ("do NOT coalesce queued RSVPs"). Sequential await (not
@@ -399,6 +457,7 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     const notifyOpts: NotifyChangeOptions = {
         ...(opts.deviceId.startsWith('api:') ? {} : { excludeDeviceId: opts.deviceId }),
         ...(opts.suppressGCalPushback ? { suppressGCalPushback: true } : {}),
+        ...(staleOpIds.size ? { suppressGCalPushbackFor: staleOpIds } : {}),
     };
     await notifyChanges(appliedOps, notifyOpts);
 

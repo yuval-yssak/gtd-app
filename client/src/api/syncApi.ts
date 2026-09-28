@@ -91,9 +91,16 @@ export async function reassignEntityOnServer(params: ReassignParams): Promise<Re
 /**
  * Mirror of the server's `OpFailureReason` enum. Kept inline (not imported from server types)
  * because the client cannot reach into api-server packages. Adding a new server-side reason
- * requires updating BOTH this union AND the failure-label map in `SyncIssuesPanel`.
+ * requires updating BOTH this union AND the failure-label map in `components/syncIssueRowLogic.ts`.
  */
-export type SyncIssueFailureReason = 'transient_exhausted' | 'scope_missing' | 'calendar_missing' | 'edit_conflict' | 'terminal' | 'entity_missing';
+export type SyncIssueFailureReason =
+    | 'transient_exhausted'
+    | 'scope_missing'
+    | 'calendar_missing'
+    | 'edit_conflict'
+    | 'terminal'
+    | 'entity_missing'
+    | 'entity_conflict';
 
 /** One row in the SyncIssuesPanel — projection of a persisted op with `syncFailed: true`. */
 export interface SyncIssue {

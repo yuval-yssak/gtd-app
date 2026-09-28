@@ -7,3 +7,4 @@
 - [Adversarial review expectations](feedback_adversarial_review_expectations.md) — Team wants concrete failure scenarios over severity labels; check consumers outside the diff; verify ordering claims by running them.
 - [Moved routine row on a foreign date](project_gcal_moved_row_foreign_date_class.md) — Recurring class: every `timeStart.slice(0,10)` consumer mis-targets a moved instance. Resolve-tier fixes don't close regeneration/propagation.
 - [Sync `now` stamped outside the lock](project_calendar_sync_now_stamped_outside_lock.md) — 3 callers take the per-calendar mutex; only manual sync stamps inside. Webhook + catch-up still backdate under queue depth.
+- [Event-ownership checks miss instance ids](project_event_ownership_checks_miss_instance_ids.md) — calendarEventId-keyed owner checks forget calendarInstanceEventId + done owners; pushback patches instance ids directly.
