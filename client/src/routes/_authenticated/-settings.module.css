@@ -51,3 +51,11 @@
 .swatchLabel {
     white-space: nowrap;
 }
+
+.legalLinks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+    margin-top: 0.75rem;
+    font-size: 0.875rem;
+}

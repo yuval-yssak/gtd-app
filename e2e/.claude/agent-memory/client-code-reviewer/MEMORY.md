@@ -64,6 +64,7 @@
 - [Shared-preview cap lands on one host only](feedback_shared_preview_fix_applied_to_one_host.md) — `MarkdownPreview` has 4 wrapper classes; capping `.previewClickable` leaves RoutineReviewCard/QuickCapture/dialog uncapped.
 - [DOM predicates faked in node-env unit tests](feedback_dom_predicate_faked_in_node_tests.md) — Stubbing `closest` makes the test re-assert the stub; demand the semantic cases in Playwright.
 - [Don't prescribe min(Nvh, 100%) for nested caps](feedback_percentage_maxheight_against_indefinite_parent.md) — Percentage max-height resolves to `none` on indefinite-height parents, silently killing the cap; raise nested-scroll as "verify", not a fix.
-- [Legal text claims vs code](feedback_legal_text_claims_vs_code.md) — Policy copy promises controls that are missing or display-only (brief opt-out, empty trash); grep every "you can" claim.
+- [Legal text claims vs code](feedback_legal_text_claims_vs_code.md) — Policy/landing copy promises controls that are missing (brief opt-out, empty trash); new copy surfaces re-break fixed claims.
 - [Copy renames break other specs' locators](feedback_copy_rename_breaks_other_specs.md) — grep e2e/ for old phrases; source-grep `toContain` passes via substring overlap (`short_name:` ⊃ `name:`).
 - [Failure label assumes one entity type](feedback_failure_label_assumes_entity_type.md) — New FAILURE_LABELS wording names "item"/"calendar event" though the generic server path also fires for routines/externalId.
+- [CSS module vs Typography emotion](feedback_css_module_vs_typography_emotion.md) — Module rules on Typography lose margin AND font-weight to the variant; fixes move only what the screenshot showed.

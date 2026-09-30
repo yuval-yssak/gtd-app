@@ -64,8 +64,8 @@ function LoginPage() {
                 >
                     {APP_NAME}
                 </Typography>
-                {/* Doubles as the public homepage description Google's OAuth reviewers check for:
-                    signed-out visits to / land here, and the page must say what the app does. */}
+                {/* A one-line description so the sign-in card is self-explanatory; the public homepage
+                    Google's OAuth reviewers read is the landing page at / (routes/-LandingPage.tsx). */}
                 <Typography variant="body2" className={styles.subtitle} sx={{ mb: 2 }} data-testid="loginAppDescription">
                     A personal productivity app for capturing, organising and reviewing your tasks — with offline-first sync across your devices and optional
                     Google Calendar integration.
@@ -101,7 +101,8 @@ function LoginPage() {
                     </Typography>
                 )}
                 {/* Google's OAuth consent-screen review checks that the policy is reachable from the sign-in flow. */}
-                <Typography variant="caption" component="p" className={styles.legalFooter}>
+                {/* Margins via sx: Typography's own margin reset outranks the CSS-module class at runtime. */}
+                <Typography variant="caption" component="p" className={styles.legalFooter} sx={{ mt: 2 }}>
                     By signing in you agree to the{' '}
                     <Link to="/terms" data-testid="loginTermsLink">
                         Terms of Service
@@ -111,6 +112,11 @@ function LoginPage() {
                         Privacy Policy
                     </Link>
                     .
+                </Typography>
+                <Typography variant="caption" component="p" className={styles.homeLink} sx={{ mt: 1 }}>
+                    <Link to="/" data-testid="loginHomeLink">
+                        Home
+                    </Link>
                 </Typography>
             </Paper>
         </div>

@@ -8,6 +8,18 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Homepage content for visitors without JavaScript (Google's OAuth verification fetches
+         the branding homepage URL; an empty SPA shell reads as "behind a login page").
+         Keep in step with src/lib/landingContent.ts — a unit test pins the tagline and links. -->
+    <noscript>
+      <main>
+        <h1>Done</h1>
+        <p>Done is a personal productivity app for capturing, organising and reviewing your tasks, built around the Getting Things Done® method by David Allen.</p>
+        <p>Signing in with Google shares your name, email address and profile picture to identify your account. If you connect Google Calendar, Done reads and writes events on the calendars you choose so they stay in sync, lists your calendars so you can pick which to sync, reads calendar settings such as the time zone, and confirms which Google account you authorised. Calendar data is used only for calendar sync and, as described in the privacy policy, for the AI features (item briefs and the clarify-with-AI assistant, which send event titles and descriptions to Anthropic). It is never used for advertising, never sold, and never used to train machine-learning models.</p>
+        <p><a href="/login">Sign in</a> · <a href="/privacy">Privacy Policy</a> · <a href="/terms">Terms of Service</a></p>
+        <p>Getting Things Done® and GTD® are registered trademarks of the David Allen Company. Done follows the GTD method but is an independent project, not affiliated with, endorsed by or sponsored by the David Allen Company.</p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

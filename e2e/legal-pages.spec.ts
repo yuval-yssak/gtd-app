@@ -64,8 +64,8 @@ test.describe('legal pages', () => {
         try {
             const page = await ctx.newPage();
             await page.goto(`${CLIENT_URL}/login`);
-            // The sign-in card doubles as the public homepage Google's reviewers visit: it must
-            // describe the app, not just ask for credentials.
+            // The sign-in card keeps a one-line description (the public homepage is / — see
+            // public-landing.spec.ts) so it never reads as a bare credentials prompt.
             await expect(page.getByTestId('loginAppDescription')).toContainText('personal productivity app');
             await expect(page.getByTestId('loginPrivacyLink')).toHaveAttribute('href', '/privacy');
             await page.getByTestId('loginTermsLink').click();
@@ -73,6 +73,10 @@ test.describe('legal pages', () => {
             await expect(page.getByTestId('legalTitle')).toHaveText('Terms of Service');
             await page.getByRole('navigation', { name: 'Legal pages' }).getByRole('link', { name: 'Sign in' }).click();
             await expect(page.getByRole('button', { name: 'Sign in with Google' })).toBeVisible();
+            // The sign-in card links back to the public homepage.
+            await page.getByTestId('loginHomeLink').click();
+            await expect(page).toHaveURL(`${CLIENT_URL}/`);
+            await expect(page.getByTestId('landingPage')).toBeVisible();
         } finally {
             await closeContextQuietly(ctx);
         }
@@ -120,6 +124,24 @@ test.describe('product name inside the app', () => {
             expect(await manifest.json()).toMatchObject({ name: 'Done', short_name: 'Done' });
             await page.goto(`${CLIENT_URL}/settings`);
             await expect(page.getByText(/^Done — an offline-first productivity app built around the GTD method\.$/)).toBeVisible();
+        });
+    });
+});
+
+test.describe('legal pages from inside the app', () => {
+    test('a signed-in user reaches both documents from the Settings App card', async ({ browser }) => {
+        const email = `settings-legal-${dayjs().valueOf()}@example.com`;
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            await page.goto(`${CLIENT_URL}/settings`);
+            await expect(page.getByTestId('settingsTermsLink')).toHaveAttribute('href', '/terms');
+            await page.getByTestId('settingsPrivacyLink').click();
+            await expect(page).toHaveURL(/\/privacy$/);
+            await expect(page.getByTestId('legalTitle')).toHaveText('Privacy Policy');
+            // The way back must not need the API (an installed PWA has no back button): every
+            // request to the server is aborted before the Home link is clicked.
+            await page.context().route('http://localhost:4000/**', (route) => route.abort());
+            await page.getByRole('navigation', { name: 'Legal pages' }).getByRole('link', { name: 'Home' }).click();
+            await expect(page).toHaveURL(/\/inbox$/);
         });
     });
 });

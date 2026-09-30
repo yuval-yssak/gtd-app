@@ -18,6 +18,9 @@ export function LegalPage({ legalDocument }: { legalDocument: LegalDocument }) {
         <main className={styles.page} data-testid="legalPage">
             <Paper elevation={3} className={styles.card}>
                 <nav className={styles.nav} aria-label="Legal pages">
+                    {/* "/" is the way back for a signed-in reader (Settings links here; an installed PWA has no
+                        back button): it routes to the inbox from IndexedDB alone, or to the landing page. */}
+                    <Link to="/">Home</Link>
                     <Link to="/login">Sign in</Link>
                     <Link to={otherDocument.path}>{otherDocument.title}</Link>
                 </nav>

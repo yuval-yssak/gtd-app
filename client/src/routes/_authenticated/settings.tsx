@@ -11,7 +11,7 @@ import Switch from '@mui/material/Switch';
 import { useColorScheme } from '@mui/material/styles';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import classNames from 'classnames';
 import type { IDBPDatabase } from 'idb';
 import { Suspense, useCallback, useEffect, useState, useTransition } from 'react';
@@ -29,6 +29,7 @@ import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
 import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
 import { CLARIFY_MODE_KEY, type InlineClarifyMode, parseClarifyMode } from '../../lib/clarifyMode';
 import { COLOR_THEMES, type ColorThemeId, getColorTheme, setColorTheme } from '../../lib/colorTheme';
+import { LEGAL_DOCUMENTS } from '../../lib/legalDocuments';
 import { getRoutineIndicatorStyle, type RoutineIndicatorStyle, setRoutineIndicatorStyle } from '../../lib/routineIndicatorStyle';
 import type { MyDB } from '../../types/MyDB';
 import styles from './-settings.module.css';
@@ -216,6 +217,16 @@ function SettingsPage() {
                     >
                         Version: {__COMMIT_HASH__}
                     </Typography>
+                    {/* The only in-app route to the legal documents; signed-out visitors get them from
+                        the sign-in card and the landing page. */}
+                    <nav aria-label="Legal pages" className={styles.legalLinks}>
+                        <Link to={LEGAL_DOCUMENTS.privacy.path} data-testid="settingsPrivacyLink">
+                            {LEGAL_DOCUMENTS.privacy.title}
+                        </Link>
+                        <Link to={LEGAL_DOCUMENTS.terms.path} data-testid="settingsTermsLink">
+                            {LEGAL_DOCUMENTS.terms.title}
+                        </Link>
+                    </nav>
                 </Box>
             </Paper>
         </Box>

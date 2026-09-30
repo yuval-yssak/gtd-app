@@ -20,11 +20,23 @@ export async function authenticatedRouteGuard({ context }: { context: { db: IDBP
     // server session — this happens after the user clears site data while the Better-Auth
     // httpOnly cookie remains. Without this branch, the login route's beforeLoad sees the
     // server session and redirects to '/', which sends us back here in an infinite loop.
-    const { session, networkError } = await fetchSessionSafely();
-    if (networkError || !session) {
+    if (!(await recoverAccountFromServerSession(db))) {
         throw redirect({ to: '/login' });
     }
+}
+
+/**
+ * Hydrates the local account store from a still-valid server session. Returns false when there
+ * is no session or the server could not be reached — offline is a valid state, and the caller
+ * decides whether that means "sign in" (the guard) or "show the public page" (the homepage).
+ */
+export async function recoverAccountFromServerSession(db: IDBPDatabase<MyDB>) {
+    const { session, networkError } = await fetchSessionSafely();
+    if (networkError || !session) {
+        return false;
+    }
     await hydrateAccountFromSession(db, session);
+    return true;
 }
 
 // Fire-and-forget: if the server confirms the session is gone, force re-login.
@@ -41,11 +53,15 @@ function verifySessionInBackground() {
         .catch((err) => console.error('[auth] background session check failed:', err));
 }
 
+/** A stalled ("lie-fi") connection must not blank the public homepage or /login for minutes. */
+const SESSION_FETCH_TIMEOUT_MS = 8_000;
+
 // Wraps authClient.getSession() to distinguish a missing session from a network failure.
-// Returns networkError=true when the fetch throws (offline/DNS), false when the server responded.
+// Returns networkError=true when the fetch throws or times out (offline/DNS/lie-fi), false when
+// the server responded.
 async function fetchSessionSafely() {
     try {
-        const result = await authClient.getSession();
+        const result = await authClient.getSession({ fetchOptions: { signal: AbortSignal.timeout(SESSION_FETCH_TIMEOUT_MS) } });
         return { session: result.data, networkError: false };
     } catch {
         return { session: null, networkError: true };

@@ -195,8 +195,8 @@ function WeeklyReviewPage() {
         latestFlowRef.current = null;
         // Deliberately NO setPhase back to idle: the navigation unmounts this route, and
         // resetting first would flash the intro screen for a frame. A later visit remounts and
-        // re-reads the (already deleted) draft fresh. / redirects to the inbox.
-        void navigate({ to: '/' });
+        // re-reads the (already deleted) draft fresh.
+        void navigate({ to: '/inbox' });
     };
 
     if (phase.kind === 'celebrating') {

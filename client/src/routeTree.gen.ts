@@ -13,7 +13,7 @@ import { Route as TermsRouteImport } from './routes/terms'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
-import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AuthenticatedWorkContextsRouteImport } from './routes/_authenticated/work-contexts'
 import { Route as AuthenticatedWeeklyReviewRouteImport } from './routes/_authenticated/weekly-review'
@@ -53,10 +53,10 @@ const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
+const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AuthenticatedRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
   id: '/auth/callback',
@@ -161,7 +161,7 @@ const AuthenticatedItemItemIdRoute = AuthenticatedItemItemIdRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof AuthenticatedIndexRoute
+  '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
@@ -186,6 +186,7 @@ export interface FileRoutesByFullPath {
   '/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof IndexRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
   '/terms': typeof TermsRoute
@@ -205,13 +206,13 @@ export interface FileRoutesByTo {
   '/weekly-review': typeof AuthenticatedWeeklyReviewRoute
   '/work-contexts': typeof AuthenticatedWorkContextsRoute
   '/auth/callback': typeof AuthCallbackRoute
-  '/': typeof AuthenticatedIndexRoute
   '/item/$itemId': typeof AuthenticatedItemItemIdRoute
   '/person/$personId': typeof AuthenticatedPersonPersonIdRoute
   '/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
@@ -232,7 +233,6 @@ export interface FileRoutesById {
   '/_authenticated/weekly-review': typeof AuthenticatedWeeklyReviewRoute
   '/_authenticated/work-contexts': typeof AuthenticatedWorkContextsRoute
   '/auth/callback': typeof AuthCallbackRoute
-  '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/item/$itemId': typeof AuthenticatedItemItemIdRoute
   '/_authenticated/person/$personId': typeof AuthenticatedPersonPersonIdRoute
   '/_authenticated/routine/$routineId': typeof AuthenticatedRoutineRoutineIdRoute
@@ -265,6 +265,7 @@ export interface FileRouteTypes {
     | '/routine/$routineId'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/'
     | '/login'
     | '/privacy'
     | '/terms'
@@ -284,12 +285,12 @@ export interface FileRouteTypes {
     | '/weekly-review'
     | '/work-contexts'
     | '/auth/callback'
-    | '/'
     | '/item/$itemId'
     | '/person/$personId'
     | '/routine/$routineId'
   id:
     | '__root__'
+    | '/'
     | '/_authenticated'
     | '/login'
     | '/privacy'
@@ -310,13 +311,13 @@ export interface FileRouteTypes {
     | '/_authenticated/weekly-review'
     | '/_authenticated/work-contexts'
     | '/auth/callback'
-    | '/_authenticated/'
     | '/_authenticated/item/$itemId'
     | '/_authenticated/person/$personId'
     | '/_authenticated/routine/$routineId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
+  IndexRoute: typeof IndexRoute
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   LoginRoute: typeof LoginRoute
   PrivacyRoute: typeof PrivacyRoute
@@ -354,12 +355,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/': {
-      id: '/_authenticated/'
+    '/': {
+      id: '/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof AuthenticatedIndexRouteImport
-      parentRoute: typeof AuthenticatedRoute
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/auth/callback': {
       id: '/auth/callback'
@@ -513,7 +514,6 @@ interface AuthenticatedRouteChildren {
   AuthenticatedWaitingForRoute: typeof AuthenticatedWaitingForRoute
   AuthenticatedWeeklyReviewRoute: typeof AuthenticatedWeeklyReviewRoute
   AuthenticatedWorkContextsRoute: typeof AuthenticatedWorkContextsRoute
-  AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
   AuthenticatedItemItemIdRoute: typeof AuthenticatedItemItemIdRoute
   AuthenticatedPersonPersonIdRoute: typeof AuthenticatedPersonPersonIdRoute
   AuthenticatedRoutineRoutineIdRoute: typeof AuthenticatedRoutineRoutineIdRoute
@@ -535,7 +535,6 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedWaitingForRoute: AuthenticatedWaitingForRoute,
   AuthenticatedWeeklyReviewRoute: AuthenticatedWeeklyReviewRoute,
   AuthenticatedWorkContextsRoute: AuthenticatedWorkContextsRoute,
-  AuthenticatedIndexRoute: AuthenticatedIndexRoute,
   AuthenticatedItemItemIdRoute: AuthenticatedItemItemIdRoute,
   AuthenticatedPersonPersonIdRoute: AuthenticatedPersonPersonIdRoute,
   AuthenticatedRoutineRoutineIdRoute: AuthenticatedRoutineRoutineIdRoute,
@@ -546,6 +545,7 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 )
 
 const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   LoginRoute: LoginRoute,
   PrivacyRoute: PrivacyRoute,
