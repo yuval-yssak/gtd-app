@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import type { ServerOp } from '#api/syncClient';
-import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
+import { fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, PUSH_TIMEOUT_MS, pushSyncOps } from '#api/syncClient';
 import type { ServerItemBriefSnapshot } from '../api/briefApi';
 import { describeDevice } from '../lib/deviceLabel';
 import { hasAtLeastOne } from '../lib/typeUtils';
@@ -21,7 +21,7 @@ import type {
 } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
 import { mergeServerOwnedCalendarFields } from './calendarLinkMerge';
-import { SYNC_APPLY_LOCK, withCrossContextLock } from './crossContextLock';
+import { hasWebLocks, SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK, withCrossContextLock } from './crossContextLock';
 import { getOrCreateDeviceId, getSyncCursor, setSyncCursor } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
 import { bulkPutItems } from './itemHelpers';
@@ -179,15 +179,19 @@ async function resolveQueueUserId(db: IDBPDatabase<MyDB>, explicitUserId: string
     return active.id;
 }
 
-// Module-level guard so concurrent callers (queueSyncOp fire-and-forget, mount effect,
-// online handler, service worker message) collapse into a single in-flight POST.
+// Per-filter in-context guard so concurrent callers (queueSyncOp fire-and-forget, mount effect,
+// online handler, service worker message) collapse into a single in-flight pass per scope.
 // Without this, two simultaneous flushes read the same queued ops and POST them twice,
 // causing the server to send duplicate push notifications for the same change.
-let flushInFlight: Promise<void> | null = null;
+// Keyed by `userIdFilter` (like `pullInFlight`): a flush for user A that is WAITING on the
+// cross-context lock must not be handed to the orchestrator's pass for user B — B's ops would
+// go unflushed that pass, and A's push would later leave under B's pivoted cookie.
+const flushInFlight = new Map<string, Promise<void>>();
+const UNFILTERED_FLUSH_KEY = '*';
 
-/** Wait for any in-flight sync flush to complete. Returns immediately if no flush is running. */
+/** Wait for every in-flight sync flush to settle. Returns immediately if none is running. */
 export function waitForPendingFlush(): Promise<void> {
-    return flushInFlight ?? Promise.resolve();
+    return Promise.allSettled(flushInFlight.values()).then(() => undefined);
 }
 
 export interface FlushOptions {
@@ -200,17 +204,36 @@ export interface FlushOptions {
 }
 
 export function flushSyncQueue(db: IDBPDatabase<MyDB>, options: FlushOptions = {}): Promise<void> {
-    if (flushInFlight) return flushInFlight;
-    flushInFlight = doFlush(db, options).finally(() => {
-        flushInFlight = null;
-    });
-    return flushInFlight;
+    const key = options.userIdFilter ?? UNFILTERED_FLUSH_KEY;
+    const existing = flushInFlight.get(key);
+    if (existing) return existing;
+    const pass = doFlush(db, options).finally(() => flushInFlight.delete(key));
+    flushInFlight.set(key, pass);
+    return pass;
 }
 
 // Cross-context flush lock: the main thread and Service Worker each have their own
 // module-level flushInFlight guard, so they can race and POST the same ops twice.
-// This IDB-based lock coordinates across JS contexts via the singleton deviceMeta record.
+// Preferred: the `gtd-sync-flush` Web Lock — a second context WAITS for the holder and then drains
+// whatever the holder left, so a fire-and-forget dispatch can never be silently dropped. The IDB
+// `deviceMeta.flushingTs` marker below is the fallback for browsers without Web Locks; it has to
+// SKIP when held (no way to wait on it) and self-heals after a TTL.
 const FLUSH_LOCK_TTL_MS = 30_000;
+
+/**
+ * Bound on waiting for the Web Lock. A holder's single request is capped by `PUSH_TIMEOUT_MS`, so a
+ * wait that outlasts it by a margin means the holder is wedged somewhere other than the network (or
+ * is draining a very long queue); give up and leave the ops queued for the next trigger (mount,
+ * online, SSE, navigation) instead of hanging the caller. Note a flush awaited inside the session
+ * gate can outlive the gate's 10s timeout — see `client/CLAUDE.md` § Offline Sync Queue.
+ */
+export const DEFAULT_FLUSH_LOCK_WAIT_MS = PUSH_TIMEOUT_MS + 15_000;
+let flushLockWaitMs = DEFAULT_FLUSH_LOCK_WAIT_MS;
+
+/** Test-only: shorten the Web Lock wait so the give-up path can be exercised without real time passing; restore with `DEFAULT_FLUSH_LOCK_WAIT_MS`. */
+export function setFlushLockWaitMs(ms: number): void {
+    flushLockWaitMs = ms;
+}
 
 type AcquireLockResult = 'acquired' | 'noDeviceState' | 'heldByOther';
 
@@ -246,7 +269,31 @@ async function releaseFlushLock(db: IDBPDatabase<MyDB>): Promise<void> {
     await tx.done;
 }
 
-async function doFlush(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<void> {
+function doFlush(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<void> {
+    return hasWebLocks() ? flushUnderWebLock(db, options) : flushUnderIdbMarker(db, options);
+}
+
+/**
+ * Queues behind any other context's flush, then drains. The wait is bounded (see `flushLockWaitMs`);
+ * on give-up the ops stay queued — same outcome as the old skip, but only after a real attempt to
+ * wait the holder out.
+ */
+async function flushUnderWebLock(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<void> {
+    const lockWait = AbortSignal.timeout(flushLockWaitMs);
+    try {
+        await withCrossContextLock(SYNC_FLUSH_LOCK, () => pushQueuedOpsUntilEmpty(db, options), { signal: lockWait });
+    } catch (err) {
+        // Identity, not name: only the wait signal's own reason means "never granted". A DOMException
+        // thrown by the task itself (an aborted IDB transaction, an aborted fetch) must propagate.
+        if (err !== lockWait.reason) {
+            throw err;
+        }
+        const leftBehind = (await readQueuedOpsForFlush(db, options)).length;
+        console.warn(`[sync-flush] gave up waiting ${flushLockWaitMs}ms for the flush lock — ${leftBehind} ops stay queued for the next trigger`);
+    }
+}
+
+async function flushUnderIdbMarker(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<void> {
     const lockResult = await acquireFlushLock(db);
     if (lockResult === 'heldByOther') {
         console.log('[sync-flush] skipping — another context holds the flush lock');
@@ -256,35 +303,45 @@ async function doFlush(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<v
         return;
     }
     try {
-        // Loop until empty: a fire-and-forget flush from queueSyncOp may have started before
-        // a subsequent mutation added more ops. Without the loop, those late-arriving ops
-        // stay in IDB because the in-flight flush already read its batch before they existed.
-        while (true) {
-            const ops = await readQueuedOpsForFlush(db, options);
-            if (!ops.length) {
-                return;
-            }
-
-            console.log(
-                `[sync-flush] pushing ${ops.length} ops to server (filter=${options.userIdFilter ?? 'all'})`,
-                ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`),
-            );
-
-            const deviceId = await getOrCreateDeviceId(db);
-            await pushSyncOps(deviceId, ops);
-
-            console.log(`[sync-flush] push succeeded, removed ${ops.length} ops from queue`);
-
-            // Batch succeeded — remove all sent ops. If the request failed, they stay for retry.
-            for (const op of ops) {
-                if (op.id !== undefined) {
-                    await db.delete('syncOperations', op.id);
-                }
-            }
-        }
+        await pushQueuedOpsUntilEmpty(db, options);
     } finally {
         await releaseFlushLock(db).catch((e) => console.warn('[sync-flush] failed to release flush lock', e));
     }
+}
+
+/** Caller holds the flush lock. Mirrors the IDB path's "no device meta → nothing to push" short-circuit. */
+async function pushQueuedOpsUntilEmpty(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<void> {
+    if (!(await db.get('deviceMeta', 'local'))) {
+        return;
+    }
+    // Loop until empty: a fire-and-forget flush from queueSyncOp may have started before
+    // a subsequent mutation added more ops. Without the loop, those late-arriving ops
+    // stay in IDB because the in-flight flush already read its batch before they existed.
+    while (true) {
+        const ops = await readNextPushBatch(db, options);
+        if (!ops.length) {
+            return;
+        }
+        await pushBatch(db, ops, options);
+    }
+}
+
+async function pushBatch(db: IDBPDatabase<MyDB>, ops: SyncOperation[], options: FlushOptions): Promise<void> {
+    console.log(
+        `[sync-flush] pushing ${ops.length} ops to server (filter=${options.userIdFilter ?? 'all'})`,
+        ops.map((op) => `${op.opType}:${op.entityType}:${op.entityId}`),
+    );
+    const deviceId = await getOrCreateDeviceId(db);
+    await pushSyncOps(deviceId, ops);
+    console.log(`[sync-flush] push succeeded, removed ${ops.length} ops from queue`);
+    await deleteSentOps(db, ops);
+}
+
+/** Batch succeeded — remove the sent ops in ONE transaction, so a context dying mid-way cannot leave half of them to be re-pushed. If the request failed, they stay for retry. */
+async function deleteSentOps(db: IDBPDatabase<MyDB>, sent: SyncOperation[]): Promise<void> {
+    const tx = db.transaction('syncOperations', 'readwrite');
+    const sentIds = sent.flatMap((op) => (op.id !== undefined ? [op.id] : []));
+    await Promise.all([...sentIds.map((id) => tx.store.delete(id)), tx.done]);
 }
 
 /**
@@ -294,10 +351,12 @@ async function doFlush(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<v
  */
 async function readQueuedOpsForFlush(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<SyncOperation[]> {
     const all = await db.getAll('syncOperations');
-    if (!options.userIdFilter) {
-        return all;
-    }
-    return all.filter((op) => op.userId === options.userIdFilter);
+    return options.userIdFilter ? all.filter((op) => op.userId === options.userIdFilter) : all;
+}
+
+/** The next request's worth of ops, in `queuedAt` (= insertion) order; the drain loop sends the rest. */
+async function readNextPushBatch(db: IDBPDatabase<MyDB>, options: FlushOptions): Promise<SyncOperation[]> {
+    return (await readQueuedOpsForFlush(db, options)).slice(0, PUSH_BATCH_MAX);
 }
 
 /**

@@ -131,6 +131,8 @@ Before flushing, `flushSyncQueue()` collapses redundant ops per entity:
 - In `_authenticated.tsx` on mount and on every `online` event
 - From the Service Worker `sync` event (Background Sync API — Chrome/Edge only)
 
+**Cross-context flush lock.** Every context's flush serializes on the `gtd-sync-flush` Web Lock (`db/crossContextLock.ts`): a flush that finds another tab or the Service Worker mid-push **waits** (bounded, `PUSH_TIMEOUT_MS` + 15s) and then drains whatever is left, so a fire-and-forget dispatch from `queueSyncOp` is never silently dropped. The IDB `deviceMeta.flushingTs` marker is only the fallback for browsers without Web Locks — it cannot wait, so it skips while held and self-heals after 30s. `pushSyncOps` carries a 60s deadline (`api/syncPushLimits.ts`) so a hung request cannot pin the lock until Cloudflare's 100s origin timeout (the 2026-10-03 "Mark done pushed ~100s late" incident); batches are capped at `PUSH_BATCH_MAX` ops because `/sync/push` has no idempotency key — an aborted request the server still applied is re-inserted on retry, so the deadline must never race a slow-but-progressing push. Known window: a flush awaited inside `withSessionGate` can outlive the gate's 10s timeout while waiting for the lock; if another pass pivots the cookie meanwhile, the late push hits the server's misroute guard (400, ops stay queued, next trigger retries). `flushInFlight` is keyed per `userIdFilter` so a waiting flush for one account is never handed to another account's pass.
+
 ## `_authenticated.tsx` Boot Sequence
 
 This layout route is the central orchestrator for all authenticated state.

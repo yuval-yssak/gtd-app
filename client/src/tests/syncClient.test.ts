@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BootstrapRequiredError, fetchBootstrap, fetchDeviceStatus, fetchSyncOps, pushSyncOps, SyncAuthError } from '../api/syncClient';
+import { BootstrapRequiredError, fetchBootstrap, fetchDeviceStatus, fetchSyncOps, PUSH_TIMEOUT_MS, pushSyncOps, SyncAuthError } from '../api/syncClient';
 
 function mockFetchResponse(status: number, body: unknown = {}): void {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) }));
@@ -71,5 +71,33 @@ describe('syncClient — reaped-device signals', () => {
         const error = await fetchDeviceStatus('device-1').catch((e: unknown) => e);
         expect(error).toBeInstanceOf(Error);
         expect(error).not.toBeInstanceOf(SyncAuthError);
+    });
+});
+
+// A push that never completes used to pin the cross-context flush lock until Cloudflare's 100s origin
+// timeout, stranding every other context's queued ops meanwhile. The request now carries a deadline.
+describe('syncClient — push deadline', () => {
+    it('pushSyncOps sends an abort signal so a hung request cannot hold the flush lock indefinitely', async () => {
+        const fetchSpy = vi.fn().mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}) });
+        vi.stubGlobal('fetch', fetchSpy);
+        await pushSyncOps('device-1', []);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        const [firstCall] = fetchSpy.mock.calls;
+        if (!firstCall) throw new Error('expected one fetch call');
+        const [, init] = firstCall as [string, RequestInit];
+        expect(init.signal).toBeInstanceOf(AbortSignal);
+        expect(init.signal?.aborted).toBe(false);
+    });
+
+    it('pushSyncOps surfaces a timeout abort as a plain Error naming the deadline (not SyncAuthError)', async () => {
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new DOMException('signal timed out', 'TimeoutError')));
+        await expect(pushSyncOps('device-1', [])).rejects.toThrow(`${PUSH_TIMEOUT_MS}ms`);
+        await expect(pushSyncOps('device-1', [])).rejects.not.toBeInstanceOf(SyncAuthError);
+    });
+
+    it('pushSyncOps rethrows non-timeout network failures unchanged', async () => {
+        const networkFailure = new TypeError('Failed to fetch');
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(networkFailure));
+        await expect(pushSyncOps('device-1', [])).rejects.toBe(networkFailure);
     });
 });

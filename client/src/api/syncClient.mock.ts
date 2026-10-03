@@ -8,6 +8,8 @@ import type * as actual from './syncClient.ts';
 // module resolution across the whole suite (observed as every worker hanging with near-zero CPU).
 export { BootstrapRequiredError } from './bootstrapRequiredError';
 export { SyncAuthError } from './syncAuthError';
+// Plain constants — real values so the flush under test chunks and times out exactly like production.
+export { PUSH_BATCH_MAX, PUSH_TIMEOUT_MS } from './syncPushLimits';
 
 // Automatically resolved instead of the real syncClient in test runs via the "test"
 // condition in package.json imports. Each export matches the real function's type so

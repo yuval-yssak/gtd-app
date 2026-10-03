@@ -2,9 +2,11 @@ import { API_SERVER } from '../constants/globals';
 import type { EntityType, OpType, SyncOperation } from '../types/MyDB';
 import { BootstrapRequiredError } from './bootstrapRequiredError';
 import { SyncAuthError } from './syncAuthError';
+import { PUSH_TIMEOUT_MS } from './syncPushLimits';
 
 export { BootstrapRequiredError } from './bootstrapRequiredError';
 export { SyncAuthError } from './syncAuthError';
+export { PUSH_BATCH_MAX, PUSH_TIMEOUT_MS } from './syncPushLimits';
 
 // ── Shared server-facing types ────────────────────────────────────────────────
 // Exported so syncHelpers.ts can reference them without importing from this path directly.
@@ -71,8 +73,16 @@ export async function pushSyncOps(deviceId: string, ops: SyncOperation[]): Promi
         credentials: 'include',
         headers: { 'Content-Type': 'application/json', [DEVICE_ID_HEADER]: deviceId },
         body: JSON.stringify({ deviceId, ops }),
+        signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+    }).catch((err: unknown) => {
+        throw isTimeoutAbort(err) ? new Error(`POST /sync/push timed out after ${PUSH_TIMEOUT_MS}ms`) : err;
     });
     if (!res.ok) throwForStatus(res, 'POST /sync/push');
+}
+
+/** `AbortSignal.timeout` rejects the fetch with a DOMException named TimeoutError; the message above names the cause for the sync logs. */
+function isTimeoutAbort(err: unknown): boolean {
+    return err instanceof DOMException && err.name === 'TimeoutError';
 }
 
 export async function fetchBootstrap(deviceId: string, deviceLabel?: string): Promise<BootstrapPayload> {

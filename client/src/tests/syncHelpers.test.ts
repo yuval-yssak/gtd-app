@@ -12,14 +12,16 @@ vi.mock('../db/multiUserSync', () => ({
 }));
 
 import dayjs from 'dayjs';
-import { fetchBootstrap, fetchSyncOps, pushSyncOps } from '#api/syncClient';
-import { SYNC_APPLY_LOCK } from '../db/crossContextLock';
+import { fetchBootstrap, fetchSyncOps, PUSH_BATCH_MAX, pushSyncOps } from '#api/syncClient';
+import { SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK } from '../db/crossContextLock';
 import { syncSingleUser } from '../db/multiUserSync';
 import {
     bootstrapFromServer,
+    DEFAULT_FLUSH_LOCK_WAIT_MS,
     flushSyncQueue,
     pullFromServer,
     queueSyncOp,
+    setFlushLockWaitMs,
     setSessionGateTimeoutMs,
     waitForPendingFlush,
     withSessionGate,
@@ -442,6 +444,234 @@ describe('flushSyncQueue', () => {
 
         const ops = await db.getAll('syncOperations');
         expect(ops).toHaveLength(1);
+    });
+});
+
+// ── flushSyncQueue — cross-context flush lock ──────────────────────────────────
+//
+// Production incident (2026-10-03): a row-level "Mark done" op sat queued for ~100s because the
+// Service Worker's flush held the IDB marker while its push request hung, and every other flush
+// attempt (the click's dispatch, two sync passes, the SW's own retry) saw "held by other" and
+// silently skipped. Nothing re-triggered a push until the user navigated. On Web Lock browsers a
+// flush now QUEUES behind the holder; the IDB marker remains only as the no-Web-Locks fallback.
+
+type LockCallback = () => Promise<unknown>;
+type LockRequestOptions = { signal?: AbortSignal };
+
+/**
+ * A Web Locks stand-in with real queueing semantics: one holder per name, later requests wait in
+ * order, and a `signal` that aborts before the grant rejects the request with the signal's reason
+ * (the waiter leaves the queue; the holder is untouched) — the behaviour `flushUnderWebLock` relies
+ * on. Returns the lock names requested, for wiring assertions.
+ */
+function installQueueingLocks(): string[] {
+    const names: string[] = [];
+    const tails = new Map<string, Promise<void>>();
+    const request = vi.fn((name: string, optionsOrCallback: LockRequestOptions | LockCallback, maybeCallback?: LockCallback) => {
+        names.push(name);
+        const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+        const signal = typeof optionsOrCallback === 'function' ? undefined : optionsOrCallback.signal;
+        if (!callback) {
+            throw new Error('fake locks: callback required');
+        }
+        const previous = tails.get(name) ?? Promise.resolve();
+        return new Promise<unknown>((resolve, reject) => {
+            // Spec: a pre-grant abort rejects with `signal.reason` — the identity `flushUnderWebLock` keys on.
+            const onAbort = () => reject(signal?.reason);
+            signal?.addEventListener('abort', onAbort, { once: true });
+            const tail = previous.then(async () => {
+                if (signal?.aborted) return;
+                signal?.removeEventListener('abort', onAbort);
+                await callback().then(resolve, reject);
+            });
+            tails.set(name, tail);
+        });
+    });
+    Object.defineProperty(navigator, 'locks', { value: { request }, configurable: true });
+    return names;
+}
+
+/** Takes the flush lock as "another context" would; the returned function releases it. */
+function holdFlushLockFromAnotherContext(): () => void {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+    void navigator.locks.request(SYNC_FLUSH_LOCK, () => held);
+    return release;
+}
+
+async function seedQueuedUpdate(entityId: string, userId = USER_ID): Promise<void> {
+    await db.add('syncOperations', {
+        userId,
+        opType: 'update',
+        entityType: 'item',
+        entityId,
+        queuedAt: dayjs().toISOString(),
+        snapshot: { ...makeItem(entityId), userId, status: 'done' },
+    });
+}
+
+/** entityIds of every op in every push call so far, in call order. */
+const pushedEntityIds = () => vi.mocked(pushSyncOps).mock.calls.flatMap(([, ops]) => ops.map((op) => op.entityId));
+
+const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+
+describe('flushSyncQueue — Web Lock path (browsers with navigator.locks)', () => {
+    afterEach(() => {
+        Reflect.deleteProperty(navigator, 'locks');
+        setFlushLockWaitMs(DEFAULT_FLUSH_LOCK_WAIT_MS);
+    });
+
+    it('requests the gtd-sync-flush Web Lock around the push', async () => {
+        const names = installQueueingLocks();
+        await seedQueuedUpdate('wired');
+
+        await flushSyncQueue(db);
+
+        expect(names).toContain(SYNC_FLUSH_LOCK);
+        expect(vi.mocked(pushSyncOps)).toHaveBeenCalledOnce();
+    });
+
+    it("waits for another context's flush to finish, then pushes the op that context left behind", async () => {
+        installQueueingLocks();
+        const releaseOtherContext = holdFlushLockFromAnotherContext();
+        await seedQueuedUpdate('row-done');
+
+        const flushing = flushSyncQueue(db);
+        await settle();
+        // Held → nothing pushed yet, but the op is still queued (not dropped, not skipped).
+        expect(vi.mocked(pushSyncOps)).not.toHaveBeenCalled();
+        expect((await db.getAll('syncOperations')).map((op) => op.entityId)).toEqual(['row-done']);
+
+        releaseOtherContext();
+        await flushing;
+
+        expect(vi.mocked(pushSyncOps)).toHaveBeenCalledOnce();
+        const [call] = vi.mocked(pushSyncOps).mock.calls;
+        if (!call) throw new Error('expected one push');
+        expect(call[1].map((op) => op.entityId)).toEqual(['row-done']);
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+    });
+
+    it('ignores a fresh IDB flush marker — the Web Lock is the only arbiter on these browsers', async () => {
+        installQueueingLocks();
+        // A marker a dead or hung context left behind; the old code skipped for up to 30s on it.
+        await db.put('deviceMeta', { _id: 'local', deviceId: 'device-test', flushingTs: dayjs().toISOString() });
+        await seedQueuedUpdate('stale-marker');
+
+        await flushSyncQueue(db);
+
+        expect(vi.mocked(pushSyncOps)).toHaveBeenCalledOnce();
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+    });
+
+    it('gives up after the bounded wait without throwing, leaving the op queued for the next trigger', async () => {
+        installQueueingLocks();
+        setFlushLockWaitMs(20);
+        const releaseOtherContext = holdFlushLockFromAnotherContext();
+        await seedQueuedUpdate('wedged');
+
+        await expect(flushSyncQueue(db)).resolves.toBeUndefined();
+
+        expect(vi.mocked(pushSyncOps)).not.toHaveBeenCalled();
+        expect((await db.getAll('syncOperations')).map((op) => op.entityId)).toEqual(['wedged']);
+        releaseOtherContext();
+    });
+
+    it('propagates an AbortError thrown by the push itself — only the wait signal\'s own reason means "gave up"', async () => {
+        installQueueingLocks();
+        vi.mocked(pushSyncOps).mockRejectedValueOnce(new DOMException('request aborted', 'AbortError'));
+        await seedQueuedUpdate('aborted-push');
+
+        await expect(flushSyncQueue(db)).rejects.toThrow('request aborted');
+
+        expect((await db.getAll('syncOperations')).map((op) => op.entityId)).toEqual(['aborted-push']);
+    });
+
+    it('does nothing (and releases the lock) when the device has no deviceMeta row yet', async () => {
+        installQueueingLocks();
+        await db.delete('deviceMeta', 'local');
+        await seedQueuedUpdate('pre-device');
+
+        await flushSyncQueue(db);
+        expect(vi.mocked(pushSyncOps)).not.toHaveBeenCalled();
+
+        // Lock released: a later flush (device meta now present) goes straight through.
+        await db.put('deviceMeta', { _id: 'local', deviceId: 'device-test', flushingTs: null });
+        await flushSyncQueue(db);
+        expect(pushedEntityIds()).toEqual(['pre-device']);
+    });
+
+    it('a flush for user A waiting on the lock is not handed to a flush for user B — each scope pushes its own ops', async () => {
+        installQueueingLocks();
+        const releaseOtherContext = holdFlushLockFromAnotherContext();
+        await seedQueuedUpdate('a-op', 'user-a');
+        await seedQueuedUpdate('b-op', 'user-b');
+
+        const flushA = flushSyncQueue(db, { userIdFilter: 'user-a' });
+        const flushB = flushSyncQueue(db, { userIdFilter: 'user-b' });
+        expect(flushB).not.toBe(flushA);
+
+        releaseOtherContext();
+        await Promise.all([flushA, flushB]);
+
+        const calls = vi.mocked(pushSyncOps).mock.calls.map(([, ops]) => ops.map((op) => `${op.userId}:${op.entityId}`));
+        expect(calls).toEqual([['user-a:a-op'], ['user-b:b-op']]);
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+    });
+});
+
+describe('flushSyncQueue — batch cap', () => {
+    it('sends a long queue in PUSH_BATCH_MAX-sized requests, in queue order, until empty', async () => {
+        const total = PUSH_BATCH_MAX * 2 + 20;
+        const ids = Array.from({ length: total }, (_, i) => `op-${String(i).padStart(3, '0')}`);
+        for (const id of ids) {
+            await seedQueuedUpdate(id);
+        }
+
+        await flushSyncQueue(db);
+
+        const sizes = vi.mocked(pushSyncOps).mock.calls.map(([, ops]) => ops.length);
+        expect(sizes).toEqual([PUSH_BATCH_MAX, PUSH_BATCH_MAX, 20]);
+        expect(pushedEntityIds()).toEqual(ids);
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+    });
+
+    it('a failing request leaves that batch and everything after it queued; earlier batches are gone', async () => {
+        const total = PUSH_BATCH_MAX + 5;
+        const ids = Array.from({ length: total }, (_, i) => `op-${String(i).padStart(3, '0')}`);
+        for (const id of ids) {
+            await seedQueuedUpdate(id);
+        }
+        vi.mocked(pushSyncOps).mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('POST /sync/push 503'));
+
+        await expect(flushSyncQueue(db)).rejects.toThrow('503');
+
+        expect((await db.getAll('syncOperations')).map((op) => op.entityId)).toEqual(ids.slice(PUSH_BATCH_MAX));
+    });
+});
+
+describe('flushSyncQueue — IDB marker fallback (no navigator.locks)', () => {
+    it("skips while another context's marker is fresh (cannot wait on a marker)", async () => {
+        await db.put('deviceMeta', { _id: 'local', deviceId: 'device-test', flushingTs: dayjs().toISOString() });
+        await seedQueuedUpdate('held');
+
+        await flushSyncQueue(db);
+
+        expect(vi.mocked(pushSyncOps)).not.toHaveBeenCalled();
+        expect(await db.getAll('syncOperations')).toHaveLength(1);
+    });
+
+    it('takes over a marker older than the 30s TTL and releases it afterwards', async () => {
+        await db.put('deviceMeta', { _id: 'local', deviceId: 'device-test', flushingTs: dayjs().subtract(31, 'second').toISOString() });
+        await seedQueuedUpdate('stale');
+
+        await flushSyncQueue(db);
+
+        expect(vi.mocked(pushSyncOps)).toHaveBeenCalledOnce();
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+        expect((await db.get('deviceMeta', 'local'))?.flushingTs).toBeNull();
     });
 });
 
