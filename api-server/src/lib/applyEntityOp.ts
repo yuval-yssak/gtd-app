@@ -150,7 +150,12 @@ export async function hydrateDeleteSnapshots(userId: string, ops: OperationInter
  * are intentionally absent: `done` keeps the event with a ✓ marker (matrix A8) and `trash`
  * keeps `calendarEventId` on the snapshot, so the existing pushback branches handle both.
  */
-const CALENDAR_DETACH_STATUSES: ReadonlySet<ItemStatus> = new Set([ItemStatus.inbox, ItemStatus.nextAction, ItemStatus.waitingFor, ItemStatus.somedayMaybe]);
+export const CALENDAR_DETACH_STATUSES: ReadonlySet<ItemStatus> = new Set([
+    ItemStatus.inbox,
+    ItemStatus.nextAction,
+    ItemStatus.waitingFor,
+    ItemStatus.somedayMaybe,
+]);
 
 /**
  * Clients strip `calendarEventId`/`timeStart` off the snapshot when clarifying a calendar item

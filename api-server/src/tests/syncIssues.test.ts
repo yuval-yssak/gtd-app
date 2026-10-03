@@ -7,6 +7,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import * as sseConnections from '../lib/sseConnections.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { syncRoutes } from '../routes/sync.js';
 import type {
@@ -363,6 +364,33 @@ describe('POST /sync/issues/:opId/retry', () => {
         expect(patchSpy).toHaveBeenCalledOnce();
         // Successful retry → op row is gone, panel entry clears on next fetch.
         expect(await operationsDAO.findOne({ _id: op._id })).toBeNull();
+    });
+
+    it('a retried create fans the server-stamped link op out to every device (the originating one included)', async () => {
+        const cookie = await loginAsAlice();
+        const userId = await getUserId(cookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        await calendarSyncConfigsDAO.insertOne(makeSyncConfig(userId));
+        // The create that failed transiently: the row exists but was never linked.
+        const {
+            calendarEventId: _e,
+            calendarIntegrationId: _i,
+            calendarSyncConfigId: _c,
+            ...unlinked
+        } = makeCalendarItem(userId, `item-${crypto.randomUUID()}`);
+        await itemsDAO.insertOne(unlinked);
+        const op = makeFailedOp(userId, { entityId: unlinked._id as string, opType: 'create', snapshot: unlinked, failureReason: 'transient_exhausted' });
+        await operationsDAO.insertOne(op);
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createEvent').mockResolvedValue({ eventId: 'gcal-evt-retried' });
+        const sseSpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: `/sync/issues/${op._id}/retry`, sessionCookie: cookie });
+        expect(res.status).toBe(200);
+
+        expect((await itemsDAO.findByOwnerAndId(unlinked._id as string, userId))?.calendarEventId).toBe('gcal-evt-retried');
+        // The link stamp is a server op: no source device to echo-suppress.
+        const linkFanOut = sseSpy.mock.calls.find(([user, payload]) => user === userId && payload.sourceDeviceId === undefined);
+        expect(linkFanOut).toBeDefined();
     });
 
     it('re-marks syncFailed when the retry hits the same failure again', async () => {

@@ -494,6 +494,142 @@ describe('pullFromServer — item ops', () => {
         expect(item?.updatedTs).toBe('2025-06-01T00:00:00.000Z');
     });
 
+    it('an older link-stamp op still hands its Google link to a newer local calendar/done row (field-level merge)', async () => {
+        // The incident shape: the device completed the item before pulling the link the server
+        // stamped after the Google create. Whole-row LWW keeps the local row — but the server-owned
+        // calendar fields must land, or every later edit this device pushes lacks the link.
+        await db.put('items', {
+            ...makeItem('item-link', '2025-06-01T00:00:30.000Z'),
+            status: 'done',
+            title: 'done locally',
+            timeStart: '2025-06-02T10:00:00Z',
+        });
+
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'item',
+                    entityId: 'item-link',
+                    opType: 'update',
+                    snapshot: {
+                        ...serverItem('item-link', '2025-06-01T00:00:05.000Z'),
+                        status: 'calendar',
+                        calendarEventId: 'gtd-evt-link',
+                        calendarIntegrationId: 'integ-1',
+                        calendarSyncConfigId: 'cfg-1',
+                        htmlLink: 'https://calendar.google.com/event?eid=link',
+                        lastPushedToGCalTs: '2025-06-01T00:00:05.000Z',
+                    },
+                },
+            ],
+            serverTs: '2025-06-01T00:00:30.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const item = await db.get('items', 'item-link');
+        expect(item?.status).toBe('done');
+        expect(item?.title).toBe('done locally');
+        expect(item?.updatedTs).toBe('2025-06-01T00:00:30.000Z');
+        expect(item?.calendarEventId).toBe('gtd-evt-link');
+        expect(item?.calendarIntegrationId).toBe('integ-1');
+        expect(item?.calendarSyncConfigId).toBe('cfg-1');
+        expect(item?.htmlLink).toBe('https://calendar.google.com/event?eid=link');
+        expect(item?.lastPushedToGCalTs).toBe('2025-06-01T00:00:05.000Z');
+    });
+
+    it('does not hand a source account’s link to a target-owned row (cross-account reassign replays the source’s older ops)', async () => {
+        // Multi-account device: the target account's pull landed the reassigned (link-less) row first;
+        // the source account's pull then replays an older update op that still carries the source's link.
+        await db.put('items', { ...makeItem('item-reassigned', '2025-06-01T00:00:30.000Z'), userId: 'user-target', status: 'calendar' });
+
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'item',
+                    entityId: 'item-reassigned',
+                    opType: 'update',
+                    snapshot: {
+                        ...serverItem('item-reassigned', '2025-06-01T00:00:05.000Z'),
+                        status: 'calendar',
+                        calendarEventId: 'gtd-evt-source',
+                        calendarIntegrationId: 'integ-source',
+                    },
+                },
+            ],
+            serverTs: '2025-06-01T00:00:30.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const item = await db.get('items', 'item-reassigned');
+        expect(item?.userId).toBe('user-target');
+        expect(item?.calendarEventId).toBeUndefined();
+        expect(item?.calendarIntegrationId).toBeUndefined();
+    });
+
+    it('does not mix two links: a local row re-targeted to another calendar ignores an older stamp for the first one', async () => {
+        await db.put('items', {
+            ...makeItem('item-retargeted', '2025-06-01T00:00:30.000Z'),
+            status: 'calendar',
+            calendarIntegrationId: 'integ-2',
+            calendarSyncConfigId: 'cfg-2',
+        });
+
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'item',
+                    entityId: 'item-retargeted',
+                    opType: 'update',
+                    snapshot: {
+                        ...serverItem('item-retargeted', '2025-06-01T00:00:05.000Z'),
+                        status: 'calendar',
+                        calendarEventId: 'gtd-evt-integ-1',
+                        calendarIntegrationId: 'integ-1',
+                        calendarSyncConfigId: 'cfg-1',
+                        htmlLink: 'https://calendar.google.com/event?eid=integ-1',
+                    },
+                },
+            ],
+            serverTs: '2025-06-01T00:00:30.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const item = await db.get('items', 'item-retargeted');
+        expect(item?.calendarEventId).toBeUndefined();
+        expect(item?.htmlLink).toBeUndefined();
+        expect(item?.calendarIntegrationId).toBe('integ-2');
+        expect(item?.calendarSyncConfigId).toBe('cfg-2');
+    });
+
+    it('does not re-link a newer local row the user detached (calendar → nextAction) from an older link-stamp op', async () => {
+        await db.put('items', { ...makeItem('item-detached', '2025-06-01T00:00:30.000Z'), status: 'nextAction' });
+
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'item',
+                    entityId: 'item-detached',
+                    opType: 'update',
+                    snapshot: { ...serverItem('item-detached', '2025-06-01T00:00:05.000Z'), status: 'calendar', calendarEventId: 'gtd-evt-detached' },
+                },
+            ],
+            serverTs: '2025-06-01T00:00:30.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const item = await db.get('items', 'item-detached');
+        expect(item?.status).toBe('nextAction');
+        expect(item?.calendarEventId).toBeUndefined();
+    });
+
     it('update op with EQUAL updatedTs replaces the local version (tie goes to the incoming snapshot)', async () => {
         // Pins the `<=` in incomingWinsLww (mirrored server-side in applyEntityOp.ts): ties
         // converge across devices because every device replays the same ordered op log, so the

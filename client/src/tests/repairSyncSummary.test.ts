@@ -12,6 +12,7 @@ const zeroCounts: RelinkSweepCounts = {
     trashedItems: 0,
     deactivatedRoutines: 0,
     clearedMarkers: 0,
+    relinkedDoneItems: 0,
 };
 
 describe('summarizeRepair', () => {
@@ -22,6 +23,11 @@ describe('summarizeRepair', () => {
     it('lists only the non-zero categories, comma-separated', () => {
         const summary = summarizeRepair({ ...zeroCounts, relinkedItems: 2, recreatedEvents: 1 });
         expect(summary).toBe('Repaired: 2 items relinked, 1 event recreated on Google.');
+    });
+
+    it('reports done items whose lost Google link was repaired', () => {
+        expect(summarizeRepair({ ...zeroCounts, relinkedDoneItems: 1 })).toBe('Repaired: 1 completed item marked done on Google.');
+        expect(summarizeRepair({ ...zeroCounts, relinkedDoneItems: 3 })).toBe('Repaired: 3 completed items marked done on Google.');
     });
 
     it('pluralizes correctly at exactly one', () => {
@@ -116,6 +122,7 @@ describe('addRepairCounts', () => {
             trashedItems: 1,
             deactivatedRoutines: 0,
             clearedMarkers: 4,
+            relinkedDoneItems: 0,
         });
     });
 });

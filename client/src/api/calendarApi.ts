@@ -64,6 +64,8 @@ export interface RelinkSweepCounts {
     trashedItems: number;
     deactivatedRoutines: number;
     clearedMarkers: number;
+    /** Done items re-linked to the Google event they had lost before the link round-tripped. */
+    relinkedDoneItems: number;
 }
 
 /**
@@ -73,7 +75,10 @@ export interface RelinkSweepCounts {
  */
 export async function relinkCalendarMarkers(): Promise<RelinkSweepCounts> {
     const res = await apiFetch('/maintenance/relink-calendar-markers', { method: 'POST' });
-    return res.json();
+    const counts = (await res.json()) as Omit<RelinkSweepCounts, 'relinkedDoneItems'> & Partial<Pick<RelinkSweepCounts, 'relinkedDoneItems'>>;
+    // Client and API deploy separately — an API that predates the done-item repair omits the field,
+    // and an `undefined` here would turn the summed totals into NaN.
+    return { ...counts, relinkedDoneItems: counts.relinkedDoneItems ?? 0 };
 }
 
 export async function deleteIntegration(integrationId: string, action: UnlinkAction): Promise<void> {

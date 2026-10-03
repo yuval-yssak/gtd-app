@@ -41,7 +41,7 @@ import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materia
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { closeSseConnections, getOpenSseUserIds } from './sseClient';
-import { flushSyncQueue, waitForPendingFlush } from './syncHelpers';
+import { flushSyncQueue, pullFromServer, waitForPendingFlush } from './syncHelpers';
 import { getWorkContextsByUser } from './workContextHelpers';
 import { createWorkContext } from './workContextMutations';
 
@@ -177,6 +177,10 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // pivots the active session before its pull — without that, only the active account gets
         // fresh data and other accounts' channels are silently missed.
         pull: () => syncAllLoggedInUsers(db),
+        // Pull for the active account WITHOUT the flush the orchestrator runs first. Lets a spec
+        // observe what a pull does to a row whose own edit is still queued (the orchestrator would
+        // push that edit first, and its echo would mask the pull's own effect).
+        pullOnly: async () => pullFromServer(db, await resolveUserId(db)),
         // The production resolved-broadcast (same call auth.callback makes after an OAuth
         // re-login) — exposed so e2e can drive the real cross-tab clear path, not a hand-rolled
         // localStorage payload that could drift from the implementation.
@@ -244,6 +248,7 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         '\n  __gtd.listItems()                      → all items',
         '\n  __gtd.flush()                          → push queue to server',
         '\n  __gtd.pull()                           → pull from server',
+        '\n  __gtd.pullOnly()                       → pull for the active account, no flush first',
         '\n  __gtd.syncState()                      → device cursor + deviceId',
         '\n  __gtd.sseChannelUserIds()              → userIds with a live SSE channel',
         '\n  __gtd.closeSse()                       → drop SSE channels (simulates an OS freeze)',

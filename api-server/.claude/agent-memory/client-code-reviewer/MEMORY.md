@@ -7,3 +7,4 @@
 - [Stale row snapshot write-back](feedback_stale_row_snapshot_write_back.md) — Row quick-actions spread the rendered entity into a full-snapshot LWW update, reverting concurrent remote edits; dialogs use a live ref.
 - [Module-singleton stale snapshot](feedback_module_singleton_stale_snapshot.md) — Store seeds its snapshot at import but only refreshes on an event; the import→first-subscriber gap serves stale data.
 - [TZ-dependent date tests](feedback_tz_dependent_date_tests.md) — Client date tests pass only in the author's positive-offset TZ; always re-run with TZ=America/New_York.
+- [Client mirror drops owner scope](feedback_client_mirror_drops_owner_scope.md) — Client ports of server merge rules lose owner/event-identity scoping; check userId guard + unit-group merge + e2e discrimination.

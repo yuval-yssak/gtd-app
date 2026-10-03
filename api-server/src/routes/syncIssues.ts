@@ -5,6 +5,7 @@ import operationsDAO from '../dataAccess/operationsDAO.js';
 import { buildCalendarProvider } from '../lib/buildCalendarProvider.js';
 import { maybePushToGCal } from '../lib/calendarPushback.js';
 import { entityDisplayName } from '../lib/entityDisplayName.js';
+import { notifyChanges } from '../lib/notifyChange.js';
 import { allocateOpIdentity } from '../lib/opIdentity.js';
 import { replayRsvpOp } from '../lib/rsvpReplay.js';
 import { hasAtLeastOne } from '../lib/typeUtils.js';
@@ -165,8 +166,10 @@ export const syncIssuesRoutes = new Hono<{ Variables: AuthVariables }>()
             await replayRsvpOp(user.id, retried, buildCalendarProvider);
         } else {
             // update / create on a calendar entity — re-fire the generic pushback. Awaited (not
-            // fire-and-forget) so the response can report success/failure to the panel.
-            await maybePushToGCal(retried, buildCalendarProvider);
+            // fire-and-forget) so the response can report success/failure to the panel. A retried
+            // create stamps the Google link server-side; fan that op out so every device learns it.
+            const recordedOps = await maybePushToGCal(retried, buildCalendarProvider);
+            await notifyChanges(recordedOps, { suppressGCalPushback: true });
         }
 
         // Re-read the post-replay op. If `syncFailed` is back, the retry failed again — leave the

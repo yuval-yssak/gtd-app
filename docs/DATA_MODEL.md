@@ -150,6 +150,8 @@ Storing full snapshots (not diffs) keeps conflict resolution simple: for any ent
 
 All entities carry `updatedTs`. When two devices make conflicting changes to the same entity while offline, the server applies last-write-wins: whichever operation has the later `ts` is the authoritative state.
 
+One field-level exception: the server-owned calendar fields of an item (`calendarEventId`, `calendarIntegrationId`, `calendarSyncConfigId`, `htmlLink`, `calendarInstanceEventId`, `lastPushedToGCalTs`, `lastSyncedNotes`, `lastSyncedFromGCalTs`) are never erased by a client snapshot that lacks them. The server merges them from the stored row before applying an item op in `calendar`/`done`/`trash` (`api-server/src/lib/calendarLinkCarryForward.ts`), and a device merges them from an older pulled snapshot into a newer local row (`client/src/db/calendarLinkMerge.ts`). A client only ever lacks them because it has not pulled the server's link stamp yet; the one intentional removal — clarifying a calendar item to an active non-calendar status — is excluded on both sides.
+
 ### Device sync state
 
 Each device registers itself in `DeviceSyncStateInterface` with a stable UUID generated on first launch. The server tracks:

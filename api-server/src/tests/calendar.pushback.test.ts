@@ -471,9 +471,7 @@ describe('calendar push-back — routine instance overrides', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
         // maybePushToGCal must resolve (not reject) — the 404 is swallowed inside the provider.
-        await expect(
-            maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider()),
-        ).resolves.toBeUndefined();
+        await expect(maybePushToGCal(makeOp(userId, { entityType: 'item', entityId: item._id!, snapshot: item }), mockBuildProvider())).resolves.toEqual([]);
         expect(patchSpy).toHaveBeenCalledOnce();
         // Log parity: the drift case warns just like a missed findInstanceId lookup.
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('no longer exists (404) — skipping'));
@@ -1170,7 +1168,7 @@ describe('calendar push-back — routines', () => {
         // Must not throw: provider failure is best-effort.
         await expect(
             maybePushToGCal(makeOp(userId, { entityType: 'routine', entityId: routine._id, opType: 'delete', snapshot: routine }), mockBuildProvider()),
-        ).resolves.toBeUndefined();
+        ).resolves.toEqual([]);
 
         const item = await itemsDAO.findOne({ _id: 'gen-err' });
         expect(item?.status).toBe('trash');

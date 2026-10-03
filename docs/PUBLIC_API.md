@@ -740,7 +740,7 @@ Subscribe a URL to receive signed POST notifications when items change. Useful f
 | Event | Fires when |
 |---|---|
 | `item.created` | A new `inbox` item is captured (via `POST /v1/items` or `POST /v1/items/bulk`). |
-| `item.completed` | An item transitions to `done` (via `POST /v1/items/:id/complete`). |
+| `item.completed` | An item transitions to `done` (via `POST /v1/items/:id/complete`). May repeat for the same item: any later update op whose snapshot is still `done` fires it again — an edit of a done item, or the server's Google-link stamp landing on an item that was completed while its calendar event was being created. Consumers should treat it as idempotent. |
 
 ### Delivery contract
 

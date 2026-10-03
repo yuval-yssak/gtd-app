@@ -20,6 +20,7 @@ import type {
     SyncOperation,
 } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
+import { mergeServerOwnedCalendarFields } from './calendarLinkMerge';
 import { SYNC_APPLY_LOCK, withCrossContextLock } from './crossContextLock';
 import { getOrCreateDeviceId, getSyncCursor, setSyncCursor } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
@@ -644,10 +645,35 @@ async function applyEntityOp<Name extends EntityStoreName>(db: IDBPDatabase<MyDB
         console.log(
             `[debug-gcal-sync][client] applyEntityOp put | type=${op.entityType} id=${op.entityId} existingTs=${existing?.updatedTs ?? 'none'} incomingTs=${incoming.updatedTs}`,
         );
-    } else {
-        console.log(
-            `[debug-gcal-sync][client] applyEntityOp skipped (LWW) | type=${op.entityType} id=${op.entityId} existingTs=${existing.updatedTs} incomingTs=${incoming.updatedTs}`,
-        );
+        await tx.done;
+        return;
+    }
+    console.log(
+        `[debug-gcal-sync][client] applyEntityOp skipped (LWW) | type=${op.entityType} id=${op.entityId} existingTs=${existing.updatedTs} incomingTs=${incoming.updatedTs}`,
+    );
+    // The lost snapshot may still carry server-owned calendar fields this device never saw (the
+    // Google link stamped after the create) — merge those in without touching the newer local state.
+    const merged = mergeServerOwnedFieldsIntoNewerRow(storeName, existing, incoming);
+    if (merged) {
+        await tx.store.put(merged);
+        console.log(`[debug-gcal-sync][client] applyEntityOp merged server-owned calendar fields into newer local row | id=${op.entityId}`);
     }
     await tx.done;
+}
+
+/**
+ * Store-dispatched wrapper around `mergeServerOwnedCalendarFields`: only the items store has
+ * server-owned calendar fields today. The casts narrow the generic store value to `StoredItem`
+ * once `storeName` has proven it — the same trust the caller places in the wire snapshot.
+ */
+function mergeServerOwnedFieldsIntoNewerRow<Name extends EntityStoreName>(
+    storeName: Name,
+    existing: { updatedTs: string; userId: string },
+    incoming: MyDB[Name]['value'],
+): MyDB[Name]['value'] | null {
+    if (storeName !== 'items') {
+        return null;
+    }
+    const merged = mergeServerOwnedCalendarFields(existing as StoredItem, incoming as StoredItem);
+    return merged as MyDB[Name]['value'] | null;
 }

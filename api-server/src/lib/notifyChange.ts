@@ -61,9 +61,7 @@ export async function notifyChange(op: OperationInterface, opts: NotifyChangeOpt
     // Suppressed when the caller has already managed the GCal side-effect inline (today: the
     // cross-account calendar-item reassign in `lib/reassignEntity.ts`).
     if (!opts.suppressGCalPushback) {
-        void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
-            console.error('[notify-change] gcal pushback failed', { opId: op._id, opType: op.opType, err });
-        });
+        pushToGCalAndFanOutRecordedOps(op);
     }
 
     // Webhook fan-out — fire-and-forget. A Mongo blip enqueueing deliveries should not fail the
@@ -71,6 +69,21 @@ export async function notifyChange(op: OperationInterface, opts: NotifyChangeOpt
     void enqueueWebhookDeliveries(op).catch((err) => {
         console.error('[notify-change] webhook enqueue failed', { opId: op._id, opType: op.opType, err });
     });
+}
+
+/**
+ * The GCal leg, fire-and-forget. Ops the push recorded server-side (the link stamp after a Google
+ * create) get their own fan-out — to EVERY device, the originating one included: it is a different
+ * op than the one that device pushed, so the own-echo rule does not apply, and without it the
+ * device learns the link only on its next scheduled pull and may edit the item in between. The
+ * stamp is bookkeeping with nothing to push, so its GCal leg is suppressed (no recursion).
+ */
+function pushToGCalAndFanOutRecordedOps(op: OperationInterface): void {
+    void maybePushToGCal(op, buildCalendarProvider)
+        .then((recordedOps) => notifyChanges(recordedOps, { suppressGCalPushback: true }))
+        .catch((err) => {
+            console.error('[notify-change] gcal pushback failed', { opId: op._id, opType: op.opType, err });
+        });
 }
 
 /**
@@ -105,9 +118,7 @@ export async function notifyChanges(ops: OperationInterface[], opts: NotifyChang
     // GCal + webhook fan-out per op (each leg is fire-and-forget).
     for (const op of ops) {
         if (!opts.suppressGCalPushback && !opts.suppressGCalPushbackFor?.has(op._id)) {
-            void maybePushToGCal(op, buildCalendarProvider).catch((err) => {
-                console.error('[notify-change] gcal pushback failed', { opId: op._id, opType: op.opType, err });
-            });
+            pushToGCalAndFanOutRecordedOps(op);
         }
         void enqueueWebhookDeliveries(op).catch((err) => {
             console.error('[notify-change] webhook enqueue failed', { opId: op._id, opType: op.opType, err });

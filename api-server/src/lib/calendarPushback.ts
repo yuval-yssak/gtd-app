@@ -14,6 +14,7 @@ import type {
     OpType,
     RoutineInterface,
 } from '../types/entities.js';
+import { CALENDAR_DETACH_STATUSES } from './applyEntityOp.js';
 import { withAuthFailureHandling } from './calendarAuthEscalation.js';
 import { integrationStatus } from './calendarIntegrationStatus.js';
 import { propagateRoutineNotesToItems } from './calendarItemNotes.js';
@@ -84,9 +85,11 @@ interface HealContext {
  * Inspects a server operation and pushes calendar-relevant changes back to Google Calendar.
  * Called fire-and-forget from the sync push handler — errors are logged, not thrown to the caller.
  * Picks up `op.gcalMeta.sendUpdates` (populated by the client's SendUpdatesDialog choice) and
- * threads it through to the provider call; absent → defaults to `'none'`.
+ * threads it through to the provider call; absent → defaults to `'none'`. Resolves to the ops the
+ * push recorded server-side (the post-create link stamp) for the caller to fan out — see
+ * `recordedOpsOf`.
  */
-export async function maybePushToGCal(op: OperationInterface, buildProvider: ProviderFactory): Promise<void> {
+export async function maybePushToGCal(op: OperationInterface, buildProvider: ProviderFactory): Promise<OperationInterface[]> {
     // OperationInterface.snapshot is a union of all entity types — TypeScript cannot narrow it
     // via entityType since it's not a discriminated union. The casts below are safe because
     // the entityType check guarantees the snapshot shape.
@@ -104,7 +107,7 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
             handleItemDelete(deleteSnapshot, op.user, buildProvider),
         );
         await surfacePushFailure(op, outcome);
-        return;
+        return [];
     }
     // Calendar → active-status transition (nextAction/somedayMaybe/waitingFor/inbox). The update
     // snapshot itself carries no GCal linkage anymore (the status matrix stripped it), so the
@@ -116,17 +119,29 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
             removeItemGCalPresence(detachedCalendar, op.user, buildProvider),
         );
         await surfacePushFailure(op, outcome);
-        return;
+        return [];
     }
     if (op.entityType === 'item' && op.snapshot) {
         const outcome = await handleItemPush(op.snapshot as ItemInterface, op.user, buildProvider, sendUpdates);
         await surfacePushFailure(op, outcome);
-        return;
+        return recordedOpsOf(outcome);
     }
     if (op.entityType === 'routine' && op.snapshot) {
         const outcome = await handleRoutinePush(op.snapshot as RoutineInterface, op.user, op.opType, op._id, op.ts, buildProvider);
         await surfacePushFailure(op, outcome);
+        return recordedOpsOf(outcome);
     }
+    return [];
+}
+
+/**
+ * The ops a push recorded on the server's behalf — today the link stamp after a Google create
+ * (`stampItemCalendarLink` / the routine equivalent). The caller must fan them out to every
+ * device, the originating one included: until it pulls the link, its next edit of the entity
+ * ships a snapshot without it (see `hydrateCalendarLinkCarryForward` for the server-side guard).
+ */
+export function recordedOpsOf(outcome: PushOutcome | undefined): OperationInterface[] {
+    return [outcome?.recordedOp, outcome?.followUpOp].filter((op): op is OperationInterface => op !== undefined);
 }
 
 /**
@@ -137,7 +152,7 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
  * rate-limit 403/unknown/network → transient_exhausted (Retry, which re-fires the idempotent push
  * via `maybePushToGCal`). No retry loop runs here — the first throw is surfaced.
  */
-async function surfacePushFailure(op: OperationInterface, outcome: PushOutcome | undefined): Promise<void> {
+export async function surfacePushFailure(op: OperationInterface, outcome: PushOutcome | undefined): Promise<void> {
     if (outcome?.status !== 'failed') {
         return;
     }
@@ -233,7 +248,11 @@ async function removeItemGCalPresence(snapshot: ItemInterface, userId: string, b
 
 // ── Item push-back ───────────────────────────────────────────────────────────
 
-async function handleItemPush(
+/**
+ * Status-dispatched push of one item snapshot. Exported for the repair sweeps in
+ * `routes/calendar.ts`, which push rows they just relinked through the same guards as a live op.
+ */
+export async function handleItemPush(
     snapshot: ItemInterface,
     userId: string,
     buildProvider: ProviderFactory,
@@ -625,11 +644,139 @@ export type PushOutcome = {
     status: 'created' | 'already-linked' | 'skipped' | 'relinked' | 'failed';
     eventId?: string;
     recordedOp?: OperationInterface;
+    /** A second server-recorded op from a create whose row moved on mid-flight (see `pushStateReachedDuringCreate`). */
+    followUpOp?: OperationInterface;
     /** Present when status === 'failed' — capped error summary for the op row / SyncIssuesPanel. */
     failureDetail?: string;
     /** Raw provider error when status === 'failed' — categorized by the caller into an OpFailureReason. */
     failureError?: unknown;
 };
+
+/**
+ * True when the row's user-visible state no longer matches the snapshot the create was built from:
+ * a done / edit / trash / detach op applied while `events.insert` was in flight. Compared on content
+ * rather than `updatedTs` because the link stamp itself re-stamps `updatedTs`.
+ */
+function rowMovedOnDuringCreate(pushed: ItemInterface, row: ItemInterface): boolean {
+    return (
+        pushed.status !== row.status ||
+        pushed.title !== row.title ||
+        pushed.timeStart !== row.timeStart ||
+        pushed.timeEnd !== row.timeEnd ||
+        (pushed.notes ?? '') !== (row.notes ?? '') ||
+        Boolean(pushed.allDay) !== Boolean(row.allDay)
+    );
+}
+
+/**
+ * Closes the in-flight window of a create: an op that applied while `events.insert` was running
+ * found a row with no link, so its own pushback matched no branch (done/edit) or was skipped by
+ * the in-flight guard — Google holds the create-time state and nothing would ever re-push it (the
+ * stamp's `lastPushedToGCalTs` even hides the row from the missed-push sweep). Once the row is
+ * linked, push its CURRENT state through the ordinary linked-item paths: done → ✓ marker, edit →
+ * update, trash → delete; a detach status means the event must go again and the link we just
+ * stamped onto a non-calendar row must come off. A failure surfaces on the driving create op, and
+ * its Retry re-enters through the `already-linked` branch, which runs this again.
+ */
+async function pushStateReachedDuringCreate(
+    pushed: ItemInterface,
+    linkedRow: ItemInterface,
+    userId: string,
+    ctx: PushContext,
+    sendUpdates: 'all' | 'none',
+): Promise<PushOutcome | undefined> {
+    if (!rowMovedOnDuringCreate(pushed, linkedRow)) {
+        return undefined;
+    }
+    console.log(`[gcal-pushback] row moved on while its create was in flight — pushing current state | itemId=${linkedRow._id} status=${linkedRow.status}`);
+    if (CALENDAR_DETACH_STATUSES.has(linkedRow.status)) {
+        return await captureFailedOutcome(`post-create removal for detached item ${linkedRow._id}`, () =>
+            removeEventOfRowDetachedDuringCreate(linkedRow, userId, ctx),
+        );
+    }
+    return await handleItemPush(linkedRow, userId, () => ctx.provider, sendUpdates);
+}
+
+/** Deletes the just-created event of a row that left the calendar mid-flight and clears the link the stamp put on it. */
+async function removeEventOfRowDetachedDuringCreate(row: ItemInterface, userId: string, ctx: PushContext): Promise<PushOutcome | undefined> {
+    if (!row._id || !row.calendarEventId) {
+        return undefined;
+    }
+    await withAuthFailureHandling(ctx.integration._id, () => ctx.provider.deleteEvent(ctx.config.calendarId, row.calendarEventId as string));
+    const now = dayjs().toISOString();
+    await itemsDAO.updateOne(
+        { _id: row._id, user: userId },
+        { $set: { updatedTs: now }, $unset: { calendarEventId: '', calendarIntegrationId: '', calendarSyncConfigId: '', htmlLink: '' } },
+    );
+    const unlinked = await itemsDAO.findByOwnerAndId(row._id, userId);
+    const recordedOp = unlinked
+        ? await recordOperation(userId, { entityType: 'item', entityId: row._id, snapshot: unlinked, opType: 'update', now })
+        : undefined;
+    return { status: 'skipped', ...(recordedOp ? { recordedOp } : {}) };
+}
+
+/** Folds a follow-up push into the create outcome: its op rides along, and its failure becomes the create's. */
+function withFollowUp(created: PushOutcome, followUp: PushOutcome | undefined): PushOutcome {
+    if (!followUp) {
+        return created;
+    }
+    const followUpOp = followUp.recordedOp ? { followUpOp: followUp.recordedOp } : {};
+    if (followUp.status !== 'failed') {
+        return { ...created, ...followUpOp };
+    }
+    return {
+        ...created,
+        ...followUpOp,
+        status: 'failed',
+        ...(followUp.failureDetail !== undefined ? { failureDetail: followUp.failureDetail } : {}),
+        ...(followUp.failureError !== undefined ? { failureError: followUp.failureError } : {}),
+    };
+}
+
+/** The item whose link is being stamped, plus the notes HTML that just went to Google (echo baseline). */
+interface LinkStampTarget {
+    userId: string;
+    itemId: string;
+    lastSyncedNotes?: string;
+}
+
+/** The Google event an item is now linked to — the three ids plus the deep link when the insert returned one. */
+export interface ItemCalendarLink {
+    calendarEventId: string;
+    calendarIntegrationId: string;
+    calendarSyncConfigId: string;
+    htmlLink?: string;
+}
+
+/**
+ * Writes the Google link onto the item after a successful create and records the op other devices
+ * learn it from. The server-stamped `updatedTs` makes the link win last-write-wins on every device
+ * that has not edited the item since; a device that HAS keeps its newer row, which is why the apply
+ * pipeline carries these fields forward (`hydrateCalendarLinkCarryForward`) and the client merges
+ * them into a newer local row. Exported for the dev seam that stands in for a Google create in e2e.
+ * Returns the recorded op, or undefined when the item vanished between the create and the stamp.
+ */
+export async function stampItemCalendarLink(target: LinkStampTarget, link: ItemCalendarLink): Promise<OperationInterface | undefined> {
+    const now = dayjs().toISOString();
+    await itemsDAO.updateOne(
+        { _id: target.itemId, user: target.userId },
+        {
+            $set: {
+                // `htmlLink` rides in the same write (and the same recorded op) as the link ids, so the
+                // "Open in Google Calendar" affordance costs no extra op or GCal round-trip.
+                ...link,
+                lastPushedToGCalTs: now,
+                updatedTs: now,
+                ...(target.lastSyncedNotes !== undefined ? { lastSyncedNotes: target.lastSyncedNotes } : {}),
+            },
+        },
+    );
+    const updated = await itemsDAO.findByOwnerAndId(target.itemId, target.userId);
+    if (!updated) {
+        return undefined;
+    }
+    return await recordOperation(target.userId, { entityType: 'item', entityId: target.itemId, snapshot: updated, opType: 'update', now });
+}
 
 /** Creates a new Google Calendar event for an app-created calendar item. */
 async function pushNewItemToGCal(
@@ -703,7 +850,10 @@ export async function pushItemToGCalWithContext(
         const current = await itemsDAO.findByOwnerAndId(snapshot._id, userId);
         if (current?.calendarEventId) {
             console.log(`[gcal-pushback] item ${snapshot._id} already linked to GCal event ${current.calendarEventId} — skipping create`);
-            return { status: 'already-linked', eventId: current.calendarEventId };
+            // A retried create (SyncIssues Retry after a failed follow-up) lands here with a row that
+            // moved on since; the follow-up below is what brings Google up to date.
+            const followUp = await pushStateReachedDuringCreate(snapshot, current, userId, ctx, options?.sendUpdates ?? 'none');
+            return withFollowUp({ status: 'already-linked', eventId: current.calendarEventId }, followUp);
         }
 
         const { provider, config, integration, timeZone } = ctx;
@@ -735,29 +885,14 @@ export async function pushItemToGCalWithContext(
             { eventId: deterministicId },
         );
 
-        const now = dayjs().toISOString();
-        await itemsDAO.updateOne(
-            { _id: snapshot._id, user: userId },
-            {
-                $set: {
-                    calendarEventId,
-                    calendarIntegrationId: integration._id,
-                    calendarSyncConfigId: config._id,
-                    // Stored in the same write (and the same recorded op) as the link fields, so the
-                    // "Open in Google Calendar" affordance costs no extra op or GCal round-trip.
-                    ...(htmlLink ? { htmlLink } : {}),
-                    lastPushedToGCalTs: now,
-                    updatedTs: now,
-                    ...(snapshot.notes !== undefined ? { lastSyncedNotes: markdownToHtml(snapshot.notes) } : {}),
-                },
-            },
+        const recordedOp = await stampItemCalendarLink(
+            { userId, itemId: snapshot._id, ...(snapshot.notes !== undefined ? { lastSyncedNotes: markdownToHtml(snapshot.notes) } : {}) },
+            { calendarEventId, calendarIntegrationId: integration._id, calendarSyncConfigId: config._id, ...(htmlLink ? { htmlLink } : {}) },
         );
-        // Record an operation so other devices learn about the newly-linked calendar event ID.
-        const updated = await itemsDAO.findByOwnerAndId(snapshot._id, userId);
-        const recordedOp = updated
-            ? await recordOperation(userId, { entityType: 'item', entityId: snapshot._id, snapshot: updated, opType: 'update', now })
-            : undefined;
-        return { status: 'created', eventId: calendarEventId, ...(recordedOp ? { recordedOp } : {}) };
+        const created: PushOutcome = { status: 'created', eventId: calendarEventId, ...(recordedOp ? { recordedOp } : {}) };
+        const stampedRow = recordedOp?.snapshot as ItemInterface | undefined;
+        const followUp = stampedRow ? await pushStateReachedDuringCreate(snapshot, stampedRow, userId, ctx, sendUpdates) : undefined;
+        return withFollowUp(created, followUp);
     } catch (err) {
         console.error(`[calendar-pushback] failed to create GCal event for item ${snapshot._id}:`, err);
         // 'failed' (not 'skipped') so the caller can mark the driving op syncFailed — the

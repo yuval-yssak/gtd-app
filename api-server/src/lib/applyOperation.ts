@@ -5,6 +5,7 @@ import type { EntitySnapshot, EntityType, OperationInterface, OpFailureReason, O
 import { type ApplyEntityOpOutcome, applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { maybeScheduleInlineBriefs } from './brief/briefInlineHook.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
+import { hydrateCalendarLinkCarryForward } from './calendarLinkCarryForward.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
 import { allocateOpIdentity } from './opIdentity.js';
 import { maybeCascadeReferenceRemoval } from './referenceCascades.js';
@@ -62,6 +63,15 @@ export interface ApplyOptions {
      * untouched" test in applyOperation.test.ts).
      */
     serverStampUpdatedTs?: boolean;
+    /**
+     * Skip `hydrateCalendarLinkCarryForward`. The carry-forward exists for CLIENT-built snapshots,
+     * which lack a server-owned calendar field only because the device has not pulled it yet. A
+     * server path that builds its snapshots from the stored rows and omits such a field on purpose —
+     * today the routine pause, which frees `calendarInstanceEventId` on the items it trashes so the
+     * `(user, calendarInstanceEventId)` unique index lets a resume regenerate them — must set this,
+     * or the hydrator puts the field straight back.
+     */
+    skipCalendarLinkCarryForward?: boolean;
 }
 
 /** Return shape of `applyAndPublishOperations`: persisted ops + index-aligned apply outcomes. */
@@ -249,6 +259,14 @@ export async function applyAndPublishOperationWithOutcome(userId: string, raw: R
     // Must also run before `applyEntityOp` — afterwards the linkage is gone from the DB too.
     await hydrateCalendarDetachSnapshots(userId, [op]);
 
+    // Step 3c — calendar-link carry-forward. A snapshot that never learned the server-stamped
+    // Google link (the client edited/completed before pulling it) would erase the link on apply;
+    // merge the stored row's server-owned calendar fields into `op.snapshot` first, so the row, the
+    // op log and the GCal pushback all carry it. Must run before `applyEntityOp` for the same reason.
+    if (!opts.skipCalendarLinkCarryForward) {
+        await hydrateCalendarLinkCarryForward(userId, [op]);
+    }
+
     // Steps 4 + 5 — persist + log. Apply first so a failure in `applyEntityOp` leaves no op in
     // the log; otherwise other devices would replay an op the server's collections never saw.
     // (The batch path below runs these in parallel as an accepted compromise inherited from the
@@ -425,6 +443,11 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     // Calendar-detach hydration — same before-apply constraint as the delete hydration above:
     // the pre-update row must be captured before the Promise.all below overwrites it.
     await hydrateCalendarDetachSnapshots(userId, ops);
+
+    // Calendar-link carry-forward — same before-apply constraint (see the single-op path).
+    if (!opts.skipCalendarLinkCarryForward) {
+        await hydrateCalendarLinkCarryForward(userId, ops);
+    }
 
     restampOpIdentities(ops);
     const [, outcomes] = await Promise.all([operationsDAO.insertMany(ops), Promise.all(ops.map((op) => applyEntityOp(userId, op)))]);

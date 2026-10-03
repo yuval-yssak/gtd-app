@@ -212,7 +212,23 @@ describe('relinkCalendarMarkers', () => {
         expect(fetchCalls[0]?.init?.credentials).toBe('include');
         const url = new URL(fetchCalls[0]?.url ?? '', 'http://placeholder');
         expect(url.pathname).toBe('/maintenance/relink-calendar-markers');
-        expect(result).toEqual(counts);
+        // The response above predates the done-item repair (no `relinkedDoneItems`): the client
+        // defaults it so the summed totals never go NaN against an older API.
+        expect(result).toEqual({ ...counts, relinkedDoneItems: 0 });
+    });
+
+    it('passes a server-reported relinkedDoneItems count through', async () => {
+        const counts = {
+            relinkedItems: 0,
+            relinkedRoutines: 0,
+            recreatedEvents: 0,
+            trashedItems: 0,
+            deactivatedRoutines: 0,
+            clearedMarkers: 0,
+            relinkedDoneItems: 3,
+        };
+        fetchSpy.mockImplementationOnce(() => Promise.resolve(makeJsonResponse(counts)));
+        expect(await relinkCalendarMarkers()).toEqual(counts);
     });
 
     it('throws on a non-OK status so the Repair button can surface an error', async () => {

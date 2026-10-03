@@ -422,6 +422,35 @@ export const devLoginRoutes = new Hono()
         return c.json({ ok: true });
     })
 
+    // POST /dev/calendar/simulate-link-stamp — stands in for the Google `events.insert` leg of
+    // pushback: runs the real post-create link stamp (`stampItemCalendarLink`) and its fan-out, so
+    // the calendar-link-carry-forward e2e can reproduce "the server linked the item, the client
+    // edited it before pulling the link" without a live Google account. The integration/config ids
+    // are taken verbatim — they need not exist; the later done/edit pushback then resolves no
+    // context and no-ops, exactly as it would against a fake integration.
+    .post('/calendar/simulate-link-stamp', async (c) => {
+        const { stampItemCalendarLink } = await import('../lib/calendarPushback.js');
+        const { notifyChanges } = await import('../lib/notifyChange.js');
+        const body = await c.req.json<{
+            userId: string;
+            itemId: string;
+            calendarEventId: string;
+            calendarIntegrationId: string;
+            calendarSyncConfigId: string;
+            htmlLink?: string;
+        }>();
+        if (!body.userId || !body.itemId || !body.calendarEventId || !body.calendarIntegrationId || !body.calendarSyncConfigId) {
+            return c.json({ error: 'userId, itemId, calendarEventId, calendarIntegrationId, calendarSyncConfigId required' }, 400);
+        }
+        const { userId, itemId, ...link } = body;
+        const recordedOp = await stampItemCalendarLink({ userId, itemId }, link);
+        if (!recordedOp) {
+            return c.json({ error: 'item not found' }, 404);
+        }
+        await notifyChanges([recordedOp], { suppressGCalPushback: true });
+        return c.json({ ok: true, opId: recordedOp._id, updatedTs: recordedOp.ts });
+    })
+
     // POST /dev/calendar/simulate-event-move — exercises the full /sync/reassign DB-side semantics
     // for e2e specs that need a calendar-linked item to move across accounts, without the
     // session-membership guard the production endpoint enforces. GCal side effects are op-driven
@@ -604,7 +633,7 @@ export const devLoginRoutes = new Hono()
     // (dev-only module, unmountable in prod).
     .post('/calendar/simulate-relink-sweep', async (c) => {
         const { default: calendarIntegrationsDAO } = await import('../dataAccess/calendarIntegrationsDAO.js');
-        const { relinkStrandedMarkers } = await import('./calendar.js');
+        const { relinkOrphanedDoneItems, relinkStrandedMarkers } = await import('./calendar.js');
         const body = await c.req.json<{
             userId: string;
             integrationId: string;
@@ -643,6 +672,7 @@ export const devLoginRoutes = new Hono()
         const now = dayjs().toISOString();
         const ctx: Parameters<typeof relinkStrandedMarkers>[2] = { userId: body.userId, now, ops: [] };
         const result = await relinkStrandedMarkers(integration, provider, ctx, () => provider);
+        result.relinkedDoneItems += await relinkOrphanedDoneItems({ integration, provider, providerFactory: () => provider }, ctx);
         return c.json({ ok: true, ...result, pushedUpdates, pushedCreates, createdSeries, opsRecorded: ctx.ops.length });
     })
 

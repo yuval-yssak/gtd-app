@@ -451,6 +451,7 @@ export function addRepairCounts(a: RelinkSweepCounts, b: RelinkSweepCounts): Rel
         trashedItems: a.trashedItems + b.trashedItems,
         deactivatedRoutines: a.deactivatedRoutines + b.deactivatedRoutines,
         clearedMarkers: a.clearedMarkers + b.clearedMarkers,
+        relinkedDoneItems: a.relinkedDoneItems + b.relinkedDoneItems,
     };
 }
 
@@ -466,6 +467,7 @@ export function summarizeRepair(counts: RelinkSweepCounts): string {
         counts.trashedItems > 0 ? `${counts.trashedItems} cancelled item${counts.trashedItems === 1 ? '' : 's'} trashed` : null,
         counts.deactivatedRoutines > 0 ? `${counts.deactivatedRoutines} ended routine${counts.deactivatedRoutines === 1 ? '' : 's'} paused` : null,
         counts.clearedMarkers > 0 ? `${counts.clearedMarkers} stale link${counts.clearedMarkers === 1 ? '' : 's'} cleared` : null,
+        counts.relinkedDoneItems > 0 ? `${counts.relinkedDoneItems} completed item${counts.relinkedDoneItems === 1 ? '' : 's'} marked done on Google` : null,
     ].filter((part): part is string => part !== null);
     return parts.length > 0 ? `Repaired: ${parts.join(', ')}.` : 'Everything is already linked — nothing needed repair.';
 }
@@ -498,7 +500,7 @@ export async function sweepAllAccounts(
 
 /** All-zero sweep counts — the identity element for `addRepairCounts`. */
 export function zeroRepairCounts(): RelinkSweepCounts {
-    return { relinkedItems: 0, relinkedRoutines: 0, recreatedEvents: 0, trashedItems: 0, deactivatedRoutines: 0, clearedMarkers: 0 };
+    return { relinkedItems: 0, relinkedRoutines: 0, recreatedEvents: 0, trashedItems: 0, deactivatedRoutines: 0, clearedMarkers: 0, relinkedDoneItems: 0 };
 }
 
 /**

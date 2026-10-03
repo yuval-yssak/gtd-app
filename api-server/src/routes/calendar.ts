@@ -12,7 +12,7 @@ import { requireCronSecret } from '../auth/cronSecret.js';
 import { authenticateRequest } from '../auth/middleware.js';
 import type { CalendarProvider, EventSyncResult, GCalEvent, GCalException } from '../calendarProviders/CalendarProvider.js';
 import { SyncTokenInvalidError } from '../calendarProviders/CalendarProvider.js';
-import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
+import { buildDeterministicGCalId, GoogleCalendarProvider, isInvalidGrantError } from '../calendarProviders/GoogleCalendarProvider.js';
 import { clientUrl } from '../config.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
@@ -23,13 +23,16 @@ import { integrationStatus } from '../lib/calendarIntegrationStatus.js';
 import { propagateRoutineNotesToItems } from '../lib/calendarItemNotes.js';
 import {
     ensureTimeZone,
+    handleItemPush,
     maybePushToGCal,
     type PushContext,
     type PushOutcome,
     pushItemToGCalWithContext,
     pushRoutineDeletion,
     pushRoutineToGCalWithContext,
+    recordedOpsOf,
     runMissedPushSweep,
+    surfacePushFailure,
 } from '../lib/calendarPushback.js';
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
 import { toInstant } from '../lib/isoInstant.js';
@@ -1519,7 +1522,7 @@ async function runOutboundBackfill(ctx: PushContext, userId: string): Promise<Ba
     const pushedItems = itemOutcomes.filter((o) => o.status === 'created').length;
     const pushedRoutines = routineOutcomes.filter((o) => o.status === 'created').length;
     const relinkedRoutines = routineOutcomes.filter((o) => o.status === 'relinked').length;
-    const recordedOps = [...all.flatMap((o) => (o.recordedOp ? [o.recordedOp] : [])), ...matcherOps];
+    const recordedOps = [...all.flatMap((o) => recordedOpsOf(o)), ...matcherOps];
     console.log(`[calendar] backfill complete | pushedItems=${pushedItems} pushedRoutines=${pushedRoutines} relinkedRoutines=${relinkedRoutines}`);
     return { pushedItems, pushedRoutines, relinkedRoutines, recordedOps };
 }
@@ -1617,6 +1620,8 @@ export interface RelinkSweepResult {
     trashedItems: number;
     deactivatedRoutines: number;
     clearedMarkers: number;
+    /** Done items re-linked to the Google event they had lost (`relinkOrphanedDoneItems`). */
+    relinkedDoneItems: number;
 }
 
 const emptySweepResult = (): RelinkSweepResult => ({
@@ -1626,6 +1631,7 @@ const emptySweepResult = (): RelinkSweepResult => ({
     trashedItems: 0,
     deactivatedRoutines: 0,
     clearedMarkers: 0,
+    relinkedDoneItems: 0,
 });
 
 /**
@@ -1764,9 +1770,7 @@ async function resolveGoneMarkerItem(
         const cleared = await clearItemMarkers(item, ctx);
         if (cleared) {
             const outcome = await pushItemToGCalWithContext(cleared, pushCtx, ctx.userId);
-            if (outcome.recordedOp) {
-                ctx.ops.push(outcome.recordedOp);
-            }
+            ctx.ops.push(...recordedOpsOf(outcome));
             result.recreatedEvents += 1;
         }
         return;
@@ -1810,7 +1814,7 @@ async function relinkLiveMarkerItem(
         // its lastPushedToGCalTs stamp).
         const restoreOp = ctx.ops.filter((op) => op.entityType === 'item' && op.entityId === restored._id).pop();
         if (restoreOp) {
-            await maybePushToGCal(restoreOp, providerFactory);
+            ctx.ops.push(...(await maybePushToGCal(restoreOp, providerFactory)));
         }
         return;
     }
@@ -2011,6 +2015,150 @@ async function sweepMarkerRoutines(
     }
 }
 
+// ── Orphaned done-item repair (link lost before the Google create round-tripped) ──
+
+/**
+ * How far back the repair looks. Rows older than this were completed long before the carry-forward
+ * fix shipped and are unlikely to still matter on Google; the window also keeps the per-full-sync
+ * `events.get` probe count bounded for users with a long history of unlinked done items.
+ */
+const ORPHANED_DONE_REPAIR_WINDOW_DAYS = 60;
+
+/**
+ * Done standalone items that may have lost their Google link to the pre-carry-forward
+ * `replaceById` wipe: completed in-app (so `timeStart` is still on the row), never linked, never
+ * disconnect-kept, not routine-generated, recent. A row stamped with another integration belongs
+ * to that calendar's push and is skipped.
+ */
+function orphanedDoneCandidatesFilter(userId: string, integration: CalendarIntegrationInterface, now: string) {
+    // An orphan needs a create AND the link-wiping write, both after this integration existed — so
+    // nothing updated before `integration.createdTs` can be one. Without this floor a first connect
+    // (or a reconnect, which mints a new integration id) would probe every recent done timed item,
+    // each a guaranteed miss since the deterministic id hashes the brand-new integration id.
+    const windowFloor = dayjs(now).subtract(ORPHANED_DONE_REPAIR_WINDOW_DAYS, 'day').toISOString();
+    const floor = integration.createdTs > windowFloor ? integration.createdTs : windowFloor;
+    return {
+        user: userId,
+        status: 'done' as const,
+        calendarEventId: { $exists: false },
+        lastKnownCalendarEventId: { $exists: false },
+        routineId: { $exists: false },
+        // `$type` rather than `$exists`: a snapshot serialized with `timeStart: undefined` lands as null.
+        timeStart: { $type: 'string' as const },
+        updatedTs: { $gte: floor },
+        $or: [{ calendarIntegrationId: { $exists: false } }, { calendarIntegrationId: integration._id }],
+    };
+}
+
+/** One integration, the Google client reading it, and the factory the pushback pipeline builds its writer from. */
+export interface OrphanRepairTarget {
+    integration: CalendarIntegrationInterface;
+    provider: CalendarProvider;
+    providerFactory: SweepProviderFactory;
+    /**
+     * The calendars to probe. The per-calendar sync pass passes just the calendar it is syncing (the
+     * pass runs once per calendar, so probing all of them there would cost candidates × M² calls);
+     * the whole-integration callers (maintenance, dev seam) leave it out → every enabled calendar.
+     */
+    configs?: NonEmptyArray<CalendarSyncConfigInterface>;
+}
+
+/**
+ * Re-links `done` items whose Google event survived the link loss. Items pushed by the app carry
+ * a deterministic event id (`buildDeterministicGCalId(itemId, integrationId)`), so the row can be
+ * matched to its event with a single `events.get` per enabled calendar — no title/time guessing,
+ * and a hit proves the event is ours. Each relinked row then goes through the regular done push
+ * (`handleItemPush`) so the ✓ marker the original completion never delivered lands on Google; a
+ * failed ✓ is surfaced on the relink op so SyncIssues Retry re-fires it.
+ *
+ * Runs on every full sync BEFORE the event import (the import must find the relinked done row and
+ * update it, instead of creating a second, open row for the same event) and from the on-demand
+ * "Repair sync" sweep. Scope is deliberately `done` only: a `calendar` row re-links through the
+ * outbound backfill's 409 path, and a trash row's event is left in place — deleting on inference
+ * is outward-facing. Sequential and paced like the backfill. Returns the number of rows relinked.
+ */
+export async function relinkOrphanedDoneItems(target: OrphanRepairTarget, ctx: SyncContext): Promise<number> {
+    const configs = target.configs ?? (await calendarSyncConfigsDAO.findEnabledByIntegration(target.integration._id));
+    if (!hasAtLeastOne(configs)) {
+        return 0;
+    }
+    const candidates = await itemsDAO.findArray(orphanedDoneCandidatesFilter(ctx.userId, target.integration, ctx.now));
+    // `let` + for-loop (not reduce): the loop must be able to stop early on dead credentials.
+    let relinkedCount = 0;
+    for (const item of candidates) {
+        try {
+            relinkedCount += (await repairOneOrphanedDoneItem(item, target, configs, ctx)) ? 1 : 0;
+            await sleep(BACKFILL_PACE_MS);
+        } catch (err) {
+            console.error(`[gcal-relink-sweep] orphaned done-item repair failed | itemId=${item._id}:`, err);
+            // Dead credentials fail every probe the same way — stop instead of burning the loop.
+            if (isInvalidGrantError(err)) {
+                break;
+            }
+        }
+    }
+    return relinkedCount;
+}
+
+/** Probes, relinks and pushes one candidate. True when the row was relinked. */
+async function repairOneOrphanedDoneItem(
+    item: ItemInterface,
+    target: OrphanRepairTarget,
+    configs: NonEmptyArray<CalendarSyncConfigInterface>,
+    ctx: SyncContext,
+): Promise<boolean> {
+    if (!item._id) {
+        return false;
+    }
+    const eventId = buildDeterministicGCalId(item._id, target.integration._id);
+    const found = await findMarkerEventAcrossConfigs(eventId, configs, target.provider, target.integration._id);
+    if (!found || found.event.status === 'cancelled') {
+        return false;
+    }
+    // Another row already linked to this event (an import that ran before this repair existed) —
+    // linking a second row would leave two items on one event; leave it for the duplicate heal.
+    const otherOwner = await itemsDAO.findOne({ user: ctx.userId, calendarEventId: eventId, _id: { $ne: item._id } });
+    if (otherOwner) {
+        console.warn(`[gcal-relink-sweep] orphaned done item skipped — event already linked to another row | itemId=${item._id} ownerId=${otherOwner._id}`);
+        return false;
+    }
+    const relinkOp = await stampRelinkedDoneItem(item._id, { integration: target.integration, config: found.config }, found.event, ctx);
+    if (!relinkOp) {
+        return false;
+    }
+    const outcome = await handleItemPush(relinkOp.snapshot as ItemInterface, ctx.userId, target.providerFactory, 'none');
+    await surfacePushFailure(relinkOp, outcome);
+    ctx.ops.push(...(outcome?.recordedOp ? [outcome.recordedOp] : []));
+    return true;
+}
+
+/** Writes the link onto the done row (only if still unlinked) and records the op. Returns the op, or undefined when another writer got there first. */
+async function stampRelinkedDoneItem(itemId: string, source: CalendarSource, event: GCalEvent, ctx: SyncContext): Promise<OperationInterface | undefined> {
+    const update = await itemsDAO.updateOne(
+        { _id: itemId, user: ctx.userId, calendarEventId: { $exists: false } },
+        {
+            $set: {
+                calendarEventId: event.id,
+                calendarIntegrationId: source.integration._id,
+                calendarSyncConfigId: source.config._id,
+                ...(event.htmlLink ? { htmlLink: event.htmlLink } : {}),
+                updatedTs: ctx.now,
+            },
+        },
+    );
+    if (update.matchedCount === 0) {
+        return undefined;
+    }
+    const relinked = await itemsDAO.findByOwnerAndId(itemId, ctx.userId);
+    if (!relinked) {
+        return undefined;
+    }
+    console.log(`[gcal-relink-sweep] relinked orphaned done item | itemId=${itemId} eventId=${event.id}`);
+    const op = await recordOperation(ctx.userId, { entityType: 'item', entityId: itemId, snapshot: relinked, opType: 'update', now: ctx.now });
+    ctx.ops.push(op);
+    return op;
+}
+
 /**
  * Active relink sweep: resolves every same-account `lastKnown*` marker by fetching its event
  * DIRECTLY by id, instead of hoping the event shows up in a sync window. This is what makes
@@ -2061,7 +2209,9 @@ export async function relinkCalendarMarkersForUser(userId: string): Promise<Reli
             continue; // no usable credentials — its markers stay put until the user reconnects
         }
         const provider = buildProvider(integration, userId);
-        const result = await relinkStrandedMarkers(integration, provider, { userId, now, ops });
+        const ctx: SyncContext = { userId, now, ops };
+        const result = await relinkStrandedMarkers(integration, provider, ctx);
+        result.relinkedDoneItems += await relinkOrphanedDoneItems({ integration, provider, providerFactory: buildProvider }, ctx);
         for (const key of Object.keys(totals) as Array<keyof RelinkSweepResult>) {
             totals[key] += result[key];
         }
@@ -2109,6 +2259,11 @@ async function syncSingleCalendar(
 
     const source: CalendarSource = { integration, config };
     const syncResult = await fetchEventsWithSyncToken(config, provider, ctx.now);
+    // Before the import, on full syncs only: a done row that lost its link must be re-linked first,
+    // or the authoritative snapshot below imports its (deterministic-id) event as a second, open item.
+    if (syncResult.fullSyncTimeMin) {
+        await relinkOrphanedDoneItems({ integration, provider, providerFactory: buildProvider, configs: [config] }, ctx);
+    }
     await importCalendarEvents(source, syncResult.events, ctx, syncResult.fullSyncTimeMin);
     await calendarSyncConfigsDAO.upsertSyncToken(config._id, syncResult.nextSyncToken, ctx.now);
 

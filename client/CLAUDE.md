@@ -96,7 +96,7 @@ After bootstrap, incremental pulls start from that cursor, so no old ops are rep
 
 When another device pushes a change to the server, the server broadcasts an SSE message. The client's listener calls `syncAndRefresh()`:
 1. `flushSyncQueue()` — sends any locally queued ops first
-2. `pullFromServer()` — fetches ops newer than the cursor, applies to IDB (last-write-wins on `updatedTs`)
+2. `pullFromServer()` — fetches ops newer than the cursor, applies to IDB (last-write-wins on `updatedTs`; a losing item snapshot still hands its server-owned calendar fields to the newer local row — same owner, same event only; `db/calendarLinkMerge.ts`)
 3. `refreshItems()` / `refreshPeople()` / etc. — re-reads IDB → React state
 
 EventSource reconnects automatically on error. **Be careful adding per-message refetches** — an SSE fan-out that triggers a per-tab pull that triggers another fetch has previously burned the Cloudflare Worker free-tier daily request limit from the user's own open tabs alone.

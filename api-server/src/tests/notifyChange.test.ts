@@ -6,6 +6,7 @@
  * continues so SSE / GCal / webhook fan-out still fire and the caller still resolves.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as calendarPushback from '../lib/calendarPushback.js';
 import { notifyChange, notifyChanges } from '../lib/notifyChange.js';
 import * as sseConnections from '../lib/sseConnections.js';
 import * as webPush from '../lib/webPush.js';
@@ -70,5 +71,59 @@ describe('notifyChange — notifyViaWebPush failure handling', () => {
         expect(sseSpy).toHaveBeenCalledTimes(1);
         const tag = errSpy.mock.calls.find((call) => typeof call[0] === 'string' && (call[0] as string).startsWith('[notify-change] notifyViaWebPush failed'));
         expect(tag).toBeDefined();
+    });
+});
+
+describe('notifyChange — fan-out of ops the GCal push recorded server-side (the link stamp)', () => {
+    const linkStampOp: OperationInterface = {
+        ...sampleOp,
+        _id: 'op-link-stamp',
+        deviceId: 'server',
+        opType: 'update',
+        snapshot: { ...(sampleOp.snapshot as Record<string, unknown>), status: 'calendar', calendarEventId: 'gtd-evt-1' } as OperationInterface['snapshot'],
+    };
+
+    it('notifies EVERY device of the link-stamp op — the originating device included — and pushes nothing back to Google for it', async () => {
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([linkStampOp]);
+        const sseSpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+        const webPushSpy = vi.spyOn(webPush, 'notifyViaWebPush').mockResolvedValue(undefined);
+
+        await notifyChange(sampleOp, { excludeDeviceId: 'device-origin' });
+
+        // The GCal leg is fire-and-forget; its follow-up fan-out lands a few microtasks later.
+        await vi.waitFor(() => expect(sseSpy).toHaveBeenCalledTimes(2));
+        // 1st SSE: the client's own op, echo-suppressed for its device. 2nd: the server's link stamp, for everyone.
+        expect(sseSpy.mock.calls[0]?.[1]).toMatchObject({ sourceDeviceId: 'device-origin' });
+        expect(sseSpy.mock.calls[1]?.[1]).toMatchObject({ sourceDeviceId: undefined, ts: linkStampOp.ts });
+        await vi.waitFor(() => expect(webPushSpy).toHaveBeenCalledTimes(2));
+        expect(webPushSpy.mock.calls[1]?.[1]).toBeNull();
+        expect(webPushSpy.mock.calls[1]?.[2]).toEqual([linkStampOp]);
+        // No recursion: the link stamp's own notify suppresses the GCal leg.
+        expect(pushSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('batch variant fans out recorded ops the same way', async () => {
+        vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([linkStampOp]);
+        const sseSpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+        vi.spyOn(webPush, 'notifyViaWebPush').mockResolvedValue(undefined);
+
+        await notifyChanges([sampleOp], { excludeDeviceId: 'device-origin' });
+
+        await vi.waitFor(() => expect(sseSpy).toHaveBeenCalledTimes(2));
+        expect(sseSpy.mock.calls[1]?.[1]).toMatchObject({ sourceDeviceId: undefined });
+    });
+
+    it('a push that recorded nothing adds no fan-out', async () => {
+        const pushSpy = vi.spyOn(calendarPushback, 'maybePushToGCal').mockResolvedValue([]);
+        const sseSpy = vi.spyOn(sseConnections, 'notifyUserViaSse');
+        vi.spyOn(webPush, 'notifyViaWebPush').mockResolvedValue(undefined);
+
+        await notifyChange(sampleOp);
+        // Settle the fire-and-forget chain deterministically: the mocked push's promise, then the
+        // `.then` continuation that would fan out — no wall-clock timer.
+        await pushSpy.mock.results[0]?.value;
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(sseSpy).toHaveBeenCalledTimes(1);
     });
 });

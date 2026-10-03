@@ -287,6 +287,9 @@ const gtdImpl = {
 
     pull: (page: Page): Promise<void> => page.evaluate(() => (window as unknown as { __gtd: { pull(): Promise<void> } }).__gtd.pull()),
 
+    /** Pull for the active account without the orchestrator's flush-first — see devTools `pullOnly`. */
+    pullOnly: (page: Page): Promise<void> => page.evaluate(() => (window as unknown as { __gtd: { pullOnly(): Promise<void> } }).__gtd.pullOnly()),
+
     queuedOps: (page: Page): Promise<SyncOperation[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { queuedOps(): Promise<SyncOperation[]> } }).__gtd.queuedOps()),
 

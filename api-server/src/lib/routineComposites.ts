@@ -139,7 +139,9 @@ async function trashFutureOpenItemsForRoutine(ctx: CompositeContext, routineId: 
     // presence-partial (user, calendarInstanceEventId) unique index. Otherwise resume — or a later split
     // successor on the same master — regenerates the same deterministic ids, E11000s, and the inserts are
     // silently swallowed (→ invisible occurrences). applyEntitySnapshotOp replaceById's the full snapshot,
-    // so omitting the key unsets it. Symmetric to deactivateRoutineFromGCal on the GCal-sync side.
+    // so omitting the key unsets it — provided the pipeline's calendar-link carry-forward (which would
+    // read the omission as "client never saw it" and restore the id) is skipped for these
+    // server-built snapshots. Symmetric to deactivateRoutineFromGCal on the GCal-sync side.
     const ops: RawOperation[] = futureOpen.map((item) => {
         const { calendarInstanceEventId: _freed, ...rest } = item;
         return {
@@ -149,7 +151,7 @@ async function trashFutureOpenItemsForRoutine(ctx: CompositeContext, routineId: 
             snapshot: { ...rest, status: 'trash' as const, updatedTs: now },
         };
     });
-    await applyAndPublishOperations(ctx.userId, ops, { deviceId: `api:${ctx.tokenId}`, now, strict: true });
+    await applyAndPublishOperations(ctx.userId, ops, { deviceId: `api:${ctx.tokenId}`, now, strict: true, skipCalendarLinkCarryForward: true });
 }
 
 /** Trash (update op) every item still in native `nextAction` status for the routine. Trash — not
