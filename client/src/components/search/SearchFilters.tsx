@@ -18,6 +18,7 @@ import type { SearchUrlState } from '../../lib/searchUrlParams';
 import { DEFAULT_URL_STATE, isDateField } from '../../lib/searchUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import { CollapsibleChipGroup } from '../pickers/CollapsibleChipGroup';
+import { DateField } from '../pickers/DateField';
 import styles from './SearchFilters.module.css';
 
 interface Props {
@@ -225,22 +226,16 @@ export function SearchFilters({
                     <MenuItem value="updatedTs">Updated</MenuItem>
                     <MenuItem value="createdTs">Created</MenuItem>
                 </TextField>
-                <TextField
-                    type="date"
-                    size="small"
+                <DateField
                     label="From"
                     value={urlState.dateFrom ?? ''}
-                    onChange={(e) => onUrlStateChange({ dateFrom: e.target.value || null })}
-                    slotProps={{ inputLabel: { shrink: true } }}
+                    onChange={(dateFrom) => onUrlStateChange({ dateFrom: dateFrom || null })}
                     className={styles.dateField}
                 />
-                <TextField
-                    type="date"
-                    size="small"
+                <DateField
                     label="To"
                     value={urlState.dateTo ?? ''}
-                    onChange={(e) => onUrlStateChange({ dateTo: e.target.value || null })}
-                    slotProps={{ inputLabel: { shrink: true } }}
+                    onChange={(dateTo) => onUrlStateChange({ dateTo: dateTo || null })}
                     className={styles.dateField}
                 />
                 {isFilterActive(urlState) && <Chip label="Reset filters" size="small" variant="outlined" onClick={onReset} className={styles.resetChip} />}

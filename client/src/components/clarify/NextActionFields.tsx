@@ -13,6 +13,7 @@ import { EMPTY_USAGE_INDEX, rankByUsage, type UsageIndex } from '../../lib/entit
 import { sortByName } from '../../lib/sortByName';
 import type { EnergyLevel, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { CollapsibleChipGroup } from '../pickers/CollapsibleChipGroup';
+import { DateField } from '../pickers/DateField';
 import styles from './NextActionFields.module.css';
 import type { NextActionFormState } from './types';
 
@@ -83,13 +84,7 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                         Item stays hidden from Next Actions until this date
                     </Typography>
                 )}
-                <TextField
-                    type="date"
-                    value={value.ignoreBefore}
-                    onChange={(e) => onChange({ ignoreBefore: e.target.value })}
-                    size="small"
-                    slotProps={{ inputLabel: { shrink: true } }}
-                />
+                <DateField accessibleName="Tickler date" value={value.ignoreBefore} onChange={(ignoreBefore) => onChange({ ignoreBefore })} />
             </Box>
             {workContexts.length > 0 && (
                 <Box className={dense ? styles.fullSpan : undefined}>
@@ -202,14 +197,7 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                     label={<Typography variant="body2">In focus</Typography>}
                 />
             </Stack>
-            <TextField
-                label="Expected by"
-                type="date"
-                value={value.expectedBy}
-                onChange={(e) => onChange({ expectedBy: e.target.value })}
-                size="small"
-                slotProps={{ inputLabel: { shrink: true } }}
-            />
+            <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} />
         </Stack>
     );
 }

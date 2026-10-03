@@ -68,3 +68,4 @@
 - [Copy renames break other specs' locators](feedback_copy_rename_breaks_other_specs.md) — grep e2e/ for old phrases; source-grep `toContain` passes via substring overlap (`short_name:` ⊃ `name:`).
 - [Failure label assumes one entity type](feedback_failure_label_assumes_entity_type.md) — New FAILURE_LABELS wording names "item"/"calendar event" though the generic server path also fires for routines/externalId.
 - [CSS module vs Typography emotion](feedback_css_module_vs_typography_emotion.md) — Module rules on Typography lose margin AND font-weight to the variant; fixes move only what the screenshot showed.
+- [Refocusing a native date input pops the iOS picker](feedback_refocus_native_date_input_opens_mobile_picker.md) — Clear→`input.focus()` in a tap handler; Chromium isMobile e2e cannot see it. Prefer keyboard-only refocus.

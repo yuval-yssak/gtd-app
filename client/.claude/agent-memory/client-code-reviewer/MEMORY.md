@@ -44,3 +44,4 @@
 - [New scrollport leaves inner scroller](project_new_scrollport_leaves_inner_scroller.md) — relocating scroll to a wrapper is inert on any card that keeps its own overflow-y:auto without flex-shrink:0.
 - [Legal text claims vs code](feedback_legal_text_claims_vs_code.md) — Policy copy promises controls that are missing or display-only (brief opt-out, empty trash); grep every "you can" claim.
 - [Failure label assumes one entity type](feedback_failure_label_assumes_entity_type.md) — New FAILURE_LABELS wording names "item"/"calendar event" though the generic server path also fires for routines/externalId.
+- [aria-label collides with getByLabel](feedback_aria_label_collides_with_getbylabel.md) — 'Clear <label>' buttons make getByLabel('<label>') strict-fail; name icon buttons via title=, not aria-label/Tooltip.

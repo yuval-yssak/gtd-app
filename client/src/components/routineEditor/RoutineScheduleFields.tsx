@@ -16,6 +16,8 @@ import { rankByUsage, type UsageIndex } from '../../lib/entityUsage';
 import { sortByName } from '../../lib/sortByName';
 import type { EnergyLevel, StoredPerson, StoredWorkContext } from '../../types/MyDB';
 import { CollapsibleChipGroup } from '../pickers/CollapsibleChipGroup';
+import { DateField } from '../pickers/DateField';
+import { TimeField } from '../pickers/TimeField';
 import { FrequencyPicker } from '../routines/FrequencyPicker';
 import styles from './RoutineEditorBody.module.css';
 import type { EndsMode, FormState } from './routineFormState';
@@ -112,13 +114,10 @@ export function RoutineScheduleFields({
                 />
             </Box>
 
-            <TextField
-                type="date"
+            <DateField
                 label="Start date"
-                size="small"
                 value={form.startDate}
-                onChange={(e) => onPatch({ startDate: e.target.value })}
-                slotProps={{ inputLabel: { shrink: true } }}
+                onChange={(startDate) => onPatch({ startDate })}
                 helperText="Optional — anchors the schedule. Leave empty to start today."
                 disabled={disabled}
             />
@@ -192,15 +191,7 @@ function CalendarSettingsFields({
                         alignItems: 'center',
                     }}
                 >
-                    <TextField
-                        label="Start time"
-                        type="time"
-                        value={form.timeOfDay}
-                        onChange={(e) => onPatch({ timeOfDay: e.target.value })}
-                        size="small"
-                        required
-                        slotProps={{ inputLabel: { shrink: true } }}
-                    />
+                    <TimeField label="Start time" value={form.timeOfDay} onChange={(timeOfDay) => onPatch({ timeOfDay })} required />
                     <TextField
                         label="Duration (min)"
                         type="number"
@@ -287,15 +278,7 @@ function EndsFields({ form, onPatch, disabled }: { form: FormState; onPatch: (pa
                 <ToggleButton value="afterN">After N</ToggleButton>
             </ToggleButtonGroup>
             {form.endsMode === 'onDate' && (
-                <TextField
-                    type="date"
-                    size="small"
-                    value={form.endsDate}
-                    onChange={(e) => onPatch({ endsDate: e.target.value })}
-                    sx={{ mt: 1, display: 'block' }}
-                    slotProps={{ inputLabel: { shrink: true } }}
-                    label="End date"
-                />
+                <DateField label="End date" value={form.endsDate} onChange={(endsDate) => onPatch({ endsDate })} sx={{ mt: 1, display: 'block' }} />
             )}
             {form.endsMode === 'afterN' && (
                 <div className={styles.ticklerRow}>

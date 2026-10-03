@@ -6,8 +6,9 @@ import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import Stack from '@mui/material/Stack';
 import Switch from '@mui/material/Switch';
-import TextField from '@mui/material/TextField';
 import type { CalendarOption } from '../../hooks/useCalendarOptions';
+import { DateField } from '../pickers/DateField';
+import { TimeField } from '../pickers/TimeField';
 import type { CalendarFormState } from './types';
 
 interface Props {
@@ -66,24 +67,14 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
                 }
                 label="All day"
             />
-            <TextField
-                label={value.allDay ? 'Start date' : 'Date'}
-                type="date"
-                value={value.date}
-                onChange={(e) => onChange({ date: e.target.value })}
-                size="small"
-                required
-                slotProps={{ inputLabel: { shrink: true } }}
-            />
+            <DateField label={value.allDay ? 'Start date' : 'Date'} value={value.date} onChange={(date) => onChange({ date })} required />
             {value.allDay ? (
-                <TextField
+                <DateField
                     label="End date"
-                    type="date"
                     value={value.endDate}
-                    onChange={(e) => onChange({ endDate: e.target.value })}
-                    size="small"
+                    onChange={(endDate) => onChange({ endDate })}
                     helperText="Leave empty for a single day"
-                    slotProps={{ inputLabel: { shrink: true }, htmlInput: { 'data-testid': 'endDatePicker' } }}
+                    inputTestId="endDatePicker"
                 />
             ) : (
                 <Stack
@@ -92,22 +83,8 @@ export function CalendarFields({ value, onChange, calendarOptions, forceShowPick
                         gap: 2,
                     }}
                 >
-                    <TextField
-                        label="Start time"
-                        type="time"
-                        value={value.startTime}
-                        onChange={(e) => onChange({ startTime: e.target.value })}
-                        size="small"
-                        slotProps={{ inputLabel: { shrink: true } }}
-                    />
-                    <TextField
-                        label="End time"
-                        type="time"
-                        value={value.endTime}
-                        onChange={(e) => onChange({ endTime: e.target.value })}
-                        size="small"
-                        slotProps={{ inputLabel: { shrink: true } }}
-                    />
+                    <TimeField label="Start time" value={value.startTime} onChange={(startTime) => onChange({ startTime })} />
+                    <TimeField label="End time" value={value.endTime} onChange={(endTime) => onChange({ endTime })} />
                 </Stack>
             )}
             {showPicker && (
