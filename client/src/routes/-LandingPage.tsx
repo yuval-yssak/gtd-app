@@ -2,6 +2,7 @@ import Button from '@mui/material/Button';
 import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { APP_NAME } from '../lib/appName';
 import {
     GOOGLE_CALENDAR_DATA_USES,
@@ -27,6 +28,7 @@ const GOOGLE_DISCLOSURE_ANCHOR = legalSectionAnchor('Google API Services disclos
  * render without a session and say what the app does and why it asks for Google data.
  */
 export function LandingPage() {
+    useDocumentTitle(undefined);
     return (
         <main className={styles.page} data-testid="landingPage">
             <Paper elevation={3} className={styles.card}>

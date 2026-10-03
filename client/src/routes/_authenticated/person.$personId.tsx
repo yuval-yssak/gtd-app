@@ -9,6 +9,7 @@ import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { PersonEditorBody } from '../../components/people/PersonEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
@@ -70,6 +71,8 @@ function PersonPage() {
     useScrollToTopOnMount();
 
     const person = allPeople.find((p) => p._id === personId) ?? null;
+    // A blank name falls back to the header's label rather than a bare app name.
+    useDocumentTitle(person?.name.trim() || 'Edit person');
     const goBack = () => historyBackOr('/people');
 
     // The person editor body owns no ESC handling (dialog chrome gets it from MUI Modal), so the

@@ -3,6 +3,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { announceAccountReauthResolved } from '../contexts/accountReauthEvents';
 import { hydrateAccountFromSession } from '../db/accountHelpers';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { authClient } from '../lib/authClient';
 import styles from './-auth.callback.module.css';
 
@@ -24,6 +25,7 @@ export const Route = createFileRoute('/auth/callback')({
 });
 
 function CallbackPage() {
+    useDocumentTitle('Signing in…');
     return (
         <Box className={styles.callbackPage}>
             <CircularProgress />

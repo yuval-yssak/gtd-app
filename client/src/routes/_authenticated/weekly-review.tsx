@@ -31,6 +31,7 @@ import {
 import { WeeklyReviewWizard } from '../../components/weeklyReview/WeeklyReviewWizard';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { seedDefaultReviewInboxesIfEmpty } from '../../db/reviewInboxMutations';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { getTodayIso } from '../../lib/dayClock';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import styles from './-weekly-review.module.css';
@@ -52,6 +53,7 @@ type PagePhase =
     | { kind: 'celebrating'; flow: ReviewFlowState };
 
 function WeeklyReviewPage() {
+    useDocumentTitle('Weekly Review');
     const { db } = Route.useRouteContext();
     const { stage: urlStageId } = Route.useSearch();
     const navigate = useNavigate();

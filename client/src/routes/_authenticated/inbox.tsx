@@ -52,6 +52,7 @@ import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } 
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useAutosave } from '../../hooks/useAutosave';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptureNotice';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -263,6 +264,7 @@ function InboxBottomSheet({ item, onClose, onClarifyClaude, onEdit, onDone, onNe
 // --- Page ---
 
 function InboxPage() {
+    useDocumentTitle('Inbox');
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
     const { account, items, workContexts, people, routines, refreshItems, syncAndRefresh, isInitialSyncing, withOwnerSession } = useAppData();

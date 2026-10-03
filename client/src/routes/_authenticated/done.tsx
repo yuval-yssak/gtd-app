@@ -2,6 +2,7 @@ import DoneAllIcon from '@mui/icons-material/DoneAll';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useCallback } from 'react';
 import { ArchivedItemsView } from '../../components/ArchivedItemsView';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 
 export const Route = createFileRoute('/_authenticated/done')({
@@ -10,6 +11,7 @@ export const Route = createFileRoute('/_authenticated/done')({
 });
 
 function DonePage() {
+    useDocumentTitle('Done');
     const { q } = Route.useSearch();
     const navigate = useNavigate();
     const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/done', search: { q: query || undefined }, replace: true }), [navigate]);

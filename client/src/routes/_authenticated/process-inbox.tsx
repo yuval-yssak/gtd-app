@@ -5,6 +5,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import type { StoredItem } from '../../types/MyDB';
 
 export const Route = createFileRoute('/_authenticated/process-inbox')({
@@ -20,6 +21,7 @@ export const Route = createFileRoute('/_authenticated/process-inbox')({
  * the inbox don't shrink the source array mid-walk and skew the index.
  */
 function ProcessInboxPage() {
+    useDocumentTitle('Process Inbox');
     const { db } = Route.useRouteContext();
     const { items, people, workContexts, refreshItems } = useAppData();
     const navigate = useNavigate();

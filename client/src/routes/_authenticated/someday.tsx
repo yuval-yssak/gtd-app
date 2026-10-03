@@ -19,6 +19,7 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useCallback, useMemo } from 'react';
 import { WindowVirtualizer } from 'virtua';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 
 dayjs.extend(relativeTime);
 
@@ -46,6 +47,7 @@ export const Route = createFileRoute('/_authenticated/someday')({
 });
 
 function SomedayPage() {
+    useDocumentTitle('Someday / Maybe');
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
     const navigate = useNavigate();

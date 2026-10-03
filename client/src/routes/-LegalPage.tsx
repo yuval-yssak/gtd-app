@@ -3,6 +3,7 @@ import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import { MarkdownPreview } from '../components/markdown/MarkdownPreview';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { LEGAL_DOCUMENTS, LEGAL_EFFECTIVE_DATE, type LegalDocument, legalSectionAnchor, legalSectionHeadings } from '../lib/legalDocuments';
 import styles from './-legal.module.css';
 
@@ -12,6 +13,7 @@ import styles from './-legal.module.css';
  * and the sign-in page are linked at the top; the body is the Markdown from `lib/legalDocuments`.
  */
 export function LegalPage({ legalDocument }: { legalDocument: LegalDocument }) {
+    useDocumentTitle(legalDocument.title);
     const otherDocument = legalDocument.slug === 'privacy' ? LEGAL_DOCUMENTS.terms : LEGAL_DOCUMENTS.privacy;
     const headings = legalSectionHeadings(legalDocument.markdown);
     return (

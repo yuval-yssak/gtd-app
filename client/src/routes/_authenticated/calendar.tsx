@@ -29,6 +29,7 @@ import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
 import { formatAllDayDate, fromGCalExclusive } from '../../lib/allDayDate';
@@ -43,6 +44,7 @@ export const Route = createFileRoute('/_authenticated/calendar')({
 });
 
 function CalendarPage() {
+    useDocumentTitle('Calendar');
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
     const navigate = useNavigate();

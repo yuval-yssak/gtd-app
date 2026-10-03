@@ -2,6 +2,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useCallback } from 'react';
 import { ArchivedItemsView } from '../../components/ArchivedItemsView';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 
 export const Route = createFileRoute('/_authenticated/trash')({
@@ -10,6 +11,7 @@ export const Route = createFileRoute('/_authenticated/trash')({
 });
 
 function TrashPage() {
+    useDocumentTitle('Trash');
     const { q } = Route.useSearch();
     const navigate = useNavigate();
     const writeUrlQuery = useCallback((query: string) => void navigate({ to: '/trash', search: { q: query || undefined }, replace: true }), [navigate]);

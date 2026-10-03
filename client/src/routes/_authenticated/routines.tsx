@@ -47,6 +47,7 @@ import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { pauseRoutine, removeRoutine } from '../../db/routineMutations';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
 import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
@@ -63,6 +64,7 @@ export const Route = createFileRoute('/_authenticated/routines')({
 });
 
 function RoutinesPage() {
+    useDocumentTitle('Routines');
     const { db } = Route.useRouteContext();
     const { q, tab, view } = Route.useSearch();
     // Route-scoped so functional `search` updaters receive (and must return) this route's

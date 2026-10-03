@@ -4,6 +4,7 @@ import Paper from '@mui/material/Paper';
 import Typography from '@mui/material/Typography';
 import { createFileRoute, isRedirect, Link, redirect } from '@tanstack/react-router';
 import { useState } from 'react';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { APP_NAME } from '../lib/appName';
 import { authClient } from '../lib/authClient';
 import type { OAuthProvider } from '../types/MyDB';
@@ -28,6 +29,7 @@ export const Route = createFileRoute('/login')({
 });
 
 function LoginPage() {
+    useDocumentTitle('Sign in');
     // Tracks which provider the user clicked. The happy path navigates the browser away
     // (component unmounts), but if the pre-redirect POST /auth/sign-in/social fetch rejects —
     // offline, 5xx, CORS — we reset pending and surface the error so the buttons aren't

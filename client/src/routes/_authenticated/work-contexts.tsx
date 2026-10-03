@@ -27,6 +27,7 @@ import { ListSkeleton } from '../../components/ListSkeleton';
 import { WorkContextEditDialog } from '../../components/workContexts/WorkContextEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import type { StoredWorkContext } from '../../types/MyDB';
 import styles from './-work-contexts.module.css';
@@ -36,6 +37,7 @@ export const Route = createFileRoute('/_authenticated/work-contexts')({
 });
 
 function WorkContextsPage() {
+    useDocumentTitle('Work Contexts');
     const { db } = Route.useRouteContext();
     const { account, workContexts, refreshWorkContexts, loggedInAccounts, isInitialSyncing } = useAppData();
     const [createOpen, setCreateOpen] = useState(false);

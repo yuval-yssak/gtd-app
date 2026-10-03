@@ -36,6 +36,7 @@ import { CollapsibleChipGroup } from '../../components/pickers/CollapsibleChipGr
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -246,6 +247,7 @@ export function buildRowSecondary(item: StoredItem, { showTags, contextsById, pe
 }
 
 function NextActionsPage() {
+    useDocumentTitle('Next Actions');
     const { db } = Route.useRouteContext();
     const { items, workContexts, people, allWorkContexts, allPeople, routines, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();

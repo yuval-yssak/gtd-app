@@ -14,6 +14,7 @@ import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
@@ -37,6 +38,7 @@ const VIEW_OPTIONS: Array<{ value: SearchView; icon: React.ReactElement; label: 
 ];
 
 function SearchPage() {
+    useDocumentTitle('Search');
     const urlState = Route.useSearch();
     const navigate = useNavigate();
     useListScrollRestoration();

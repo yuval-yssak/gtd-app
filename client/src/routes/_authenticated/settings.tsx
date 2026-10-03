@@ -24,6 +24,7 @@ import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { getOrCreateDeviceId } from '../../db/deviceId';
 import { requestAndRegisterPushSubscription } from '../../db/pushSubscription';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { APP_NAME, METHOD_NAME } from '../../lib/appName';
 import { setShowBriefs, useShowBriefs } from '../../lib/briefPreference';
 import { getCalendarHorizonMonths, setCalendarHorizonMonths } from '../../lib/calendarHorizon';
@@ -54,6 +55,7 @@ export const Route = createFileRoute('/_authenticated/settings')({
 });
 
 function SettingsPage() {
+    useDocumentTitle('Settings');
     const { db } = Route.useRouteContext();
     const { account } = useAppData();
 

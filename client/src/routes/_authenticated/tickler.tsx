@@ -23,6 +23,7 @@ import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { releaseFromTickler } from '../../db/itemMutations';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useTodayIso } from '../../hooks/useTodayIso';
@@ -36,6 +37,7 @@ export const Route = createFileRoute('/_authenticated/tickler')({
 });
 
 function TicklerPage() {
+    useDocumentTitle('Tickler');
     const { db } = Route.useRouteContext();
     const { items, routines, people, workContexts, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();

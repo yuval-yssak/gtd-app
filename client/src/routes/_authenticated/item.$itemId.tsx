@@ -12,6 +12,7 @@ import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ItemEditorBody } from '../../components/itemEditor/ItemEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
@@ -81,6 +82,8 @@ function ItemPage() {
     useScrollToTopOnMount();
 
     const item = allItems.find((i) => i._id === itemId) ?? null;
+    // A blank title falls back to the header's label rather than a bare app name.
+    useDocumentTitle(item?.title.trim() || 'Edit item');
 
     // Page mode doesn't use useItemEditor, so we own a tiny local snackbar slot to surface the
     // fromGmail-read-only warning when the body's done-transition save fires the callback.

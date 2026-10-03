@@ -15,6 +15,7 @@ import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { RoutineEditorBody } from '../../components/routineEditor/RoutineEditorBody';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone, FROM_GMAIL_READONLY_MESSAGE } from '../../db/itemMutations';
+import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useScrollToTopOnMount } from '../../hooks/useListScrollRestoration';
 import { useNavigateBack } from '../../hooks/useNavigateBack';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
@@ -117,6 +118,8 @@ function RoutinePage() {
     useScrollToTopOnMount();
 
     const routine = allRoutines.find((r) => r._id === routineId) ?? null;
+    // A blank title falls back to the header's label rather than a bare app name.
+    useDocumentTitle(routine?.title.trim() || 'Edit routine');
     const goBack = () => historyBackOr('/routines');
 
     // ESC on the not-found branch, where RoutineEditorBody (which owns the page-chrome ESC
