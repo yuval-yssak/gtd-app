@@ -29,6 +29,10 @@ export function strictCors() {
         // to cookie-authed calls without preflight errors.
         allowHeaders: ['Content-Type', 'X-Device-Id', 'Authorization'],
         allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+        // Cross-origin fetches can only read safelisted response headers; `GET /export` names its
+        // download file in Content-Disposition, which the SPA otherwise can't see (it then falls
+        // back to its own `done-export-<date>.json`).
+        exposeHeaders: ['Content-Disposition'],
     });
 }
 

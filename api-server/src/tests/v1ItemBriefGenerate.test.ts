@@ -316,12 +316,12 @@ describe('POST /v1/items/:id/brief/generate — outcomes', () => {
         expect(body.item.brief).toMatchObject({ origin: 'model', text: null, state: 'declined' });
     });
 
-    it('maps model failures: refusal → 502 brief_generation_failed, no key → 503 agent_unavailable', async () => {
+    it('maps model failures: refusal → 422 brief_generation_failed, no key → 503 agent_unavailable', async () => {
         const session = await login();
         const itemId = await seedItem(session.userId);
         messagesCreate.mockResolvedValue({ stop_reason: 'refusal', content: [] });
         const refused = await generate(itemId, session);
-        expect(refused.status).toBe(502);
+        expect(refused.status).toBe(422);
         expect((await refused.json()) as unknown).toMatchObject({ code: 'brief_generation_failed' });
 
         vi.stubEnv('ANTHROPIC_API_KEY', '');
@@ -379,7 +379,7 @@ describe('POST /v1/items/:id/brief/generate — per-user generation cap', () => 
         const session = await login();
         const itemId = await seedItem(session.userId);
         messagesCreate.mockResolvedValue({ stop_reason: 'refusal', content: [] });
-        expect((await generate(itemId, session)).status).toBe(502);
+        expect((await generate(itemId, session)).status).toBe(422);
         expect((await generate(itemId, session)).status).toBe(429);
     });
 });

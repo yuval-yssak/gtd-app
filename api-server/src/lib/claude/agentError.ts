@@ -8,15 +8,16 @@ import Anthropic from '@anthropic-ai/sdk';
  *     END USER cannot act on it: our API account is out of credits, the key is missing/invalid, the
  *     API is overloaded (529) or rate-limited (429), or any 5xx. The user sees a "temporarily
  *     unavailable, try later" message — distinct from THEIR own per-day spend cap (402).
- *   - `agent_error` (502) — a genuinely unexpected failure (malformed request we built, a bug). The
- *     user sees a generic "couldn't finish, try again".
+ *   - `agent_error` (500) — a genuinely unexpected failure (malformed request we built, a bug). The
+ *     user sees a generic "couldn't finish, try again". Never 502: the Cloudflare proxy replaces an
+ *     origin 502/504 with its own HTML page (no CORS headers, no JSON) — see root CLAUDE.md.
  *
  * Either way the operator gets a `console.error` with the status + Anthropic request_id so a silent
  * "agent_error" in the client is no longer a dead end when debugging.
  */
 
 export interface ClassifiedAgentError {
-    status: 502 | 503;
+    status: 500 | 503;
     code: 'agent_error' | 'agent_unavailable';
     /** User-facing message returned in the response body. */
     message: string;
@@ -59,12 +60,12 @@ export function classifyAgentError(err: unknown): ClassifiedAgentError {
             };
         }
         return {
-            status: 502,
+            status: 500,
             code: 'agent_error',
             message: GENERIC_MESSAGE,
             logLine: `Anthropic error (status=${err.status ?? 'n/a'}, request_id=${requestId}): ${err.message}`,
         };
     }
     const detail = err instanceof Error ? err.message : 'unknown error';
-    return { status: 502, code: 'agent_error', message: GENERIC_MESSAGE, logLine: `Agent loop failed: ${detail}` };
+    return { status: 500, code: 'agent_error', message: GENERIC_MESSAGE, logLine: `Agent loop failed: ${detail}` };
 }

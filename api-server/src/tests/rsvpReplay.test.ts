@@ -246,6 +246,12 @@ describe('rsvp opType replay via /sync/push', () => {
 describe('update opType with gcalMeta sidecar', () => {
     it('persists gcalMeta on the op row so the pushback layer can read it back', async () => {
         await seedAll();
+        // applyAndPublishOperations fires maybePushToGCal fire-and-forget. Left unawaited, that push
+        // can reach updateEvent AFTER this test ends — on a slow CI runner it landed on the next
+        // test's prototype spy and made "called once" read 2 (same snapshot, indistinguishable).
+        // The test owns the spy and waits for the whole push to finish (its last step stamps
+        // lastPushedToGCalTs), so neither the call nor that write can leak into the next test.
+        const backgroundPush = vi.spyOn(GoogleCalendarProvider.prototype, 'updateEvent').mockResolvedValue(undefined);
 
         const now = dayjs().add(1, 'minute').toISOString();
         const snapshot: ItemInterface = makeCalendarItem({ title: 'Renamed standup', updatedTs: now });
@@ -272,6 +278,8 @@ describe('update opType with gcalMeta sidecar', () => {
         const [op] = ops;
         if (!op) throw new Error('expected one update op');
         expect(op.gcalMeta).toEqual({ sendUpdates: 'all' });
+        await vi.waitFor(async () => expect((await itemsDAO.findByOwnerAndId('item-rsvp-1', USER_ID))?.lastPushedToGCalTs).toBeDefined());
+        expect(backgroundPush).toHaveBeenCalledOnce();
     });
 
     it('drives the sendUpdates value through maybePushToGCal into provider.updateEvent', async () => {

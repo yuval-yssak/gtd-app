@@ -18,7 +18,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { v1ClaudeRoutes } from '../routes/v1/claude.js';
+import { __setAssistTimeoutForTests, v1ClaudeRoutes } from '../routes/v1/claude.js';
 import { v1ItemsRoutes } from '../routes/v1/items.js';
 import type { CalendarIntegrationInterface, CalendarSyncConfigInterface } from '../types/entities.js';
 import { oauthLogin, SESSION_COOKIE } from './helpers.js';
@@ -772,12 +772,31 @@ describe('spend cap + metering (COGS)', () => {
             .mockRejectedValueOnce(new Error('upstream 529'));
 
         const res = await assist(plaintext, id);
-        expect(res.status).toBe(502);
+        expect(res.status).toBe(500);
         // The tokens spent before the throw are still metered (finally-block recording).
         const day = dayjs.utc().format('YYYY-MM-DD');
         const usage = await db.collection('claudeUsage').findOne({ _id: `${userId}:${day}` });
         expect(usage).not.toBeNull();
         expect((usage as { inputTokens: number }).inputTokens).toBe(100);
+    });
+
+    it('answers 503 agent_timeout (never 504) when the loop exceeds its wall-clock budget', async () => {
+        const { userId } = await login();
+        const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'claude.assist']);
+        const id = await captureInboxItem(plaintext, 'slow model', 'ext-timeout');
+        // The model call never answers on its own; it only rejects when the request's signal aborts.
+        messagesCreate.mockImplementationOnce(
+            (_params: unknown, options: { signal: AbortSignal }) =>
+                new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted')))),
+        );
+        __setAssistTimeoutForTests(50);
+        try {
+            const res = await assist(plaintext, id);
+            expect(res.status).toBe(503);
+            expect(await res.json()).toMatchObject({ code: 'agent_timeout' });
+        } finally {
+            __setAssistTimeoutForTests();
+        }
     });
 
     it('returns 503 agent_unavailable when Anthropic reports the API account is out of credits', async () => {
@@ -786,7 +805,7 @@ describe('spend cap + metering (COGS)', () => {
         const id = await captureInboxItem(plaintext, 'no credits', 'ext-credits');
 
         // Simulate the SDK throwing the "credit balance too low" 400 — an operator/service failure
-        // the end user can't fix, so it maps to 503 agent_unavailable (not the generic 502).
+        // the end user can't fix, so it maps to 503 agent_unavailable (not the generic 500).
         messagesCreate.mockRejectedValueOnce(
             new Anthropic.BadRequestError(
                 400,

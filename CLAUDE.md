@@ -331,7 +331,7 @@ Configured at https://github.com/yuval-yssak/gtd-app/settings/environments — t
 ### Infrastructure
 
 - **Backend**: Google Cloud Run, region `us-central1`, `--max-instances=1` and scales to zero — **no in-process timers**; anything periodic is a Cloud Scheduler job hitting an endpoint with the `x-cron-secret` header (value = `CRON_SECRET`).
-- **API proxy**: Cloudflare Worker (`workers/api-proxy/`) routes both API domains to the respective Cloud Run service. The free tier's daily request limit can take staging offline; bypass via the raw Cloud Run URL + bearer token.
+- **API proxy**: Cloudflare Worker (`workers/api-proxy/`) routes both API domains to the respective Cloud Run service. The free tier's daily request limit can take staging offline; bypass via the raw Cloud Run URL + bearer token. **Cloudflare replaces any origin `502`/`504` with its own HTML error page — no CORS headers, no JSON** — so the browser sees "Failed to fetch" and API callers lose the error `code`. The API therefore never returns 502/504: use `503` for an unavailable upstream (Google, Anthropic) or a timeout, `500` for an unexpected failure, a `4xx` otherwise. `api-server/src/tests/noGatewayStatusCodes.test.ts` enforces it. The one 504 the code can't prevent is Cloud Run's own request timeout, so keep handler budgets well under it (the Claude-assist loop stops at 25 s).
 - **Docker images**: built from `api-server/Dockerfile` (build context is the repo root) and pushed to Google Artifact Registry.
 - Full runbook, env-var inventory and Scheduler job setup: [`docs/gcp-deploy-plan.md`](docs/gcp-deploy-plan.md).
 

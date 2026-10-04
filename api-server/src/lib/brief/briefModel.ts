@@ -116,7 +116,7 @@ export async function generateBriefText(item: BriefSourceItem): Promise<Generate
 }
 
 export interface BriefHttpError {
-    status: 429 | 502 | 503;
+    status: 422 | 429 | 500 | 503;
     code: 'rate_limited' | 'brief_generation_failed' | 'agent_unavailable';
     message: string;
     /** Seconds, passed through from Anthropic's `retry-after` when it sent one. */
@@ -134,7 +134,10 @@ function retryAfterSeconds(headers: Headers): number | undefined {
  * Maps a generation failure to an HTTP response. Anthropic-side outages (missing key, out of
  * credits, 5xx) reuse `classifyAgentError`'s 503 `agent_unavailable`; an Anthropic 429 is
  * surfaced as our own 429 with its Retry-After so a client backs off instead of hammering;
- * everything else (refusal, malformed output, a bad request we built) is 502.
+ * a content failure (`BriefGenerationError`: refusal, malformed output) is 422 — this item's content
+ * could not be turned into a brief; anything else (a connection drop, a bad request we built, a bug)
+ * is 500 and retryable. Never 502: the Cloudflare proxy swaps an origin 502/504 for its own HTML
+ * error page, so the JSON `code` would never reach the client (see root CLAUDE.md).
  */
 export function briefErrorToHttp(err: unknown): BriefHttpError {
     if (err instanceof Anthropic.RateLimitError) {
@@ -151,6 +154,7 @@ export function briefErrorToHttp(err: unknown): BriefHttpError {
     if (classified.status === 503) {
         return { status: 503, code: 'agent_unavailable', message: classified.message, logLine: classified.logLine };
     }
-    const detail = err instanceof BriefGenerationError ? `${err.code}: ${err.message}` : classified.logLine;
-    return { status: 502, code: 'brief_generation_failed', message: 'Could not generate a brief for this item.', logLine: detail };
+    const isContentFailure = err instanceof BriefGenerationError;
+    const detail = isContentFailure ? `${err.code}: ${err.message}` : classified.logLine;
+    return { status: isContentFailure ? 422 : 500, code: 'brief_generation_failed', message: 'Could not generate a brief for this item.', logLine: detail };
 }

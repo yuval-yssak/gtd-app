@@ -51,6 +51,12 @@ describe('strictCors (cookie-authed routes)', () => {
             expect(res.headers.get('access-control-allow-credentials')).toBe('true');
         });
 
+        it('exposes Content-Disposition so the SPA can read the export download filename', async () => {
+            const app = buildStrictApp();
+            const res = await app.request('/sync/push', { method: 'POST', headers: { Origin: SPA_ORIGIN } });
+            expect(res.headers.get('access-control-expose-headers')).toBe('Content-Disposition');
+        });
+
         it('rejects a foreign origin in production: no allow-origin header', async () => {
             const app = buildStrictApp();
             const res = await app.request('/sync/push', {

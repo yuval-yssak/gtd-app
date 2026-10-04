@@ -126,7 +126,7 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(res.status).toBe(400);
     });
 
-    it('returns 502 when Google token exchange fails', async () => {
+    it('returns 503 when Google token exchange fails', async () => {
         // Obtain a valid signed state by triggering the /auth/google redirect and extracting the state.
         const sessionCookie = await loginAsAlice();
         const redirectRes = await authenticatedRequest(app, {
@@ -141,7 +141,7 @@ describe('GET /calendar/auth/google/callback', () => {
         vi.spyOn(google.auth.OAuth2.prototype, 'getToken').mockRejectedValueOnce(new Error('invalid_grant'));
 
         const res = await app.fetch(new Request(`http://localhost:4000/calendar/auth/google/callback?code=used-code&state=${state}`));
-        expect(res.status).toBe(502);
+        expect(res.status).toBe(503);
     });
 
     it('redirects to client settings and stores integration on success', async () => {
@@ -626,7 +626,7 @@ describe('GET /calendar/integrations/:id/calendars', () => {
         expect(res.status).toBe(404);
     });
 
-    it('returns 502 when Google calendar listing fails', async () => {
+    it('returns 503 (with a code) when Google calendar listing fails', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
@@ -634,7 +634,8 @@ describe('GET /calendar/integrations/:id/calendars', () => {
         vi.spyOn(GoogleCalendarProvider.prototype, 'listCalendars').mockRejectedValueOnce(new Error('Google error'));
 
         const res = await authenticatedRequest(app, { method: 'GET', path: '/calendar/integrations/int-1/calendars', sessionCookie });
-        expect(res.status).toBe(502);
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({ code: 'google_calendar_unavailable' });
     });
 
     it('returns the list of calendars on success', async () => {
@@ -1209,6 +1210,20 @@ describe('POST /calendar/integrations/:id/link-routine/:routineId', () => {
             sessionCookie,
         });
         expect(res.status).toBe(400);
+    });
+
+    it('answers 503 google_calendar_unavailable (never 502) when Google rejects the event create, and links nothing', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await calendarIntegrationsDAO.insertEncrypted(makeIntegration(userId));
+        await routinesDAO.insertOne(makeRoutine(userId));
+        vi.spyOn(GoogleCalendarProvider.prototype, 'createRecurringEvent').mockRejectedValueOnce(new Error('google down'));
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/link-routine/routine-1', sessionCookie });
+
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({ code: 'google_calendar_unavailable' });
+        expect((await routinesDAO.findByOwnerAndId('routine-1', userId))?.calendarEventId).toBeUndefined();
     });
 
     it('creates a GCal event, stores calendarEventId on the routine, and records an operation', async () => {

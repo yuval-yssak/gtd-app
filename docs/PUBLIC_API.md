@@ -131,7 +131,7 @@ with `Retry-After: <seconds>` in the response headers. Read and write buckets ar
 - **Content type**: `application/json` for both request and response bodies. UTF-8.
 - **Timestamps**: ISO 8601 datetime strings (e.g. `2026-05-04T14:23:00.000Z`). Always UTC.
 - **IDs**: client-supplied UUID v4 strings. The server accepts a client-provided `_id` on create; if omitted, the server generates one.
-- **Errors**: `{ "error": "<human message>", "code": "<machine slug>" }` with the appropriate HTTP status.
+- **Errors**: `{ "error": "<human message>", "code": "<machine slug>" }` with the appropriate HTTP status. The API never answers `502` or `504` itself (since 2026-10-04): the Cloudflare proxy in front of it replaces those with an HTML page. If you do see a `502`/`504`, it is an infrastructure failure, not an API error — retry.
 - **Versioning**: this document describes `v1`. Breaking changes ship as `/v2`. Additive changes (new optional fields, new endpoints) may appear in `v1` without a version bump.
 
 ## Item shape
@@ -331,7 +331,8 @@ Asks the server's model (`claude-haiku-4-5`) to write a `model`-origin brief fro
 | `409` | `brief_not_applicable` | The item is `done` or `trash`. Briefs are only generated for open items; `force` does not override this. |
 | `409` | `brief_pinned` | A user/agent-authored brief exists and `force` was not `true`. |
 | `429` | `rate_limited` | Per-user generation cap (or the token's write bucket, or an upstream model rate limit) — honour `Retry-After`. |
-| `502` | `brief_generation_failed` | The model refused or returned unusable output. |
+| `422` | `brief_generation_failed` | The model refused or returned unusable output for this item. (Was `502` before 2026-10-04.) |
+| `500` | `brief_generation_failed` | Unexpected failure (connection drop, server bug). Retryable. |
 | `503` | `agent_unavailable` | The model service is unavailable (missing key, out of credits, upstream outage). Try later. |
 
 ---
@@ -523,7 +524,6 @@ Content-Type: application/json
 | `403` | `recipient_token_mismatch` | Recipient token's user does not equal `toUserId`. |
 | `403` | `recipient_scope_missing` | Recipient token lacks `reassign.accept`. |
 | `404` | `reassign_failed` | Entity not owned by the calling user, or routine-generated item (which cannot be reassigned). |
-| `502` | `reassign_failed` | GCal create-on-target failed; nothing was persisted. |
 
 **Fan-out parity.** A reassign now flows through `applyAndPublishOperation` for both legs — a delete on `fromUserId` and a create on `toUserId`. SSE, web push, GCal pushback, and webhook deliveries fire on BOTH user channels, so external integrations see cross-account moves with the same fidelity as any other write. Both ops carry `deviceId: api:<tokenId>` for audit attribution. Strict-mode validation runs ahead of the source delete, so an invalid snapshot can't leave a torn state.
 
@@ -689,8 +689,9 @@ The "Clarify with Claude" agent. `POST /v1/claude/assist` runs a bounded, single
 | `402` | `daily_spend_cap_reached` | Per-user daily Claude budget reached; no call was made. |
 | `403` | `forbidden_scope` | Token lacks `claude.assist`. |
 | `404` | `not_found` | Item doesn't exist or isn't owned by the caller. |
-| `502` | `agent_error` | The model call failed. |
-| `504` | `agent_timeout` | The agent exceeded its wall-clock budget. |
+| `500` | `agent_error` | The model call failed unexpectedly. (Was `502` before 2026-10-04.) |
+| `503` | `agent_unavailable` | The model service is unavailable (missing key, out of credits, upstream outage). Try later. |
+| `503` | `agent_timeout` | The agent exceeded its wall-clock budget. Retryable. (Was `504` before 2026-10-04.) |
 
 ### `POST /v1/claude/assist/apply` — redeem an executeToken
 

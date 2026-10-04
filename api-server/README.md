@@ -453,7 +453,7 @@ CLAUDE_ASSIST_DAILY_COST_CAP_USD=1.00         # optional; per-user daily spend c
 - `CALENDAR_ENCRYPTION_KEY` — zeros (insecure, dev only)
 - `EXECUTE_TOKEN_SIGNING_KEY` — dev placeholder (insecure; production throws if a real key < 32 chars isn't set)
 - Web Push keys — optional; warnings if missing
-- `ANTHROPIC_API_KEY` — none; the Claude-assist endpoints throw `502` until it is set (the rest of the server runs fine without it)
+- `ANTHROPIC_API_KEY` — none; the Claude-assist and brief-generation endpoints answer `503 agent_unavailable` until it is set (the rest of the server runs fine without it)
 
 ## Claude assist setup (Anthropic API key)
 

@@ -180,7 +180,7 @@ describe('describeGenerateError / isBriefPinnedError', () => {
     });
 
     it('falls back to the generic line for other statuses and non-API throws', () => {
-        expect(describeGenerateError(new BriefApiError('x', { status: 502, code: 'brief_generation_failed' }))).toBe('Could not generate a brief');
+        expect(describeGenerateError(new BriefApiError('x', { status: 422, code: 'brief_generation_failed' }))).toBe('Could not generate a brief');
         expect(describeGenerateError(new TypeError('Failed to fetch'))).toBe('Could not generate a brief');
     });
 

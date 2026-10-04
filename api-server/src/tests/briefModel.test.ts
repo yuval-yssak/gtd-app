@@ -130,13 +130,18 @@ describe('briefErrorToHttp', () => {
         expect(briefErrorToHttp(noHeader).retryAfterSec).toBeUndefined();
     });
 
-    it('maps refusal / malformed output / unknown errors to 502 brief_generation_failed', () => {
+    it('maps a content failure (refusal / malformed output) to 422 and any other error to 500, both brief_generation_failed', () => {
         expect(briefErrorToHttp(new BriefGenerationError('refusal', 'no'))).toMatchObject({
-            status: 502,
+            status: 422,
             code: 'brief_generation_failed',
             logLine: 'refusal: no',
         });
-        expect(briefErrorToHttp(new Error('boom'))).toMatchObject({ status: 502, code: 'brief_generation_failed' });
+        // A bug or a dropped connection is not "this item can't be briefed" — retryable 500.
+        expect(briefErrorToHttp(new Error('boom'))).toMatchObject({ status: 500, code: 'brief_generation_failed' });
+        expect(briefErrorToHttp(new Anthropic.APIConnectionError({ message: 'socket hang up' }))).toMatchObject({
+            status: 500,
+            code: 'brief_generation_failed',
+        });
     });
 
     it('maps an Anthropic 5xx / overloaded to 503 agent_unavailable', () => {

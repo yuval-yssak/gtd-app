@@ -30,8 +30,14 @@ import { isOverDailyCap, recordUsage } from '../../lib/claude/spend.js';
  * relies on the credentialed `assistCors()` profile (see `index.ts`).
  */
 
-// Wall-clock ceiling for the whole loop. A stuck call fails fast rather than holding the request.
+// Wall-clock ceiling for the whole loop. A stuck call fails fast rather than holding the request —
+// and stays well under Cloud Run's request timeout, whose own 504 Cloudflare would replace with HTML.
 const ASSIST_TIMEOUT_MS = 25_000;
+let assistTimeoutMs = ASSIST_TIMEOUT_MS;
+/** Test-only: shrink the wall-clock budget so the timeout path runs without waiting 25 s. */
+export function __setAssistTimeoutForTests(ms = ASSIST_TIMEOUT_MS): void {
+    assistTimeoutMs = ms;
+}
 
 interface AssistBody {
     itemId?: unknown;
@@ -99,7 +105,7 @@ export const v1ClaudeRoutes = new Hono<{ Variables: BearerVariables }>()
         }
 
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), ASSIST_TIMEOUT_MS);
+        const timeout = setTimeout(() => controller.abort(), assistTimeoutMs);
         // Caller-owned usage accumulator: the loop mutates it as it goes, so tokens spent before a
         // timeout/error throw are still metered. Recorded in `finally` on every exit path.
         const usage = emptyUsage();
@@ -109,7 +115,9 @@ export const v1ClaudeRoutes = new Hono<{ Variables: BearerVariables }>()
         } catch (err) {
             if (controller.signal.aborted) {
                 console.warn(`[claude-assist] agent timed out for user ${ownerUserId} (item ${item._id})`);
-                return c.json({ error: 'The assistant took too long to respond.', code: 'agent_timeout' }, 504);
+                // 503, not 504: the Cloudflare proxy replaces an origin 504 with its own HTML page
+                // (no CORS, no JSON), so the client would never see `agent_timeout`.
+                return c.json({ error: 'The assistant took too long to respond.', code: 'agent_timeout' }, 503);
             }
             // Classify operator/service failures (no credits, bad key, overloaded) apart from genuinely
             // unexpected ones, log the detail + Anthropic request_id (previously a silent dead end), and

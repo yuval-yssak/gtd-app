@@ -38,23 +38,23 @@ describe('classifyAgentError', () => {
         }
     });
 
-    it('maps a genuine bad request (not credits) to agent_error (502)', () => {
+    it('maps a genuine bad request (not credits) to agent_error (500)', () => {
         const err = makeApiError(Anthropic.BadRequestError, 400, 'messages: at least one message is required');
         const result = classifyAgentError(err);
-        expect(result).toMatchObject({ status: 502, code: 'agent_error' });
+        expect(result).toMatchObject({ status: 500, code: 'agent_error' });
         expect(result.logLine).toContain('req_test');
     });
 
-    it('maps a non-Anthropic error to agent_error (502) with the message in the log', () => {
+    it('maps a non-Anthropic error to agent_error (500) with the message in the log', () => {
         const result = classifyAgentError(new Error('something unexpected'));
-        expect(result).toMatchObject({ status: 502, code: 'agent_error' });
+        expect(result).toMatchObject({ status: 500, code: 'agent_error' });
         expect(result.logLine).toContain('something unexpected');
     });
 
-    it('maps an APIConnectionError (status undefined) to agent_error (502)', () => {
+    it('maps an APIConnectionError (status undefined) to agent_error (500)', () => {
         // A connection error is an APIError but has no status, so it falls through to the generic
         // path. Pinning this guards a future "treat connection errors as unavailable" change.
         const result = classifyAgentError(new Anthropic.APIConnectionError({ message: 'socket hang up' }));
-        expect(result).toMatchObject({ status: 502, code: 'agent_error' });
+        expect(result).toMatchObject({ status: 500, code: 'agent_error' });
     });
 });

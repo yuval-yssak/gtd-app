@@ -80,12 +80,12 @@ describe('assist', () => {
         expect(err).toMatchObject({ status: 402, message: "You've reached today's limit.", code: 'daily_spend_cap_reached' });
     });
 
-    it('surfaces agent_timeout (504) and agent_error (502) codes', async () => {
+    it('surfaces agent_timeout (503) and agent_error (500) codes', async () => {
         fetchSpy
-            .mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ error: 'too long', code: 'agent_timeout' }, 504)))
-            .mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ error: 'boom', code: 'agent_error' }, 502)));
-        await expect(assist('item-1')).rejects.toMatchObject({ status: 504, code: 'agent_timeout' });
-        await expect(assist('item-1')).rejects.toMatchObject({ status: 502, code: 'agent_error' });
+            .mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ error: 'too long', code: 'agent_timeout' }, 503)))
+            .mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ error: 'boom', code: 'agent_error' }, 500)));
+        await expect(assist('item-1')).rejects.toMatchObject({ status: 503, code: 'agent_timeout' });
+        await expect(assist('item-1')).rejects.toMatchObject({ status: 500, code: 'agent_error' });
     });
 
     it('throws AssistApiError with code=undefined when the error body is not JSON (network/proxy failure)', async () => {
@@ -97,9 +97,9 @@ describe('assist', () => {
     });
 
     it('falls back to a synthetic message when the error body carries a code but no error string', async () => {
-        fetchSpy.mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ code: 'agent_error' }, 502)));
+        fetchSpy.mockImplementationOnce(() => Promise.resolve(makeJsonResponse({ code: 'agent_error' }, 500)));
         const err = await assist('item-1').catch((e) => e);
-        expect(err).toMatchObject({ status: 502, code: 'agent_error', message: 'assist API error 502' });
+        expect(err).toMatchObject({ status: 500, code: 'agent_error', message: 'assist API error 500' });
     });
 });
 

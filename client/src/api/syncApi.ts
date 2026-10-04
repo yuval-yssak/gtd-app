@@ -70,7 +70,7 @@ export type ReassignResponse =
 /**
  * Calls `POST /sync/reassign`. Errors are returned as discriminated `{ ok: false }` so the
  * caller can present a toast without a try/catch. Network failures throw; HTTP error statuses
- * (400/403/404/502) are surfaced in the discriminated branch.
+ * (400/403/404) are surfaced in the discriminated branch.
  */
 export async function reassignEntityOnServer(params: ReassignParams): Promise<ReassignResponse> {
     const res = await fetch(`${API_SERVER}/sync/reassign`, {

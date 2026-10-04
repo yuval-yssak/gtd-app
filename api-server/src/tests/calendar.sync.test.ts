@@ -40,6 +40,19 @@ describe('POST /calendar/integrations/:id/sync', () => {
         expect(res.status).toBe(404);
     });
 
+    it('answers 503 calendar_sync_failed (never 502, and not blaming Google) when the sync throws', async () => {
+        const sessionCookie = await loginAsAlice();
+        const userId = await getUserId(sessionCookie);
+        await insertIntegrationWithConfig(userId);
+        // Our own failure inside the handler's try — the case the neutral code exists for.
+        vi.spyOn(calendarSyncConfigsDAO, 'findEnabledByIntegration').mockRejectedValueOnce(new Error('mongo blip'));
+
+        const res = await authenticatedRequest(app, { method: 'POST', path: '/calendar/integrations/int-1/sync', sessionCookie });
+
+        expect(res.status).toBe(503);
+        expect(await res.json()).toMatchObject({ code: 'calendar_sync_failed' });
+    });
+
     it('returns syncedRoutines: 0 when no routines are linked', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);

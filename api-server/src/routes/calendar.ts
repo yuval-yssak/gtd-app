@@ -166,6 +166,15 @@ function revokedIntegrationBody(integration: CalendarIntegrationInterface) {
     };
 }
 
+/**
+ * Error codes for failures that are not the caller's fault, sent with 503 (never 502 — see root
+ * CLAUDE.md: the Cloudflare proxy swaps an origin 502/504 for an HTML page). `google_calendar_unavailable`
+ * when the failing call was Google's; `calendar_sync_failed` for the sync catch-all, which also catches
+ * our own errors (Mongo, bugs) and so must not blame Google.
+ */
+const GOOGLE_CALENDAR_UNAVAILABLE = 'google_calendar_unavailable';
+const CALENDAR_SYNC_FAILED = 'calendar_sync_failed';
+
 // ── OAuth ─────────────────────────────────────────────────────────────────────
 
 function buildOAuthClient() {
@@ -359,7 +368,7 @@ calendarRoutes.get('/auth/google/callback', async (c) => {
     if (!tokenResult.ok) {
         return tokenResult.reason === 'missing_tokens'
             ? c.text('OAuth did not return required tokens', 400)
-            : c.text('Failed to exchange OAuth code for tokens', 502);
+            : c.text('Failed to exchange OAuth code for tokens', 503);
     }
     const { accessToken, refreshToken, expiryDate, grantedScopes } = tokenResult;
 
@@ -970,9 +979,11 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
     // done on the callback's partial-grant rejection path — see the comment there — and not when
     // another GTD user has connected the same Google account (Google revokes per client + account,
     // so it would kill their refresh token too).
-    if (!(await calendarIntegrationsDAO.isGoogleAccountUsedByOtherUser(integration.accountEmail, userId))) {
-        await revokeGoogleGrant(integration);
-    }
+    const revokeOutcome = (await calendarIntegrationsDAO.isGoogleAccountUsedByOtherUser(integration.accountEmail, userId))
+        ? 'skipped_shared_account'
+        : await revokeGoogleGrant(integration);
+    // One line per disconnect so production logs show which branch ran (no email, no token).
+    console.log(`[calendar] disconnect revoke outcome | integration=${integrationId} outcome=${revokeOutcome}`);
     await calendarSyncConfigsDAO.deleteByIntegration(integrationId);
     await calendarIntegrationsDAO.deleteByOwner(integrationId, userId);
     return c.json({ ok: true });
@@ -1019,7 +1030,9 @@ calendarRoutes.get('/integrations/:id/calendars', authenticateRequest, async (c)
         return c.json(calendars);
     } catch (err) {
         console.error(`[calendar] listCalendars failed for integration ${integrationId}:`, err);
-        return c.json({ error: 'Failed to fetch calendars from Google' }, 502);
+        // 503, never 502: the Cloudflare proxy swaps an origin 502/504 for its own HTML page without
+        // CORS headers, which the browser reports as a network failure instead of this JSON.
+        return c.json({ error: 'Failed to fetch calendars from Google', code: GOOGLE_CALENDAR_UNAVAILABLE }, 503);
     }
 });
 
@@ -1319,7 +1332,7 @@ calendarRoutes.post('/integrations/:id/link-routine/:routineId', authenticateReq
     const createResult = await tryCreateRecurringEvent(provider, routine, targetCalendarId, timeZone, integration._id);
     if (!createResult.ok) {
         console.error(`[calendar] createRecurringEvent failed for integration ${integrationId}:`, createResult.error);
-        return c.json({ error: 'Failed to create Google Calendar event' }, 502);
+        return c.json({ error: 'Failed to create Google Calendar event', code: GOOGLE_CALENDAR_UNAVAILABLE }, 503);
     }
     // Defensive normalization: a freshly-created GCal event should already have a bare master id,
     // but `normalizeMasterEventId` is idempotent on bare ids and protects against provider quirks.
@@ -1457,7 +1470,7 @@ calendarRoutes.post('/integrations/:id/sync', authenticateRequest, async (c) => 
         });
     } catch (err) {
         console.error(`[calendar] sync failed for integration ${integrationId}:`, err);
-        return c.json({ error: 'Failed to sync with Google Calendar' }, 502);
+        return c.json({ error: 'Calendar sync failed', code: CALENDAR_SYNC_FAILED }, 503);
     }
 });
 

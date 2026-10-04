@@ -122,3 +122,4 @@
 - [Event-ownership checks miss instance ids](project_event_ownership_checks_miss_instance_ids.md) — calendarEventId-keyed owner checks forget calendarInstanceEventId + done…
 - [Link-stamp in-flight window + orphan repair](project_link_stamp_inflight_window_and_orphan_repair.md) — carry-forward in-flight + orphan-repair checklist; repair cost on first connect (new integration id)
 - [Account deletion/export review checklist](project_account_deletion_review_checklist.md) — policy-text drift, best-effort steps that block deletion, shared pushSubscriptions, in-flight writers re-create rows; cross-user grant revoke, CLI-process no-op drains
+- [Line-regex guard tests miss Biome wrapping](project_line_regex_guards_miss_biome_wrapping.md) — anchored per-line regex guards miss a status arg alone on its own line; test the wrapped shape.
