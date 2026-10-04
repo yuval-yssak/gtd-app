@@ -123,6 +123,19 @@ Everything else (`operations`, `deviceSyncState`, `calendarIntegrations`, `apiTo
 
 Adding a synced entity is a **client change too**: `client/src/db/syncHelpers.ts` needs the new `case` arm and the IDB store, or pre-upgrade tabs silently skip the ops.
 
+### User data scope: deletion + export (GDPR)
+
+Account deletion (`DELETE /auth/me`, the admin CLI `api-server/src/scripts/deleteUser.ts`) and the data export (`GET /export`, Settings → "Download my data") are both driven from **one list**: `api-server/src/lib/userDataInventory.ts`. Each entry names the collection, its owner filter (owner fields differ: `items.user`, `deviceUsers.userId`, `entityMoves.fromUserId|toUserId`, Better Auth rows by `userId` as string **or** ObjectId) and an export policy — `full`, `redacted` (with the exact fields stripped) or `omitted` (with the reason the user sees).
+
+**Rule for every future change that touches user data:**
+
+- A **new collection** holding anything of the user's — content they wrote, metadata about them, state derived from their data — goes into `USER_DATA_COLLECTIONS` (deletion + export) or, only if it truly holds no per-user rows, into `NOT_USER_SCOPED_COLLECTIONS` with a reason. `api-server/src/tests/userDataInventory.test.ts` enumerates every DAO and the Better Auth collections and fails until the decision is made; `tests/userDataFixtures.ts` needs a matching fixture row.
+- **User-authored content is exported in full** (items, routines, people, work contexts, review inboxes, …). **Generated or derived content** (item briefs, device sync cursors) is still in the **deletion** scope — it must vanish with the account — and is exported when it is useful to the user; a transient replication log like `operations` may be `omitted`, never silently left out.
+- A **new field** on an existing collection that holds a credential, token, hash, push key or webhook secret must be added to that collection's `redacted` list, or the export leaks it. A new field holding the user's content needs nothing — `full` exports whole rows.
+- The **client mirror**: a new IndexedDB store holding user rows must be added to `wipeUserData` in `client/src/db/accountHelpers.ts` (sign-out **and** account evaporation) and to the local snapshot in `client/src/db/exportRecoveryData.ts`.
+
+The tombstone (`deletedUsers`) carries only the user id and the deletion time — never the email — because the privacy policy promises that only the fact of the deletion is kept. Details: `api-server/README.md` § Account deletion & data export.
+
 ### Sync Architecture
 
 All mutations are recorded as `OperationInterface` documents on the server. Each operation stores the **full entity snapshot** at the time of the change (not a diff), making last-write-wins conflict resolution trivial: the operation with the latest `ts` wins.

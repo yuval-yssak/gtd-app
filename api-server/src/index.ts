@@ -7,6 +7,7 @@ import { assertBriefFakeModelNotInProduction, assertSessionSecretConfiguredInPro
 import { noStoreCache } from './lib/noStoreCache.js';
 import { v1RequestLogger } from './lib/v1Logger.js';
 import { auth, loadDataAccess } from './loaders/mainLoader.js';
+import { accountRoutes, exportRoutes } from './routes/account.js';
 import { calendarRoutes } from './routes/calendar.js';
 import { deviceRoutes } from './routes/devices.js';
 import { createHealthRoutes } from './routes/health.js';
@@ -40,7 +41,13 @@ const app = new Hono()
     // auth is a live ESM binding — assigned in loadDataAccess() before serve() is called, so it's safe to reference lazily here.
     // CORS for /auth/* must come before the handler so OPTIONS preflight is answered correctly.
     .use('/auth/*', strictCors())
+    // Account lifecycle (GET /auth/user-status, DELETE /auth/me) — mounted BEFORE the Better Auth
+    // catch-all so its exact paths win; everything else under /auth still reaches Better Auth.
+    .route('/auth', accountRoutes)
     .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
+    // "Download my data" — cookie-authed, so the strict profile.
+    .use('/export', strictCors())
+    .route('/export', exportRoutes)
     .use('/sync/*', strictCors())
     .route('/sync', syncRoutes)
     .use('/push/*', strictCors())

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { withTimeout } from '../lib/claude/tools.js';
+import { withTimeout } from '../lib/withTimeout.js';
 
 /**
  * Unit-tests the real timer + Promise.race behavior of withTimeout (the degrade test in

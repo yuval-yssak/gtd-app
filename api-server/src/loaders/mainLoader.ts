@@ -7,6 +7,7 @@ import briefBatchRequestsDAO from '../dataAccess/briefBatchRequestsDAO.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
+import deletedUsersDAO from '../dataAccess/deletedUsersDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
 import entityMovesDAO from '../dataAccess/entityMovesDAO.js';
@@ -115,6 +116,7 @@ async function loadDataAccess(customDBName?: string) {
         oauthClientsDAO.init(dbClient, resolvedDBName),
         oauthAuthCodesDAO.init(dbClient, resolvedDBName),
         oauthRefreshTokensDAO.init(dbClient, resolvedDBName),
+        deletedUsersDAO.init(dbClient, resolvedDBName),
     ]);
     // Persist the legacy items.clarify → items.write scope rewrite so stored tokens match what auth
     // enforces (the in-memory backfill bridge has been removed). Idempotent + boot-only.

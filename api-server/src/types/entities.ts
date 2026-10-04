@@ -1065,3 +1065,17 @@ export interface ClaudeUsageInterface {
     callCount: number;
     updatedTs: string;
 }
+
+/**
+ * Permanent marker that a user was deleted (`deletedUsers` collection, `_id` = the deleted
+ * Better Auth user id). Written by `lib/deleteUserCompletely.ts` and read by the unauthenticated
+ * `GET /auth/user-status` so a device that has been offline for a year — whose session cookie is
+ * long dead — can still learn that its account is gone using only the `userId` it keeps in IDB.
+ * Never deleted: ~100 bytes per ever-deleted user is the price of that guarantee. Deliberately
+ * carries NO personal data (no email): the privacy policy promises that only the fact of the
+ * deletion is kept.
+ */
+export interface DeletedUserTombstone {
+    _id: string;
+    deletedAt: string; // ISO datetime
+}

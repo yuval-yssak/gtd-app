@@ -16,11 +16,30 @@ export async function getUserEmail(userId: string): Promise<string | null> {
     return doc?.email ?? null;
 }
 
-async function findUserById(userId: string): Promise<{ email?: string } | null> {
-    const collection = db.collection<{ email?: string }>('user');
+/** Shape of the Better Auth `user` row the lookups below project. */
+export interface BetterAuthUserRow {
+    _id: unknown;
+    email?: string;
+    name?: string;
+    image?: string | null;
+}
+
+export async function findUserById(userId: string): Promise<BetterAuthUserRow | null> {
+    const collection = db.collection<BetterAuthUserRow>('user');
     if (ObjectId.isValid(userId) && /^[a-f0-9]{24}$/i.test(userId)) {
-        const byOid = await collection.findOne({ _id: new ObjectId(userId) } as never, { projection: { email: 1 } });
-        if (byOid) return byOid;
+        const byOid = await collection.findOne({ _id: new ObjectId(userId) } as never);
+        if (byOid) {
+            return byOid;
+        }
     }
-    return collection.findOne({ _id: userId } as never, { projection: { email: 1 } });
+    return collection.findOne({ _id: userId } as never);
+}
+
+/**
+ * Resolves a user's id from their email, as the string form that every user-scoped collection
+ * stores (`String(ObjectId)` === the `id` Better Auth hands out). Emails are stored lowercased.
+ */
+export async function findUserIdByEmail(email: string): Promise<string | null> {
+    const doc = await db.collection<BetterAuthUserRow>('user').findOne({ email: email.toLowerCase() });
+    return doc ? String(doc._id) : null;
 }

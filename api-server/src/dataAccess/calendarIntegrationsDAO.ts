@@ -103,6 +103,20 @@ class CalendarIntegrationsDAO extends AbstractDAO<CalendarIntegrationInterface> 
         }
     }
 
+    /**
+     * True when another GTD user holds an integration on the same Google account. Google revokes a
+     * grant per (OAuth client, Google account), so revoking "our" token for this account would also kill
+     * that other user's refresh token — callers skip the revocation instead. A missing `accountEmail`
+     * (legacy row) cannot be matched and is treated as not shared.
+     */
+    async isGoogleAccountUsedByOtherUser(accountEmail: string | undefined, userId: string): Promise<boolean> {
+        if (!accountEmail) {
+            return false;
+        }
+        const other = await this._collection.findOne({ accountEmail: accountEmail.toLowerCase(), user: { $ne: userId } }, { projection: { _id: 1 } });
+        return other !== null;
+    }
+
     /** Fetches all integrations for a user with tokens decrypted. */
     async findByUserDecrypted(userId: string): Promise<CalendarIntegrationInterface[]> {
         const docs = await this.findArray({ user: userId });

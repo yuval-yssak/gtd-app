@@ -549,3 +549,18 @@ interface PushSubscriptionRecord {
     updatedTs: string;
 }
 ```
+
+---
+
+### `deletedUsers`
+
+Permanent tombstone written by `lib/deleteUserCompletely.ts` as the second-to-last step of an account deletion (the Better Auth `user` row goes last). `GET /auth/user-status?userId=` reads it so a device that has been offline for a year — whose session cookie is long dead — can still learn the account is gone and wipe only that account's IndexedDB rows. Never purged.
+
+```typescript
+interface DeletedUserTombstone {
+    _id: string;       // the deleted Better Auth user id — deliberately the ONLY identifier (no email)
+    deletedAt: string; // ISO datetime of the first (real) deletion; re-runs keep it
+}
+```
+
+Which collections a deletion erases (and the data export returns) is defined once, in `api-server/src/lib/userDataInventory.ts`. **Every collection or field added later that is pertinent to the user — their own content, metadata about them, or content derived from their data (briefs are generated, yet still deleted with the account) — must be added there**: new collection → inventory entry with an export policy (`full` for the user's content, `redacted` naming each credential field, `omitted` with a reason only for transient/derived data), new secret-bearing field → the `redacted` list, new client IDB store → `wipeUserData` + `exportRecoveryData`. The inventory test fails for an unlisted collection.

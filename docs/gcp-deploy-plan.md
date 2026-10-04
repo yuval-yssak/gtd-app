@@ -67,7 +67,7 @@ Each environment (`production`, `staging`) holds its own set of secrets and vari
 | `GOOGLE_OAUTH_APP_CLIENT_SECRET` | Google OAuth client secret |
 | `GH_OAUTH_CLIENT_ID` | GitHub OAuth client ID |
 | `GH_OAUTH_CLIENT_SECRET` | GitHub OAuth client secret |
-| `BETTER_AUTH_SECRET` | Session signing key (64+ chars) |
+| `BETTER_AUTH_SECRET` | Session signing key (64+ chars); also encrypts the Google/GitHub sign-in tokens Better Auth stores — rotating it signs every user out and invalidates those tokens |
 | `VAPID_PRIVATE_KEY` | Web Push VAPID private key |
 | `CALENDAR_ENCRYPTION_KEY` | AES key encrypting stored Google OAuth tokens |
 | `CRON_SECRET` | Shared secret every Cloud Scheduler job sends as `x-cron-secret` — webhook renewal and the brief sweep (see "Calendar webhook renewal" and "Brief sweep" below). Renamed from `CALENDAR_WEBHOOK_CRON_SECRET` on 2026-09-21; see "Operator steps for the rename" |

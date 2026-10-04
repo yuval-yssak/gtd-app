@@ -37,6 +37,8 @@ Cloud Run runs `--max-instances=1` and scales to zero, so **no in-process timers
 
 Unique indexes are created with `partialFilterExpression` where in-app rows legitimately share a null field — `createIndexes` rejects and **crashes boot** if pre-existing data already violates a new unique index.
 
+**Every new DAO/collection is a deletion + export decision.** Add it to `src/lib/userDataInventory.ts` — `USER_DATA_COLLECTIONS` (owner filter + export policy: `full` for the user's own content, `redacted` naming every credential/hash/secret field, `omitted` with a user-visible reason only for derived or transient data) or `NOT_USER_SCOPED_COLLECTIONS` with a reason — plus a fixture row in `tests/userDataFixtures.ts`. `tests/userDataInventory.test.ts` fails until you do. Generated content (briefs) must still be **deleted** with the account even when its export value is low. A new secret-bearing field on an existing collection goes into that collection's `redacted` list. The push-subscription row is per DEVICE, not per user — see the `sharedDevicePushSubscription` strategy before adding any other device-shared collection.
+
 ### Auth
 
 Two parallel auth modes share the same user identity space.
@@ -88,7 +90,8 @@ Currently mounted:
 - `/calendar` — Google Calendar OAuth + management + webhook receiver/renewal
 - `/account/tokens` — personal API token mint/list/revoke UI backend
 - `/mcp` + `/mcp-oauth` — remote MCP transport and its OAuth 2.1 authorization server
-- `/auth/*` — Better Auth handler
+- `/auth/*` — Better Auth handler. `routes/account.ts` is mounted on `/auth` **before** it (`GET /auth/user-status`, `DELETE /auth/me`) — Hono runs the first matching handler.
+- `/export` — "Download my data" (cookie-authed JSON attachment)
 - `/dev` — dev-only login/reset/token-mint, mounted only when `NODE_ENV !== 'production'`
 
 **Mount order matters on `/v1`.** Hono's `.use('/v1/*', …)` is a catch-all; a sub-router needing its own CORS or auth profile must be mounted before it.
@@ -128,7 +131,7 @@ Entity interfaces and their fields live in `src/types/entities.ts` and are docum
 - `BearerVariables` (`src/auth/bearerMiddleware.ts`) — `{ apiAuth: { userId, tokenId, scopes } }` for typed `c.var.apiAuth` on bearer-authenticated routes.
 - `Session` — inferred from Better Auth via `Auth['$Infer']['Session']`.
 
-`ItemInterface.user` is a `string` UUID (Better Auth id, **not** `ObjectId`), and the owner field on `items` is `user` — not `userId`. Querying by `userId` silently returns 0 rows; verify the owner field per collection.
+`ItemInterface.user` is a `string` UUID (Better Auth id, **not** `ObjectId`), and the owner field on `items` is `user` — not `userId`. Querying by `userId` silently returns 0 rows; verify the owner field per collection. `src/lib/userDataInventory.ts` is the authoritative owner-field list: **every new collection must be added there** (deletion + export policy) or declared not user-scoped, or `tests/userDataInventory.test.ts` fails. Better Auth rows (`user._id`, `session.userId`, `account.userId`) are a string|ObjectId mix — use `betterAuthIdFilter`.
 
 Public-API-only item fields: `externalId` (caller dedupe key, sparse-unique on `(user, externalId)`) and `contentHash` (sha256 of `${title}\n${notes}` for 24h content-dedupe — internal, never returned via the public API).
 

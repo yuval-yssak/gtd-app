@@ -13,11 +13,14 @@ import {
     ANON_BUCKET,
     anonymousRateLimit,
     authenticatedRateLimit,
+    InMemoryStore as BoundedInMemoryStore,
     type BucketState,
     classifyRequest,
+    ipRateLimit,
     type RateLimitStore,
     READ_BUCKET,
     tryConsume,
+    USER_STATUS_BUCKET,
     WRITE_BUCKET,
 } from '../auth/rateLimitMiddleware.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
@@ -273,5 +276,55 @@ describe('integration with the real /v1 router', () => {
             attempts++;
         }
         throw new Error('Read bucket never exhausted after 5 parallel waves');
+    });
+});
+
+describe('ipRateLimit (generic IP bucket — GET /auth/user-status)', () => {
+    function buildApp(store: RateLimitStore, now: () => number) {
+        return new Hono()
+            .use('*', ipRateLimit({ bucket: USER_STATUS_BUCKET, keyPrefix: 'user-status', store, now }))
+            .get('/auth/user-status', (c) => c.json({ status: 'unknown' }));
+    }
+
+    it('allows 120 probes per minute per IP, 429s the 121st, and keeps its own bucket apart from the anon one', async () => {
+        const store = new InMemoryStore();
+        const now = () => 1_700_000_000_000;
+        const app = buildApp(store, now);
+        const probe = () => app.fetch(new Request('http://localhost/auth/user-status?userId=u', { headers: { 'x-forwarded-for': '9.9.9.9' } }));
+        for (let i = 0; i < 120; i++) {
+            expect((await probe()).status).toBe(200);
+        }
+        const limited = await probe();
+        expect(limited.status).toBe(429);
+        expect(limited.headers.get('Retry-After')).toBeTruthy();
+        // The anon bucket for the same IP is untouched: different keyPrefix, different budget.
+        expect(store.get('anon:9.9.9.9')).toBeUndefined();
+        expect(store.get('user-status:9.9.9.9')?.tokens).toBeLessThan(1);
+    });
+});
+
+describe('bounded in-memory store', () => {
+    it('evicts the oldest key once the cap is reached instead of growing without bound (or resetting everyone)', () => {
+        const store = new BoundedInMemoryStore(3);
+        store.set('a', { tokens: 1, lastRefillMs: 0 });
+        store.set('b', { tokens: 2, lastRefillMs: 0 });
+        store.set('c', { tokens: 3, lastRefillMs: 0 });
+        store.set('d', { tokens: 4, lastRefillMs: 0 });
+        expect(store.get('a')).toBeUndefined();
+        expect(store.get('b')?.tokens).toBe(2);
+        expect(store.get('d')?.tokens).toBe(4);
+        // Updating an existing key never evicts.
+        store.set('b', { tokens: 9, lastRefillMs: 0 });
+        expect(store.get('c')?.tokens).toBe(3);
+    });
+});
+
+describe('client IP header precedence', () => {
+    it('keys the bucket by cf-connecting-ip when both it and x-forwarded-for are present', async () => {
+        const store = new InMemoryStore();
+        const app = new Hono().use('*', ipRateLimit({ bucket: USER_STATUS_BUCKET, keyPrefix: 'probe', store, now: () => 0 })).get('/', (c) => c.text('ok'));
+        await app.fetch(new Request('http://localhost/', { headers: { 'cf-connecting-ip': '198.51.100.7', 'x-forwarded-for': '203.0.113.1, 10.0.0.1' } }));
+        expect(store.get('probe:198.51.100.7')).toBeDefined();
+        expect(store.get('probe:203.0.113.1')).toBeUndefined();
     });
 });

@@ -22,5 +22,6 @@ The hash is injected at build time — via Vite `define` for the client and a Do
 - **Public API**: [`docs/PUBLIC_API.md`](docs/PUBLIC_API.md)
 - **Google Calendar sync internals** (pushback, escalation, "Sync now" sweep): [`api-server/README.md`](api-server/README.md) § Calendar Integration; test matrix in [`docs/CALENDAR_ROUTINE_SYNC_TESTS.md`](docs/CALENDAR_ROUTINE_SYNC_TESTS.md)
 - **Design plans** (in-flight and shipped): [`docs/plans/`](docs/plans/) — each file states its status at the top
+- **Account deletion & data export** (GDPR scope, the user-data inventory every new collection must join): [`api-server/README.md`](api-server/README.md) § Account deletion & data export
 - **Dev setup & architecture**: [`api-server/CLAUDE.md`](api-server/CLAUDE.md)
 - **Full project overview**: [`CLAUDE.md`](CLAUDE.md)

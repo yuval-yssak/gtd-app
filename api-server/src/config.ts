@@ -19,7 +19,9 @@ export function assertBriefFakeModelNotInProduction(env: { NODE_ENV?: string; BR
 }
 
 /**
- * Better Auth signs every session cookie with `BETTER_AUTH_SECRET`; `auth/betterAuth.ts` falls back
+ * Better Auth signs every session cookie with `BETTER_AUTH_SECRET` — and, since
+ * `account.encryptOAuthTokens` is on, also encrypts the stored Google/GitHub sign-in tokens with
+ * it, so rotating the secret invalidates those tokens too (users simply sign in again). `auth/betterAuth.ts` falls back
  * to a public dev placeholder when it is unset, which in production would let anyone forge a session.
  * `index.ts` calls this at boot so a deploy with the secret missing — or blank: deploy-api.yml writes
  * every GitHub secret through verbatim, and an unset one arrives as '' — fails loudly instead of serving.

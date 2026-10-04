@@ -7,6 +7,7 @@ import peopleDAO from '../../dataAccess/peopleDAO.js';
 import workContextsDAO from '../../dataAccess/workContextsDAO.js';
 import type { CalendarIntegrationInterface, ItemInterface, ItemStatus, PersonInterface, WorkContextInterface } from '../../types/entities.js';
 import { buildCalendarProvider } from '../buildCalendarProvider.js';
+import { withTimeout } from '../withTimeout.js';
 
 /**
  * Read-only tools the clarify agent can call. Every tool is executed by THIS dispatcher (never by
@@ -161,26 +162,6 @@ async function searchItems(ownerUserId: string, input: SearchItemsInput) {
 // and let a timeout fall through to the dispatcher's error envelope (an `is_error` tool_result the
 // model adapts to) rather than failing the request.
 const GET_CALENDAR_EVENTS_TIMEOUT_MS = 8_000;
-
-/**
- * Resolves with `promise` if it settles within `ms`, otherwise rejects with a `${label} timed out`
- * error. NOTE: this only bounds how long the CALLER waits — it does not cancel `promise`. The
- * underlying GCal fetch keeps running to completion in the background (`listEvents` exposes no abort
- * signal). Threading the request AbortSignal through the provider would actually cancel the socket;
- * that's a larger change deferred for now, and a backgrounded read here is harmless (read-only, no
- * effect on the proposal once the loop has moved on).
- */
-export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    });
-    try {
-        return await Promise.race([promise, timeout]);
-    } finally {
-        clearTimeout(timer);
-    }
-}
 
 async function getCalendarEvents(calendar: CalendarContext, ownerUserId: string, input: GetCalendarEventsInput) {
     // Credentials live in `calendar.integration` (decrypted server-side) and never enter the model

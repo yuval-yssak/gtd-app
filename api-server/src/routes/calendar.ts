@@ -34,9 +34,10 @@ import {
     runMissedPushSweep,
     surfacePushFailure,
 } from '../lib/calendarPushback.js';
+import { withSyncLock } from '../lib/calendarSyncLock.js';
 import { DONE_PREFIX, stripDoneMarker } from '../lib/doneMarker.js';
+import { revokeGoogleGrant } from '../lib/googleTokenRevoke.js';
 import { toInstant } from '../lib/isoInstant.js';
-import { KeyedMutex } from '../lib/keyedMutex.js';
 import { htmlToMarkdown, markdownToHtml } from '../lib/markdownHtml.js';
 import { isDuplicateKeyError } from '../lib/mongoErrors.js';
 import { recordOperation } from '../lib/operationHelpers.js';
@@ -964,6 +965,14 @@ calendarRoutes.delete('/integrations/:id', authenticateRequest, async (c) => {
     // Stop all webhook channels before deleting configs so Google stops sending notifications.
     const configs = await calendarSyncConfigsDAO.findByIntegration(integrationId);
     await Promise.all(configs.map((cfg) => teardownWatch(cfg, provider, integration._id).catch(() => {})));
+    // Tell Google the grant is over, while we still hold the (decrypted) tokens. Best-effort: the
+    // disconnect must succeed even when Google is unreachable or already dropped the grant. NOT
+    // done on the callback's partial-grant rejection path — see the comment there — and not when
+    // another GTD user has connected the same Google account (Google revokes per client + account,
+    // so it would kill their refresh token too).
+    if (!(await calendarIntegrationsDAO.isGoogleAccountUsedByOtherUser(integration.accountEmail, userId))) {
+        await revokeGoogleGrant(integration);
+    }
     await calendarSyncConfigsDAO.deleteByIntegration(integrationId);
     await calendarIntegrationsDAO.deleteByOwner(integrationId, userId);
     return c.json({ ok: true });
@@ -5919,30 +5928,6 @@ async function runLockedSync(
 export { buildProvider, renewWebhookAndCatchUp };
 
 // ── Per-calendar sync serialization ──────────────────────────────────────────
-
-// Serializes the actual `syncSingleCalendar` execution per calendar so a webhook-triggered sync and a
-// manual `POST /integrations/:id/sync` cannot run concurrently and both create-on-miss for the same
-// inbound event (the unique indexes make duplicates impossible, but serializing avoids the wasted
-// insert→E11000→merge churn on every race). Keyed by `webhookChannelId` when present, else
-// `${user}:${calendarId}` so configs without a live channel still serialize.
-const syncMutex = new KeyedMutex();
-
-/** A stable per-calendar key for the sync mutex. */
-function syncKeyFor(config: CalendarSyncConfigInterface): string {
-    return config.webhookChannelId ?? `${config.user}:${config.calendarId}`;
-}
-
-/**
- * Runs `task` after any in-flight sync for the same calendar completes, chaining so concurrent callers
- * serialize. `task` receives the sync's clock stamp (`now` for its SyncContext), taken the moment the
- * lock is acquired: stamping at request/webhook arrival let a sync queued behind a backlog write
- * createdTs/updatedTs/op timestamps from long before it actually ran (observed ~85 min stale on staging
- * under a client-driven sync storm), skewing LWW against every device. Structural here so every caller
- * gets it right without per-site discipline.
- */
-function withSyncLock<T>(config: CalendarSyncConfigInterface, task: (startedAt: string) => Promise<T>): Promise<T> {
-    return syncMutex.withLock(syncKeyFor(config), () => task(dayjs().toISOString()));
-}
 
 // ── Webhook receiver ─────────────────────────────────────────────────────────
 

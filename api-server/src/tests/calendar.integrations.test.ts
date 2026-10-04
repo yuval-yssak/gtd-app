@@ -8,6 +8,7 @@ import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
+import { GOOGLE_TOKEN_REVOKE_URL } from '../lib/googleTokenRevoke.js';
 import { auth, db } from '../loaders/mainLoader.js';
 import type { CalendarSyncConfigInterface, ItemInterface } from '../types/entities.js';
 import {
@@ -466,7 +467,7 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(integration.grantedScopes).toEqual(granularScopes.split(' '));
     });
 
-    it('rejects a partial grant — revokes the token and persists nothing', async () => {
+    it('rejects a partial grant — persists nothing and does NOT revoke (neither via googleapis nor the shared revoke helper)', async () => {
         const sessionCookie = await loginAsAlice();
         const userId = await getUserId(sessionCookie);
         const redirectRes = await authenticatedRequest(app, { method: 'GET', path: '/calendar/auth/google', sessionCookie });
@@ -493,8 +494,12 @@ describe('GET /calendar/auth/google/callback', () => {
         expect(res.status).toBe(302);
         expect(res.headers.get('location')).toContain('calendarConnectError=scope_missing');
         // No revoke: it would wipe the whole app grant for this Google account, including the
-        // refresh token of an existing working integration being re-consented over.
+        // refresh token of an existing working integration being re-consented over. Both revoke
+        // paths are checked — googleapis' revokeToken AND the shared fetch-based helper the
+        // disconnect handler and account deletion use.
         expect(revokeSpy).not.toHaveBeenCalled();
+        const revokeFetches = vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => url.toString() === GOOGLE_TOKEN_REVOKE_URL);
+        expect(revokeFetches).toEqual([]);
         expect(await calendarIntegrationsDAO.findByUserDecrypted(userId)).toEqual([]);
     });
 

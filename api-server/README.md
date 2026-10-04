@@ -106,6 +106,16 @@ src/
 |--------|------|-------------|
 | `*` | `/auth/*` | All OAuth flows handled by Better Auth (Google, GitHub) |
 
+### Account lifecycle (`routes/account.ts`)
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/auth/user-status?userId=<id>` | No (IP rate-limited, 120/min) | `{ status: 'active' }`, `{ status: 'deleted', deletedAt }` (from the permanent `deletedUsers` tombstone) or `{ status: 'unknown' }`. Unauthenticated so a device whose session expired while offline can still learn its account is gone; the client treats any non-200 as `unknown` (fail-open). |
+| `DELETE` | `/auth/me?expectedUserId=<id>` | Yes | Self-service deletion via `lib/deleteUserCompletely.ts`: stops GCal webhook channels, revokes the Google grants, hard-deletes every collection in `lib/userDataInventory.ts`, writes the tombstone, deletes the `user` row last, sends SSE `account-deleted` and closes the user's streams. `expectedUserId` is required (400 without it) and answers `409 session_mismatch` when the cookie's session is a different account (multi-account cookie/IDB drift). Sessions and tokens are cut first, in-flight calendar syncs are drained, and a second sweep catches rows written into the gap; a device shared with another account keeps its push subscription. |
+| `GET` | `/export?expectedUserId=<id>` | Yes | "Download my data": JSON attachment built from the same inventory — tokens, hashes, push keys and webhook secrets stripped; `operations` listed under `omitted` with the reason. Same required `expectedUserId` guard. |
+
+The admin equivalent is `npx tsx --env-file=.env src/scripts/deleteUser.ts --email <addr> [--dry-run] [--yes]` (see Scripts).
+
 ### Sync
 
 | Method | Path | Auth | Description |
@@ -192,6 +202,7 @@ See [`mcp-server/README.md`](../mcp-server/README.md) for tool inventory and the
 | `POST` | `/dev/login` | Upserts user by email, returns session cookie |
 | `POST` | `/dev/api-tokens` | Mint an API token for the logged-in user (returns plaintext once). Capped at 50/user. |
 | `DELETE` | `/dev/reset` | Wipes all collections (test cleanup) |
+| `POST` | `/dev/delete-user` | `{ email }` → runs `deleteUserCompletely` — the e2e suite's stand-in for an admin running `scripts/deleteUser.ts` |
 
 ## Authentication
 
@@ -204,6 +215,7 @@ Two parallel auth modes share the same user identity space.
 - **Middleware:** `authenticateRequest` calls `auth.api.getSession()`, attaches session to the Hono context.
 - **User ID:** Access via `c.get('session').user.id` — a UUID string (not ObjectId).
 - **Collections managed by Better Auth:** `user`, `session`, `account`, `verification`.
+- **Sign-in tokens encrypted at rest:** `account.encryptOAuthTokens` is on (`auth/betterAuth.ts`), so the Google/GitHub `accessToken` + `refreshToken` on `account` rows are ciphertext keyed by `BETTER_AUTH_SECRET`. Better Auth reads mixed rows, so rows written before the flag stay valid; `scripts/encryptBetterAuthTokens.ts` converts them. `idToken` (the OpenID profile JWT) is NOT covered by Better Auth 1.5.6 and stays plaintext. **Rotating `BETTER_AUTH_SECRET` therefore invalidates every stored sign-in token as well as every session** — users sign in again; nothing else breaks.
 
 In production, cookies are `Secure` with `SameSite=none` for cross-domain API access.
 
@@ -254,7 +266,8 @@ Operations older than `min(lastSyncedTs)` across all of a user's devices are pur
 2. `GET /calendar/auth/google` redirects to Google OAuth with an HMAC-signed state parameter (CSRF protection)
 3. Google redirects back to `/calendar/auth/google/callback`
 4. Server exchanges the authorization code for access + refresh tokens
-5. Tokens are encrypted with AES-256-GCM and stored in `calendarIntegrations`
+5. Tokens are encrypted with AES-256-GCM (`CALENDAR_ENCRYPTION_KEY`) and stored in `calendarIntegrations`
+6. Disconnecting (`DELETE /calendar/integrations/:id`) stops the webhook channels, then best-effort revokes the grant at Google (`lib/googleTokenRevoke.ts`) before deleting our rows — except when another GTD user has an integration on the same Google account (Google revokes per client + account, so their refresh token would die too), and never on the callback's partial-grant rejection path (it would kill a working integration's refresh token on a same-account re-consent).
 
 ### Sync Strategy
 
@@ -326,6 +339,29 @@ A bearer-token-authenticated REST surface for external integrations and the loca
 
 Tokens are minted from the **Settings → Personal API tokens** UI in the client, which calls `POST /account/tokens` (cookie-authed, per-user cap of 20 active tokens, plaintext returned exactly once). `GET /account/tokens` lists, `DELETE /account/tokens/:id` revokes — see `routes/tokens.ts`. The legacy `POST /dev/api-tokens` (gated by `NODE_ENV !== 'production'`) is the dev convenience shortcut and is intentionally absent from production deploys.
 
+## Account deletion & data export
+
+GDPR erasure + portability, promised by the privacy policy. Endpoints are in the Account lifecycle table above; the shared implementation is `src/lib/deleteUserCompletely.ts` and `src/lib/exportUserData.ts`, both driven by **`src/lib/userDataInventory.ts`** so the two cannot drift.
+
+**Deletion order** (`deleteUserCompletely(userId, { dryRun })`):
+
+1. Read what the Google side effects need (integration tokens decrypted per row — an undecryptable row forfeits its side effects but never blocks the deletion; Better Auth sign-in tokens via `lib/betterAuthTokenCrypto.ts`).
+2. Cut access: `session`, `apiTokens`, `oauthRefreshTokens`, `oauthAuthCodes` go first.
+3. Stop every live Google webhook channel; revoke the Google grants (calendar + sign-in) — skipped when another GTD user has an integration on the same Google account, since Google revokes per client + account. Each call is bounded (5 s) and best-effort.
+4. Wait (bounded) for in-flight calendar syncs (`lib/calendarSyncLock.ts`).
+5. Delete every `USER_DATA_COLLECTIONS` row. Push subscriptions are per device: dropped only when no other account remains on the device, otherwise handed over to a remaining account.
+6. Write the `deletedUsers` tombstone (`{ _id, deletedAt }`, no email, `$setOnInsert` so re-runs keep the first), THEN delete the `user` row — a crash in between leaves a recoverable user row, never a vanished user without a tombstone.
+7. Second sweep for rows a writer that was already past authentication landed in the gap.
+8. SSE `account-deleted` to the user's live tabs, then close those streams.
+
+`dryRun` reports per-collection counts and makes no change (no Google calls). The report tallies webhook stops and revocations as `attempted / succeeded / failed / skipped`.
+
+**Export** (`GET /export?expectedUserId=`): `{ format: 'done-export/1', exportedAt, user, collections, omitted }` — every inventory collection per its policy; `omitted` names what was left out and why, with the row count.
+
+**Scope rule for future changes.** Any new collection or field pertinent to the user — their content first of all, but also metadata about them and content derived from their data (briefs are generated, yet they are still deleted with the account) — must be covered: new collection → inventory entry (+ fixture in `tests/userDataFixtures.ts`), new secret-bearing field → the collection's `redacted` list, new client IDB store → `wipeUserData` + `exportRecoveryData` on the client. `tests/userDataInventory.test.ts` enforces the server side.
+
+**Clients.** `GET /auth/user-status` lets a device whose session expired while offline learn the account is gone from the tombstone alone; the client probes it before sync (throttled), evaporates only that account's IndexedDB rows, and broadcasts to its other tabs. Reconnect of a tab whose SSE stream the deletion closed answers 401 and triggers the same probe.
+
 ## Email (stub)
 
 Outbound email is currently a stub. `src/lib/emailStub.ts` exposes `sendEmail(...)`, which (a) writes a row to the `sentEmails` MongoDB collection and (b) logs `[email-stub] kind=... to=... subject=...`. No external email provider is wired up.
@@ -364,6 +400,9 @@ DAOs are initialized as singletons in `loadDataAccess()` before the server start
 | ItemBriefsDAO | `itemBriefs` | `user`, `user+sourceHash` |
 | BriefBatchesDAO | `briefBatches` | `status`, `expiresAt` TTL (BSON Date, +90 d) — one Anthropic Message Batch per row; server-only, not user-scoped |
 | BriefBatchRequestsDAO | `briefBatchRequests` | `batchId`, `user`, `expiresAt` TTL (BSON Date, +48 h backstop) — custom_id → user/item/sourceHash, deleted on harvest |
+| DeletedUsersDAO | `deletedUsers` | `_id` = deleted user id — permanent tombstone read by `GET /auth/user-status`; never purged |
+
+**Every user-scoped collection must be listed in `src/lib/userDataInventory.ts`** (owner filter + export policy) or declared there as not user-scoped — `tests/userDataInventory.test.ts` enumerates the DAOs and fails otherwise. Account deletion and the data export are both driven from that list.
 
 ## Environment Variables
 
@@ -378,7 +417,7 @@ NODE_ENV=production|development|test
 
 # Better Auth
 BETTER_AUTH_URL=https://api.getting-things-done.app   # public base URL
-BETTER_AUTH_SECRET=<64+ char random string>
+BETTER_AUTH_SECRET=<64+ char random string>             # signs sessions AND encrypts stored sign-in tokens — rotating it signs everyone out
 CLIENT_URL=https://getting-things-done.app             # trusted CORS origin
 
 # Google OAuth
@@ -459,6 +498,26 @@ Tests run sequentially (`fileParallelism: false`) because they share MongoDB col
 ## Scripts
 
 One-shot maintenance scripts live in `src/scripts/`. Run them via `tsx`, against the same `.env` the server uses.
+
+### Delete a user (`deleteUser.ts`)
+
+```bash
+cd api-server
+npx tsx --env-file=.env src/scripts/deleteUser.ts --email <user-email> --dry-run   # per-collection counts, no changes
+npx tsx --env-file=.env src/scripts/deleteUser.ts --email <user-email>             # prompts: type the email to confirm
+npx tsx --env-file=.env src/scripts/deleteUser.ts --user-id <id> --yes             # no prompt (scripted)
+```
+
+Thin wrapper over `lib/deleteUserCompletely.ts` — the same function behind `DELETE /auth/me`. Prints the deletion report: rows per collection, webhook-stop and Google-revocation tallies (a Google grant another GTD user also relies on is skipped, not revoked), tombstone confirmation, SSE streams closed. Two steps are in-process and therefore inert when run from the CLI's own process: the wait for in-flight calendar syncs (the final sweep covers late rows) and the SSE `account-deleted` broadcast (live tabs learn of the deletion when their next request 401s and `GET /auth/user-status` answers `deleted`).
+
+### Encrypt pre-flag Better Auth sign-in tokens (`encryptBetterAuthTokens.ts`)
+
+```bash
+cd api-server
+npx tsx --env-file=.env src/scripts/encryptBetterAuthTokens.ts [--dry-run]
+```
+
+`account.encryptOAuthTokens` (`auth/betterAuth.ts`) encrypts new `accessToken`/`refreshToken` values with `BETTER_AUTH_SECRET`; Better Auth reads mixed rows, so this one-off is hygiene for rows written before the flag. Idempotent — already-encrypted values are skipped. `idToken` is not covered by Better Auth 1.5.6 and is left alone.
 
 ### Import from FacileThings (`importFacileThings.ts`)
 

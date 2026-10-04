@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { expect, vi } from 'vitest';
 // Imported and re-exported under SESSION_COOKIE so call sites in this file and test files are unchanged
 import { SESSION_COOKIE_NAME as SESSION_COOKIE } from '../auth/constants.js';
+import { GOOGLE_TOKEN_REVOKE_URL } from '../lib/googleTokenRevoke.js';
 
 export { SESSION_COOKIE };
 
@@ -155,4 +156,28 @@ export async function authenticatedRequest(app: FetchApp, { method, path, sessio
             ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
         }),
     );
+}
+
+/** Google's OAuth token-revocation endpoint, re-exported under the test-side name. */
+export const GOOGLE_REVOKE_URL = GOOGLE_TOKEN_REVOKE_URL;
+
+/**
+ * Answers the revoke endpoint with `status` and rejects every other URL. Replaces the mock
+ * `oauthLogin` leaves behind (which throws on unknown URLs — so without this, a disconnect or
+ * deletion would count its revocation as failed).
+ */
+export function stubGoogleRevokeEndpoint(status = 200) {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        if (input.toString() === GOOGLE_REVOKE_URL) {
+            return new Response(status === 400 ? '{"error":"invalid_token"}' : '', { status });
+        }
+        throw new Error(`Unexpected fetch to ${input.toString()}`);
+    });
+}
+
+/** The `token=` form values sent to the revoke endpoint, in call order. */
+export function revokedTokensFrom(fetchSpy: ReturnType<typeof stubGoogleRevokeEndpoint>): string[] {
+    return fetchSpy.mock.calls
+        .filter(([url]) => url.toString() === GOOGLE_REVOKE_URL)
+        .map(([, init]) => new URLSearchParams(String(init?.body)).get('token') ?? '');
 }

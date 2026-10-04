@@ -6,6 +6,8 @@ import { issueApiToken } from '../auth/apiTokens.js';
 import { SESSION_COOKIE_NAME } from '../auth/constants.js';
 import type { GCalEvent } from '../calendarProviders/CalendarProvider.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
+import { deleteUserCompletely } from '../lib/deleteUserCompletely.js';
+import { findUserIdByEmail } from '../lib/userLookup.js';
 import { auth, db } from '../loaders/mainLoader.js';
 import { deviceSyncStateId } from '../types/entities.js';
 
@@ -264,6 +266,23 @@ export const devLoginRoutes = new Hono()
             db.collection('calendarSyncConfigs').deleteMany({}),
         ]);
         return c.json({ ok: true, scope: 'all' });
+    })
+
+    // POST /dev/delete-user — run the real account deletion (`deleteUserCompletely`) for a user by
+    // email, standing in for an admin running `scripts/deleteUser.ts` against the live DB. Lets the
+    // e2e suite drive the SSE and year-offline tombstone paths without spawning a CLI. Auth-free like
+    // the other dev helpers — the module is unmountable in production (see guard at top of file).
+    .post('/delete-user', async (c) => {
+        const { email } = await c.req.json<{ email?: string }>();
+        if (!email) {
+            return c.json({ error: 'email required' }, 400);
+        }
+        const userId = await findUserIdByEmail(email);
+        if (!userId) {
+            return c.json({ error: 'no user with that email' }, 404);
+        }
+        const report = await deleteUserCompletely(userId);
+        return c.json({ ok: true, userId, report });
     })
 
     // POST /dev/reap-device — delete deviceSyncState row(s) for a device, simulating the stale-device

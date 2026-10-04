@@ -34,6 +34,13 @@ export interface BucketConfig {
 export const WRITE_BUCKET: BucketConfig = { capacity: 60, refillPerSec: 60 / 60 };
 export const READ_BUCKET: BucketConfig = { capacity: 600, refillPerSec: 600 / 60 };
 export const ANON_BUCKET: BucketConfig = { capacity: 30, refillPerSec: 30 / 60 };
+/**
+ * `GET /auth/user-status` — the unauthenticated tombstone probe every device runs per logged-in
+ * account on boot and on every reconnect. Keyed by IP, so a NAT'd office or a CI box shares one
+ * bucket; 120/min leaves headroom for that, and the client treats a 429 as `unknown` (fail-open:
+ * nothing is evaporated, the next probe retries), so exhaustion only delays an evaporation.
+ */
+export const USER_STATUS_BUCKET: BucketConfig = { capacity: 120, refillPerSec: 120 / 60 };
 
 /**
  * Decides which bucket a /v1 request falls into. Pure — no I/O. Exposed for tests so we don't
@@ -79,16 +86,35 @@ export function classifyRequest(method: string, path: string): 'write' | 'read' 
 }
 
 /**
+ * Upper bound on distinct bucket keys. Keys are `<bucket>:<tokenId|ip>`; an attacker rotating a
+ * spoofed client IP against an unauthenticated endpoint could otherwise grow the map without end.
+ * At the cap the OLDEST key is evicted (Map iteration order is insertion order), so legitimate
+ * buckets are only ever lost one at a time under attack — never reset wholesale.
+ */
+const MAX_BUCKET_KEYS = 50_000;
+
+/**
  * Default in-process store. Each Cloud Run instance keeps its own counters; on multi-instance
  * deployments a caller can briefly burst capacity * N, which is acceptable for this UX-grade
  * limiter (the goal is "stop runaway scripts", not "exact transaction-per-second budget").
+ * Exported for the eviction test; production uses the module-level `defaultStore` instance.
  */
-class InMemoryStore implements RateLimitStore {
+export class InMemoryStore implements RateLimitStore {
     private map = new Map<string, BucketState>();
+    private readonly maxKeys: number;
+    constructor(maxKeys = MAX_BUCKET_KEYS) {
+        this.maxKeys = maxKeys;
+    }
     get(key: string): BucketState | undefined {
         return this.map.get(key);
     }
     set(key: string, state: BucketState): void {
+        if (!this.map.has(key) && this.map.size >= this.maxKeys) {
+            const oldest = this.map.keys().next().value;
+            if (oldest !== undefined) {
+                this.map.delete(oldest);
+            }
+        }
         this.map.set(key, state);
     }
     /** Test-only: drop all bucket state so a spec doesn't leak counters into the next file. */
@@ -138,13 +164,30 @@ interface MiddlewareDeps {
     now?: () => number;
 }
 
-/** Best-effort client IP extraction from the standard proxy headers. Falls back to `'unknown'`. */
+interface IpRateLimitDeps extends MiddlewareDeps {
+    bucket: BucketConfig;
+    /** Namespaces the store key so two IP-keyed limiters on different routes never share a bucket. */
+    keyPrefix: string;
+}
+
+/**
+ * Best-effort client IP extraction. `CF-Connecting-IP` first: the Cloudflare Worker in front of the
+ * API sets it from the connection and a client cannot forge it through Cloudflare. `X-Forwarded-For`
+ * is the fallback for direct Cloud Run / local traffic; its left-most entry is client-controlled, so
+ * on an unauthenticated route the limiter is advisory there (see MAX_BUCKET_KEYS). Falls back to `'unknown'`.
+ */
 function extractClientIp(c: Context): string {
+    const cloudflareIp = c.req.header('cf-connecting-ip')?.trim();
+    if (cloudflareIp) {
+        return cloudflareIp;
+    }
     const xff = c.req.header('x-forwarded-for');
     if (xff) {
         // x-forwarded-for can be a comma-separated chain; the first entry is the original client.
         const first = xff.split(',')[0]?.trim();
-        if (first) return first;
+        if (first) {
+            return first;
+        }
     }
     return c.req.header('x-real-ip') ?? 'unknown';
 }
@@ -197,23 +240,31 @@ export function anonymousRejection(c: Context): Response | null {
 }
 
 /**
+ * Generic IP-keyed limiter for unauthenticated endpoints (`GET /auth/user-status` today). The
+ * bucket and key prefix are the caller's so each endpoint gets its own budget.
+ */
+export function ipRateLimit(deps: IpRateLimitDeps): MiddlewareHandler {
+    const store = deps.store ?? defaultStore;
+    const now = deps.now ?? Date.now;
+    return async (c, next) => {
+        const ip = extractClientIp(c);
+        const key = `${deps.keyPrefix}:${ip}`;
+        const result = tryConsume(store, key, deps.bucket, now());
+        if (!result.allowed) {
+            console.log('[rate-limit]', { bucket: deps.keyPrefix, ip, route: c.req.path, method: c.req.method });
+            return rateLimitedResponse(c, result.retryAfterSec);
+        }
+        await next();
+        return;
+    };
+}
+
+/**
  * Rate-limits requests that have NOT yet authenticated. Reusable as a standalone middleware,
  * but on /v1 specifically the anon-bucket consumption is now handled inline by `authenticateBearer`
  * so successful-auth requests don't burn anon tokens. Kept exported for unit tests and any
  * future endpoint that wants a pure pre-auth IP-bucket check.
  */
 export function anonymousRateLimit(deps: MiddlewareDeps = {}): MiddlewareHandler {
-    const store = deps.store ?? defaultStore;
-    const now = deps.now ?? Date.now;
-    return async (c, next) => {
-        const ip = extractClientIp(c);
-        const key = `anon:${ip}`;
-        const result = tryConsume(store, key, ANON_BUCKET, now());
-        if (!result.allowed) {
-            console.log('[rate-limit]', { bucket: 'anon', ip, route: c.req.path, method: c.req.method });
-            return rateLimitedResponse(c, result.retryAfterSec);
-        }
-        await next();
-        return;
-    };
+    return ipRateLimit({ ...deps, bucket: ANON_BUCKET, keyPrefix: 'anon' });
 }
