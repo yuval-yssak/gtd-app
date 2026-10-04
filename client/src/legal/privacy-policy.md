@@ -53,7 +53,7 @@ We want to learn where the Service helps and where it gets in the way. To do tha
 
 Done's use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes), including the Limited Use requirements. Calendar data is used only to provide user-facing features of the app: calendar sync, and — as described under "AI processing" — item briefs for calendar items and the event context the "clarify with AI" assistant uses when you ask it to. It is never used for advertising, never sold, never used to train machine-learning models, and only read by a person with your consent (for example, to answer a support request you raised), for security purposes such as investigating abuse, or when required by law. For product research it is used only in aggregated, anonymised form and is never read by a person.
 
-Disconnecting the calendar in Settings deletes the tokens we hold, which ends our access. To remove the grant from your Google Account as well, use [your Google Account permissions](https://myaccount.google.com/permissions).
+Disconnecting the calendar in Settings deletes the tokens we hold and asks Google to revoke the grant, which ends our access. If that revocation does not go through (for example, Google was unreachable at that moment), you can also remove the grant from [your Google Account permissions](https://myaccount.google.com/permissions).
 
 ## Who else processes your data
 
@@ -80,11 +80,11 @@ If we introduce paid features, payment details will be handled by a payment proc
 - **Webhook delivery records:** each delivery to a webhook you registered keeps a copy of the item as it was sent, for as long as your account exists — deleting the item or person later does not remove it from those records.
 - **Service emails:** a record of each service email (recipient, subject and body) is kept for as long as your account exists.
 - **Logs:** 30 days.
-- **After account deletion:** all of the above is deleted within 30 days. The database has no long-term backups, so deletion is final.
+- **After account deletion:** all of the above is deleted immediately, when you delete the account; only a record that the account id was deleted is kept, so your devices can tell. The database has no long-term backups, so deletion is final.
 
 ## Your rights
 
-Depending on where you live you may have the right to access, correct, export, restrict or delete your personal data, and to object to certain processing. You can edit any item, move it to the trash, and delete people, routines and devices in the app; disconnect Google Calendar; and revoke API tokens and webhooks. To export your data or delete your account, email [yuval.yssak@gmail.com](mailto:yuval.yssak@gmail.com) from the address on the account; we will act within 30 days. In-app "Download my data" and "Delete my account" controls are on the roadmap.
+Depending on where you live you may have the right to access, correct, export, restrict or delete your personal data, and to object to certain processing. You can edit any item, move it to the trash, and delete people, routines and devices in the app; disconnect Google Calendar; and revoke API tokens and webhooks. To export your data, use "Download my data" in Settings; to delete your account and everything in it, use "Delete my account" there — both take effect immediately. You can also email [yuval.yssak@gmail.com](mailto:yuval.yssak@gmail.com) from the address on the account and we will act within 30 days.
 
 If you are in the EU/EEA or the UK you may also complain to your local data-protection authority.
 
@@ -95,7 +95,7 @@ If you are in the EU/EEA or the UK you may also complain to your local data-prot
 
 ## Security
 
-Traffic is encrypted with TLS. Calendar OAuth tokens are encrypted at rest; API tokens and OAuth client secrets are stored only as hashes. Access to production systems is limited to the operator. No system is perfectly secure, so please use a strong account password with your sign-in provider and enable two-factor authentication there.
+Traffic is encrypted with TLS. Calendar OAuth tokens and the sign-in access and refresh tokens from Google and GitHub are encrypted at rest; API tokens and OAuth client secrets are stored only as hashes. Access to production systems is limited to the operator. No system is perfectly secure, so please use a strong account password with your sign-in provider and enable two-factor authentication there.
 
 ## Children
 

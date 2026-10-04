@@ -6,12 +6,12 @@ vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts')
 
 vi.mock('../db/multiUserSync', () => ({
     syncSingleUser: vi.fn().mockResolvedValue(undefined),
+    handleDeadSessionGated: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { fetchSyncOps, pushSyncOps, SyncAuthError } from '#api/syncClient';
-import { ACCOUNT_NEEDS_REAUTH_EVENT } from '../contexts/accountReauthEvents';
 import { dispatchOpFlush } from '../db/dispatchOpFlush';
-import { syncSingleUser } from '../db/multiUserSync';
+import { handleDeadSessionGated, syncSingleUser } from '../db/multiUserSync';
 import type { MyDB } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -49,7 +49,7 @@ describe('dispatchOpFlush', () => {
         expect(syncSingleUser).toHaveBeenCalledWith(db, 'user-b');
     });
 
-    it('flags the account for reauth on a 401 on the same-account fast path, without throwing', async () => {
+    it('routes a 401 on the same-account fast path through the dead-session probe, without throwing', async () => {
         await seedAccount(db, 'user-a', 'a@example.com');
         await db.put('activeAccount', { userId: 'user-a' }, 'active');
         vi.mocked(pushSyncOps).mockRejectedValueOnce(new SyncAuthError('POST /sync/push'));
@@ -62,18 +62,11 @@ describe('dispatchOpFlush', () => {
             snapshot: null,
         });
 
-        const dispatchSpy = vi.fn();
-        vi.stubGlobal('window', { dispatchEvent: dispatchSpy } as unknown as Window);
-
         await expect(dispatchOpFlush(db, 'user-a')).resolves.toBeUndefined();
 
-        const reauthEvents = dispatchSpy.mock.calls.map(([e]) => e as CustomEvent).filter((e) => e.type === ACCOUNT_NEEDS_REAUTH_EVENT);
-        expect(reauthEvents).toHaveLength(1);
-        const [reauthEvent] = reauthEvents;
-        if (!reauthEvent) throw new Error('expected one reauth event');
-        expect(reauthEvent.detail).toEqual({ userId: 'user-a' });
-
-        vi.unstubAllGlobals();
+        // The probe decides between "flag for reauth" and "evaporate a deleted account" — the
+        // dispatcher itself no longer assumes the 401 means "expired".
+        expect(handleDeadSessionGated).toHaveBeenCalledExactlyOnceWith(db, 'user-a');
     });
 
     it('rethrows non-auth errors on the same-account fast path', async () => {

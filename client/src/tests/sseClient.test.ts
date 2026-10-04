@@ -50,7 +50,7 @@ afterEach(() => {
 
 describe('openSseConnections', () => {
     it('opens one EventSource per userId, each with the per-user query param', () => {
-        openSseConnections(() => {}, 'dev-1', ['user-a', 'user-b']);
+        openSseConnections({ onUpdate: () => {}, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
 
         expect(created).toHaveLength(2);
         expect(created[0]?.url).toBe('http://test.local/sync/events?userId=user-a');
@@ -60,9 +60,9 @@ describe('openSseConnections', () => {
 
     it('is idempotent — calling with the same userIds does not reopen channels', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
         const firstSource = created[0];
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
 
         // No new EventSource was created on the second call.
         expect(created).toHaveLength(1);
@@ -71,11 +71,11 @@ describe('openSseConnections', () => {
 
     it('closes channels for users that are no longer in the list on a subsequent call', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
         const userBSource = created[1];
 
         // Drop user-b — the corresponding channel must close.
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
 
         expect(userBSource?.closed).toBe(true);
         expect(getOpenSseUserIds()).toEqual(['user-a']);
@@ -83,7 +83,7 @@ describe('openSseConnections', () => {
 
     it('passes the userId of the originating channel to onUpdate', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
 
         const userBSource = created[1];
         userBSource?.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'update' }) }));
@@ -93,7 +93,7 @@ describe('openSseConnections', () => {
 
     it('ignores echoed events (sourceDeviceId matches localDeviceId)', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
 
         created[0]?.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'update', sourceDeviceId: 'dev-1' }) }));
         expect(onUpdate).not.toHaveBeenCalled();
@@ -101,7 +101,7 @@ describe('openSseConnections', () => {
 
     it('ignores malformed event payloads without throwing', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
 
         // Not JSON — JSON.parse throws inside handleMessage; the handler must catch and continue.
         expect(() => created[0]?.onmessage?.(new MessageEvent('message', { data: 'not-json' }))).not.toThrow();
@@ -109,9 +109,52 @@ describe('openSseConnections', () => {
     });
 });
 
+describe('account-deleted events', () => {
+    it('routes account-deleted to onAccountDeleted with the channel userId and closes that channel', () => {
+        const onUpdate = vi.fn();
+        const onAccountDeleted = vi.fn();
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1', onAccountDeleted: onAccountDeleted }, ['user-a', 'user-b']);
+        const [sourceA, sourceB] = created;
+        if (!sourceA || !sourceB) throw new Error('expected two channels');
+
+        sourceB.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'account-deleted', userId: 'user-b' }) }));
+
+        expect(onAccountDeleted).toHaveBeenCalledExactlyOnceWith('user-b');
+        expect(onUpdate).not.toHaveBeenCalled();
+        // The server closes its end; the client must drop the channel too so EventSource does not
+        // auto-reconnect against a deleted account forever.
+        expect(sourceB.closed).toBe(true);
+        expect(sourceA.closed).toBe(false);
+        expect(getOpenSseUserIds()).toEqual(['user-a']);
+    });
+
+    it('ignores account-deleted when no handler was supplied (legacy callers) but still closes the channel', () => {
+        const onUpdate = vi.fn();
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
+        const [source] = created;
+        if (!source) throw new Error('expected one channel');
+
+        expect(() => source.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'account-deleted' }) }))).not.toThrow();
+        expect(onUpdate).not.toHaveBeenCalled();
+        expect(source.closed).toBe(true);
+        expect(getOpenSseUserIds()).toEqual([]);
+    });
+
+    it('reopenSseConnections carries the handler onto the fresh channels', () => {
+        const onAccountDeleted = vi.fn();
+        openSseConnections({ onUpdate: () => {}, localDeviceId: 'dev-1' }, ['user-a']);
+        reopenSseConnections({ onUpdate: () => {}, localDeviceId: 'dev-1', onAccountDeleted: onAccountDeleted }, ['user-a']);
+        const fresh = created[1];
+        if (!fresh) throw new Error('expected a reopened channel');
+
+        fresh.onmessage?.(new MessageEvent('message', { data: JSON.stringify({ type: 'account-deleted' }) }));
+        expect(onAccountDeleted).toHaveBeenCalledExactlyOnceWith('user-a');
+    });
+});
+
 describe('closeSseConnections', () => {
     it('closes every channel and clears the registry', () => {
-        openSseConnections(() => {}, 'dev-1', ['user-a', 'user-b']);
+        openSseConnections({ onUpdate: () => {}, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
         closeSseConnections();
 
         expect(created.every((s) => s.closed)).toBe(true);
@@ -122,13 +165,13 @@ describe('closeSseConnections', () => {
 describe('dead-channel eviction', () => {
     it('replaces a channel whose socket closed underneath us (iOS freezing a backgrounded PWA)', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
         const [frozen] = created;
         if (!frozen) throw new Error('expected one channel');
 
         // Simulate the OS tearing the connection down without the app closing it.
         frozen.readyState = 2;
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
 
         // Pre-fix this was a no-op: the Map still had the entry, so `has(userId)` reported it live
         // and the dead socket was never replaced.
@@ -138,12 +181,12 @@ describe('dead-channel eviction', () => {
 
     it('evicts only the dead channel on a multi-account device', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
         const [deadA, liveB] = created;
         if (!deadA || !liveB) throw new Error('expected two channels');
 
         deadA.readyState = 2;
-        openSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
 
         // Only user-a is replaced; user-b's healthy socket is left untouched.
         expect(created).toHaveLength(3);
@@ -153,12 +196,12 @@ describe('dead-channel eviction', () => {
 
     it('leaves a merely-reconnecting channel alone (CONNECTING is recoverable, not dead)', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
         const [reconnecting] = created;
         if (!reconnecting) throw new Error('expected one channel');
 
         reconnecting.readyState = 0;
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
 
         expect(created).toHaveLength(1);
     });
@@ -167,11 +210,11 @@ describe('dead-channel eviction', () => {
 describe('reopenSseConnections', () => {
     it('discards and recreates every channel regardless of a healthy-looking readyState', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
         const [staleA, staleB] = created;
 
         // Both still claim OPEN — a resumed web view can report this for a dropped connection.
-        reopenSseConnections(onUpdate, 'dev-1', ['user-a', 'user-b']);
+        reopenSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
 
         expect(staleA?.closed).toBe(true);
         expect(staleB?.closed).toBe(true);
@@ -181,12 +224,12 @@ describe('reopenSseConnections', () => {
 
     it('closes everything and opens nothing when no accounts are logged in', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
         const [existing] = created;
 
         // Reachable on resume: loggedInUserIdsRef starts empty and a resume can beat the effect
         // that mirrors the account list into it.
-        reopenSseConnections(onUpdate, 'dev-1', []);
+        reopenSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, []);
 
         expect(existing?.closed).toBe(true);
         expect(created).toHaveLength(1);
@@ -195,8 +238,8 @@ describe('reopenSseConnections', () => {
 
     it('routes messages from the fresh channel to onUpdate', () => {
         const onUpdate = vi.fn();
-        openSseConnections(onUpdate, 'dev-1', ['user-a']);
-        reopenSseConnections(onUpdate, 'dev-1', ['user-a']);
+        openSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
+        reopenSseConnections({ onUpdate: onUpdate, localDeviceId: 'dev-1' }, ['user-a']);
 
         const fresh = created[1];
         fresh?.onmessage?.({ data: JSON.stringify({ type: 'update' }) } as MessageEvent);

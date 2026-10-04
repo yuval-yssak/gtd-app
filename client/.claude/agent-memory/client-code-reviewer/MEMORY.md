@@ -46,3 +46,7 @@
 - [Failure label assumes one entity type](feedback_failure_label_assumes_entity_type.md) — New FAILURE_LABELS wording names "item"/"calendar event" though the generic server path also fires for routines/externalId.
 - [aria-label collides with getByLabel](feedback_aria_label_collides_with_getbylabel.md) — 'Clear <label>' buttons make getByLabel('<label>') strict-fail; name icon buttons via title=, not aria-label/Tooltip.
 - [Push deadline retry amplification](project_push_deadline_retry_amplification.md) — client abort on non-idempotent /sync/push + unbounded batch = server applies, client retries forever; demand chunking.
+- [wasActive read inside session pivot](feedback_wasactive_read_inside_session_pivot.md) — decisions inside a sync pass read the PIVOTED activeAccount; evaporation reloaded + switched user to remaining[0]. Need 3-acct test.
+- [Fallback navigation clobbers the specific one](feedback_fallback_navigation_clobbers_specific_one.md) — caller's post-pass `href='/'` overrides a callee's `/login`; demand callee return `{ navigated }`.
+- [Deferred side effect lost on loop throw](feedback_deferred_side_effect_lost_on_loop_throw.md) — collect-ids-then-act-after-finally drops collected work when a later pass throws; test pass-1 outcome + pass-2 reject.
+- [Cross-tab broadcast sent before state is durable](feedback_cross_tab_broadcast_before_state_durable.md) — reload-triggering broadcast precedes pointer/cookie pivot; receivers boot onto landing/login.

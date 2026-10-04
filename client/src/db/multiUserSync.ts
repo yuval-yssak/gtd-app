@@ -1,10 +1,14 @@
+import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { fetchUserStatus } from '#api/accountApi';
 import { BootstrapRequiredError, SyncAuthError } from '../api/syncClient';
 import { clearAccountReauthAfterSuccessfulSync, dispatchAccountNeedsReauth, isAccountFlaggedForReauth } from '../contexts/accountReauthEvents';
 import { enterCase2Recovery } from '../contexts/syncRecoveryStore';
 import { authClient } from '../lib/authClient';
+import { hasAtLeastOne } from '../lib/typeUtils';
 import type { MyDB } from '../types/MyDB';
 import { getActiveAccount, getLoggedInUserIds, setActiveAccount } from './accountHelpers';
+import { evaporateUserAndRecover } from './evaporateUser';
 import { bootstrapFromServerUnguarded, flushSyncQueue, pullFromServerUnguarded, withSessionGate } from './syncHelpers';
 import { countQueuedOpsForUser, isDeviceUnregistered, recoverFromBootstrapRequiredUnderGate } from './syncRecovery';
 
@@ -16,6 +20,61 @@ import { countQueuedOpsForUser, isDeviceUnregistered, recoverFromBootstrapRequir
 export interface SyncAllLoggedInUsersOptions {
     /** Called once per pass after pull settles, with the userId being synced. */
     onUserSynced?: (userId: string) => Promise<void> | void;
+    /**
+     * Called for every logged-in account the server reports as deleted (tombstoned): before the
+     * loop for accounts the pre-loop probe caught (they are not synced), and after the loop — once
+     * the user's real active session is restored — for accounts whose dead session turned out to be
+     * a deletion mid-pass. Returns whether a full-page navigation was scheduled (the active account
+     * went away). Defaults to `evaporateUserAndRecover`; injectable so tests can observe the
+     * decision without the default's `window.location` navigation.
+     */
+    onUserDeleted?: OnUserDeleted;
+}
+
+type OnUserDeleted = (userId: string) => Promise<{ navigated: boolean }>;
+
+/**
+ * Minimum gap between two tombstone probes for the same account. The sync pass runs on boot,
+ * online, resume, SW push and catch-up — and every probe is a billed request through the Cloudflare
+ * Worker in front of the API, whose free-tier daily cap this project has hit before. A deletion is
+ * rare and a live device learns of it over SSE anyway, so a 10-minute probe cadence costs nothing
+ * in practice; the one case that must not wait is a `SyncAuthError` (see `syncOneUser`), where the
+ * probe is forced because "401" is exactly the ambiguous signal the tombstone exists to resolve.
+ */
+const USER_STATUS_PROBE_INTERVAL_MS = 10 * 60_000;
+const lastProbedMs = new Map<string, number>();
+
+/** Test-only: forget every probe timestamp so a spec starts from a cold throttle. */
+export function resetUserStatusProbeThrottleForTests(): void {
+    lastProbedMs.clear();
+}
+
+/** Probes the tombstone endpoint, honouring the throttle unless `force` is set. `undefined` ⇒ throttled, nothing asked. */
+async function probeUserStatus(userId: string, force: boolean): Promise<'active' | 'deleted' | 'unknown' | undefined> {
+    const now = dayjs().valueOf();
+    const last = lastProbedMs.get(userId);
+    if (!force && last !== undefined && now - last < USER_STATUS_PROBE_INTERVAL_MS) {
+        return undefined;
+    }
+    const { status } = await fetchUserStatus(userId);
+    // Only `active` starts the window. `unknown` (offline boot, 429, 5xx, timeout) must not burn it,
+    // or the `online` pass that follows an offline boot would skip the real probe. `deleted` is
+    // terminal and must stay re-askable — it also CLEARS a window an earlier `active` answer opened
+    // (the pre-loop probe runs before the pass whose 401 forces the re-probe): if the evaporation
+    // it triggers is lost (a later pass in the same loop throws before the post-restore evaporation
+    // runs), the next pre-loop probe has to find it again instead of hiding the account for 10
+    // minutes with no reauth flag either.
+    if (status === 'active') {
+        lastProbedMs.set(userId, now);
+    } else if (status === 'deleted') {
+        lastProbedMs.delete(userId);
+    }
+    return status;
+}
+
+/** The evaporation hook callers get when they inject none: the ungated wipe + recovery (the orchestrator holds the gate). */
+function resolveOnUserDeleted(db: IDBPDatabase<MyDB>, options: SyncAllLoggedInUsersOptions): OnUserDeleted {
+    return options.onUserDeleted ?? ((userId) => evaporateUserAndRecover(db, userId));
 }
 
 interface DeviceSession {
@@ -24,7 +83,15 @@ interface DeviceSession {
 }
 
 /**
- * Runs a per-user sync pass for every logged-in account on this device. Each pass:
+ * Runs a per-user sync pass for every logged-in account on this device. Before the loop, every
+ * account is checked against the unauthenticated tombstone endpoint (throttled per account — see
+ * `USER_STATUS_PROBE_INTERVAL_MS`): an account deleted server-side is evaporated (`onUserDeleted`)
+ * and skipped — this is the year-offline path, where the session cookie is long dead and a 401
+ * alone could not tell "expired" from "deleted". `active` and `unknown` (endpoint unreachable /
+ * rate-limited) proceed as today — fail-open by design. When the evaporated account was the active
+ * one a reload is already scheduled, so the pass returns without touching the survivors.
+ *
+ * Each pass:
  *   1. pivots `multiSession.setActive` to that account so the server reads the right session,
  *   2. flushes the queued ops scoped to that user,
  *   3. pulls (or bootstraps on first run) under that session,
@@ -33,29 +100,87 @@ interface DeviceSession {
  * The loop is strictly serialized — concurrent active-session swaps would race the cookie write,
  * leaving the server reading the wrong session for at least one of the passes.
  *
- * The user's previously-active session is restored at the end via `try/finally`, even when a
- * per-user pass throws.
+ * The user's previously-active session is restored after the passes (`.finally`), even when a
+ * per-user pass throws. Accounts whose dead session turned out to be a deletion are evaporated
+ * only after that restore.
+ *
+ * Resolves `{ navigated: true }` when an evaporation scheduled a full-page navigation — the caller
+ * must then stop (anything it does afterwards, e.g. another `location.href` write, would race or
+ * override the reload).
  */
-export async function syncAllLoggedInUsers(db: IDBPDatabase<MyDB>, options: SyncAllLoggedInUsersOptions = {}): Promise<void> {
+export async function syncAllLoggedInUsers(db: IDBPDatabase<MyDB>, options: SyncAllLoggedInUsersOptions = {}): Promise<{ navigated: boolean }> {
     // The whole loop pivots the active Better Auth session multiple times, so it must serialize
     // against any standalone `pullFromServer` call. Without the gate, an SSE-driven pull for a
     // different user could fetch under the wrong session mid-pivot and write to the wrong cursor.
     return withSessionGate(async () => {
-        const userIds = await getLoggedInUserIds(db);
-        if (!userIds.length) {
-            return;
+        const loggedInUserIds = await getLoggedInUserIds(db);
+        if (!loggedInUserIds.length) {
+            return { navigated: false };
+        }
+        const resolvedOptions = { ...options, onUserDeleted: resolveOnUserDeleted(db, options) };
+        const { survivors, navigated } = await evaporateDeletedUsers(loggedInUserIds, resolvedOptions.onUserDeleted);
+        if (navigated || !hasAtLeastOne(survivors)) {
+            return { navigated };
         }
         const sessions = await loadDeviceSessionsByUserId();
         const previouslyActive = await getActiveAccount(db);
         const previouslyActiveSession = previouslyActive ? sessions.get(previouslyActive.id) : undefined;
-        try {
-            for (const userId of userIds) {
-                await syncOneUser(db, userId, sessions, options, userIds.length);
-            }
-        } finally {
-            await restorePreviouslyActiveSession(db, previouslyActive?.id, previouslyActiveSession);
-        }
+        const deletedMidPass = await syncSurvivors(db, survivors, sessions, resolvedOptions).finally(() =>
+            restorePreviouslyActiveSession(db, previouslyActive?.id, previouslyActiveSession),
+        );
+        // Evaporate only AFTER the restore: inside a pass, IDB's activeAccount points at the account
+        // being synced, so an evaporation there would read `wasActive` for the wrong account, pivot
+        // to an arbitrary survivor and reload a tab that had nothing to do with the deletion.
+        return { navigated: await evaporateEach(deletedMidPass, resolvedOptions.onUserDeleted) };
     });
+}
+
+/** Runs every survivor's pass in order and returns the accounts whose dead session turned out to be a deletion. */
+async function syncSurvivors(db: IDBPDatabase<MyDB>, survivors: string[], sessions: Map<string, DeviceSession>, options: SyncAllLoggedInUsersOptions) {
+    const outcomes = await mapSequentially(survivors, async (userId) => ({
+        userId,
+        outcome: await syncOneUser(db, userId, sessions, options, survivors.length),
+    }));
+    return outcomes.filter(({ outcome }) => outcome === 'deleted').map(({ userId }) => userId);
+}
+
+/** Sequential async map — passes pivot the shared session cookie, so they must never overlap. */
+async function mapSequentially<T, R>(items: readonly T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+    const results: R[] = [];
+    for (const item of items) {
+        results.push(await fn(item));
+    }
+    return results;
+}
+
+/**
+ * Probes the tombstone endpoint for every account (throttled) and evaporates the deleted ones.
+ * Returns the ids still worth syncing, plus whether an evaporation scheduled a reload. The probes
+ * run in parallel (one cheap unauthenticated GET each) so a multi-account device pays one
+ * round-trip, not N.
+ */
+async function evaporateDeletedUsers(userIds: string[], onUserDeleted: OnUserDeleted): Promise<{ survivors: string[]; navigated: boolean }> {
+    const statuses = await Promise.all(userIds.map(async (userId) => ({ userId, status: await probeUserStatus(userId, false) })));
+    const deleted = statuses.filter(({ status }) => status === 'deleted').map(({ userId }) => userId);
+    if (hasAtLeastOne(deleted)) {
+        console.warn(`[multi-sync] account(s) deleted server-side — evaporating local data: ${deleted.join(', ')}`);
+    }
+    const navigated = await evaporateEach(deleted, onUserDeleted);
+    return { survivors: statuses.filter(({ status }) => status !== 'deleted').map(({ userId }) => userId), navigated };
+}
+
+/**
+ * Sequential on purpose — each evaporation may pivot the active account, which must not interleave.
+ * Stops at the first evaporation that scheduled a reload: the page is going away, and the remaining
+ * deleted accounts are caught by the next boot's probe.
+ */
+async function evaporateEach(userIds: string[], onUserDeleted: OnUserDeleted): Promise<boolean> {
+    for (const userId of userIds) {
+        if ((await onUserDeleted(userId)).navigated) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**
@@ -81,14 +206,17 @@ export async function syncSingleUser(db: IDBPDatabase<MyDB>, userId: string): Pr
         }
         const previouslyActive = await getActiveAccount(db);
         const previouslyActiveSession = previouslyActive ? sessions.get(previouslyActive.id) : undefined;
-        try {
-            // totalUsers > 1 wouldn't matter here because we've already verified the session entry
-            // exists — `syncOneUser` will take the pivot branch unconditionally. We pass 2 to
-            // signal "multi-user device" so the no-pivot fallback in `syncOneUser` is unreachable
-            // by construction (defense-in-depth against future refactors).
-            await syncOneUser(db, userId, sessions, {}, 2);
-        } finally {
-            await restorePreviouslyActiveSession(db, previouslyActive?.id, previouslyActiveSession);
+        // totalUsers > 1 wouldn't matter here because we've already verified the session entry
+        // exists — `syncOneUser` will take the pivot branch unconditionally. We pass 2 to
+        // signal "multi-user device" so the no-pivot fallback in `syncOneUser` is unreachable
+        // by construction (defense-in-depth against future refactors).
+        const outcome = await syncOneUser(db, userId, sessions, {}, 2).finally(() =>
+            restorePreviouslyActiveSession(db, previouslyActive?.id, previouslyActiveSession),
+        );
+        // After the restore, for the same reason as in syncAllLoggedInUsers: the pass left IDB's
+        // activeAccount on `userId`, which is not necessarily the account the user chose.
+        if (outcome === 'deleted') {
+            await evaporateEach([userId], resolveOnUserDeleted(db, {}));
         }
     });
 }
@@ -213,15 +341,17 @@ async function loadDeviceSessionsByUserId(): Promise<Map<string, DeviceSession>>
  *   `listDeviceSessions()` returns empty — but the cookie already authenticates as this user.
  * - **Multi-user device** (more than one entry): re-fetch the session list once (the boot-time
  *   snapshot can predate a login completed in another tab) and re-resolve. If now present, pivot
- *   and proceed. If still missing, skip with a warning AND dispatch a reauth-needed signal so the
- *   user sees a banner instead of silent data absence — without a session token we'd authenticate
- *   as whoever the cookie points at and attribute their data to the wrong cursor (the failure mode
- *   `assertActiveSessionMatches` catches downstream).
+ *   and proceed. If still missing, skip with a warning and hand off to `probeDeadSession` — without
+ *   a session token we'd authenticate as whoever the cookie points at and attribute their data to
+ *   the wrong cursor (the failure mode `assertActiveSessionMatches` catches downstream).
  *
  * A 401 from the flush/pull themselves (the pivoted session cookie itself has expired — distinct
- * from the "no multi-session entry" case above, which is caught before any request is made) is
- * caught the same way: flag this user for reauth and skip, so a stale cookie for one account
- * doesn't abort the whole loop or spin retrying against a dead session forever.
+ * from the "no multi-session entry" case above, which is caught before any request is made) takes
+ * the same `probeDeadSession` path: a forced tombstone probe, because a deleted account's session
+ * vanishes / 401s exactly like an expired one and only the probe can tell them apart. Deleted →
+ * reported as `'deleted'` for the caller to evaporate once the active session is restored; otherwise
+ * flag this user for reauth and skip, so a stale cookie for one account doesn't abort the whole loop
+ * or spin retrying against a dead session.
  */
 async function syncOneUser(
     db: IDBPDatabase<MyDB>,
@@ -229,16 +359,16 @@ async function syncOneUser(
     sessions: Map<string, DeviceSession>,
     options: SyncAllLoggedInUsersOptions,
     totalUsers: number,
-): Promise<void> {
+): Promise<'synced' | 'skipped' | 'deleted'> {
     const session = sessions.get(userId) ?? (totalUsers > 1 ? await refreshSessionForUser(userId) : undefined);
     if (session) {
         await authClient.multiSession.setActive({ sessionToken: session.sessionToken });
         await setActiveAccount(userId, db);
     } else if (totalUsers > 1) {
         console.warn(`[multi-sync] no multi-session entry for ${userId} on a multi-user device — skipping pass to avoid cross-user data corruption`);
-        // Surface it so the user can re-login instead of silently never seeing this account's data.
-        dispatchAccountNeedsReauth(userId);
-        return;
+        // A deleted account's session disappears from the device list too — probe before telling
+        // the user to re-login to an account that no longer exists.
+        return probeDeadSession(userId);
     } else {
         // Single-user case: no pivot needed, but make sure IDB active matches so the downstream
         // session-match guard passes (it reads IDB's activeAccount).
@@ -256,7 +386,7 @@ async function syncOneUser(
         if (queuedOpCount > 0 && (await isDeviceUnregistered(db))) {
             console.warn(`[multi-sync] device unregistered server-side with ${queuedOpCount} queued ops for ${userId} — deferring to recovery dialog`);
             enterCase2Recovery(userId, queuedOpCount);
-            return;
+            return 'skipped';
         }
         await flushSyncQueue(db, { userIdFilter: userId });
         await pullOrBootstrap(db, userId);
@@ -267,21 +397,55 @@ async function syncOneUser(
         }
     } catch (err) {
         if (err instanceof SyncAuthError) {
-            console.warn(`[multi-sync] session for ${userId} expired mid-sync — flagging for reauth`);
-            dispatchAccountNeedsReauth(userId);
-            return;
+            return probeDeadSession(userId);
         }
         if (err instanceof BootstrapRequiredError) {
             // Pull 409'd: this device was reaped and its cursor is worthless. We already hold the
             // session gate here, so the recovery routine uses the unguarded bootstrap internally.
             await recoverFromBootstrapRequiredUnderGate(db, userId);
-            return;
+            return 'skipped';
         }
         throw err;
     }
     if (options.onUserSynced) {
         await options.onUserSynced(userId);
     }
+    return 'synced';
+}
+
+/**
+ * The session for `userId` is unusable (401 mid-pass, or missing from the device's session list):
+ * forced tombstone probe. `'deleted'` is only REPORTED here — the evaporation runs once the caller
+ * has restored the user's real active session (see syncAllLoggedInUsers). Anything else flags the
+ * account for reauth.
+ */
+async function probeDeadSession(userId: string): Promise<'skipped' | 'deleted'> {
+    const status = await probeUserStatus(userId, true);
+    if (status === 'deleted') {
+        console.warn(`[multi-sync] account ${userId} has no usable session and is tombstoned`);
+        return 'deleted';
+    }
+    console.warn(`[multi-sync] session for ${userId} is unusable — flagging for reauth`);
+    dispatchAccountNeedsReauth(userId);
+    return 'skipped';
+}
+
+/**
+ * Gated entry for callers outside the orchestrator that hit a 401 for `userId` (the same-account
+ * flush in `dispatchOpFlush`). No pivot happened, so a deletion can be evaporated right here. An
+ * account already flagged for reauth is left alone: `dispatchOpFlush` runs once per queued op, and
+ * re-probing on every op would burn the Cloudflare request cap — the orchestrator's next pre-loop
+ * probe (throttled) still catches a deletion that happens after the flag.
+ */
+export function handleDeadSessionGated(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
+    return withSessionGate(async () => {
+        if (isAccountFlaggedForReauth(userId)) {
+            return;
+        }
+        if ((await probeDeadSession(userId)) === 'deleted') {
+            await evaporateUserAndRecover(db, userId);
+        }
+    });
 }
 
 /**

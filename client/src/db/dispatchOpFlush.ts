@@ -1,9 +1,8 @@
 import type { IDBPDatabase } from 'idb';
 import { SyncAuthError } from '../api/syncClient';
-import { dispatchAccountNeedsReauth } from '../contexts/accountReauthEvents';
 import type { MyDB } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
-import { syncSingleUser } from './multiUserSync';
+import { handleDeadSessionGated, syncSingleUser } from './multiUserSync';
 import { flushSyncQueue } from './syncHelpers';
 
 /**
@@ -34,7 +33,9 @@ export async function dispatchOpFlush(db: IDBPDatabase<MyDB>, userId: string): P
         await flushSyncQueue(db, { userIdFilter: userId });
     } catch (err) {
         if (err instanceof SyncAuthError) {
-            dispatchAccountNeedsReauth(userId);
+            // 401 is ambiguous (expired vs deleted account) — the forced tombstone probe decides
+            // between the reauth flag and evaporation, same as the orchestrator's own passes.
+            await handleDeadSessionGated(db, userId);
             return;
         }
         throw err;

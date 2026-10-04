@@ -2,7 +2,7 @@ import privacyPolicyMarkdown from '../legal/privacy-policy.md?raw';
 import termsOfServiceMarkdown from '../legal/terms-of-service.md?raw';
 
 /** ISO date both documents took effect; bump it (and announce in-app) whenever either text changes. */
-export const LEGAL_EFFECTIVE_DATE = '2026-09-27';
+export const LEGAL_EFFECTIVE_DATE = '2026-10-04';
 
 export const LEGAL_CONTACT_EMAIL = 'yuval.yssak@gmail.com';
 

@@ -42,11 +42,19 @@ describe('privacy policy', () => {
         expect(privacy.markdown).toContain('including the Limited Use requirements');
     });
 
-    it('states the storage regions, the deletion window and the contact address', () => {
+    it('states the storage regions, immediate deletion and the contact address', () => {
         expect(privacy.markdown).toContain('us-central1');
         expect(privacy.markdown).toContain('us-east-1');
-        expect(privacy.markdown).toContain('deleted within 30 days');
+        // Self-service deletion is immediate; the only 30-day window left is the emailed-request fallback.
+        expect(privacy.markdown).toContain('all of the above is deleted immediately');
+        expect(privacy.markdown).toContain('we will act within 30 days');
         expect(privacy.markdown).toContain(`mailto:${LEGAL_CONTACT_EMAIL}`);
+    });
+
+    it('points at the in-app Download my data / Delete my account controls instead of a roadmap promise', () => {
+        expect(privacy.markdown).toContain('"Download my data" in Settings');
+        expect(privacy.markdown).toContain('"Delete my account"');
+        expect(privacy.markdown).not.toContain('on the roadmap');
     });
 
     it('discloses what the AI features send, and that no user identifier goes with briefs', () => {

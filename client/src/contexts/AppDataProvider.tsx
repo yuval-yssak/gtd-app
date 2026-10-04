@@ -18,8 +18,9 @@ import { BootstrapRequiredError, SyncAuthError } from '../api/syncClient';
 import { AppResourceProvider, useAppResource } from '../data/AppResourceProvider';
 import { triggerAppResourceRefresh } from '../data/appResource';
 import { getInitialAuthBundle } from '../data/initialAuthBundle';
-import { getActiveAccount, getLoggedInAccounts, upsertAccount } from '../db/accountHelpers';
+import { getActiveAccount, getLoggedInAccounts, getLoggedInUserIds, upsertAccount } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
+import { evaporateUserAndRecoverGated } from '../db/evaporateUser';
 import { reconcileActiveSessionCookie, syncAllLoggedInUsers, syncSingleUser, withAccountSession } from '../db/multiUserSync';
 import { registerPushSubscriptionIfPermitted } from '../db/pushSubscription';
 import { materializePendingNextActionRoutines } from '../db/routineItemHelpers';
@@ -43,10 +44,17 @@ import type {
     StoredRoutine,
     StoredWorkContext,
 } from '../types/MyDB';
+import { ACCOUNT_EVAPORATED_EVENT, type AccountEvaporatedDetail, subscribeToEvaporationBroadcast } from './accountEvaporatedEvents';
+import { type ReloadDestination, refreshAfterAccountEvaporation, reloadIfTabAccountGone, shouldReloadOnEvaporation } from './accountEvaporatedRecovery';
 import { clearAccountReauthAfterSuccessfulSync, dispatchAccountNeedsReauth, isAccountFlaggedForReauth } from './accountReauthEvents';
 import { filterOutHiddenAccounts, getHiddenAccountIds, subscribeHiddenAccounts } from './hiddenAccounts';
 import { applyOverrideToItem, applyOverrideToRoutine, usePendingReassignMaps } from './PendingReassignProvider';
 import { dispatchSyncIssuesRefresh } from './syncIssuesEvents';
+
+/** Full-page navigation used by every "this tab's account is gone" path (see accountEvaporatedRecovery). */
+function navigate(destination: ReloadDestination): void {
+    window.location.href = destination;
+}
 
 export interface AppData {
     /** The active session's account — the default-owner for newly created entities. */
@@ -269,6 +277,13 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     }, [db]);
 
     // Extracted so both the mount effect and the isOnline effect can call it.
+    // One deps object for every "this tab's boot account is gone" reload decision (boot sync,
+    // post-sync check, cross-tab evaporation). `account` is the sticky boot-time account.
+    const tabAccountGoneDeps = useMemo(
+        () => ({ tabAccountId: account?.id ?? null, readLoggedInUserIds: () => getLoggedInUserIds(db), navigate }),
+        [db, account],
+    );
+
     const syncAndRefresh = useCallback(async () => {
         if (isSyncingRef.current) {
             syncRequestedWhileBusy.current = true;
@@ -282,11 +297,20 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         try {
             const acct = await getActiveAccount(db);
             if (!acct) {
+                // No active pointer. With survivors present this is another tab mid-evaporation (it
+                // moves the pointer, then broadcasts) — its broadcast will route us, so don't race it.
+                // With nobody left, every live signal was missed and only /login makes sense.
+                await reloadIfTabAccountGone({ ...tabAccountGoneDeps, onlyWhenNoneRemain: true });
                 return;
             }
             // Multi-account orchestrator: pivots active session per logged-in user, flushes that
             // user's queue, pulls (or bootstraps), then runs that user's calendar integrations.
-            await syncAllLoggedInUsers(db, { onUserSynced: async () => syncCalendarIntegrationsForActiveSession() });
+            const { navigated } = await syncAllLoggedInUsers(db, { onUserSynced: async () => syncCalendarIntegrationsForActiveSession() });
+            if (navigated) {
+                // An evaporation already set location.href (to / or /login). Anything below — the
+                // missing-account check included — would override that navigation.
+                return;
+            }
 
             // After pulling for the active account, materialize startDate-due routines so the
             // user sees today's first occurrence without waiting for the next disposal event.
@@ -294,6 +318,11 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
 
             // Guard after the async work — component may have unmounted while awaiting network.
             if (unmountedRef.current) {
+                return;
+            }
+            // This tab's boot-time account was removed from IDB by another tab (deleted server-side,
+            // or signed out there) and every live signal was missed — reload onto whatever is active.
+            if (await reloadIfTabAccountGone(tabAccountGoneDeps)) {
                 return;
             }
             triggerAppResourceRefresh('all');
@@ -313,7 +342,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                 runCatchUpPull();
             }
         }
-    }, [db, runCatchUpPull]);
+    }, [db, runCatchUpPull, tabAccountGoneDeps]);
 
     // SSE callback receives the userId of the channel that fired. We trigger a per-user pull only —
     // re-syncing every account on every event would multiply network round-trips by N for no
@@ -362,6 +391,25 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             })();
         },
         [db],
+    );
+
+    // The server announces a deleted account on its own SSE channel (and then closes it). Evaporate
+    // that account's local rows right away so a live device drops it within seconds; devices that
+    // were offline catch the tombstone on their next `syncAllLoggedInUsers` instead.
+    const onAccountDeleted = useCallback(
+        (userId: string) => {
+            // Gated: the pivot inside writes the active-session cookie and must not interleave with a
+            // sync pass's own pivots.
+            evaporateUserAndRecoverGated(db, userId).catch((err) => console.error('[sse] account evaporation failed:', err));
+        },
+        [db],
+    );
+
+    // One handlers object per channel set — the device id is only known asynchronously at each
+    // open site, so this builds the object there instead of threading three positional callbacks.
+    const sseHandlersFor = useCallback(
+        (deviceId: string) => ({ onUpdate: onSseUpdateForUser, localDeviceId: deviceId, onAccountDeleted }),
+        [onSseUpdateForUser, onAccountDeleted],
     );
 
     // When the SW handles a push event it updates IndexedDB and then messages open tabs.
@@ -492,7 +540,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                         // Open one SSE channel per logged-in account. The orchestrator inside
                         // loadAll has already populated `loggedInUserIdsRef`, so reading it here
                         // covers every signed-in session — single-account devices still get one channel.
-                        openSseConnections(onSseUpdateForUser, deviceId, loggedInUserIdsRef.current);
+                        openSseConnections(sseHandlersFor(deviceId), loggedInUserIdsRef.current);
                     });
                     registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
                 }
@@ -505,7 +553,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             closeSseConnections();
             navigator.serviceWorker?.removeEventListener('message', onSwMessage);
         };
-    }, [loadAll, onSwMessage, db, onSseUpdateForUser]);
+    }, [loadAll, onSwMessage, db, sseHandlersFor]);
 
     /**
      * Online/offline effect: when the device comes back online, flushes the sync queue,
@@ -549,7 +597,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             });
             syncAndRefresh().catch((err) => console.error('[online] sync failed:', err));
             getOrCreateDeviceId(db).then((deviceId) => {
-                openSseConnections(onSseUpdateForUser, deviceId, loggedInUserIdsRef.current);
+                openSseConnections(sseHandlersFor(deviceId), loggedInUserIdsRef.current);
             });
             // Re-register push in case the subscription was lost or expired while offline.
             registerPushSubscriptionIfPermitted(db).catch((err) => console.error('[push] registration failed:', err));
@@ -561,7 +609,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
         // for Strict Mode remounts. If this effect returned a cleanup that also reset it, the
         // offline→online transition would set the flag back to true (via the offline run's
         // cleanup), making the online run skip entirely — silently dropping the reconnect flush.
-    }, [isOnline, db, syncAndRefresh, onSseUpdateForUser]);
+    }, [isOnline, db, syncAndRefresh, sseHandlersFor]);
 
     // Resume trigger: an installed PWA (iOS especially) is frozen while backgrounded and comes back
     // with no sync of any kind. Boot only fires on a cold launch, `online` never fires because the
@@ -585,7 +633,7 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
                     if (unmounted) {
                         return;
                     }
-                    reopenSseConnections(onSseUpdateForUser, deviceId, loggedInUserIdsRef.current);
+                    reopenSseConnections(sseHandlersFor(deviceId), loggedInUserIdsRef.current);
                 })
                 .catch((err) => console.error('[resume] sse reopen failed:', err));
             // Routed through syncAndRefresh (not a direct pull) so the multi-account session pivot,
@@ -597,7 +645,43 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
             unmounted = true;
             stopListening();
         };
-    }, [db, syncAndRefresh, onSseUpdateForUser]);
+    }, [db, syncAndRefresh, sseHandlersFor]);
+
+    // An account was evaporated (deleted server-side) WITHOUT this tab navigating. Usually it was a
+    // non-active account: refresh the account list and re-open SSE with the survivors. But it can
+    // also be THIS tab's boot-time account, when another tab evaporated it first and already moved
+    // the IDB active pointer to a survivor — `account` is sticky for the tab's lifetime, so the only
+    // way onto the survivor is a reload (see shouldReloadOnEvaporation).
+    // Both the same-tab event and the cross-tab `storage` broadcast land here: a tab that neither
+    // received the SSE message (frozen) nor probed the account itself (another tab already removed it
+    // from IDB) still learns of the deletion this way.
+    useEffect(() => {
+        let unmounted = false;
+        const onAccountEvaporated = (userId: string) => {
+            if (shouldReloadOnEvaporation(userId, account?.id ?? null)) {
+                // Async on purpose: the destination depends on whether any account is left, and the
+                // other tab (whose broadcast this may be) races us to the same answer.
+                reloadIfTabAccountGone(tabAccountGoneDeps).catch((err) => console.error('[evaporate] could not decide where to reload:', err));
+                return;
+            }
+            refreshAfterAccountEvaporation({
+                refreshAccounts: refreshAccountsInternal,
+                getDeviceId: () => getOrCreateDeviceId(db),
+                isStillMounted: () => !unmounted,
+                isOnline: () => navigator.onLine,
+                reopenSse: (deviceId) => openSseConnections(sseHandlersFor(deviceId), loggedInUserIdsRef.current),
+                refreshResources: () => triggerAppResourceRefresh('all'),
+            }).catch((err) => console.error('[evaporate] account refresh failed:', err));
+        };
+        const onSameTabEvent = (event: Event) => onAccountEvaporated((event as CustomEvent<AccountEvaporatedDetail>).detail.userId);
+        window.addEventListener(ACCOUNT_EVAPORATED_EVENT, onSameTabEvent);
+        const unsubscribeBroadcast = subscribeToEvaporationBroadcast(onAccountEvaporated);
+        return () => {
+            unmounted = true;
+            window.removeEventListener(ACCOUNT_EVAPORATED_EVENT, onSameTabEvent);
+            unsubscribeBroadcast();
+        };
+    }, [db, account, refreshAccountsInternal, sseHandlersFor, tabAccountGoneDeps]);
 
     return (
         <AppResourceProvider db={db} userIds={loggedInUserIds}>

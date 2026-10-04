@@ -6,6 +6,8 @@ import { API_SERVER } from '../constants/globals';
 const eventSources = new Map<string, EventSource>();
 
 type OnUpdateCallback = (userId: string) => void;
+/** Fired when the server announces that the channel's account was deleted (`{ type: 'account-deleted' }`). */
+type OnAccountDeletedCallback = (userId: string) => void;
 
 interface UpdatePayload {
     type?: string;
@@ -20,12 +22,12 @@ interface UpdatePayload {
  * `onUpdate` is invoked with the userId of the channel that fired so the caller can scope the
  * follow-up pull to that account instead of re-syncing every account on every event.
  */
-export function openSseConnections(onUpdate: OnUpdateCallback, localDeviceId: string | undefined, userIds: string[]): void {
+export function openSseConnections(handlers: ChannelHandlers, userIds: string[]): void {
     closeStaleConnections(userIds);
     dropDeadConnections();
     for (const userId of userIds) {
         if (!eventSources.has(userId)) {
-            openSingleChannel(userId, onUpdate, localDeviceId);
+            openSingleChannel(userId, handlers);
         }
     }
 }
@@ -51,9 +53,9 @@ function dropDeadConnections(): void {
  * socket that reports CONNECTING/OPEN but is attached to a connection the OS already dropped, so
  * readyState alone can't prove liveness — on resume we discard unconditionally and reconnect.
  */
-export function reopenSseConnections(onUpdate: OnUpdateCallback, localDeviceId: string | undefined, userIds: string[]): void {
+export function reopenSseConnections(handlers: ChannelHandlers, userIds: string[]): void {
     closeSseConnections();
-    openSseConnections(onUpdate, localDeviceId, userIds);
+    openSseConnections(handlers, userIds);
 }
 
 /** Closes every channel and clears the registry. Called on unmount and when going offline. */
@@ -79,12 +81,12 @@ function closeStaleConnections(activeUserIds: string[]): void {
     }
 }
 
-function openSingleChannel(userId: string, onUpdate: OnUpdateCallback, localDeviceId: string | undefined): void {
+function openSingleChannel(userId: string, handlers: ChannelHandlers): void {
     // withCredentials is required so the auth + multi-session cookies are sent cross-origin.
     const url = `${API_SERVER}/sync/events?userId=${encodeURIComponent(userId)}`;
     const source = new EventSource(url, { withCredentials: true });
 
-    source.onmessage = (event) => handleMessage(event, userId, onUpdate, localDeviceId);
+    source.onmessage = (event) => handleMessage(event, userId, handlers);
     source.onopen = () => console.log(`[debug-gcal-sync][client] sse open | userId=${userId}`);
     // EventSource auto-reconnects on transient errors; we only log so we can spot a wedged connection.
     source.onerror = (err) => console.warn(`[debug-gcal-sync][client] sse error | userId=${userId} readyState=${source.readyState}`, err);
@@ -92,19 +94,41 @@ function openSingleChannel(userId: string, onUpdate: OnUpdateCallback, localDevi
     eventSources.set(userId, source);
 }
 
-function handleMessage(event: MessageEvent, userId: string, onUpdate: OnUpdateCallback, localDeviceId: string | undefined): void {
+/** What a channel does with each server message. One object shared by every channel of a device. */
+export interface ChannelHandlers {
+    onUpdate: OnUpdateCallback;
+    /** This device's id, so the channel can ignore echoes of its own writes. */
+    localDeviceId?: string | undefined;
+    onAccountDeleted?: OnAccountDeletedCallback | undefined;
+}
+
+function handleMessage(event: MessageEvent, userId: string, handlers: ChannelHandlers): void {
     try {
         const data = JSON.parse(event.data as string) as UpdatePayload;
         console.log('[debug-gcal-sync][client] sse onmessage', { userId, data });
+        if (data.type === 'account-deleted') {
+            handleAccountDeleted(userId, handlers.onAccountDeleted);
+            return;
+        }
         if (data.type !== 'update') {
             return;
         }
-        if (localDeviceId && data.sourceDeviceId === localDeviceId) {
-            console.log('[debug-gcal-sync][client] sse ignoring own echo', { userId, localDeviceId });
+        if (handlers.localDeviceId && data.sourceDeviceId === handlers.localDeviceId) {
+            console.log('[debug-gcal-sync][client] sse ignoring own echo', { userId, localDeviceId: handlers.localDeviceId });
             return;
         }
-        onUpdate(userId);
+        handlers.onUpdate(userId);
     } catch (err) {
         console.warn('[debug-gcal-sync][client] sse malformed event', err, event.data);
     }
+}
+
+/**
+ * The server closes the stream right after this message. Drop the channel ourselves too — otherwise
+ * EventSource would auto-reconnect against an account that no longer exists and 401 forever.
+ */
+function handleAccountDeleted(userId: string, onAccountDeleted: OnAccountDeletedCallback | undefined): void {
+    eventSources.get(userId)?.close();
+    eventSources.delete(userId);
+    onAccountDeleted?.(userId);
 }

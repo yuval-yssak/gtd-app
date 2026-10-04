@@ -17,6 +17,7 @@ import type { IDBPDatabase } from 'idb';
 import { Suspense, useCallback, useEffect, useState, useTransition } from 'react';
 import { getPushStatus } from '../../api/pushApi';
 import { AppErrorBoundary } from '../../components/AppErrorBoundary';
+import { AccountDataSection } from '../../components/settings/AccountDataSection';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
 import { CalendarIntegrationsSkeleton } from '../../components/settings/CalendarIntegrationsSkeleton';
 import { ConnectedDevices } from '../../components/settings/ConnectedDevices';
@@ -189,6 +190,8 @@ function SettingsPage() {
                     <PersonalApiTokens />
                 </Box>
             </Paper>
+            {/* Data export + account deletion (GDPR portability / erasure) */}
+            <AccountDataSection db={db} account={account} />
             {/* App info */}
             <Paper variant="outlined">
                 <Box className={styles.sectionContent}>

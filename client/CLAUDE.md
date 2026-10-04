@@ -51,6 +51,8 @@ Shape: `accounts` (keyed by account `id`, unique `email` index) and the singleto
 
 **Adding a synced entity means a schema bump plus a `case` arm in `db/syncHelpers.ts`** — the default branch warns and skips, so a missing arm silently drops those ops.
 
+**Adding any store that holds user rows also means adding it to `wipeUserData` in `db/accountHelpers.ts`** (the per-account wipe used by sign-out AND by account evaporation after a server-side deletion) **and to the local snapshot in `db/exportRecoveryData.ts`.** Nothing enforces this on the client — the server-side inventory (`api-server/src/lib/userDataInventory.ts`) is the enforced half; keep the two in step. Generated content (briefs) counts: it must be wiped with the account.
+
 **Always open through `withAppDB`, never a bare long-lived `openAppDB`.** A connection left open holds the schema version and blocks the next upgrade in every other tab — a v7→v8 upgrade deadlocked on a stale tab and rendered a blank page with no error. The Service Worker outlives individual events, so this matters most there.
 
 ## API Client
@@ -100,6 +102,16 @@ When another device pushes a change to the server, the server broadcasts an SSE 
 3. `refreshItems()` / `refreshPeople()` / etc. — re-reads IDB → React state
 
 EventSource reconnects automatically on error. **Be careful adding per-message refetches** — an SSE fan-out that triggers a per-tab pull that triggers another fetch has previously burned the Cloudflare Worker free-tier daily request limit from the user's own open tabs alone.
+
+### Account deletion (evaporation)
+
+A deleted account must vanish from every device, including one offline for a year. Three signals, all ending in `db/evaporateUser.ts`:
+
+- **Tombstone probe** — `multiUserSync.ts` asks `GET /auth/user-status` (via `#api/accountApi`) for every logged-in account before the per-user loop, throttled to once per 10 minutes per account (every request is billed through the Cloudflare Worker); a dead session (401, or no multi-session entry) forces the probe. Any non-200 is `unknown` and never evaporates (fail-open).
+- **SSE `account-deleted`** — `sseClient.ts` closes the channel and hands the id to the provider.
+- **Cross-tab broadcast** — a `storage` event (`contexts/accountEvaporatedEvents.ts`), sent only AFTER the survivor's IDB pointer and session cookie are written, so a tab that reloads on it boots onto a coherent state.
+
+Rules that came out of review: never evaporate inside a sync pass (IDB's active pointer is then the account being synced — collect the deleted ids and evaporate after the session restore); every "leave this account" reload goes through `reloadDestination` (`/` while another account remains, else `/login`) so two tabs racing each other agree; `navigator.serviceWorker.ready` never settles without an active worker, so the push unsubscribe is gated on notification permission and bounded. Settings → "Your data" (`components/settings/AccountDataSection.tsx`) runs delete/export through `withActiveAccountSession` and sends `expectedUserId` so a drifted cookie can never delete the wrong account.
 
 ### Push Notifications (background sync)
 
