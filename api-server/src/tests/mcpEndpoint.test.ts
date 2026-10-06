@@ -10,15 +10,17 @@ import { issueOAuthAccessToken } from '../auth/apiTokens.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { mcpRoutes } from '../routes/mcp.js';
-import { v1MeRoutes } from '../routes/v1/me.js';
+import { v1Routes } from '../routes/v1/index.js';
 import type { ApiTokenScope } from '../types/entities.js';
 
 const ORIGIN = 'http://localhost:4000';
 
 // The app under test serves both /mcp (the resource) and /v1 (what the tools call over loopback).
-const app = new Hono().route('/mcp', mcpRoutes).route('/v1', v1MeRoutes);
+// The full /v1 router is mounted so item writes (gtd_capture → gtd_update_item) run the real
+// apply pipeline — the field-guidance test below inspects what the server actually stored.
+const app = new Hono().route('/mcp', mcpRoutes).route('/v1', v1Routes);
 
-const SCOPES: ApiTokenScope[] = ['items.read', 'items.write'];
+const SCOPES: ApiTokenScope[] = ['items.capture', 'items.read', 'items.write', 'contexts.write'];
 
 beforeAll(async () => {
     await loadDataAccess('gtd_test');
@@ -29,7 +31,15 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-    await Promise.all([db.collection('user').deleteMany({}), db.collection('apiTokens').deleteMany({})]);
+    // Every test reuses the same userId, so the rows item writes leave behind (items, their ops,
+    // work contexts) must go too or a later list-style assertion would see earlier tests' rows.
+    await Promise.all([
+        db.collection('user').deleteMany({}),
+        db.collection('apiTokens').deleteMany({}),
+        db.collection('items').deleteMany({}),
+        db.collection('operations').deleteMany({}),
+        db.collection('workContexts').deleteMany({}),
+    ]);
     __resetDefaultStoreForTests();
     vi.restoreAllMocks();
 });
@@ -111,6 +121,127 @@ describe('/mcp protocol', () => {
         const payload = JSON.parse(content.content[0]?.text ?? '{}') as { userId: string; email: string };
         expect(payload.userId).toBe(userId);
         expect(payload.email).toBe('mcp@example.com');
+    });
+
+    /** The slice of an item tool response these tests inspect. */
+    interface ItemToolPayload {
+        _id?: string;
+        status?: string;
+        workContextIds?: string[];
+        location?: string;
+        fieldGuidance?: { missing: string[]; hint: string };
+    }
+
+    interface ToolCallResult {
+        content: { text: string }[];
+        isError?: boolean;
+    }
+
+    async function callToolViaMcp(token: string, id: number, name: string, args: Record<string, unknown>): Promise<ToolCallResult> {
+        const call = await callMcp(token, { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+        return (call.body as { result: ToolCallResult }).result;
+    }
+
+    /** Calls one item tool through /mcp and returns its parsed JSON payload (asserting it did not error). */
+    async function callItemToolViaMcp(token: string, id: number, name: string, args: Record<string, unknown>): Promise<ItemToolPayload> {
+        const result = await callToolViaMcp(token, id, name, args);
+        const [block] = result.content;
+        if (!block) throw new Error(`tool ${name} returned no content`);
+        expect(result.isError, `tool ${name} errored: ${block.text}`).toBeFalsy();
+        return JSON.parse(block.text) as ItemToolPayload;
+    }
+
+    /** Captures an inbox item through /mcp and returns its id. */
+    async function captureViaMcp(token: string, id: number, title: string): Promise<string> {
+        const captured = await callItemToolViaMcp(token, id, 'gtd_capture', { title });
+        // Inbox has no required metadata, so a capture never carries guidance.
+        expect(captured).not.toHaveProperty('fieldGuidance');
+        if (typeof captured._id !== 'string') throw new Error('expected the captured item to carry an _id');
+        return captured._id;
+    }
+
+    it('stamps fieldGuidance on an incomplete nextAction written through gtd_update_item, and drops it once complete', async () => {
+        const { token } = await seedUserAndToken();
+        stubLoopbackFetch();
+        await callMcp(token, INITIALIZE);
+        const id = await captureViaMcp(token, 10, 'Renew passport');
+
+        const bare = await callItemToolViaMcp(token, 11, 'gtd_update_item', { id, status: 'nextAction' });
+        expect(bare.status).toBe('nextAction');
+        expect(bare.fieldGuidance).toMatchObject({ missing: ['energy', 'time', 'workContextIds'] });
+
+        const partial = await callItemToolViaMcp(token, 12, 'gtd_update_item', { id, energy: 'low', time: 20 });
+        expect(partial.fieldGuidance).toMatchObject({ missing: ['workContextIds'] });
+
+        const office = await callItemToolViaMcp(token, 13, 'gtd_create_work_context', { name: 'Office' });
+        if (typeof office._id !== 'string') throw new Error('expected the work context to carry an _id');
+        const complete = await callItemToolViaMcp(token, 14, 'gtd_update_item', { id, workContextIds: [office._id] });
+        expect(complete).not.toHaveProperty('fieldGuidance');
+        expect(complete.workContextIds).toEqual([office._id]);
+    });
+
+    it('asks for location only on a Google-linked calendar item, and reads the stored location back through the projection', async () => {
+        const { userId, token } = await seedUserAndToken();
+        stubLoopbackFetch();
+        await callMcp(token, INITIALIZE);
+        const id = await captureViaMcp(token, 30, 'Dentist');
+
+        // No Google Calendar is connected, so scheduling leaves the item unlinked: nothing to set a location on.
+        const unlinked = await callItemToolViaMcp(token, 31, 'gtd_update_item', { id, status: 'calendar', timeStart: '2099-04-01T10:00:00' });
+        expect(unlinked.status).toBe('calendar');
+        expect(unlinked).not.toHaveProperty('fieldGuidance');
+
+        // The sync stamps the link (and later the Google location) server-side; seed both directly.
+        await db.collection('items').updateOne({ _id: id, user: userId } as never, { $set: { calendarEventId: 'gcal-evt-dentist' } });
+        const linked = await callItemToolViaMcp(token, 32, 'gtd_update_item', { id, title: 'Dentist (cleaning)' });
+        expect(linked.fieldGuidance).toMatchObject({ missing: ['location'] });
+        expect(linked.fieldGuidance?.hint).toContain('calendarEventId gcal-evt-dentist');
+
+        await db.collection('items').updateOne({ _id: id, user: userId } as never, { $set: { location: 'Room 4B' } });
+        const located = await callItemToolViaMcp(token, 33, 'gtd_update_item', { id, notes: 'Bring insurance card' });
+        expect(located.location).toBe('Room 4B');
+        expect(located).not.toHaveProperty('fieldGuidance');
+    });
+
+    it('returns a plain isError payload, with no fieldGuidance, when the update itself is rejected', async () => {
+        const { token } = await seedUserAndToken();
+        stubLoopbackFetch();
+        await callMcp(token, INITIALIZE);
+        const id = await captureViaMcp(token, 40, 'Taxes');
+
+        // `energy` is not allowed on an inbox item → 400 status_field_violation from the apply pipeline.
+        const result = await callToolViaMcp(token, 41, 'gtd_update_item', { id, energy: 'high' });
+        const [block] = result.content;
+        if (!block) throw new Error('expected an error content block');
+        expect(result.isError).toBe(true);
+        expect(block.text).toContain('status_field_violation');
+        expect(block.text).not.toContain('fieldGuidance');
+    });
+
+    it('asks for expectedBy on a waitingFor item written through gtd_update_item', async () => {
+        const { token } = await seedUserAndToken();
+        stubLoopbackFetch();
+        await callMcp(token, INITIALIZE);
+
+        const id = await captureViaMcp(token, 20, 'Quote from the roofer');
+
+        const waiting = await callItemToolViaMcp(token, 21, 'gtd_update_item', { id, status: 'waitingFor' });
+        expect(waiting.fieldGuidance).toMatchObject({ missing: ['expectedBy'] });
+
+        const dated = await callItemToolViaMcp(token, 22, 'gtd_update_item', { id, expectedBy: '2026-10-20' });
+        expect(dated).not.toHaveProperty('fieldGuidance');
+    });
+
+    it('advertises the completeness rule in the server instructions and the gtd_update_item description', async () => {
+        const { token } = await seedUserAndToken();
+        stubLoopbackFetch();
+
+        const init = await callMcp(token, INITIALIZE);
+        expect((init.body as { result?: { instructions?: string } }).result?.instructions).toContain('fieldGuidance');
+
+        const list = await callMcp(token, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+        const tools = (list.body as { result: { tools: { name: string; description?: string }[] } }).result.tools;
+        expect(tools.find((tool) => tool.name === 'gtd_update_item')?.description).toContain('Completeness:');
     });
 
     it('fails gtd_reassign explicitly (multi-account is unsupported on the single-token remote)', async () => {

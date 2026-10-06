@@ -32,6 +32,7 @@ export type PublicItem = Pick<
     | 'calendarEventId'
     | 'calendarIntegrationId'
     | 'calendarSyncConfigId'
+    | 'location'
 > & { brief: PublicItemBrief | null };
 
 /**
@@ -70,6 +71,10 @@ const PUBLIC_FIELDS: ReadonlyArray<Exclude<keyof PublicItem, 'brief'>> = [
     'calendarEventId',
     'calendarIntegrationId',
     'calendarSyncConfigId',
+    // Read-only mirror of the Google event's location (GCal-owned; PATCH rejects it as
+    // forbidden_field). Exposed so an agent can see whether a linked calendar item names its
+    // venue — the MCP's field guidance inspects it — and set it on the Google event if not.
+    'location',
 ];
 
 export function presentBrief(item: ItemInterface, brief: ItemBriefInterface | null): PublicItemBrief | null {

@@ -1,9 +1,13 @@
+import { FIELD_COMPLETENESS_GUIDANCE } from './tools/fieldGuidance.js';
+
 /**
  * Server-level usage guidance surfaced to every MCP client. Lives here (not in any user's local
  * memory) so the URL-surfacing behaviour ships with the server and works for all operators.
  * Copied verbatim into api-server/src/mcp/registerTools.ts — mcpToolParity.test.ts pins the two.
  */
 export const SERVER_INSTRUCTIONS = [
+    FIELD_COMPLETENESS_GUIDANCE,
+    'The same applies to a nextAction routine: give its `template` an `energy`, `time` and `workContextIds`.',
     'After creating or editing an item, routine or person, the tool response includes a `url` field — a direct',
     'web-app link to that entity. Always show the user this `url` at the end of your reply so they can jump straight to it.',
     'The `gtd_batch` tool returns per-op `results`, each carrying the server-stamped `updatedTs`, an `applyStatus`, and',

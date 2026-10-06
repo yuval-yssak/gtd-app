@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { type ZodRawShape, type z, z as zod } from 'zod';
 import { type ApiClient, GtdApiError, type RequestOptions } from '../apiClient.js';
+import { decorateWithFieldGuidance } from './fieldGuidance.js';
 import { decorateWithUrls } from './webUrl.js';
 
 /**
@@ -110,7 +111,9 @@ export function registerOne<Shape extends ZodRawShape>(server: McpServer, tool: 
                 const result = await tool.handler(args as ParsedArgs<Shape>, api);
                 // Stamp a browsable deep link onto item/routine responses so the model surfaces a
                 // clickable URL without depending on any user's local memory (no-op for other tools).
-                const decorated = decorateWithUrls(tool.name, result, api.webBase());
+                // Then flag still-empty GTD metadata on a written item (energy/time/context on a next
+                // action, expectedBy on waiting-for, location on calendar) so the model fills it in.
+                const decorated = decorateWithFieldGuidance(tool.name, decorateWithUrls(tool.name, result, api.webBase()));
                 return {
                     content: [{ type: 'text', text: JSON.stringify(decorated, null, 2) }],
                 };

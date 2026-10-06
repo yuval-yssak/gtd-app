@@ -71,7 +71,9 @@ const createRoutine = defineTool({
     description:
         'Create a recurring task template. Required: title, routineType, rrule, template. ' +
         'Use routineType=nextAction for a recurring next-action item, or calendar for a recurring calendar event ' +
-        '(calendar routines also need calendarItemTemplate.timeOfDay/duration).',
+        '(calendar routines also need calendarItemTemplate.timeOfDay/duration). A nextAction routine generates next ' +
+        'actions, so give its `template` the metadata every next action needs: `energy`, `time` (minutes) and ' +
+        '`workContextIds` (usually exactly one id from gtd_list_work_contexts).',
     inputSchema: {
         title: z.string().min(1),
         routineType: z.enum(['nextAction', 'calendar']),

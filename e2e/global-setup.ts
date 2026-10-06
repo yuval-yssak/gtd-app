@@ -11,14 +11,19 @@ import * as path from 'node:path';
 //   - Build fails (TS error, etc.) → propagate and fail the whole run. A stale bundle would just
 //     hide the real error behind confusing UI-level failures.
 
-// MCP package: `mcp-server.spec.ts` spawns `tools/mcp-gtd/dist/index.js`; a missing/stale dist is
-// the most common reason that spec fails mysteriously.
+// MCP packages: `mcp-server.spec.ts` spawns `tools/mcp-gtd/dist/index.js` (the superseded binary)
+// and `mcp-field-guidance.spec.ts` spawns `mcp-server/dist/index.js` (the current one); a
+// missing/stale dist is the most common reason either spec fails mysteriously.
 function buildMcp(): void {
-    const cwd = path.resolve(__dirname, '../tools/mcp-gtd');
-    if (!fs.existsSync(path.join(cwd, 'node_modules'))) {
-        return;
+    for (const packageDir of ['../tools/mcp-gtd', '../mcp-server']) {
+        const cwd = path.resolve(__dirname, packageDir);
+        if (!fs.existsSync(path.join(cwd, 'node_modules'))) {
+            // Say so: the dependent spec otherwise fails with an opaque "MCP spawn failed / exited".
+            console.warn(`[global-setup] ${packageDir} has no node_modules — skipping its build; its MCP spec will fail until you npm install there`);
+            continue;
+        }
+        execSync('npm run build', { cwd, stdio: 'inherit' });
     }
-    execSync('npm run build', { cwd, stdio: 'inherit' });
 }
 
 // Client: the client webServer command is `npm run dev` (= `vite build --watch` + `vite preview`),

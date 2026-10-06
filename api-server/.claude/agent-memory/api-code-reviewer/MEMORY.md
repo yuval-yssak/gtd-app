@@ -123,3 +123,4 @@
 - [Link-stamp in-flight window + orphan repair](project_link_stamp_inflight_window_and_orphan_repair.md) — carry-forward in-flight + orphan-repair checklist; repair cost on first connect (new integration id)
 - [Account deletion/export review checklist](project_account_deletion_review_checklist.md) — policy-text drift, best-effort steps that block deletion, shared pushSubscriptions, in-flight writers re-create rows; cross-user grant revoke, CLI-process no-op drains
 - [Line-regex guard tests miss Biome wrapping](project_line_regex_guards_miss_biome_wrapping.md) — anchored per-line regex guards miss a status arg alone on its own line; test the wrapped shape.
+- [Synthetic payload vs projection allowlist](pattern_synthetic_payload_vs_projection.md) — MCP decorations tested on fake payloads miss fields the /v1 projection never returns

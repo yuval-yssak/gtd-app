@@ -180,6 +180,31 @@ To clear an optional field that is already set, pass `null` for it — e.g. `gtd
 | `somedayMaybe` | (none) |
 | `done` / `trash` | (archival — preserves whatever fields the item carried) |
 
+## Field-completeness guidance
+
+An agent clarifying an item tends to set `status` and stop, which leaves the GTD metadata the method depends on empty. The MCP nudges it in two places, with no per-user memory or prompt needed:
+
+- **Before the write** — the server `instructions` and the `gtd_update_item` description (plus the `energy` / `time` / `workContextIds` / `expectedBy` property descriptions, and the `gtd_create_routine` template guidance) tell the model to send the fields together with the status.
+- **After the write** — a `gtd_update_item` response whose item still lacks them carries a `fieldGuidance` block next to the entity:
+
+```jsonc
+{
+    "_id": "…", "status": "nextAction", "title": "Call plumber", "url": "https://…/item/…",
+    "fieldGuidance": {
+        "missing": ["energy", "time", "workContextIds"],
+        "hint": "Missing: energy, time, workContextIds. A next action is only actionable in the Do phase when it carries all three: …"
+    }
+}
+```
+
+| Status | Fields checked | Notes |
+|---|---|---|
+| `nextAction` | `energy`, `time`, `workContextIds` | `time: 0` counts as set; an empty `workContextIds` array counts as missing. |
+| `waitingFor` | `expectedBy` | The date the delegated outcome is expected. |
+| `calendar` | `location` | Checked only when the item carries a `calendarEventId`. The field is Google-Calendar-owned and read-only on the item (`PATCH` rejects it), so the hint tells the agent to set the venue on that Google event; the sync mirrors it back. An unlinked calendar item (no Google Calendar connected) is never flagged — there is nowhere to set it. |
+
+The block is advisory — the write has already succeeded — and is omitted entirely once every checked field is set, so a complete item never carries it. Only `gtd_update_item` is decorated: reads (`gtd_get_item`, `gtd_list_items`) never carry it, so a lookup cannot tempt the model into edits the user did not ask for. Rules live in `src/tools/fieldGuidance.ts`.
+
 ## Development
 
 ```bash

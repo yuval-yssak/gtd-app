@@ -62,7 +62,7 @@ npm run lint:fix                # Biome format + lint
 npm run cleanup-e2e-seeds       # Drop calendar integrations leaked by /dev/calendar/seed-integration (mongosh, reads api-server/.env)
 ```
 
-Playwright's `webServer` starts the API with `TZ=UTC BRIEF_FAKE_MODEL=1` and the client via `npm run dev`, but both entries set `reuseExistingServer: true`: a dev server you already have running keeps **its** environment. Timezone specs then run against your local TZ, and `item-brief-generate.spec.ts` gets `503 agent_unavailable` — restart the API under those env vars before working on those specs. `global-setup.ts` runs `vite build` (not `npm run build`) and builds `tools/mcp-gtd` once before workers spawn.
+Playwright's `webServer` starts the API with `TZ=UTC BRIEF_FAKE_MODEL=1` and the client via `npm run dev`, but both entries set `reuseExistingServer: true`: a dev server you already have running keeps **its** environment. Timezone specs then run against your local TZ, and `item-brief-generate.spec.ts` gets `503 agent_unavailable` — restart the API under those env vars before working on those specs. `global-setup.ts` runs `vite build` (not `npm run build`) and builds `tools/mcp-gtd` and `mcp-server` once before workers spawn.
 
 Manual Google Calendar smoke-test plans (one Claude session per case, driven through Chrome) live under `e2e/gcal-sync-smoke/`; `CONTINUE_HERE.md` at the root is their index.
 

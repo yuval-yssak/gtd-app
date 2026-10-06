@@ -4,6 +4,9 @@
  * api-server/src/mcp/*. This test registers every tool group from BOTH copies against a stub server
  * and asserts the exposed tool-name sets are identical, so the copies can never silently drift.
  */
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -83,5 +86,21 @@ describe('MCP tool parity (api-server copy ↔ mcp-server source of truth)', () 
     it('serves identical server instructions from both copies', () => {
         expect(REMOTE_SERVER_INSTRUCTIONS).toEqual(STDIO_SERVER_INSTRUCTIONS);
         expect(REMOTE_SERVER_INSTRUCTIONS).toContain('gtd_set_brief');
+        expect(REMOTE_SERVER_INSTRUCTIONS).toContain('fieldGuidance');
+    });
+
+    // Registration-level parity above cannot see response decoration (url stamping, field
+    // guidance) — that code only runs when a tool is called. Comparing the copied modules' text
+    // catches drift in those paths too, and flags a module added to one side only.
+    it('keeps every copied module byte-identical to its source apart from the COPIED header', () => {
+        const remoteDir = fileURLToPath(new URL('../mcp/tools', import.meta.url));
+        const stdioDir = fileURLToPath(new URL('../../../mcp-server/src/tools', import.meta.url));
+        const remoteFiles = fs.readdirSync(remoteDir).sort();
+        expect(remoteFiles).toEqual(fs.readdirSync(stdioDir).sort());
+        for (const file of remoteFiles) {
+            const [header, ...body] = fs.readFileSync(path.join(remoteDir, file), 'utf8').split('\n');
+            expect(header, file).toMatch(/^\/\/ COPIED from mcp-server\/src\/tools\//);
+            expect(body.join('\n'), file).toEqual(fs.readFileSync(path.join(stdioDir, file), 'utf8'));
+        }
     });
 });

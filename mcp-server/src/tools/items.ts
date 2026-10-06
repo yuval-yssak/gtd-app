@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ApiClient } from '../apiClient.js';
+import { FIELD_COMPLETENESS_GUIDANCE } from './fieldGuidance.js';
 import { accountSchema, defineTool, idSchema, NOTES_DESCRIPTION, notesSchema, registerOne, requestOptsFromArgs } from './types.js';
 
 /**
@@ -178,21 +179,28 @@ const updateItem = defineTool({
         'To CLEAR an optional field that is already set, pass `null` for it (e.g. `{"waitingForPersonId": null}` unsets the ' +
         'person while keeping status waitingFor). Omitting a field leaves it unchanged; an empty string is rejected. ' +
         'Not clearable (400 not_clearable): `title`, `status`, and the Google Calendar linkage ids (calendarEventId / ' +
-        'calendarIntegrationId / calendarSyncConfigId) — to detach an item from its calendar event, change its status instead.',
+        'calendarIntegrationId / calendarSyncConfigId) — to detach an item from its calendar event, change its status instead.\n' +
+        `${FIELD_COMPLETENESS_GUIDANCE}`,
     inputSchema: {
         id: idSchema,
         title: z.string().min(1).optional(),
         // `.describe()` last so the guidance lands at the property level of the JSON Schema, not inside `anyOf`.
         notes: clearable(z.string()).describe(`${NOTES_DESCRIPTION} null clears.`),
         status: itemStatusSchema.optional(),
-        workContextIds: clearable(z.array(z.string())),
+        workContextIds: clearable(z.array(z.string())).describe(
+            'Work-context ids (from gtd_list_work_contexts) the item needs — the condition under which it can be done. ' +
+                'Every nextAction should carry one (usually exactly one). null clears.',
+        ),
         peopleIds: clearable(z.array(z.string())),
         waitingForPersonId: clearable(z.string()).describe('Person the waitingFor item is blocked on. null clears it (the item stays waitingFor).'),
-        energy: clearable(z.enum(['low', 'medium', 'high'])),
-        time: clearable(z.number().nonnegative()),
+        energy: clearable(z.enum(['low', 'medium', 'high'])).describe('Energy the task demands. Every nextAction should carry one. null clears.'),
+        time: clearable(z.number().nonnegative()).describe('Estimated duration in minutes. Every nextAction should carry one. null clears.'),
         focus: clearable(z.boolean()),
         urgent: clearable(z.boolean()),
-        expectedBy: clearable(z.string()).describe('YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe. null clears.'),
+        expectedBy: clearable(z.string()).describe(
+            'YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe. Every waitingFor should carry ' +
+                'one — the date the delegated outcome is expected. null clears.',
+        ),
         ignoreBefore: clearable(z.string()).describe(
             'YYYY-MM-DD. Tickler — hides item until this date. Allowed on nextAction / waitingFor / somedayMaybe. null clears.',
         ),

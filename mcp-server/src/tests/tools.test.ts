@@ -527,4 +527,53 @@ describe('registerOne URL decoration (end-to-end)', () => {
         if (!block) throw new Error('expected one content block');
         expect(JSON.parse(block.text)).toEqual({ _id: 'xyz' });
     });
+
+    it('stamps fieldGuidance next to the url on an incomplete nextAction returned by gtd_update_item', async () => {
+        const callback = captureRegistered('gtd_update_item', { _id: 'na1', status: 'nextAction', energy: 'low' }, 'https://staging.getting-things-done.app');
+        const out = await callback({});
+        const [block] = out.content;
+        if (!block) throw new Error('expected one content block');
+        const payload = JSON.parse(block.text) as { url?: string; fieldGuidance?: { missing: string[]; hint: string } };
+        expect(payload.url).toBe('https://staging.getting-things-done.app/item/na1');
+        expect(payload.fieldGuidance?.missing).toEqual(['time', 'workContextIds']);
+        expect(payload.fieldGuidance?.hint).toContain('gtd_update_item');
+    });
+
+    it('serializes no fieldGuidance key at all once the nextAction is complete', async () => {
+        const complete = { _id: 'na1', status: 'nextAction', energy: 'low', time: 15, workContextIds: ['wc1'] };
+        const callback = captureRegistered('gtd_update_item', complete, null);
+        const out = await callback({});
+        const [block] = out.content;
+        if (!block) throw new Error('expected one content block');
+        expect(JSON.parse(block.text)).toEqual(complete);
+    });
+});
+
+describe('field-completeness guidance in tool descriptions', () => {
+    it('gtd_update_item tells the model to send energy/time/workContextIds, expectedBy and location with the status', () => {
+        const { description } = _itemToolsForTesting.updateItem;
+        expect(description).toContain('Completeness:');
+        expect(description).toContain('`fieldGuidance: { missing, hint }`');
+        for (const field of ['`energy`', '`time`', '`workContextIds`', '`expectedBy`', '`location`']) {
+            expect(description).toContain(field);
+        }
+    });
+
+    it('gtd_update_item carries the guidance on the energy/time/workContextIds/expectedBy properties of the JSON Schema', () => {
+        const schema = z.toJSONSchema(z.object(_itemToolsForTesting.updateItem.inputSchema), { io: 'input' }) as {
+            properties: Record<string, { description?: string }>;
+        };
+        const { energy, time, workContextIds, expectedBy } = schema.properties;
+        expect(energy?.description).toContain('Every nextAction should carry one');
+        expect(time?.description).toContain('minutes');
+        expect(workContextIds?.description).toContain('gtd_list_work_contexts');
+        expect(expectedBy?.description).toContain('Every waitingFor should carry one');
+    });
+
+    it('gtd_create_routine asks for energy/time/workContextIds on a nextAction template', () => {
+        const { description } = _routineToolsForTesting.createRoutine;
+        for (const field of ['`energy`', '`time`', '`workContextIds`']) {
+            expect(description).toContain(field);
+        }
+    });
 });

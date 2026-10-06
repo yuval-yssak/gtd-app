@@ -148,6 +148,7 @@ The full item shape is `ItemInterface` in `api-server/src/types/entities.ts`. Th
 | `updatedTs` | string | Server-assigned on every write. Conflict-resolution anchor. |
 | `externalId` | string? | Caller-provided dedupe key. Unique per `(user, externalId)`. |
 | `brief` | `{ text, origin, state, generatedTs } \| null` | Read-only. The item's one-line brief sidecar (see [Item briefs](#item-briefs)); `null` when the item has none. Written through `PUT /v1/items/:id/brief`, never through `PATCH`. |
+| `location` | string? | Read-only. Mirror of the linked Google Calendar event's location, present only on items the calendar sync has linked and whose event names a place. Google-owned: `PATCH` rejects it with `400 forbidden_field` — change it on the Google event and the sync mirrors it back. |
 
 GTD-specific fields (`workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore`, `timeStart`, `timeEnd`, `waitingForPersonId`, calendar linkage) are now **writable** through `PATCH /v1/items/:id` and `POST /v1/operations/batch` — subject to the status×field matrix (e.g. `expectedBy` / `ignoreBefore` are valid on `nextAction` / `waitingFor` / `somedayMaybe` / `done` / `trash`; `timeStart`/`timeEnd` only on `calendar` / `done` / `trash`; `waitingForPersonId` is optional even on `waitingFor`). Server-managed fields remain off-limits. `PATCH /v1/items/:id` rejects them with `400 forbidden_field` (`_id`, `user`, `createdTs`, `updatedTs`, `routineId`, `contentHash`, `externalId`, and the sync anchors `lastPushedToGCalTs` / `lastSyncedFromGCalTs` / `lastSyncedNotes`). `POST /v1/operations/batch` takes full snapshots, so its rules differ: server-managed sync-integrity anchors absent from the public read projections (items: `contentHash`, `lastPushedToGCalTs`, `lastSyncedFromGCalTs`, `lastSyncedNotes`, `calendarInstanceEventId`, `cancelledByGCal`, the four `lastKnownCalendar*` markers; routines: the three sync anchors plus `retiredByGCal`, `calendarRebasedEventId`, and the `lastKnownCalendar*` markers — full list in the batch section) are rejected with `400 forbidden_field`; `updatedTs` and `user` are **silently server-overwritten** (callers echo them back from reads); `routineId` and `externalId` stay accepted (trash-replay and create-dedupe flows legitimately carry them).
 
@@ -838,9 +839,13 @@ A stdio MCP server lives at [`mcp-server/`](../mcp-server/) and exposes the full
 
 See [`mcp-server/README.md`](../mcp-server/README.md) for the build and Claude Desktop / Claude Code config snippet.
 
+### Field-completeness guidance
+
+The MCP layer (both the stdio binary and the remote `/mcp` endpoint) adds one thing the raw `PATCH /v1/items/:id` does not: after a `gtd_update_item`, if the stored item is a `nextAction` without `energy` / `time` / `workContextIds`, a `waitingFor` without `expectedBy`, or a Google-linked `calendar` item (one with a `calendarEventId`) without `location`, the tool response carries a `fieldGuidance: { missing, hint }` block telling the model which fields to fill in and how. The server instructions and tool descriptions state the same rule up front. The write itself is unchanged — this is advisory metadata, not validation — and the block is omitted once the fields are set. Details and the per-status table: [`mcp-server/README.md`](../mcp-server/README.md) § Field-completeness guidance.
+
 ### Why no item delete tool
 
-There is no `DELETE /v1/items/:id`, and `PATCH` rejects `{status: 'trash'}` — there is no `/v1` restore endpoint, so trashing through the public surface would create unrecoverable rows. The MCP server reflects this: trashing an item requires an explicit `gtd_batch` op (`{entityType:'item', opType:'delete', ...}`). Keeping destructive item ops behind the explicit batch tool is intentional safety for an LLM-driven surface.
+There is no `DELETE /v1/items/:id`, and `PATCH` rejects `{status: 'trash'}`. Disposal goes through the dedicated `POST /v1/items/:id/trash` (MCP: `gtd_trash_item`), which is a recoverable soft-delete — the item stays in the in-app Trash view. A hard delete of an item is refused even inside `gtd_batch` (`{entityType:'item', opType:'delete'}` is rejected), so an LLM-driven surface can never make a row unrecoverable.
 
 
 ## Implementation notes (for the API server)
