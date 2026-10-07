@@ -1,29 +1,80 @@
-# gtd-mcp
+# Done MCP server
 
-A local **stdio MCP server** that exposes the GTD `/v1` public API as MCP tools, so Claude (or any MCP client) can capture, list, update, and complete items, manage routines/people/work-contexts, reassign across accounts, and submit atomic batches.
+Lets Claude (or any MCP client) work your Done account in conversation: capture, list, clarify and complete items, and manage routines, people and work contexts.
 
-Auth is a personal API token. The server is a thin shim — every write goes through `/v1/*`, hits the same Zod-validated apply pipeline as `/sync/push`, and lands in the operations log so other devices learn about the change on their next sync.
+There are two ways to connect. **Most people want the first one.**
 
-## Setup
+| | Hosted connector (recommended) | Local server (this package) |
+|---|---|---|
+| Install | Nothing | Clone this repo, Node.js 22+, `npm install` |
+| Credentials | Sign in with Google/GitHub in the browser | A personal API token pasted into your client config |
+| Works in | claude.ai (web + mobile), Claude Desktop, Claude Code | Claude Desktop, Claude Code (same machine) |
+| Accounts | One per connector; add a second connector for a second account | Several in one server (`GTD_API_TOKEN_<LABEL>`), incl. moving items between them (`gtd_reassign`) |
+
+Both expose the same tools and talk to the same `/v1` API, so every change reaches your other devices on their next sync.
+
+## Option 1: Hosted connector (recommended, no install, no token)
+
+The API serves the MCP endpoint itself and runs its own OAuth sign-in. The in-app guide (**Settings → Connect Claude**) shows the URL and copy buttons; the steps are the same as below.
+
+| Environment | Connector URL |
+|---|---|
+| production | `https://api.getting-things-done.app/mcp` |
+| staging | `https://api-staging.getting-things-done.app/mcp` |
+| local dev | `http://localhost:4000/mcp` |
+
+**claude.ai or Claude Desktop**
+
+1. Settings → Connectors → **Add custom connector**.
+2. Name it `Done`, paste the connector URL, click **Add**.
+3. Click **Connect**. Connectors added on claude.ai also work in the Claude mobile app.
+
+On a Claude Team or Enterprise plan, only an owner can add custom connectors (organization settings); members then click **Connect**.
+
+**Claude Code**
+
+```bash
+claude mcp add --scope user --transport http done https://api.getting-things-done.app/mcp
+```
+
+`--scope user` makes it available in every project; without it the server is tied to the directory you ran the command in. Then, in any Claude Code session, type `/mcp`, select `done` and choose **Authenticate**.
+
+**Sign in (all clients)**
+
+1. A browser window opens. If this browser has no Done session, a **Sign in to Done** page asks you to sign in with Google or GitHub. If it already has one, this step is skipped.
+2. The **Authorize access** page lists what Claude may do and every Done account signed in on this browser. Click **Allow** (or **Allow for <email>** when there are several) for the account Claude should use. If yours isn't listed, choose **Use a different account with Google/GitHub**. The provider's account chooser opens, and the page comes back with that account added.
+3. Back in Claude, ask *"What's in my Done inbox?"* to confirm. `gtd_me` reports the connected email and environment.
+
+Claude refreshes its access on its own: an access token lasts an hour and the 30-day refresh token rotates on use, so you only sign in again after a month without use. To disconnect, remove the connector in Claude. That only makes Claude forget the tokens: no server-side revoke exists for OAuth grants yet, so the refresh token stays valid until it expires.
+
+Limits of the hosted connector:
+
+- **One account per connector.** For a second account (e.g. work), add a second connector (`done-work`) and click **Allow** for that account on the Authorize page. Each Allow button is bound to its account, so the grant goes to the account you click.
+- **No cross-account moves.** `gtd_reassign` needs a token for each account, so it fails with `multi_account_unsupported`. Use the local server for that.
+- The OAuth server grants items, routines, people and contexts read/write. It does not grant `reassign` or `webhooks.manage`.
+
+Server code: `api-server/src/routes/mcp.ts` (resource endpoint), `api-server/src/routes/mcpOAuth.ts` + `api-server/src/lib/mcpOAuth.ts` (authorization server). The tool modules are copied into `api-server/src/mcp/`, and a parity test keeps them in step with `mcp-server/src/tools/`. Design notes: [`docs/REMOTE_MCP_PLAN.md`](docs/REMOTE_MCP_PLAN.md).
+
+## Option 2: Local server with a personal API token
+
+Use this when you want several accounts in one server, cross-account moves, or to develop the tools themselves.
 
 ### 1. Install + build
 
 ```bash
-cd mcp-server
+git clone https://github.com/yuval-yssak/gtd-app.git
+cd gtd-app/mcp-server
 npm install   # the `prepare` hook compiles dist/ automatically
+pwd           # the absolute path you will need in step 3
 ```
 
-The compiled entrypoint lives at `mcp-server/dist/index.js` (the launch command runs
-this artifact). `npm install` runs `prepare` → `tsc`, so `dist/` is always rebuilt on
-install. **After editing source, run `npm run build` and restart the MCP client** (Claude
-CLI / Desktop) — a running session holds the old `dist/` process for its lifetime and
-won't pick up changes until relaunched.
+The compiled entrypoint is `mcp-server/dist/index.js`. **After editing source, run `npm run build` and restart the MCP client** (Claude CLI / Desktop). A running session holds the old `dist/` process for its lifetime and won't pick up changes until relaunched.
 
 ### 2. Mint a personal API token
 
-In the GTD app (local dev, staging, or prod), go to **Settings → Personal API tokens** and create one. Copy the plaintext value — it's shown exactly once.
+In the app, go to **Settings → Personal API tokens → Create token**, tick the scopes you need, and copy the value (it starts with `gtd_` and is shown exactly once). Pick the smallest scope set you need. See [`docs/PUBLIC_API.md`](../docs/PUBLIC_API.md) for the full table.
 
-For local dev shortcut:
+Local dev shortcut (`/dev/*` exists only when `NODE_ENV !== 'production'`):
 ```bash
 curl -X POST http://localhost:4000/dev/api-tokens \
     -H 'Content-Type: application/json' \
@@ -31,41 +82,39 @@ curl -X POST http://localhost:4000/dev/api-tokens \
     -d '{"label": "Local MCP", "scopes": ["items.capture","items.read","items.write","routines.read","routines.write","people.read","people.write","contexts.read","contexts.write"]}'
 ```
 
-Pick the smallest scope set you need — see [`docs/PUBLIC_API.md`](../docs/PUBLIC_API.md) for the full table.
-
 ### 3. Wire into your MCP client
+
+**`GTD_API_BASE` is required for anything but local dev.** It defaults to `http://localhost:4000`, so without it every call fails against production.
+
+| Environment | `GTD_API_BASE` |
+|---|---|
+| production | `https://api.getting-things-done.app` |
+| staging | `https://api-staging.getting-things-done.app` |
+| local dev | `http://localhost:4000` (default) |
 
 #### Claude Code (CLI)
 
-The fastest way is the `claude mcp add` command — it writes the config for you:
-
 ```bash
-claude mcp add gtd \
-    --env GTD_API_BASE=http://localhost:4000 \
+claude mcp add gtd --scope user \
+    --env GTD_API_BASE=https://api.getting-things-done.app \
     --env GTD_API_TOKEN=gtd_... \
-    -- node /Users/yuvalyssak/gtd/mcp-server/dist/index.js
+    -- node /ABSOLUTE/PATH/TO/gtd-app/mcp-server/dist/index.js
 ```
 
-Add `--scope user` to register the server globally for your user (default scope is the current project). Verify with `claude mcp list`; remove with `claude mcp remove gtd`.
-
-For staging or production, swap `GTD_API_BASE` to `https://api-staging.getting-things-done.app` or `https://api.getting-things-done.app`.
-
-#### Web-app deep links (`url` field)
-
-Item and routine tool responses include a `url` — a direct web-app link to that entity (e.g. `https://staging.getting-things-done.app/item/<id>`) — so any MCP client surfaces a clickable link to what it just created or edited, with no per-user setup. The web origin is derived from `GTD_API_BASE` (`local` → `http://localhost:4173`, `staging`/`production` → their web hosts). For a self-hosted or preview deployment (`custom` environment), set `GTD_WEB_BASE` to your web-app origin to enable the links; without it, `custom` deployments omit `url`. People and work contexts have no per-entity page in the web app, so they carry no `url`. `gtd_batch` returns only `{ ok, count }` and no `url`.
+Verify with `claude mcp list`; remove with `claude mcp remove gtd`.
 
 #### Claude Desktop / manual config
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop) or your `claude_code_config` MCP block:
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop), then fully quit and reopen the app:
 
 ```json
 {
     "mcpServers": {
         "gtd": {
             "command": "node",
-            "args": ["/Users/yuvalyssak/gtd/mcp-server/dist/index.js"],
+            "args": ["/ABSOLUTE/PATH/TO/gtd-app/mcp-server/dist/index.js"],
             "env": {
-                "GTD_API_BASE": "http://localhost:4000",
+                "GTD_API_BASE": "https://api.getting-things-done.app",
                 "GTD_API_TOKEN": "gtd_..."
             }
         }
@@ -73,9 +122,13 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude
 }
 ```
 
-Restart your MCP client after editing the config. The tools should appear under the `gtd` server.
+Ask Claude *"Which Done account am I connected to?"* to verify (`gtd_me`).
 
-## Multi-account setup
+#### Web-app deep links (`url` field)
+
+Item, routine and person tool responses include a `url`, a direct web-app link (e.g. `https://getting-things-done.app/item/<id>`), so the client can show a clickable link to what it just created or edited. `gtd_batch` returns one per item/routine/person op in its `results`. The web origin is derived from `GTD_API_BASE` (`local` → `http://localhost:4173`, `staging`/`production` → their web hosts). For a self-hosted or preview deployment (`custom` environment), set `GTD_WEB_BASE` to your web-app origin; without it, `custom` deployments omit `url`. Work contexts have no page in the web app, so they carry no `url`.
+
+## Multi-account setup (local server only)
 
 A single Claude session can drive multiple GTD accounts (e.g. personal + work) without restarting. Set one numbered token env var per additional account; the label after `GTD_API_TOKEN_` is what tools refer to (lowercased).
 
@@ -140,7 +193,7 @@ The MCP looks up the work userId via `GET /v1/me` on the recipient token, attach
 
 ## Tools
 
-Every tool except `gtd_reassign` accepts an optional `account` arg (default `"default"`). `gtd_reassign` accepts `fromAccount` (defaults to `"default"`) and `toAccount` (required).
+Every tool except `gtd_reassign` accepts an optional `account` arg (default `"default"`). `gtd_reassign` accepts `fromAccount` (defaults to `"default"`) and `toAccount` (required). On the hosted connector only `"default"` (the signed-in account) is valid.
 
 | Tool | Maps to | Scope | Account args |
 |---|---|---|---|
@@ -151,6 +204,7 @@ Every tool except `gtd_reassign` accepts an optional `account` arg (default `"de
 | `gtd_complete_item` | `POST /v1/items/:id/complete` | `items.write` | `account?` |
 | `gtd_trash_item` | `POST /v1/items/:id/trash` | `items.write` | `account?` |
 | `gtd_set_brief` | `PUT /v1/items/:id/brief` | `items.write` | `account?` |
+| `gtd_generate_brief` | `POST /v1/items/:id/brief/generate` | `items.write` | `account?` |
 | `gtd_list_routines` / `gtd_get_routine` | `GET /v1/routines[/:id]` | `routines.read` | `account?` |
 | `gtd_create_routine` / `gtd_update_routine` / `gtd_delete_routine` | routines CRUD | `routines.write` | `account?` |
 | `gtd_pause_routine` / `gtd_resume_routine` / `gtd_split_routine` | composite gestures | `routines.write` | `account?` |
@@ -158,10 +212,11 @@ Every tool except `gtd_reassign` accepts an optional `account` arg (default `"de
 | `gtd_list_work_contexts` / `gtd_get_work_context` / `gtd_create_work_context` / `gtd_update_work_context` / `gtd_delete_work_context` | work-contexts CRUD | `contexts.{read,write}` | `account?` |
 | `gtd_reassign` | `POST /v1/reassign` | caller: `reassign`, recipient: `reassign.accept` | `fromAccount?` (default `"default"`), `toAccount` (required) |
 | `gtd_batch` | `POST /v1/operations/batch` | union of needed scopes | `account?` |
+| `gtd_me` / `gtd_list_accounts` | `GET /v1/me` | any | `account?` / none |
 
 ### Why no `gtd_delete_item`?
 
-There's no `DELETE /v1/items/:id` endpoint, and `PATCH` rejects `{status: 'trash'}` — the API has no `/v1` restore route, so trashing through the public surface would create unrecoverable rows. To delete an item programmatically, send a `gtd_batch` with `{entityType:'item', opType:'delete', entityId, snapshot:null}`. Keeping destructive item ops behind the explicit batch tool is intentional safety for an LLM-driven surface.
+Items are never hard-deleted through the public surface. Use `gtd_trash_item`, a recoverable soft-delete: the item stays in the in-app Trash and can be restored. `gtd_update_item` rejects `status: "trash"`, and `gtd_batch` rejects `{entityType:'item', opType:'delete'}` with 400. Batch `delete` stays valid for routines, people and work contexts.
 
 ## Status×field matrix
 

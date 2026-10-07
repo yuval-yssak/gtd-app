@@ -8,7 +8,7 @@ Full-stack offline-first productivity app built around the GTD (Getting Things D
 - `api-server/` — Node.js/Hono/TypeScript backend on port 4000
 - `client/` — React 19/TypeScript/Vite PWA frontend on port 4173
 - `e2e/` — Playwright end-to-end suite (drives the real client + API)
-- `mcp-server/` — local stdio MCP server exposing GTD tools over the public `/v1` API (setup, multi-account and tool table: `mcp-server/README.md`)
+- `mcp-server/` — local stdio MCP server exposing GTD tools over the public `/v1` API (setup, multi-account and tool table: `mcp-server/README.md`). The **hosted** MCP endpoint (`/mcp`, OAuth sign-in, no token) is served by the API itself — `api-server/src/routes/mcp.ts` + `mcpOAuth.ts`, tools copied into `api-server/src/mcp/` — and is what new users connect to (Settings → Connect Claude).
 - `tools/mcp-gtd/` — **superseded** four-tool MCP predecessor, untouched since May 2026. `e2e/mcp-server.spec.ts` still spawns its `dist/`, so it must stay buildable, but new MCP work goes in `mcp-server/`.
 - `workers/api-proxy/` — Cloudflare Worker fronting the API domains (route map in `wrangler.toml`; no package.json)
 

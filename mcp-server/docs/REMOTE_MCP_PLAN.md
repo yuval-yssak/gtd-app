@@ -1,6 +1,6 @@
 # Plan: Host the GTD MCP server remotely (Cloud Run)
 
-Status: **proposal — not yet built.** Written 2026-06-24.
+Status: **built.** Option 2 (OAuth 2.1) shipped in `f96183c` and is live on production. This file was written on 2026-06-24 as the proposal and is kept as design notes. For user-facing setup, see [`../README.md`](../README.md) § Option 1.
 
 ## Why
 
