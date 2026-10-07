@@ -9,3 +9,4 @@
 - [Sync `now` stamped outside the lock](project_calendar_sync_now_stamped_outside_lock.md) — 3 callers take the per-calendar mutex; only manual sync stamps inside. Webhook + catch-up still backdate under queue depth.
 - [Event-ownership checks miss instance ids](project_event_ownership_checks_miss_instance_ids.md) — calendarEventId-keyed owner checks forget calendarInstanceEventId + done owners; pushback patches instance ids directly.
 - [Line-regex guard tests miss Biome wrapping](project_line_regex_guards_miss_biome_wrapping.md) — anchored per-line regex guards miss a status arg alone on its own line; test the wrapped shape.
+- [API-origin cookie session flaps + prod SameSite=None](project_api_origin_cookie_session_flaps.md) — Server-rendered forms keyed on getSession() need CSRF token + displayed-user binding; web app pivots the active session.

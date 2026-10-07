@@ -18,7 +18,7 @@ interface FetchApp {
  * not the signature). Better Auth's Google provider calls decodeJwt(id_token) at
  * callback time, so the id_token must be a real three-part base64url string.
  */
-function makeFakeIdToken(claims: Record<string, unknown>): string {
+export function makeFakeIdToken(claims: Record<string, unknown>): string {
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
     const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
     return `${header}.${payload}.fake-sig`;

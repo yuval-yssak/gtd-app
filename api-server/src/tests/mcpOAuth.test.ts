@@ -13,8 +13,8 @@ import { APP_NAME } from '../lib/appName.js';
 import { pkceS256Challenge, verifyPkceS256 } from '../lib/mcpOAuth.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { mcpRoutes } from '../routes/mcp.js';
-import { authorizationServerMetadata, mcpOAuthRoutes, protectedResourceMetadata } from '../routes/mcpOAuth.js';
-import { oauthLogin, SESSION_COOKIE } from './helpers.js';
+import { authorizationServerMetadata, mcpOAuthRoutes, protectedResourceMetadata, withAccountChooser } from '../routes/mcpOAuth.js';
+import { collectCookies, GOOGLE_PROFILE, GOOGLE_TOKEN, makeFakeIdToken, mockGoogleOAuth, oauthLogin, SESSION_COOKIE } from './helpers.js';
 
 const ORIGIN = 'http://localhost:4000';
 const REDIRECT_URI = 'https://claude.ai/api/mcp/auth_callback';
@@ -69,35 +69,70 @@ async function registerClient(redirectUris: string[] = [REDIRECT_URI]): Promise<
     return body.client_id;
 }
 
-/** Drives /authorize (logged in) → /authorize/decision(allow) and returns the issued `code`. */
-async function authorizeAndConsent(clientId: string, sessionCookie: string, challenge: string, state = 'xyz'): Promise<string> {
-    const params = new URLSearchParams({
+function authorizeQuery(clientId: string, { scope = 'items.read items.write', state = 'xyz', challenge = CHALLENGE } = {}) {
+    return new URLSearchParams({
         response_type: 'code',
         client_id: clientId,
         redirect_uri: REDIRECT_URI,
         code_challenge: challenge,
         code_challenge_method: 'S256',
-        scope: 'items.read items.write',
+        scope,
         state,
     });
-    const decisionForm = new URLSearchParams(params);
-    decisionForm.set('decision', 'allow');
-    const res = await app.fetch(
+}
+
+/** GET /authorize as a browser carrying `cookieHeader`; returns the rendered page. */
+async function renderAuthorizePage(query: URLSearchParams, cookieHeader: string) {
+    const res = await app.fetch(new Request(`${ORIGIN}/mcp-oauth/authorize?${query}`, { headers: { Cookie: cookieHeader } }));
+    expect(res.status).toBe(200);
+    return res.text();
+}
+
+/** The hidden fields of the consent page's Allow form — for `email` when the page lists several accounts. */
+function allowFormFields(html: string, email?: string) {
+    const forms = html.split('<form ').filter((form) => form.includes('name="decision" value="allow"'));
+    const form = email ? forms.find((candidate) => candidate.includes(`data-account="${email}"`)) : forms[0];
+    if (!form) {
+        throw new Error(`expected an Allow form${email ? ` for ${email}` : ''}`);
+    }
+    // Only `&amp;` is decoded: the values here (ids, base64url tokens, URLs without quotes) never carry other entities.
+    const fields = [...form.slice(0, form.indexOf('</form>')).matchAll(/<input type="hidden" name="([^"]*)" value="([^"]*)">/g)];
+    return new URLSearchParams(fields.map(([, name = '', value = '']) => [name, value.replaceAll('&amp;', '&')]));
+}
+
+/** POST /authorize/decision as a same-origin browser form submission (unless `headers` says otherwise). */
+async function postDecision(form: URLSearchParams, cookieHeader: string, headers: Record<string, string> = { 'Sec-Fetch-Site': 'same-origin' }) {
+    return app.fetch(
         new Request(`${ORIGIN}/mcp-oauth/authorize/decision`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
-            body: decisionForm.toString(),
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookieHeader, ...headers },
+            body: form.toString(),
             redirect: 'manual',
         }),
     );
+}
+
+/** The `code` on a successful decision's redirect back to the client. */
+function issuedCode(res: Response, state = 'xyz') {
     expect(res.status).toBe(302);
     const location = res.headers.get('location');
-    if (!location) throw new Error('expected a redirect with the authorization code');
+    if (!location) {
+        throw new Error('expected a redirect back to the client');
+    }
     const redirected = new URL(location);
     expect(redirected.searchParams.get('state')).toBe(state);
     const code = redirected.searchParams.get('code');
-    if (!code) throw new Error('expected a code on the redirect');
+    if (!code) {
+        throw new Error('expected a code on the redirect');
+    }
     return code;
+}
+
+/** Drives /authorize (logged in) → submits the rendered Allow form, like a browser, and returns the issued `code`. */
+async function authorizeAndConsent(clientId: string, sessionCookie: string, challenge: string, state = 'xyz'): Promise<string> {
+    const cookieHeader = `${SESSION_COOKIE}=${sessionCookie}`;
+    const html = await renderAuthorizePage(authorizeQuery(clientId, { state, challenge }), cookieHeader);
+    return issuedCode(await postDecision(allowFormFields(html), cookieHeader), state);
 }
 
 async function exchangeCode(clientId: string, code: string, verifier: string) {
@@ -169,6 +204,216 @@ describe('sign-in and consent pages', () => {
         const consentHtml = await signedIn.text();
         expect(consentHtml).toContain(`wants to access your ${APP_NAME} account`);
         expect(consentHtml).not.toMatch(/\bGTD\b/);
+    });
+});
+
+describe('choosing the account to connect', () => {
+    // Better Auth reads the Google identity from the id_token, so Bob needs his own token, not only a profile.
+    const BOB_PROFILE = { ...GOOGLE_PROFILE, id: 'g2', email: 'bob@example.com', name: 'Bob Jones', given_name: 'Bob', family_name: 'Jones' };
+    const BOB_TOKEN = {
+        ...GOOGLE_TOKEN,
+        id_token: makeFakeIdToken({ sub: 'g2', email: 'bob@example.com', email_verified: true, name: 'Bob Jones', iat: 1700000000, exp: 9999999999 }),
+    };
+
+    /** Merges cookie headers, later values winning per name — a minimal browser cookie jar. */
+    function cookieJar(...headers: string[]) {
+        const pairs = headers.flatMap((header) => header.split('; ')).filter((pair) => pair.includes('='));
+        const byName = new Map(pairs.map((pair) => [pair.slice(0, pair.indexOf('=')), pair]));
+        return [...byName.values()].join('; ');
+    }
+
+    /** POSTs a sign-in form from the Authorize/sign-in page; returns the provider redirect + the cookies it set. */
+    async function startSignIn(query: URLSearchParams, cookieHeader: string, provider: 'google' | 'github' = 'google') {
+        const form = new URLSearchParams(query);
+        form.set('provider', provider);
+        const res = await app.fetch(
+            new Request(`${ORIGIN}/mcp-oauth/authorize/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookieHeader, 'Sec-Fetch-Site': 'same-origin' },
+                body: form.toString(),
+            }),
+        );
+        expect(res.status).toBe(302);
+        const location = res.headers.get('location');
+        if (!location) {
+            throw new Error('expected a redirect to the provider');
+        }
+        return { providerUrl: new URL(location), cookies: collectCookies(res) };
+    }
+
+    /** Completes the Google callback as `token`'s user; returns the browser's cookie jar and where it lands. */
+    async function finishGoogleSignIn(start: { providerUrl: URL; cookies: string }, jarBefore: string, token = GOOGLE_TOKEN) {
+        mockGoogleOAuth({ token, profile: token === BOB_TOKEN ? BOB_PROFILE : GOOGLE_PROFILE });
+        const callback = await app.fetch(
+            new Request(`${ORIGIN}/auth/callback/google?code=test-code&state=${start.providerUrl.searchParams.get('state')}`, {
+                headers: { Cookie: cookieJar(jarBefore, start.cookies) },
+            }),
+        );
+        return { jar: cookieJar(jarBefore, collectCookies(callback)), returnTo: new URL(callback.headers.get('location') ?? '', ORIGIN) };
+    }
+
+    async function aliceJar() {
+        const { res } = await oauthLogin(app, 'google');
+        return collectCookies(res);
+    }
+
+    /** Alice signed in, then Bob added through the consent page's "Use a different account". */
+    async function aliceThenBob(query: URLSearchParams) {
+        const alice = await aliceJar();
+        const start = await startSignIn(query, alice);
+        return finishGoogleSignIn(start, alice, BOB_TOKEN);
+    }
+
+    it('a browser with no session completes sign-in and reaches the consent page', async () => {
+        const clientId = await registerClient();
+        const query = authorizeQuery(clientId);
+        const start = await startSignIn(query, '');
+        // Without the forwarded state cookie the callback fails with state_mismatch.
+        expect(start.cookies).toContain('better-auth.state=');
+        const { jar, returnTo } = await finishGoogleSignIn(start, '');
+        expect(returnTo.pathname).toBe('/mcp-oauth/authorize');
+        expect(await renderAuthorizePage(returnTo.searchParams, jar)).toContain('<code>alice@example.com</code>');
+    });
+
+    it('forces the provider account chooser for Google and GitHub', async () => {
+        const query = authorizeQuery(await registerClient());
+        const google = await startSignIn(query, '', 'google');
+        expect(google.providerUrl.hostname).toBe('accounts.google.com');
+        expect(google.providerUrl.searchParams.get('prompt')).toBe('select_account');
+        const github = await startSignIn(query, '', 'github');
+        expect(github.providerUrl.hostname).toBe('github.com');
+        expect(github.providerUrl.searchParams.get('prompt')).toBe('select_account');
+    });
+
+    it('offers a different-account sign-in on the consent page', async () => {
+        const html = await renderAuthorizePage(authorizeQuery(await registerClient()), await aliceJar());
+        expect(html).toContain('<code>alice@example.com</code>');
+        expect(html).toContain('data-testid="switchAccount"');
+        expect(html).toContain('Use a different account with Google');
+        expect(html).toContain('Use a different account with GitHub');
+    });
+
+    it('after signing in another account, the consent page offers both and mints for the one clicked', async () => {
+        const clientId = await registerClient();
+        const query = authorizeQuery(clientId);
+        const { jar, returnTo } = await aliceThenBob(query);
+        expect(returnTo.pathname).toBe('/mcp-oauth/authorize');
+        const html = await renderAuthorizePage(returnTo.searchParams, jar);
+        expect(html).toContain('Allow for alice@example.com');
+        expect(html).toContain('Allow for bob@example.com');
+
+        const code = issuedCode(await postDecision(allowFormFields(html, 'bob@example.com'), jar));
+        const bob = await db.collection('user').findOne({ email: 'bob@example.com' });
+        const codeRow = await db.collection('oauthAuthCodes').findOne({});
+        expect(code).toBeTruthy();
+        expect(codeRow?.user).toBe(bob?._id.toString());
+    });
+
+    it('mints for the clicked account even if the active session flipped before submit', async () => {
+        const clientId = await registerClient();
+        const { jar, returnTo } = await aliceThenBob(authorizeQuery(clientId));
+        const bobForm = allowFormFields(await renderAuthorizePage(returnTo.searchParams, jar), 'bob@example.com');
+        // The web app's sync pivots the active session back to its own account at any moment.
+        const alice = await aliceJar();
+        const flipped = cookieJar(jar, alice.split('; ').find((pair) => pair.startsWith(`${SESSION_COOKIE}=`)) ?? '');
+
+        issuedCode(await postDecision(bobForm, flipped));
+        const bob = await db.collection('user').findOne({ email: 'bob@example.com' });
+        expect((await db.collection('oauthAuthCodes').findOne({}))?.user).toBe(bob?._id.toString());
+    });
+});
+
+describe('consent forgery protection', () => {
+    async function aliceConsent(clientId: string) {
+        const cookieHeader = `${SESSION_COOKIE}=${await loginCookie()}`;
+        const html = await renderAuthorizePage(authorizeQuery(clientId), cookieHeader);
+        return { cookieHeader, form: allowFormFields(html) };
+    }
+
+    async function expectNoCodeIssued(res: Response) {
+        expect(res.status).not.toBe(302);
+        expect(await db.collection('oauthAuthCodes').countDocuments()).toBe(0);
+    }
+
+    it('an Allow without the CSRF token re-renders consent and issues no code', async () => {
+        const { cookieHeader, form } = await aliceConsent(await registerClient());
+        form.delete('csrf');
+        const res = await postDecision(form, cookieHeader);
+        await expectNoCodeIssued(res);
+        expect(await res.text()).toContain('Authorize access');
+    });
+
+    it("a CSRF token minted for another client's page does not authorize this one", async () => {
+        const { cookieHeader, form } = await aliceConsent(await registerClient());
+        form.set('client_id', await registerClient());
+        await expectNoCodeIssued(await postDecision(form, cookieHeader));
+    });
+
+    it('an Allow naming a user this browser is not signed in to issues no code', async () => {
+        const { cookieHeader, form } = await aliceConsent(await registerClient());
+        form.set('user_id', 'someone-else');
+        await expectNoCodeIssued(await postDecision(form, cookieHeader));
+    });
+
+    it('a re-rendered consent page drops the stale fields and its Allow then succeeds', async () => {
+        const { cookieHeader, form } = await aliceConsent(await registerClient());
+        form.set('csrf', 'forged');
+        const rerender = await postDecision(form, cookieHeader);
+        await expectNoCodeIssued(rerender);
+        const html = await rerender.text();
+        expect(html).not.toContain('value="forged"');
+
+        const retry = allowFormFields(html);
+        expect(retry.getAll('csrf')).toHaveLength(1);
+        expect(retry.getAll('user_id')).toHaveLength(1);
+        issuedCode(await postDecision(retry, cookieHeader));
+    });
+
+    it('rejects cross-site submissions of the consent and sign-in forms', async () => {
+        const { cookieHeader, form } = await aliceConsent(await registerClient());
+        const crossSite = await postDecision(form, cookieHeader, { 'Sec-Fetch-Site': 'cross-site' });
+        expect(crossSite.status).toBe(403);
+        const foreignOrigin = await postDecision(form, cookieHeader, { Origin: 'https://evil.example' });
+        expect(foreignOrigin.status).toBe(403);
+        await expectNoCodeIssued(crossSite);
+
+        form.set('provider', 'google');
+        const login = await app.fetch(
+            new Request(`${ORIGIN}/mcp-oauth/authorize/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Sec-Fetch-Site': 'cross-site' },
+                body: form.toString(),
+            }),
+        );
+        expect(login.status).toBe(403);
+    });
+
+    it('forbids framing the sign-in and consent pages', async () => {
+        const query = authorizeQuery(await registerClient());
+        const signIn = await app.fetch(new Request(`${ORIGIN}/mcp-oauth/authorize?${query}`));
+        const consent = await app.fetch(
+            new Request(`${ORIGIN}/mcp-oauth/authorize?${query}`, { headers: { Cookie: `${SESSION_COOKIE}=${await loginCookie()}` } }),
+        );
+        for (const page of [signIn, consent]) {
+            expect(page.headers.get('x-frame-options')).toBe('DENY');
+            expect(page.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+        }
+    });
+});
+
+describe('withAccountChooser', () => {
+    it('adds prompt=select_account and keeps every other param', () => {
+        const url = new URL(withAccountChooser('https://accounts.google.com/o/oauth2/auth?client_id=c&state=s&scope=openid+email'));
+        expect(url.searchParams.get('prompt')).toBe('select_account');
+        expect(url.searchParams.get('client_id')).toBe('c');
+        expect(url.searchParams.get('state')).toBe('s');
+        expect(url.searchParams.get('scope')).toBe('openid email');
+    });
+
+    it('overrides a prompt the provider URL already carries', () => {
+        expect(new URL(withAccountChooser('https://github.com/login/oauth/authorize?prompt=consent')).searchParams.getAll('prompt')).toEqual([
+            'select_account',
+        ]);
     });
 });
 
@@ -346,27 +591,11 @@ describe('scope confinement', () => {
     it('confines the granted scope to a server-supported value even if the consent form requests an unknown scope', async () => {
         const clientId = await registerClient();
         const sessionCookie = await loginCookie();
+        const cookieHeader = `${SESSION_COOKIE}=${sessionCookie}`;
+        const form = allowFormFields(await renderAuthorizePage(authorizeQuery(clientId, { scope: 'items.read', state: 's' }), cookieHeader));
         // Tamper the consent form: request a real scope plus an unsupported/elevated one.
-        const decisionForm = new URLSearchParams({
-            response_type: 'code',
-            client_id: clientId,
-            redirect_uri: REDIRECT_URI,
-            code_challenge: CHALLENGE,
-            code_challenge_method: 'S256',
-            scope: 'items.read reassign webhooks.manage',
-            state: 's',
-            decision: 'allow',
-        });
-        const res = await app.fetch(
-            new Request(`${ORIGIN}/mcp-oauth/authorize/decision`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: `${SESSION_COOKIE}=${sessionCookie}` },
-                body: decisionForm.toString(),
-                redirect: 'manual',
-            }),
-        );
-        expect(res.status).toBe(302);
-        const code = new URL(res.headers.get('location') ?? '').searchParams.get('code') ?? '';
+        form.set('scope', 'items.read reassign webhooks.manage');
+        const code = issuedCode(await postDecision(form, cookieHeader), 's');
         const tokens = (await (await exchangeCode(clientId, code, VERIFIER)).json()) as { scope: string };
         // reassign / webhooks.manage are not MCP-supported scopes → dropped; only items.read survives.
         expect(tokens.scope).toBe('items.read');

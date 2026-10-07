@@ -6,7 +6,7 @@
  * The route layer (routes/mcpOAuth.ts) does request parsing, session resolution, and HTML rendering;
  * everything that decides "is this grant valid / what token should we mint" lives here.
  */
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import dayjs from 'dayjs';
 import { issueOAuthAccessToken } from '../auth/apiTokens.js';
 import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
@@ -14,6 +14,7 @@ import oauthAuthCodesDAO from '../dataAccess/oauthAuthCodesDAO.js';
 import oauthClientsDAO from '../dataAccess/oauthClientsDAO.js';
 import oauthRefreshTokensDAO from '../dataAccess/oauthRefreshTokensDAO.js';
 import { type ApiTokenScope, MINTABLE_API_TOKEN_SCOPES, type OAuthClientInterface } from '../types/entities.js';
+import { betterAuthSecret } from './betterAuthTokenCrypto.js';
 
 /** Scopes the remote MCP authorization server advertises + permits. Read+write across all entity domains. */
 export const MCP_SUPPORTED_SCOPES: ApiTokenScope[] = [
@@ -352,4 +353,33 @@ async function revokeFamilyOnReuse(refreshHash: string, now: string): Promise<vo
         }
         cursorId = row.rotatedToId;
     }
+}
+
+/**
+ * What one consent "Allow" button is bound to: the account it connects (and the browser session
+ * that proves this browser holds that account) plus the exact client + PKCE challenge it authorizes.
+ */
+export interface ConsentBinding {
+    sessionId: string;
+    userId: string;
+    clientId: string;
+    codeChallenge: string;
+}
+
+/**
+ * CSRF token for a consent form. Session cookies are SameSite=None in production (web app and API
+ * are cross-site), so without it any page could auto-submit "allow" for a client it registered and
+ * receive a code for the victim. Only a page rendered by this server for this browser's session can
+ * carry a token that verifies, and it covers the user id so the code is minted for the account shown.
+ */
+export function consentCsrfToken(binding: ConsentBinding): string {
+    const message = ['mcp-consent', binding.sessionId, binding.userId, binding.clientId, binding.codeChallenge].join('|');
+    return createHmac('sha256', betterAuthSecret()).update(message).digest('base64url');
+}
+
+/** Constant-time check of a posted consent CSRF token against the binding recomputed server-side. */
+export function isValidConsentCsrf(token: string, binding: ConsentBinding): boolean {
+    const expected = Buffer.from(consentCsrfToken(binding));
+    const actual = Buffer.from(token);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
 }

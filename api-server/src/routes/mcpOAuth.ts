@@ -18,7 +18,9 @@ import oauthClientsDAO from '../dataAccess/oauthClientsDAO.js';
 import { APP_NAME } from '../lib/appName.js';
 import {
     confineScopes,
+    consentCsrfToken,
     issueAuthCode,
+    isValidConsentCsrf,
     isValidRedirectUri,
     MCP_SUPPORTED_SCOPES,
     parseScopeParam,
@@ -27,6 +29,7 @@ import {
     redirectUriIsRegistered,
     registerOAuthClient,
 } from '../lib/mcpOAuth.js';
+import { hasAtLeastOne, type NonEmptyArray } from '../lib/typeUtils.js';
 import { auth } from '../loaders/mainLoader.js';
 import type { ApiTokenScope, OAuthClientInterface } from '../types/entities.js';
 
@@ -105,10 +108,17 @@ function fieldReader(fields: Map<string, string>): FieldReader {
 }
 
 /** Re-encodes a field map into a query string so login/consent forms round-trip every param verbatim. */
+/**
+ * Fields the sign-in/consent forms add on top of the authorize params. They must never be carried
+ * forward: a re-rendered page would duplicate a stale user_id/csrf in every form, and the sign-in
+ * callbackURL would ship them through the provider round-trip (history, logs, verification row).
+ */
+const FORM_CONTROL_FIELDS = new Set(['provider', 'decision', 'user_id', 'csrf']);
+
 function authorizeQueryString(fields: Map<string, string>): string {
     const params = new URLSearchParams();
     for (const [key, value] of fields) {
-        if (value.length > 0) {
+        if (value.length > 0 && !FORM_CONTROL_FIELDS.has(key)) {
             params.set(key, value);
         }
     }
@@ -119,22 +129,132 @@ function renderErrorPage(message: string): string {
     return `<!doctype html><html><head><meta charset="utf-8"><title>Authorization error</title></head><body style="font-family:system-ui;max-width:32rem;margin:4rem auto;padding:0 1rem"><h1>Authorization error</h1><p>${escapeHtml(message)}</p></body></html>`;
 }
 
-/** Login page: Google/GitHub buttons that POST back to /authorize/login preserving the authorize params. */
-function renderLoginPage(queryString: string): string {
-    const hidden = new URLSearchParams(queryString);
-    const hiddenFields = [...hidden.entries()].map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('');
-    const button = (provider: string, label: string) =>
-        `<form method="post" action="/mcp-oauth/authorize/login" style="margin:0.5rem 0">${hiddenFields}<input type="hidden" name="provider" value="${provider}"><button type="submit" style="width:100%;padding:0.75rem;font-size:1rem;cursor:pointer">${escapeHtml(label)}</button></form>`;
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Sign in to ${APP_NAME}</title></head><body style="font-family:system-ui;max-width:24rem;margin:4rem auto;padding:0 1rem"><h1>Sign in to ${APP_NAME}</h1><p>An MCP client wants to connect to your ${APP_NAME} account.</p>${button('google', 'Sign in with Google')}${button('github', 'Sign in with GitHub')}</body></html>`;
+/** Hidden inputs that carry every authorize param through a form POST verbatim. */
+function hiddenFieldsFor(queryString: string): string {
+    return [...new URLSearchParams(queryString).entries()]
+        .map(([name, value]) => `<input type="hidden" name="${escapeHtml(name)}" value="${escapeHtml(value)}">`)
+        .join('');
 }
 
-/** Consent page: shows the client + requested scopes with Allow/Deny, POSTing to /authorize/decision. */
-function renderConsentPage(client: OAuthClientInterface, scopes: ApiTokenScope[], queryString: string, userEmail: string): string {
-    const hidden = new URLSearchParams(queryString);
-    const hiddenFields = [...hidden.entries()].map(([k, v]) => `<input type="hidden" name="${escapeHtml(k)}" value="${escapeHtml(v)}">`).join('');
-    const clientLabel = client.clientName ?? client._id;
-    const scopeList = scopes.map((s) => `<li><code>${escapeHtml(s)}</code></li>`).join('');
-    return `<!doctype html><html><head><meta charset="utf-8"><title>Authorize MCP access</title></head><body style="font-family:system-ui;max-width:28rem;margin:4rem auto;padding:0 1rem"><h1>Authorize access</h1><p><strong>${escapeHtml(clientLabel)}</strong> wants to access your ${APP_NAME} account (<code>${escapeHtml(userEmail)}</code>) with:</p><ul>${scopeList}</ul><div style="display:flex;gap:0.75rem;margin-top:1.5rem"><form method="post" action="/mcp-oauth/authorize/decision" style="flex:1">${hiddenFields}<input type="hidden" name="decision" value="allow"><button type="submit" style="width:100%;padding:0.75rem;cursor:pointer">Allow</button></form><form method="post" action="/mcp-oauth/authorize/decision" style="flex:1">${hiddenFields}<input type="hidden" name="decision" value="deny"><button type="submit" style="width:100%;padding:0.75rem;cursor:pointer">Deny</button></form></div></body></html>`;
+/** Google + GitHub buttons that POST to /authorize/login, preserving the authorize params. Shared by login and consent pages. */
+function signInButtons(queryString: string, labelPrefix: string): string {
+    const hiddenFields = hiddenFieldsFor(queryString);
+    const button = (provider: 'google' | 'github', providerName: string) =>
+        `<form method="post" action="/mcp-oauth/authorize/login" style="margin:0.5rem 0">${hiddenFields}<input type="hidden" name="provider" value="${provider}"><button type="submit" style="width:100%;padding:0.75rem;font-size:1rem;cursor:pointer">${escapeHtml(`${labelPrefix} ${providerName}`)}</button></form>`;
+    return `${button('google', 'Google')}${button('github', 'GitHub')}`;
+}
+
+/** Login page: Google/GitHub buttons that POST back to /authorize/login preserving the authorize params. */
+function renderLoginPage(queryString: string): string {
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Sign in to ${APP_NAME}</title></head><body style="font-family:system-ui;max-width:24rem;margin:4rem auto;padding:0 1rem"><h1>Sign in to ${APP_NAME}</h1><p>An MCP client wants to connect to your ${APP_NAME} account.</p>${signInButtons(queryString, 'Sign in with')}</body></html>`;
+}
+
+/** One account this browser is signed in to on the API origin (Better Auth multi-session). */
+interface BrowserAccount {
+    sessionId: string;
+    userId: string;
+    email: string;
+}
+
+interface ConsentView {
+    client: OAuthClientInterface;
+    scopes: ApiTokenScope[];
+    queryString: string;
+    codeChallenge: string;
+    accounts: NonEmptyArray<BrowserAccount>;
+}
+
+/**
+ * Consent page: the client + requested scopes, one Allow button per account this browser is signed
+ * in to, Deny, and a fresh sign-in for an account not listed. Each Allow carries its own user id and
+ * CSRF token, so the code is minted for the account the user clicked. The API-origin cookie's
+ * *active* session is not used for that: the web app pivots it between its accounts during every sync
+ * (`multiSession.setActive` in client/src/db/multiUserSync.ts), so it can change between render and submit.
+ */
+function renderConsentPage(view: ConsentView): string {
+    const hiddenFields = hiddenFieldsFor(view.queryString);
+    const clientLabel = view.client.clientName ?? view.client._id;
+    const scopeList = view.scopes.map((scope) => `<li><code>${escapeHtml(scope)}</code></li>`).join('');
+    const [firstAccount] = view.accounts;
+    const isSingleAccount = view.accounts.length === 1;
+    const allowButtons = view.accounts
+        .map((account) => allowForm(view, account, hiddenFields, isSingleAccount ? 'Allow' : `Allow for ${account.email}`))
+        .join('');
+    const accountLine = isSingleAccount
+        ? `<p>Account: <code>${escapeHtml(firstAccount.email)}</code></p>`
+        : '<p>This browser is signed in to several accounts. Choose the one to connect:</p>';
+    const denyForm = `<form method="post" action="/mcp-oauth/authorize/decision" style="margin:0.5rem 0">${hiddenFields}<input type="hidden" name="decision" value="deny"><button type="submit" style="width:100%;padding:0.75rem;cursor:pointer">Deny</button></form>`;
+    const switchAccount = `<div data-testid="switchAccount" style="margin-top:2rem;padding-top:1rem;border-top:1px solid #ccc"><p>Account not listed? Sign in with it:</p>${signInButtons(view.queryString, 'Use a different account with')}</div>`;
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Authorize MCP access</title></head><body style="font-family:system-ui;max-width:28rem;margin:4rem auto;padding:0 1rem"><h1>Authorize access</h1><p><strong>${escapeHtml(clientLabel)}</strong> wants to access your ${APP_NAME} account with:</p><ul>${scopeList}</ul>${accountLine}<div style="margin-top:1.5rem">${allowButtons}${denyForm}</div>${switchAccount}</body></html>`;
+}
+
+/** An Allow form bound (user id + CSRF token) to one account. */
+function allowForm(view: ConsentView, account: BrowserAccount, hiddenFields: string, label: string): string {
+    const csrf = consentCsrfToken({ sessionId: account.sessionId, userId: account.userId, clientId: view.client._id, codeChallenge: view.codeChallenge });
+    const bound = `<input type="hidden" name="decision" value="allow"><input type="hidden" name="user_id" value="${escapeHtml(account.userId)}"><input type="hidden" name="csrf" value="${escapeHtml(csrf)}">`;
+    return `<form method="post" action="/mcp-oauth/authorize/decision" style="margin:0.5rem 0" data-account="${escapeHtml(account.email)}">${hiddenFields}${bound}<button type="submit" style="width:100%;padding:0.75rem;cursor:pointer">${escapeHtml(label)}</button></form>`;
+}
+
+/**
+ * Every account this browser holds a live session for, the cookie-active one first. Better Auth's
+ * device-session list reads the multi-session cookies; the active session is merged in because a
+ * browser can carry the session cookie without its multi-session twin.
+ */
+async function browserAccounts(headers: Headers): Promise<BrowserAccount[]> {
+    const [active, deviceSessions] = await Promise.all([auth.api.getSession({ headers }), auth.api.listDeviceSessions({ headers })]);
+    const all = [...(active ? [active] : []), ...deviceSessions].map(({ session, user }) => ({ sessionId: session.id, userId: user.id, email: user.email }));
+    return all.filter((account, index) => all.findIndex((other) => other.userId === account.userId) === index);
+}
+
+/**
+ * The account an Allow submission is for: the posted user must still be signed in on this browser,
+ * and the posted CSRF token must verify against that user's session + this client + this challenge.
+ */
+function consentedAccount(
+    accounts: BrowserAccount[],
+    fields: Map<string, string>,
+    grant: { clientId: string; codeChallenge: string },
+): BrowserAccount | undefined {
+    const account = accounts.find((candidate) => candidate.userId === fields.get('user_id'));
+    const csrf = fields.get('csrf') ?? '';
+    if (!account || !isValidConsentCsrf(csrf, { sessionId: account.sessionId, userId: account.userId, ...grant })) {
+        return undefined;
+    }
+    return account;
+}
+
+/**
+ * Fetch Metadata / Origin check for the state-changing form POSTs. Both forms are only ever submitted
+ * from pages this server rendered, so anything cross-site is a forged submission. Browsers that send
+ * neither header (very old ones) fall through to the CSRF token, which is the real gate.
+ */
+function isCrossSiteSubmission(c: Context): boolean {
+    const fetchSite = c.req.header('Sec-Fetch-Site');
+    if (fetchSite) {
+        return fetchSite !== 'same-origin';
+    }
+    const origin = c.req.header('Origin');
+    return origin !== undefined && origin !== issuerOrigin();
+}
+
+/** Copies every Set-Cookie from an internal Better Auth call onto the outgoing response (append keeps multiple cookies). */
+function forwardSetCookies(c: Context, headers: Headers): void {
+    for (const cookie of headers.getSetCookie()) {
+        c.header('Set-Cookie', cookie, { append: true });
+    }
+}
+
+/**
+ * Forces the provider's account chooser. Better Auth's `signInSocial` takes no per-request `prompt`,
+ * so it goes on the returned authorization URL. Google and GitHub both honour `select_account`;
+ * without it a browser signed in to one Google account is silently signed in as that account,
+ * and "Use a different account" could never reach another one.
+ */
+export function withAccountChooser(providerAuthorizationUrl: string): string {
+    const url = new URL(providerAuthorizationUrl);
+    // `set`, not `append`: replaces any prompt Better Auth adds (e.g. a configured `prompt: 'consent'`).
+    url.searchParams.set('prompt', 'select_account');
+    return url.toString();
 }
 
 interface AuthorizeParams {
@@ -219,6 +339,13 @@ interface RegisterRequestBody {
 }
 
 export const mcpOAuthRoutes = new Hono()
+    // The sign-in and consent pages hold one-click grant buttons, so they must never render in a
+    // frame (clickjacking). Set on every response; harmless on the JSON endpoints.
+    .use('*', async (c, next) => {
+        await next();
+        c.header('X-Frame-Options', 'DENY');
+        c.header('Content-Security-Policy', "frame-ancestors 'none'");
+    })
     // RFC 7591 Dynamic Client Registration.
     .post('/register', async (c) => {
         if (!dcrEnabled()) {
@@ -268,39 +395,43 @@ export const mcpOAuthRoutes = new Hono()
             }
             return c.redirect(validation.redirect);
         }
-        const session = await auth.api.getSession({ headers: c.req.raw.headers });
+        const accounts = await browserAccounts(c.req.raw.headers);
         const queryString = authorizeQueryString(fields);
-        if (!session) {
+        if (!hasAtLeastOne(accounts)) {
             return c.html(renderLoginPage(queryString));
         }
-        return c.html(renderConsentPage(validation.client, validation.scopes, queryString, session.user.email));
+        return c.html(renderConsentPage({ client: validation.client, scopes: validation.scopes, queryString, codeChallenge: params.codeChallenge, accounts }));
     })
 
     // Login bounce: federate to Better Auth social sign-in with a callbackURL returning to /authorize.
     .post('/authorize/login', async (c) => {
+        if (isCrossSiteSubmission(c)) {
+            return c.html(renderErrorPage('This sign-in request did not come from this site.'), 403);
+        }
         const fields = toFieldMap(await c.req.parseBody());
         const provider = fields.get('provider') ?? '';
         if (provider !== 'google' && provider !== 'github') {
             return c.html(renderErrorPage('Unsupported sign-in provider.'), 400);
         }
-        const callbackURL = `${issuerOrigin()}/mcp-oauth/authorize?${authorizeQueryStringFromForm(fields)}`;
-        const result = await auth.api.signInSocial({ body: { provider, callbackURL }, headers: c.req.raw.headers });
-        if (!result?.url) {
+        const callbackURL = `${issuerOrigin()}/mcp-oauth/authorize?${authorizeQueryString(fields)}`;
+        // returnHeaders: Better Auth answers with a Set-Cookie carrying the OAuth `state`; called
+        // server-side, that cookie is dropped unless forwarded here, and the provider callback then
+        // fails with state_mismatch — so a browser with no session could never finish signing in.
+        const { headers, response } = await auth.api.signInSocial({ body: { provider, callbackURL }, headers: c.req.raw.headers, returnHeaders: true });
+        if (!response?.url) {
             return c.html(renderErrorPage('Could not start sign-in. Please try again.'), 500);
         }
-        return c.redirect(result.url);
+        forwardSetCookies(c, headers);
+        return c.redirect(withAccountChooser(response.url));
     })
 
     // Consent decision: on allow, mint a one-time code and redirect to the client with code + state.
     .post('/authorize/decision', async (c) => {
+        if (isCrossSiteSubmission(c)) {
+            return c.html(renderErrorPage('This authorization request did not come from this site.'), 403);
+        }
         const fields = toFieldMap(await c.req.parseBody());
         const params = readAuthorizeParams(fieldReader(fields));
-        const decision = fields.get('decision') ?? '';
-        const session = await auth.api.getSession({ headers: c.req.raw.headers });
-        if (!session) {
-            // Session expired between consent render and submit — restart by showing login again.
-            return c.html(renderLoginPage(authorizeQueryStringFromForm(fields)));
-        }
         const validation = await validateAuthorizeRequest(params);
         if (!validation.ok) {
             if ('page' in validation) {
@@ -308,11 +439,22 @@ export const mcpOAuthRoutes = new Hono()
             }
             return c.redirect(validation.redirect);
         }
-        if (decision !== 'allow') {
+        if (fields.get('decision') !== 'allow') {
             return c.redirect(redirectWithError(params.redirectUri, 'access_denied', 'the user denied the authorization request', params.state));
         }
+        const accounts = await browserAccounts(c.req.raw.headers);
+        const queryString = authorizeQueryString(fields);
+        const account = consentedAccount(accounts, fields, { clientId: params.clientId, codeChallenge: params.codeChallenge });
+        if (!account) {
+            // Forged/stale form, or the clicked account's session is gone — never mint; ask again.
+            return c.html(
+                hasAtLeastOne(accounts)
+                    ? renderConsentPage({ client: validation.client, scopes: validation.scopes, queryString, codeChallenge: params.codeChallenge, accounts })
+                    : renderLoginPage(queryString),
+            );
+        }
         const code = await issueAuthCode({
-            user: session.user.id,
+            user: account.userId,
             client: validation.client,
             redirectUri: params.redirectUri,
             codeChallenge: params.codeChallenge,
@@ -340,13 +482,6 @@ export const mcpOAuthRoutes = new Hono()
     });
 
 /** Rebuilds the authorize query string from posted form fields, dropping non-authorize control fields. */
-function authorizeQueryStringFromForm(fields: Map<string, string>): string {
-    const authorizeFields = new Map(fields);
-    authorizeFields.delete('provider');
-    authorizeFields.delete('decision');
-    return authorizeQueryString(authorizeFields);
-}
-
 async function handleAuthorizationCodeGrant(c: Context, fields: Map<string, string>) {
     const clientSecret = fields.get('client_secret');
     const result = await redeemAuthorizationCode({
