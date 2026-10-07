@@ -71,3 +71,4 @@
 - [Refocusing a native date input pops the iOS picker](feedback_refocus_native_date_input_opens_mobile_picker.md) — Clear→`input.focus()` in a tap handler; Chromium isMobile e2e cannot see it. Prefer keyboard-only refocus.
 - [Fallback navigation clobbers the specific one](feedback_fallback_navigation_clobbers_specific_one.md) — caller's post-pass `href='/'` overrides a callee's `/login`; demand callee return `{ navigated }`.
 - [Deferred side effect lost on loop throw](feedback_deferred_side_effect_lost_on_loop_throw.md) — collect-ids-then-act-after-finally drops collected work when a later pass throws; test pass-1 outcome + pass-2 reject.
+- [API-origin OAuth binds the cookie-active session](feedback_api_origin_oauth_uses_cookie_active_session.md) — Guides promising "sign in with that account" are false for multi-account users; app switch is IDB-only.

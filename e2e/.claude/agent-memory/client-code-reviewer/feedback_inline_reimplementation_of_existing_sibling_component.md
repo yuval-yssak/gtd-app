@@ -39,3 +39,5 @@ a copy button from host headers into `ItemEditorBody`'s meta row loses it wherev
 early-returns (reassign-in-flight) while the host header still renders. Usually an acceptable
 trade — but name it explicitly rather than letting it pass unnoticed.
 Related: [[extracted-body-diverges-from-shared-chrome-type]].
+
+Recurred 2026-10-07 (Connect Claude settings): a THIRD hand-rolled clipboard block (CopyIdButton, PersonalApiTokens reveal, ConnectClaude CopyableLine), this time keeping the catch but dropping visible success feedback (tooltip-only, invisible on tap). Ask for a generic CopyButton extracted from CopyIdButton.

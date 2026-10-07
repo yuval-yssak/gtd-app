@@ -20,6 +20,7 @@ import { AppErrorBoundary } from '../../components/AppErrorBoundary';
 import { AccountDataSection } from '../../components/settings/AccountDataSection';
 import { CalendarIntegrations } from '../../components/settings/CalendarIntegrations';
 import { CalendarIntegrationsSkeleton } from '../../components/settings/CalendarIntegrationsSkeleton';
+import { ConnectClaude } from '../../components/settings/ConnectClaude';
 import { ConnectedDevices } from '../../components/settings/ConnectedDevices';
 import { PersonalApiTokens } from '../../components/settings/PersonalApiTokens';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -164,6 +165,32 @@ function SettingsPage() {
                     <ConnectedDevices db={db} />
                 </Box>
             </Paper>
+            {/* Connect Claude via the hosted MCP endpoint (OAuth, no token) */}
+            <Paper variant="outlined" className={styles.section}>
+                <Box className={styles.sectionContent}>
+                    <Typography
+                        variant="subtitle1"
+                        sx={{
+                            fontWeight: 600,
+                            mb: 0.5,
+                        }}
+                    >
+                        Connect Claude
+                    </Typography>
+                    <Typography
+                        variant="body2"
+                        sx={{
+                            color: 'text.secondary',
+                            mb: 2,
+                        }}
+                    >
+                        Let Claude capture, clarify and review your items in conversation. Add {APP_NAME} as a connector in Claude, then sign in. No install or
+                        token needed.
+                    </Typography>
+                    <Divider className={styles.divider} />
+                    <ConnectClaude />
+                </Box>
+            </Paper>
             {/* Personal API tokens */}
             <Paper variant="outlined" className={styles.section}>
                 <Box className={styles.sectionContent}>
@@ -184,7 +211,7 @@ function SettingsPage() {
                         }}
                     >
                         Bearer tokens for the public <code>/v1</code> API. Use them to integrate this account with shortcuts, automations, or the local MCP
-                        server.
+                        server. Connecting Claude doesn't need one; use Connect Claude above.
                     </Typography>
                     <Divider className={styles.divider} />
                     <PersonalApiTokens />
