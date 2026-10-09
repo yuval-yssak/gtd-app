@@ -9,8 +9,8 @@ declare const styles: {
     readonly itemId: string;
     readonly metaRow: string;
     readonly notesHeader: string;
+    readonly pagePreview: string;
     readonly preview: string;
-    readonly previewClickable: string;
     readonly sectionLabel: string;
     readonly statusChips: string;
     readonly statusLabel: string;

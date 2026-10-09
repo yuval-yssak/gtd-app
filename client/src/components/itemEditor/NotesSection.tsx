@@ -1,3 +1,4 @@
+import CheckIcon from '@mui/icons-material/Check';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
@@ -6,8 +7,7 @@ import IconButton from '@mui/material/IconButton';
 import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import Typography from '@mui/material/Typography';
-import { useId, useRef, useState } from 'react';
-import { isLinkActivation } from '../../lib/notesPreviewLinks';
+import { useEffect, useId, useRef, useState } from 'react';
 import { type ItemEditorChrome, notesAreEmpty } from '../editItemDialogLogic';
 import { MarkdownNotesEditor, NOTES_EDITOR_LABEL, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
@@ -26,9 +26,10 @@ interface NotesSectionProps {
 
 /**
  * Notes editor section. Two surface variants:
- * - Page mode: click-to-edit. Defaults to a Markdown preview when notes exist; clicking the
- *   preview switches to a focused CodeMirror editor; blurring with non-empty notes returns to
- *   preview. Empty notes start in the editor so the affordance is obvious.
+ * - Page mode: defaults to a read-only Markdown preview when notes exist; only the pencil button
+ *   switches to a focused CodeMirror editor (edits autosave through `onNotesChange`). The "Done"
+ *   button, Escape, or moving focus elsewhere return to the preview while notes are non-empty.
+ *   Empty notes start in the editor so the affordance is obvious.
  * - All other chromes (dialog/popover/expand): tabbed Edit/Preview, unchanged from the previous
  *   behaviour. The page-mode redesign was scoped intentionally — the smaller surfaces are short
  *   and edit-oriented and don't need the read-mostly default.
@@ -66,85 +67,89 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
     // value even though CodeMirror captures them once at mount.
     const notesRef = useRef(notes);
     notesRef.current = notes;
+    // Done/Escape are explicit exits that unmount the focused editor — hand focus to the pencil so
+    // keyboard users can re-enter without tabbing back. Blur exits leave focus where the user put it.
+    const editButtonRef = useRef<HTMLButtonElement | null>(null);
+    const focusEditButtonOnPreviewMount = useRef(false);
+    useEffect(() => {
+        if (!editing && focusEditButtonOnPreviewMount.current) {
+            focusEditButtonOnPreviewMount.current = false;
+            editButtonRef.current?.focus();
+        }
+    }, [editing]);
     const enterEdit = () => {
         focusOnNextEditMount.current = true;
         setEditing(true);
     };
+    // Empty notes have nothing to preview — the editor stays the resting state.
+    const exitEditIfNotesExist = () => {
+        if (notesAreEmpty(notesRef.current)) {
+            return false;
+        }
+        setEditing(false);
+        return true;
+    };
+    const exitEditExplicitly = () => {
+        const didExit = exitEditIfNotesExist();
+        focusEditButtonOnPreviewMount.current = didExit;
+        return didExit;
+    };
 
     if (editing) {
         // autoFocus prop is captured at mount; reset the flag synchronously after read so the next
-        // `editing` cycle (e.g. after blur→preview→click again) decides for itself.
+        // `editing` cycle (e.g. after blur→preview→pencil again) decides for itself.
         const shouldFocus = focusOnNextEditMount.current;
         focusOnNextEditMount.current = false;
         return (
             <Box>
-                <Typography variant="caption" id={labelId} className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600 }}>
-                    {NOTES_EDITOR_LABEL}
-                </Typography>
+                <Box className={styles.notesHeader}>
+                    <Typography variant="caption" id={labelId} className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600, mb: 0 }}>
+                        {NOTES_EDITOR_LABEL}
+                    </Typography>
+                    {/* Always rendered (disabled while empty) so the header doesn't jump when the
+                        first character is typed. */}
+                    <IconButton
+                        size="small"
+                        aria-label="Done editing notes"
+                        title="Done editing notes"
+                        disabled={notesAreEmpty(notes)}
+                        // Keep focus in the editor on press: otherwise its blur flips to preview
+                        // first and the click would land on nothing (or re-enter edit).
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={exitEditExplicitly}
+                    >
+                        <CheckIcon fontSize="small" />
+                    </IconButton>
+                </Box>
                 <MarkdownNotesEditor
                     value={notes}
                     onValueChange={onNotesChange}
                     placeholder={NOTES_PLACEHOLDER}
                     autoFocus={shouldFocus}
-                    onBlurOutside={() => {
-                        // Stay in editor when notes are still empty — the user can keep typing.
-                        if (!notesAreEmpty(notesRef.current)) {
-                            setEditing(false);
-                        }
-                    }}
-                    onEscape={() => {
-                        // First ESC steps out to the preview; claiming the key (return true) makes
-                        // CodeMirror preventDefault so the page-level ESC listener doesn't also
-                        // navigate back. With empty notes the editor is the resting state — let
-                        // ESC fall through.
-                        if (notesAreEmpty(notesRef.current)) {
-                            return false;
-                        }
-                        setEditing(false);
-                        return true;
-                    }}
+                    onBlurOutside={exitEditIfNotesExist}
+                    // First ESC steps out to the preview; claiming the key (return true) makes
+                    // CodeMirror preventDefault so the page-level ESC listener doesn't also navigate
+                    // back. With empty notes the editor is the resting state — ESC falls through.
+                    onEscape={exitEditExplicitly}
                 />
             </Box>
         );
     }
 
+    // The preview is read-only: selecting text and following links must never flip it into the
+    // editor — the pencil is the only way in. It stays focusable so keyboard users can scroll
+    // long notes inside the capped-height region.
     return (
         <Box>
             <Box className={styles.notesHeader}>
                 <Typography variant="caption" id={labelId} className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600, mb: 0 }}>
                     {NOTES_EDITOR_LABEL}
                 </Typography>
-                <IconButton size="small" aria-label="Edit notes" onClick={enterEdit}>
+                <IconButton ref={editButtonRef} size="small" aria-label="Edit notes" title="Edit notes" onClick={enterEdit}>
                     <EditOutlinedIcon fontSize="small" />
                 </IconButton>
             </Box>
-            <Box
-                className={styles.previewClickable}
-                tabIndex={0}
-                role="region"
-                aria-labelledby={labelId}
-                data-testid="pageNotesPreview"
-                onClick={(e) => {
-                    // A click on a rendered link must open the link (new tab, see MarkdownPreview),
-                    // not flip the notes into the editor underneath it.
-                    if (!isLinkActivation(e.target)) {
-                        enterEdit();
-                    }
-                }}
-                onKeyDown={(e) => {
-                    if (e.key !== 'Enter' && e.key !== ' ') {
-                        return;
-                    }
-                    // Enter on a focused link is the browser's own activation — let it open the link.
-                    // Space is never a link activation (anchors only respond to Enter), so it always
-                    // belongs to the region; preventDefault also stops the page scroll-jump.
-                    if (e.key === 'Enter' && isLinkActivation(e.target)) {
-                        return;
-                    }
-                    e.preventDefault();
-                    enterEdit();
-                }}
-            >
+            <Box className={styles.pagePreview} tabIndex={0} role="region" aria-labelledby={labelId} data-testid="pageNotesPreview">
                 <MarkdownPreview markdown={notes} />
             </Box>
         </Box>

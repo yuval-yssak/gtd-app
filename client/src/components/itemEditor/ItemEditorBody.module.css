@@ -60,28 +60,23 @@
     overflow-y: auto;
 }
 
-/* Clickable preview region in page mode — same shell as .preview, but signals editability with
- * a text cursor and a subtle hover highlight. */
-.previewClickable {
+/* Read-only preview region in page mode — same shell as .preview; editing goes through the
+ * pencil button only, so it has no click/hover affordance of its own. */
+.pagePreview {
     composes: preview;
-    cursor: text;
     /* Same cap as the CodeMirror editor's .cm-scroller: very long notes scroll inside the
      * preview instead of pushing the action buttons below the fold of the whole page. */
     max-height: var(--gtd-notes-max-height);
 }
 
-.previewClickable:hover {
-    border-color: var(--mui-palette-action-active, rgba(0, 0, 0, 0.54));
-}
-
 /* Review: the 7.5rem floor is a comfortable editing target but pure waste when scanning — a
  * 3-line note should occupy 3 lines. The review's 30vh scroll cap (set on .bodyReview) still
  * applies above. */
-.bodyReview .previewClickable {
+.bodyReview .pagePreview {
     min-height: 0;
 }
 
-.previewClickable:focus-visible {
+.pagePreview:focus-visible {
     outline: 0.125rem solid var(--mui-palette-primary-main, #1976d2);
     outline-offset: 0.0625rem;
 }

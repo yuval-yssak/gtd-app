@@ -169,10 +169,19 @@ test.describe('Routine editor — page mode notes markdown', () => {
             await expect(preview).toBeVisible();
             await expect(preview.locator('strong')).toHaveText('routine');
 
-            await page.getByRole('button', { name: 'Edit notes' }).click();
+            // The preview is read-only — clicking the rendered text does not open the editor.
             const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
+            await preview.locator('strong').click();
+            await expect(notesEditor).toHaveCount(0);
+
+            await page.getByRole('button', { name: 'Edit notes' }).click();
             await expect(notesEditor).toBeVisible();
             await expect(notesEditor).toHaveText('Hello **routine**');
+
+            // Done returns to the preview.
+            await page.getByRole('button', { name: 'Done editing notes' }).click();
+            await expect(preview).toBeVisible();
+            await expect(notesEditor).toHaveCount(0);
         });
     });
 });

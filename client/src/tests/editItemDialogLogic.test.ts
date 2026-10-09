@@ -779,8 +779,8 @@ describe('shouldAutoFocusTitle', () => {
 });
 
 describe('notesAreEmpty', () => {
-    // Page-mode notes click-to-edit reads this for both initial state (start in editor when
-    // empty) and blur behaviour (stay in editor when empty so the user can keep typing).
+    // Page-mode notes read this for both initial state (start in editor when empty) and
+    // blur/Escape/Done behaviour (stay in editor when empty so the user can keep typing).
     it('treats blank and whitespace-only strings as empty', () => {
         expect(notesAreEmpty('')).toBe(true);
         expect(notesAreEmpty('   ')).toBe(true);

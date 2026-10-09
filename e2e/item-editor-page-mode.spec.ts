@@ -33,7 +33,7 @@ test.describe('Item editor — page mode UX', () => {
             await page.goto(`/item/${item._id}`);
             await expect(page.getByRole('textbox', { name: 'Title' })).toBeVisible();
 
-            // Edit/Preview tabs should not appear in page mode — click-to-edit replaces them.
+            // Edit/Preview tabs should not appear in page mode — the pencil/Done toggle replaces them.
             await expect(page.getByRole('tab', { name: 'Edit' })).toHaveCount(0);
             await expect(page.getByRole('tab', { name: 'Preview' })).toHaveCount(0);
 
@@ -63,32 +63,81 @@ test.describe('Item editor — page mode UX', () => {
         });
     });
 
-    test('keyboard activation (Enter / Space) on the preview switches to the editor', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-kbd-${dayjs().valueOf()}@example.com`, async (page) => {
-            const item = await gtd.collect(page, 'Keyboard activation target');
-            await gtd.updateItem(page, { ...item, notes: 'Initial content' });
+    test('the preview is read-only: clicking, selecting text, Enter and Space never open the editor', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-notes-readonly-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Read-only preview target');
+            await gtd.updateItem(page, { ...item, notes: 'Copy this phrase from the notes' });
 
             await page.goto(`/item/${item._id}`);
             const preview = page.getByTestId('pageNotesPreview');
             await expect(preview).toBeVisible();
-
-            // Press Enter on the preview locator directly: locator.press auto-waits for the element
-            // to be actionable and dispatches the key to it, so there's no separate focus() step to
-            // race under load (a detached page.keyboard.press could land on the wrong element).
-            await preview.press('Enter');
             const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
-            // Gate on visible before focus — under load the editor's mount+autofocus lagged the keypress.
-            // Generous timeout: the React mount can take several seconds under hook saturation.
-            await expect(notesEditor).toBeVisible({ timeout: 15_000 });
-            await expect(notesEditor).toBeFocused();
 
-            // Blur back to preview, then verify Space also activates.
-            await page.getByRole('textbox', { name: 'Title' }).click();
-            const previewAgain = page.getByTestId('pageNotesPreview');
-            await expect(previewAgain).toBeVisible();
-            await previewAgain.press(' ');
+            // Plain click on prose stays in the preview.
+            await preview.getByText('Copy this phrase').click();
+            await expect(preview).toBeVisible();
+            await expect(notesEditor).toHaveCount(0);
+
+            // A real mouse drag across the text (the gesture that used to flip into the editor)
+            // keeps the preview and leaves the selection in place for copying.
+            const phraseBox = await preview.getByText('Copy this phrase').boundingBox();
+            if (!phraseBox) throw new Error('expected the phrase to have a box');
+            const midY = phraseBox.y + phraseBox.height / 2;
+            await page.mouse.move(phraseBox.x + 2, midY);
+            await page.mouse.down();
+            await page.mouse.move(phraseBox.x + phraseBox.width - 2, midY, { steps: 5 });
+            await page.mouse.up();
+            expect(await page.evaluate(() => window.getSelection()?.toString().length ?? 0)).toBeGreaterThan(10);
+            await expect(notesEditor).toHaveCount(0);
+
+            // Keyboard: the region is focusable (scrolling long notes) but Enter/Space don't edit.
+            await preview.press('Enter');
+            await preview.press(' ');
+            await expect(preview).toBeVisible();
+            await expect(notesEditor).toHaveCount(0);
+
+            // The pencil remains the one way in.
+            await page.getByRole('button', { name: 'Edit notes' }).click();
             await expect(notesEditor).toBeVisible({ timeout: 15_000 });
             await expect(notesEditor).toBeFocused();
+        });
+    });
+
+    test('the Done button returns to the preview and the edit is autosaved', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `page-notes-done-${dayjs().valueOf()}@example.com`, async (page) => {
+            const item = await gtd.collect(page, 'Done button target');
+            await gtd.updateItem(page, { ...item, notes: 'Before' });
+
+            await page.goto(`/item/${item._id}`);
+            await page.getByRole('button', { name: 'Edit notes' }).click();
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
+            await expect(notesEditor).toBeVisible({ timeout: 15_000 });
+            // Own focus explicitly (autofocus focus is covered by the read-only test above) — the
+            // fills below need a focused editor, and a lost autofocus would race them.
+            await notesEditor.click();
+            const doneButton = page.getByRole('button', { name: 'Done editing notes' });
+
+            // Empty notes have nothing to preview — Done is disabled until there is content.
+            await notesEditor.fill('');
+            await expect(doneButton).toBeDisabled();
+            await notesEditor.fill('After **edit**');
+            await expect(doneButton).toBeEnabled();
+
+            await doneButton.click();
+            const preview = page.getByTestId('pageNotesPreview');
+            await expect(preview).toBeVisible();
+            // Explicit exit hands focus to the pencil, so a keyboard user can re-enter directly.
+            await expect(page.getByRole('button', { name: 'Edit notes' })).toBeFocused();
+            await expect(preview.locator('strong')).toHaveText('edit');
+            await expect(notesEditor).toHaveCount(0);
+
+            // No explicit save: the autosave persisted the notes across a reload.
+            await expect
+                .poll(async () => (await gtd.listItems(page)).find((stored) => stored._id === item._id)?.notes, { timeout: 10_000 })
+                .toBe('After **edit**');
+            await gtd.flush(page);
+            await page.reload();
+            await expect(page.getByTestId('pageNotesPreview')).toContainText('After edit');
         });
     });
 
@@ -252,6 +301,7 @@ test.describe('Item editor — page mode UX', () => {
             // First ESC (in the editor): steps out to the preview, does not navigate.
             await notesEditor.press('Escape');
             await expect(page.getByTestId('pageNotesPreview')).toBeVisible();
+            await expect(editNotesButton).toBeFocused();
             await expect(page).toHaveURL(new RegExp(`/item/${item._id}`));
 
             // Second ESC: nothing claims it → navigate back (deep link → inbox fallback).
@@ -317,43 +367,6 @@ test.describe('Item editor — page mode UX', () => {
             await expect(await keyboardTab).toHaveURL(/example\.com\/docs/);
             await expect(preview).toBeVisible();
             await expect(notesEditor).toHaveCount(0);
-        });
-    });
-
-    test('Space on a focused link inside the preview enters edit mode without scroll-jumping the page', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-link-space-${dayjs().valueOf()}@example.com`, async (page) => {
-            const item = await gtd.collect(page, 'Item with a linked note and a tall page');
-            // Enough trailing lines that the document scrolls, so a leaked default Space would move it.
-            const tail = Array.from({ length: 80 }, (_, i) => `Filler ${i + 1}`).join('\n\n');
-            await gtd.updateItem(page, { ...item, notes: `See [the docs](https://example.com/docs) for details\n\n${tail}` });
-
-            await page.goto(`/item/${item._id}`);
-            const preview = page.getByTestId('pageNotesPreview');
-            await expect(preview).toBeVisible();
-            const link = preview.getByRole('link', { name: 'the docs' });
-            await link.focus();
-
-            // Anchors do not activate on Space, so the key belongs to the region: no new tab, no
-            // scroll, but the editor opens (as it does for Space on the region itself).
-            const scrollBefore = await page.evaluate(() => window.scrollY);
-            await link.press(' ');
-            await expect(page.getByRole('textbox', { name: 'Notes (Markdown)' })).toBeVisible({ timeout: 15_000 });
-            expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
-            expect(page.context().pages()).toHaveLength(1);
-        });
-    });
-
-    test('clicking prose next to a link still enters edit mode (the carve-out is link-only)', async ({ browser }) => {
-        await withOneLoggedInDevice(browser, `page-notes-prose-${dayjs().valueOf()}@example.com`, async (page) => {
-            const item = await gtd.collect(page, 'Item with a linked note and prose');
-            await gtd.updateItem(page, { ...item, notes: 'See [the docs](https://example.com/docs) for details' });
-
-            await page.goto(`/item/${item._id}`);
-            const preview = page.getByTestId('pageNotesPreview');
-            await expect(preview).toBeVisible();
-            await preview.getByText('for details').click();
-            await expect(page.getByRole('textbox', { name: 'Notes (Markdown)' })).toBeVisible({ timeout: 15_000 });
-            expect(page.context().pages()).toHaveLength(1);
         });
     });
 

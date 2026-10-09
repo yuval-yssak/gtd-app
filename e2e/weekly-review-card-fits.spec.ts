@@ -77,7 +77,7 @@ test.describe('Weekly review card fits without scrolling', () => {
 
             // The notes surface scrolls internally rather than growing without bound...
             const notesHeight = await stage
-                .locator('[class*="previewClickable"], [class*="cm-scroller"]')
+                .locator('[class*="pagePreview"], [class*="cm-scroller"]')
                 .first()
                 .evaluate((el) => el.clientHeight);
             const viewportHeight = page.viewportSize()?.height ?? 0;
@@ -118,7 +118,7 @@ test.describe('Weekly review card fits without scrolling', () => {
             // revisit uses the review's 30vh ceiling rather than the item page's 60vh — the
             // difference between ~277px of notes and ~555px.
             const notesHeight = await revisit
-                .locator('[class*="previewClickable"], [class*="cm-scroller"]')
+                .locator('[class*="pagePreview"], [class*="cm-scroller"]')
                 .first()
                 .evaluate((el) => el.clientHeight);
             expect(notesHeight).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) * 0.35);
