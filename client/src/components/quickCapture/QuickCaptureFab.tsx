@@ -20,6 +20,7 @@ import { useAppData } from '../../contexts/AppDataProvider';
 import { deleteQuickCaptureDraft, getQuickCaptureDraft, saveQuickCaptureDraft } from '../../db/draftHelpers';
 import { collectItem } from '../../db/itemMutations';
 import { useAutosave } from '../../hooks/useAutosave';
+import { useCaptureNotesPanel } from '../../hooks/useCaptureNotesPanel';
 import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptureNotice';
 import type { MyDB } from '../../types/MyDB';
 import { MarkdownNotesEditor, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
@@ -38,8 +39,7 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
     const [isOpen, setIsOpen] = useState(false);
     const [title, setTitle] = useState('');
     const [notes, setNotes] = useState('');
-    const [notesOpen, setNotesOpen] = useState(false);
-    const [notesTab, setNotesTab] = useState<0 | 1>(0);
+    const notesPanel = useCaptureNotesPanel();
     const [capturedCount, setCapturedCount] = useState(0);
     const { noticeCaptureIfHidden, hiddenAccountNotice } = useHiddenAccountCaptureNotice();
     // Dedupes Enter + button double-submits within one React batch — transitions don't dedupe,
@@ -71,7 +71,7 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
             setTitle(stored.title);
             setNotes(stored.notes);
             if (stored.notes) {
-                setNotesOpen(true);
+                notesPanel.openForRestoredDraft();
             }
             // Re-baseline so restoring doesn't immediately rewrite the same draft row.
             draftAutosave.reset({ title: stored.title, notes: stored.notes });
@@ -79,8 +79,8 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
         return () => {
             cancelled = true;
         };
-        // draftAutosave is a stable controller instance; account/db are boot-stable.
-    }, [isOpen, account, db, draftAutosave]);
+        // draftAutosave and the notes-panel actions are stable; account/db are boot-stable.
+    }, [isOpen, account, db, draftAutosave, notesPanel.openForRestoredDraft]);
 
     // Ref-routed listener (same shape as usePageEscapeToClose) — attaches once, reads fresh state.
     const openDialogRef = useRef(() => {});
@@ -115,8 +115,7 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
         try {
             setTitle('');
             setNotes('');
-            setNotesOpen(false);
-            setNotesTab(0);
+            notesPanel.resetAfterCapture();
             // The text is committed as a real item — drop the draft row and re-baseline the
             // autosave so a pending debounce tick can't resurrect the just-captured text.
             draftAutosave.reset({ title: '', notes: '' });
@@ -134,6 +133,9 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
     // Uncaptured text deliberately survives the close — the draft restores it on reopen.
     function onClose() {
         setIsOpen(false);
+        // The dialog unmounts its content; a pending focus request would otherwise make the
+        // reopened editor steal focus from the title field.
+        notesPanel.cancelPendingFocus();
         setCapturedCount(0);
     }
 
@@ -164,10 +166,10 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
                             input: {
                                 endAdornment: (
                                     <InputAdornment position="end">
-                                        <Tooltip title={notesOpen ? 'Hide note' : 'Add note'}>
+                                        <Tooltip title={notesPanel.isOpen ? 'Hide note' : 'Add note'}>
                                             {/* color="primary" when notes have content so the user knows a note is attached */}
                                             <IconButton
-                                                onClick={() => setNotesOpen((open) => !open)}
+                                                onClick={notesPanel.toggleByUser}
                                                 color={notes.trim() ? 'primary' : 'default'}
                                                 data-testid="quickCaptureAddNoteButton"
                                             >
@@ -179,14 +181,19 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
                             },
                         }}
                     />
-                    {notesOpen && (
+                    {notesPanel.isOpen && (
                         <Box className={styles.captureNotes} data-testid="quickCaptureNotes">
-                            <Tabs value={notesTab} onChange={(_, tab) => setNotesTab(tab as 0 | 1)} className={styles.tabs}>
+                            <Tabs value={notesPanel.tab} onChange={(_, tab: 0 | 1) => notesPanel.selectTab(tab)} className={styles.tabs}>
                                 <Tab label="Edit" value={0} />
                                 <Tab label="Preview" value={1} />
                             </Tabs>
-                            {notesTab === 0 ? (
-                                <MarkdownNotesEditor value={notes} onValueChange={(next) => onFieldsChange(title, next)} placeholder={NOTES_PLACEHOLDER} />
+                            {notesPanel.tab === 0 ? (
+                                <MarkdownNotesEditor
+                                    value={notes}
+                                    onValueChange={(next) => onFieldsChange(title, next)}
+                                    placeholder={NOTES_PLACEHOLDER}
+                                    autoFocus={notesPanel.shouldFocusEditor}
+                                />
                             ) : (
                                 <div className={styles.notesPreview}>
                                     {notes.trim() ? <MarkdownPreview markdown={notes} /> : <span className={styles.notesEmpty}>Nothing to preview.</span>}

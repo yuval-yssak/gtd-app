@@ -52,6 +52,7 @@ import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } 
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useAutosave } from '../../hooks/useAutosave';
+import { useCaptureNotesPanel } from '../../hooks/useCaptureNotesPanel';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptureNotice';
 import { useListGhosts } from '../../hooks/useListGhosts';
@@ -282,8 +283,7 @@ function InboxPage() {
 
     const [draft, setDraft] = useState('');
     const [notes, setNotes] = useState('');
-    const [notesOpen, setNotesOpen] = useState(false);
-    const [notesTab, setNotesTab] = useState<0 | 1>(0);
+    const notesPanel = useCaptureNotesPanel();
     // Shared "captured into a hidden account" snackbar — same surface the quick-capture FAB uses.
     const { noticeCaptureIfHidden, hiddenAccountNotice } = useHiddenAccountCaptureNotice();
 
@@ -313,7 +313,7 @@ function InboxPage() {
             setDraft(stored.title);
             setNotes(stored.notes);
             if (stored.notes) {
-                setNotesOpen(true);
+                notesPanel.openForRestoredDraft();
             }
             // Re-baseline so restoring doesn't immediately rewrite the same draft row.
             draftAutosave.reset({ title: stored.title, notes: stored.notes });
@@ -321,8 +321,8 @@ function InboxPage() {
         return () => {
             cancelled = true;
         };
-        // draftAutosave is a stable controller instance; account/db are boot-stable.
-    }, [account, db, draftAutosave]);
+        // draftAutosave and the notes-panel actions are stable; account/db are boot-stable.
+    }, [account, db, draftAutosave, notesPanel.openForRestoredDraft]);
 
     function onCaptureFieldsChange(nextTitle: string, nextNotes: string) {
         setDraft(nextTitle);
@@ -376,8 +376,7 @@ function InboxPage() {
         }
         setDraft('');
         setNotes('');
-        setNotesOpen(false);
-        setNotesTab(0);
+        notesPanel.resetAfterCapture();
         // The text is committed as a real item — drop the draft row and re-baseline the autosave
         // so a pending debounce tick can't resurrect the just-captured text. reset() drops the
         // scheduled timer; flush() then drains any commit already in flight before the delete.
@@ -465,10 +464,10 @@ function InboxPage() {
                         input: {
                             endAdornment: (
                                 <InputAdornment position="end">
-                                    <Tooltip title={notesOpen ? 'Hide note' : 'Add note'}>
+                                    <Tooltip title={notesPanel.isOpen ? 'Hide note' : 'Add note'}>
                                         {/* color="primary" when notes have content so user knows a note is attached */}
                                         <IconButton
-                                            onClick={() => setNotesOpen((o) => !o)}
+                                            onClick={notesPanel.toggleByUser}
                                             color={notes.trim() ? 'primary' : 'default'}
                                             data-testid="inboxAddNoteButton"
                                         >
@@ -484,14 +483,19 @@ function InboxPage() {
                     }}
                     className={styles.captureField}
                 />
-                {notesOpen && (
+                {notesPanel.isOpen && (
                     <Box className={styles.captureNotes}>
-                        <Tabs value={notesTab} onChange={(_, v) => setNotesTab(v as 0 | 1)} className={styles.tabs}>
+                        <Tabs value={notesPanel.tab} onChange={(_, tab: 0 | 1) => notesPanel.selectTab(tab)} className={styles.tabs}>
                             <Tab label="Edit" value={0} />
                             <Tab label="Preview" value={1} />
                         </Tabs>
-                        {notesTab === 0 ? (
-                            <MarkdownNotesEditor value={notes} onValueChange={(next) => onCaptureFieldsChange(draft, next)} placeholder={NOTES_PLACEHOLDER} />
+                        {notesPanel.tab === 0 ? (
+                            <MarkdownNotesEditor
+                                value={notes}
+                                onValueChange={(next) => onCaptureFieldsChange(draft, next)}
+                                placeholder={NOTES_PLACEHOLDER}
+                                autoFocus={notesPanel.shouldFocusEditor}
+                            />
                         ) : (
                             <div className={styles.notesPreview}>
                                 {notes.trim() ? <MarkdownPreview markdown={notes} /> : <span className={styles.notesEmpty}>Nothing to preview.</span>}

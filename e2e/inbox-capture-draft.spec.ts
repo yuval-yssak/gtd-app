@@ -18,7 +18,11 @@ test.describe('inbox capture draft persistence', () => {
             await page.goto(`${CLIENT_URL}/inbox`);
             await page.getByPlaceholder("What's on your mind?").fill('Half-typed thought');
             await page.getByTestId('inboxAddNoteButton').click();
-            await page.getByRole('textbox', { name: NOTES_EDITOR_NAME }).fill('with a **markdown** note');
+            // "Add note" moves focus straight into the editor — typing without a click lands there.
+            const notesEditor = page.getByRole('textbox', { name: NOTES_EDITOR_NAME });
+            await expect(notesEditor).toBeFocused({ timeout: 15_000 });
+            await page.keyboard.type('with a **markdown** note');
+            await expect(notesEditor).toHaveText('with a **markdown** note');
 
             // Wait for BOTH fields to reach IDB — polling on the title alone races the notes'
             // debounce tick against the reload, and a draft without notes doesn't reopen the panel.
@@ -31,6 +35,8 @@ test.describe('inbox capture draft persistence', () => {
             await expect(page.getByPlaceholder("What's on your mind?")).toHaveValue('Half-typed thought');
             // The notes panel re-opens automatically because the draft carried notes.
             await expect(page.getByRole('textbox', { name: NOTES_EDITOR_NAME })).toHaveText('with a **markdown** note');
+            // The restore did not move focus into the editor — only an "Add note" click does.
+            await expect(page.getByRole('textbox', { name: NOTES_EDITOR_NAME })).not.toBeFocused();
         });
     });
 

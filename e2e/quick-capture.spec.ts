@@ -72,7 +72,11 @@ test.describe('global quick capture', () => {
             await page.getByTestId('quickCaptureFab').click();
             await page.getByTestId('quickCaptureInput').fill('Draft me');
             await page.getByTestId('quickCaptureAddNoteButton').click();
-            await page.getByRole('textbox', { name: 'Notes (Markdown)' }).fill('- a **bold** point');
+            // "Add note" moves focus straight into the editor — typing without a click lands there.
+            const notesEditor = page.getByRole('textbox', { name: 'Notes (Markdown)' });
+            await expect(notesEditor).toBeFocused({ timeout: 15_000 });
+            await page.keyboard.type('- a **bold** point');
+            await expect(notesEditor).toHaveText('- a **bold** point');
             // Wait for BOTH fields to reach IDB before navigating — title and notes land in
             // separate debounce commits, and a reload that beats the notes commit restores a
             // title-only draft (notes panel closed). See inbox-capture-draft.spec.ts.
@@ -91,6 +95,9 @@ test.describe('global quick capture', () => {
             await page.getByTestId('quickCaptureFab').click();
             await expect(page.getByTestId('quickCaptureInput')).toHaveValue('Draft me');
             await expect(page.getByRole('textbox', { name: 'Notes (Markdown)' })).toHaveText('- a **bold** point');
+            // A restored draft reopens the panel without stealing focus from the title.
+            await expect(page.getByTestId('quickCaptureInput')).toBeFocused();
+            await expect(page.getByRole('textbox', { name: 'Notes (Markdown)' })).not.toBeFocused();
 
             // Survives a full reload too.
             await page.goto('/someday');
