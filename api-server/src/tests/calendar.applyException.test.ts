@@ -1,5 +1,7 @@
 /** biome-ignore-all lint/style/noNonNullAssertion: test code asserts status before using ! */
 import dayjs from 'dayjs';
+import timezone from 'dayjs/plugin/timezone.js';
+import utc from 'dayjs/plugin/utc.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GoogleCalendarProvider } from '../calendarProviders/GoogleCalendarProvider.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
@@ -19,6 +21,18 @@ import {
     useCalendarTestLifecycle,
 } from './calendarTestKit.js';
 import { authenticatedRequest, SESSION_COOKIE } from './helpers.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+/**
+ * `date` + `time` as an offset-explicit Asia/Jerusalem timestamp (the calendar fixture's zone).
+ * Derived, not hard-coded: Israel switches between +03:00 and +02:00, and these tests use dates
+ * relative to today, so a fixed offset breaks whenever the date crosses a DST change.
+ */
+function jerusalemWallTime(date: string, time: string) {
+    return dayjs.tz(`${date}T${time}:00`, 'Asia/Jerusalem').format();
+}
 
 useCalendarTestLifecycle();
 
@@ -464,8 +478,8 @@ describe('applyExceptionToItems — tiered lookup + create-on-miss', () => {
 
         const originalDate = dayjs().add(3, 'day').format('YYYY-MM-DD');
         const moveDate = dayjs().add(10, 'day').format('YYYY-MM-DD');
-        const movedStartOffset = `${moveDate}T07:00:00+03:00`;
-        const movedEndOffset = `${moveDate}T08:00:00+03:00`;
+        const movedStartOffset = jerusalemWallTime(moveDate, '07:00');
+        const movedEndOffset = jerusalemWallTime(moveDate, '08:00');
         const routine = makeRoutine(userId, {
             calendarEventId: 'gcal-evt-master',
             calendarIntegrationId: 'int-1',
@@ -569,8 +583,8 @@ describe('applyExceptionToItems — tiered lookup + create-on-miss', () => {
 
         const originalDate = dayjs().add(5, 'day').format('YYYY-MM-DD');
         const moveDate = dayjs().add(11, 'day').format('YYYY-MM-DD');
-        const movedStartOffset = `${moveDate}T07:00:00+03:00`;
-        const movedEndOffset = `${moveDate}T08:00:00+03:00`;
+        const movedStartOffset = jerusalemWallTime(moveDate, '07:00');
+        const movedEndOffset = jerusalemWallTime(moveDate, '08:00');
         const routine = makeRoutine(userId, {
             calendarEventId: 'gcal-evt-master',
             calendarIntegrationId: 'int-1',

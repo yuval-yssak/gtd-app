@@ -307,6 +307,19 @@ export const devLoginRoutes = new Hono()
         return c.json({ deletedRows: all.deletedCount });
     })
 
+    // POST /dev/session-expiry — move every session of `email` to expire `expiresInSeconds` from now,
+    // so e2e specs can put a live session inside Better Auth's refresh window without waiting days.
+    .post('/session-expiry', async (c) => {
+        const { email, expiresInSeconds } = await c.req.json<{ email: string; expiresInSeconds: number }>();
+        const user = await db.collection<StoredUser>('user').findOne({ email: email.toLowerCase() });
+        if (!user) {
+            return c.json({ error: 'user not found' }, 404);
+        }
+        const expiresAt = dayjs().add(expiresInSeconds, 'second').toDate();
+        const result = await db.collection('session').updateMany({ userId: user._id }, { $set: { expiresAt } });
+        return c.json({ updatedSessions: result.modifiedCount });
+    })
+
     // GET /dev/device-users?deviceId=... — surface deviceUsers join rows so e2e specs can
     // assert which (deviceId, userId) pairs the server has recorded without reaching into
     // MongoDB directly. Auth-free because tests need to read the collection across sign-out

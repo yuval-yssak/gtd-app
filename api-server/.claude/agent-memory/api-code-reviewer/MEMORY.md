@@ -124,3 +124,5 @@
 - [Account deletion/export review checklist](project_account_deletion_review_checklist.md) — policy-text drift, best-effort steps that block deletion, shared pushSubscriptions, in-flight writers re-create rows; cross-user grant revoke, CLI-process no-op drains
 - [Line-regex guard tests miss Biome wrapping](project_line_regex_guards_miss_biome_wrapping.md) — anchored per-line regex guards miss a status arg alone on its own line; test the wrapped shape.
 - [Synthetic payload vs projection allowlist](pattern_synthetic_payload_vs_projection.md) — MCP decorations tested on fake payloads miss fields the /v1 projection never returns
+- [Set-Cookie assertions must be last-wins](feedback_set_cookie_assertions_last_wins.md) — `.find()` reads the first write; hooks append overwrites after an expiry and the test still passes
+- [Multi-session cookie renewal keys on newSession](project_multisession_cookie_renewal_newsession.md) — never forward the MAIN cookie from ungated routes on pivoting devices; newSession can be stale after revoke

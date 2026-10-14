@@ -3,6 +3,13 @@ import { mongodbAdapter } from 'better-auth/adapters/mongodb';
 import { multiSession } from 'better-auth/plugins';
 import type { Db } from 'mongodb';
 import { betterAuthSecret } from '../lib/betterAuthTokenCrypto.js';
+import { renewMultiSessionCookie } from './multiSessionCookieRenewal.js';
+
+// The session expires after this long without use: every authenticated request older than
+// `updateAge` slides `expiresAt` forward, so an account in regular use stays signed in.
+// The privacy policy (client/src/legal/privacy-policy.md) promises "7 days without activity" — change both together.
+const SESSION_LIFETIME_SECONDS = 60 * 60 * 24 * 7;
+const SESSION_REFRESH_INTERVAL_SECONDS = 60 * 60 * 24;
 
 export function createAuth(db: Db) {
     return betterAuth({
@@ -28,6 +35,14 @@ export function createAuth(db: Db) {
                 process.env.NODE_ENV === 'production'
                     ? { httpOnly: true, secure: true, sameSite: 'none' as const }
                     : { httpOnly: true, sameSite: 'lax' as const },
+        },
+        session: {
+            expiresIn: SESSION_LIFETIME_SECONDS,
+            updateAge: SESSION_REFRESH_INTERVAL_SECONDS,
+        },
+        hooks: {
+            // Keeps each account's multi-session cookie alive while the account is in use — see the module.
+            after: renewMultiSessionCookie,
         },
         plugins: [
             // Allows multiple simultaneous server-side sessions (different user accounts

@@ -1,10 +1,21 @@
 import { Buffer } from 'node:buffer';
+import { createHmac } from 'node:crypto';
 import { expect, vi } from 'vitest';
 // Imported and re-exported under SESSION_COOKIE so call sites in this file and test files are unchanged
 import { SESSION_COOKIE_NAME as SESSION_COOKIE } from '../auth/constants.js';
+import { betterAuthSecret } from '../lib/betterAuthTokenCrypto.js';
 import { GOOGLE_TOKEN_REVOKE_URL } from '../lib/googleTokenRevoke.js';
 
 export { SESSION_COOKIE };
+
+/**
+ * The cookie value Better Auth's `setSignedCookie` writes for a session token (better-call's
+ * `encodeURIComponent("<token>.<base64 HMAC-SHA256>")`), so tests can forge session cookies.
+ */
+export function signSessionToken(rawToken: string) {
+    const signature = createHmac('sha256', Buffer.from(betterAuthSecret(), 'utf8')).update(Buffer.from(rawToken, 'utf8')).digest('base64');
+    return encodeURIComponent(`${rawToken}.${signature}`);
+}
 
 // Minimal interface so helpers work with any Hono app variant without importing Hono types.
 // Hono's fetch() is typed as Response | Promise<Response>, so we mirror that here.
