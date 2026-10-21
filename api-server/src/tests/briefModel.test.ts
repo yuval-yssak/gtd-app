@@ -32,7 +32,20 @@ describe('generateBriefText', () => {
         vi.stubEnv('ANTHROPIC_API_KEY', 'k');
         messagesCreate.mockResolvedValue(modelReply(JSON.stringify({ brief: 'Passport renewal still blocked on photos.' })));
         await expect(generateBriefText(ITEM)).resolves.toEqual({ text: 'Passport renewal still blocked on photos.', model: BRIEF_MODEL });
-        expect(messagesCreate).toHaveBeenCalledWith(expect.objectContaining({ model: BRIEF_MODEL, max_tokens: 256 }));
+        expect(messagesCreate).toHaveBeenCalledWith(expect.objectContaining({ model: BRIEF_MODEL, max_tokens: 2048 }));
+    });
+
+    it('reads the text block when adaptive thinking precedes it', async () => {
+        // Haiku 5.5 thinks by default, so the answer is no longer content[0].
+        vi.stubEnv('ANTHROPIC_API_KEY', 'k');
+        messagesCreate.mockResolvedValue({
+            stop_reason: 'end_turn',
+            content: [
+                { type: 'thinking', thinking: '', signature: 'sig' },
+                { type: 'text', text: JSON.stringify({ brief: 'Close the loop on the migration meeting.' }) },
+            ],
+        });
+        await expect(generateBriefText(ITEM)).resolves.toEqual({ text: 'Close the loop on the migration meeting.', model: BRIEF_MODEL });
     });
 
     it('returns a null brief when the model says the title already covers it', async () => {

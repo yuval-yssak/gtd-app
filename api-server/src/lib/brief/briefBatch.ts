@@ -7,7 +7,7 @@ import type { BriefBatchInterface, BriefBatchRequestInterface, BriefBatchResultC
 import { getAnthropicClient } from '../claude/anthropicClient.js';
 import { BriefGenerationError, parseBriefResponse } from './briefModel.js';
 import { executePlansSerially, type ModelPlan, partitionPlans } from './briefPlans.js';
-import { BRIEF_MODEL, buildBriefRequest } from './briefPrompt.js';
+import { buildBriefRequest } from './briefPrompt.js';
 import { findBriefTargets } from './briefTargets.js';
 import { writeModelBrief } from './briefWriter.js';
 
@@ -168,7 +168,9 @@ async function writeSucceeded(request: BriefBatchRequestInterface, message: Anth
         userId: request.user,
         itemId: request.itemId,
         sourceHash: request.sourceHash,
-        generated: { text, model: BRIEF_MODEL },
+        // The model that served THIS result, not today's constant: a batch submitted before a model
+        // switch can be harvested after the deploy (batches live up to 24 h), and its row must say so.
+        generated: { text, model: message.model },
         deviceId: BRIEF_BATCH_DEVICE_ID,
     });
     if (written.outcome === 'discarded_stale') {

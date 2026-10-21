@@ -11,17 +11,20 @@ function systemText(request: ReturnType<typeof buildBriefRequest>): string {
 }
 
 describe('buildBriefRequest', () => {
-    it('targets the brief model with a small output budget and a cached system block', () => {
+    it('targets the brief model with room for thinking, pinned effort and a cached system block', () => {
         const request = buildBriefRequest(ITEM);
         expect(request.model).toBe(BRIEF_MODEL);
-        expect(BRIEF_MODEL).toBe('claude-haiku-4-5');
-        expect(request.max_tokens).toBe(256);
+        expect(BRIEF_MODEL).toBe('claude-haiku-5-5');
+        // Haiku 5.5 thinks by default and thinking counts toward max_tokens — 256 could end before any JSON.
+        expect(request.max_tokens).toBe(2048);
+        expect(request.output_config?.effort).toBe('medium');
         expect(request.system).toEqual([expect.objectContaining({ type: 'text', cache_control: { type: 'ephemeral' } })]);
     });
 
     it('asks for structured { brief: string | null } output', () => {
         const request = buildBriefRequest(ITEM);
         expect(request.output_config).toEqual({
+            effort: 'medium',
             format: {
                 type: 'json_schema',
                 schema: {
@@ -78,6 +81,17 @@ describe('buildBriefRequest', () => {
         expect(text).toMatch(/GOOD \(states the shape\)/);
         expect(text).toMatch(/Never end with a dangling/);
         expect(text).toContain('complete and self-contained');
+    });
+
+    it('asks for the subject the task serves rather than a narration of agent-style steps', () => {
+        // Guards the "summarised the procedure" regression: notes written as instructions for an AI agent
+        // produced briefs listing transcribe/extract/schedule steps and never naming the meeting's topic.
+        const text = systemText(buildBriefRequest(ITEM));
+        expect(text).toContain('Name the SUBJECT the task serves, not the procedure');
+        expect(text).toContain('step-by-step instructions for an AI agent');
+        expect(text).toContain('Never name tools or services');
+        expect(text).toMatch(/BAD \(narrates the steps\)/);
+        expect(text).toMatch(/GOOD \(names the subject\)/);
     });
 
     it('is pure: the same item yields a deep-equal request every time and an empty notes field is rendered empty', () => {

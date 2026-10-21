@@ -9,6 +9,7 @@ import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { generationBucket } from '../lib/brief/briefCap.js';
+import { BRIEF_MODEL } from '../lib/brief/briefPrompt.js';
 import { briefSourceHash } from '../lib/briefSource.js';
 import { auth, closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import { v1Routes } from '../routes/v1/index.js';
@@ -167,7 +168,7 @@ describe('POST /v1/items/:id/brief/generate — auth', () => {
             itemId,
             user: session.userId,
             origin: 'model',
-            model: 'claude-haiku-4-5',
+            model: BRIEF_MODEL,
             text: 'Passport renewal still blocked on photos.',
         });
         const [op] = await briefOps(session.userId);

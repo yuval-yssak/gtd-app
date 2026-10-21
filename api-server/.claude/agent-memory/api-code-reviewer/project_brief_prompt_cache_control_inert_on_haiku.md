@@ -1,39 +1,23 @@
 ---
 name: brief-prompt-cache-control-inert-on-haiku
-description: The brief prompt's cache_control block is silently inert — Claude Haiku 4.5's minimum cacheable prefix is 4096 tokens and the system prompt is ~640, and the brief path records no usage so nothing surfaces it
+description: Brief prompt cache_control was inert on Haiku 4.5 (4096 floor); live since the 2026-10-18 move to Haiku 5.5 (512 floor). Floors are per-model and non-monotonic; the brief path records no usage, so nothing surfaces a regression
 metadata:
   type: project
 ---
 
-`briefPrompt.ts` marks its single system block with `cache_control: { type: 'ephemeral' }` and both
-the code comment and `docs/plans/item-brief.md` describe the prefix as cached across every call and
-across the Message Batches sweep. **It is not cached.**
+History: on `claude-haiku-4-5` the single system block (~640 tokens) was below Haiku 4.5's 4,096-token
+minimum cacheable prefix, so `cache_control` was silently ignored (Anthropic returns no error, only
+`cache_creation_input_tokens: 0`). On 2026-10-18 `BRIEF_MODEL` moved to `claude-haiku-5-5`, whose
+floor is 512, so the marker became live.
 
-- `BRIEF_MODEL = 'claude-haiku-4-5'`, and Haiku 4.5's **minimum cacheable prefix is 4,096 tokens**
-  (verified against the prompt-caching docs 2026-09-21; Sonnet 4.x/5 is 1,024, Opus 5 is 512 —
-  Haiku has the *highest* floor of the current lineup, which is the counterintuitive part).
-- The system prompt measures ~2,550 chars ≈ **640 tokens**, well under the floor. Even after the
-  2026-09-21 anti-enumeration additions (~340 tokens of the total) it is ~6× too short.
-- Anthropic **returns no error** for a sub-minimum `cache_control`; the request is simply processed
-  uncached. The only way to detect it is `usage.cache_creation_input_tokens` /
-  `cache_read_input_tokens` both being 0.
+**Why it stays relevant:** the brief path (`briefModel.ts`, `briefBatch.ts`) still reads no `usage`
+fields, so a future model switch back to a high-floor model, or the prompt shrinking under 512, would
+silently make caching inert again with no signal anywhere. Floors are NOT monotonic across
+generations (Haiku 4.5 4096, Sonnet 4.x/5 1024, Opus 5 / Haiku 5.5 512).
 
-**Why it stays invisible here:** `lib/claude/agentLoop.ts` *does* accumulate
-`cacheReadTokens` / `cacheCreationTokens` (and `spend.ts` prices them), but that is the
-**claude-assist** path. The brief path (`briefModel.ts`, `briefBatch.ts`) reads no `usage` fields at
-all — grep for `usage` under `lib/brief/` returns nothing. So there is no signal, no cost anomaly,
-and no test that would ever fail.
-
-Practical impact is small (~640 input tokens per brief on the cheapest model, and Message Batches
-already halves it), so this is a **correctness-of-documentation** issue, not a spend emergency. The
-danger is the reverse inference: someone sizing a future prompt addition will reason "the prefix is
-cached, extra rules are nearly free" — which is exactly backwards on this model. Every token added
-to `SYSTEM_PROMPT` is billed at full input rate on every single brief.
-
-**How to apply:** when reviewing any change that grows `SYSTEM_PROMPT` (or any `cache_control` block
-anywhere), check the model's minimum cacheable length against the actual block size before accepting
-a "it's cached, so it's free" justification. Either fix the comment to say the block is below
-Haiku's cache floor and therefore uncached, or (if caching is genuinely wanted) note that the prompt
-would have to grow past 4,096 tokens for the flag to do anything. Related:
-[[project_brief_length_bound_split_across_paths]],
+**How to apply:** on any `BRIEF_MODEL` change or `SYSTEM_PROMPT` shrink, check the new model's floor
+against the block size and that the `buildSystemBlocks` comment + docs/plans/item-brief.md (both the
+decisions table AND § 3.3 Cost, which drifted once) say the same thing. Reject "it's cached, so extra
+rules are free" — on-demand briefs are isolated calls outside the 5-min TTL and pay full rate plus the
+1.25x write. Related: [[project_brief_length_bound_split_across_paths]],
 [[feedback_prompt_text_tests_are_not_behaviour_tests]].

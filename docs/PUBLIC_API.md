@@ -291,7 +291,7 @@ The stored brief is hashed against the item's **current** title + notes, so it r
 
 ### `POST /v1/items/:id/brief/generate` — generate the item's brief with the server's model
 
-Asks the server's model (`claude-haiku-4-5`) to write a `model`-origin brief from the item's **current** title + notes. This is the endpoint behind the in-app "Generate brief" button, so it accepts **either** a bearer token carrying `items.write` **or** the first-party session cookie (like the [Claude assist](#claude-assist-lane-a) routes; browser callers get the credentialed CORS profile pinned to the web app's origin).
+Asks the server's model (`claude-haiku-5-5`) to write a `model`-origin brief from the item's **current** title + notes. This is the endpoint behind the in-app "Generate brief" button, so it accepts **either** a bearer token carrying `items.write` **or** the first-party session cookie (like the [Claude assist](#claude-assist-lane-a) routes; browser callers get the credentialed CORS profile pinned to the web app's origin).
 
 **Request body** (optional)
 
@@ -313,7 +313,7 @@ Asks the server's model (`claude-haiku-4-5`) to write a `model`-origin brief fro
 {
     "outcome": "written",
     "item": { "_id": "…", "title": "Renew passport", "brief": { "text": "…", "origin": "model", "state": "fresh", "generatedTs": "…" }, "…": "…" },
-    "brief": { "_id": "…", "user": "…", "itemId": "…", "text": "…", "origin": "model", "model": "claude-haiku-4-5", "sourceHash": "…", "generatedTs": "…", "createdTs": "…", "updatedTs": "…" }
+    "brief": { "_id": "…", "user": "…", "itemId": "…", "text": "…", "origin": "model", "model": "claude-haiku-5-5", "sourceHash": "…", "generatedTs": "…", "createdTs": "…", "updatedTs": "…" }
 }
 ```
 

@@ -29,8 +29,8 @@ Five ways a brief comes into existence, in priority order:
 | Staleness | `sourceHash` of `title + '\n' + notes` stored on the brief; a model brief is shown only when it matches the item's current hash |
 | Authored briefs | `origin: 'user' \| 'agent'` briefs are **pinned**: the sweeper never overwrites them; the UI shows them even when stale, with a subtle "notes changed since" marker; explicit Regenerate overrides |
 | Skip rule | notes empty or `< 160` chars after trim → a `text: null, origin: 'skipped'` row is written **without a model call**, so the sweeper does not reselect it. Card then shows title only |
-| Model | `BRIEF_MODEL = 'claude-haiku-4-5'` (open decision 1, answered "Haiku"); `CLAUDE_ASSIST_MODEL` stays `claude-sonnet-4-6` |
-| Output | structured output `output_config.format` → `{ brief: string \| null }`, **soft** target 160 chars (never truncated server-side — an ellipsis would read as "summary incomplete, open the notes"), must abstract the notes as a whole rather than enumerate them, language of the notes, `max_tokens: 256`; system block carries `cache_control` but it is **inert on Haiku 4.5** (4096-token minimum cacheable prefix vs our ~642 — see `buildSystemBlocks`), notes treated as data (same injection guard wording as `agentLoop.ts`) |
+| Model | `BRIEF_MODEL = 'claude-haiku-5-5'` at effort `medium` (open decision 1, answered "Haiku"; moved off `claude-haiku-4-5` on 2026-10-18 because it narrated agent-style notes instead of naming their subject); `CLAUDE_ASSIST_MODEL` stays `claude-sonnet-4-6` |
+| Output | structured output `output_config.format` → `{ brief: string \| null }`, **soft** target 160 chars (never truncated server-side — an ellipsis would read as "summary incomplete, open the notes"), must abstract the notes as a whole rather than enumerate them, name the subject rather than narrate agent-style steps, language of the notes, `max_tokens: 2048` (Haiku 5.5 thinks by default and thinking counts toward the cap); system block carries `cache_control`, live on Haiku 5.5 (512-token floor; it was inert on Haiku 4.5's 4096 — see `buildSystemBlocks`), notes treated as data (same injection guard wording as `agentLoop.ts`) |
 | Visibility | device-local preference `showBriefs` (localStorage, same pattern as `lib/colorTheme.ts`), toggled in Settings and in the Weekly Review header; default **on** |
 | Cron auth | the scheduler secret, renamed `CRON_SECRET` + `x-cron-secret` header (open decision 6) and shared through `auth/cronSecret.ts`; one new Cloud Scheduler job per environment |
 | Hash function | `cyrb53`-style synchronous string hash mirrored server/client (`lib/briefSource.ts` ↔ `client/src/lib/briefSource.ts`) with a parity test; sha256 would force async hashing in render paths |
@@ -458,6 +458,12 @@ independence), `maintenanceBriefs.test.ts` (401/200, limit clamp, session scopin
 |---|---|---|---|
 | `claude-opus-5` | ≈ $0.0025 | ≈ $0.005 | ≈ $12 |
 | `claude-haiku-4-5` | ≈ $0.0005 | ≈ $0.001 | ≈ $2.50 |
+| `claude-haiku-5-5` (current, effort `medium`) | ≈ $0.0002 | ≈ $0.0004 | ≈ $1 |
+
+**Haiku 5.5 (2026-10-18):** measured ~1 500 input tokens and ~500 output tokens on long agent-style
+notes. Almost all of the output is adaptive thinking; the JSON brief itself is ~50 tokens. At
+$0.10 / $0.50 per MTok the cost is now driven by thinking (output) tokens, not by prompt length.
+The system block caches (512-token floor), so back-to-back briefs read it at 0.1× the input rate.
 
 Assumes ~400 input tokens per item, ~40 output tokens, and the skip rule removing most
 short-note items. Steady state is a few cents a week. **Note:** the original estimate assumed a
@@ -482,6 +488,11 @@ in absolute terms, but it means prompt length is a real per-call cost, not a one
    Haiku
    > Resolved 2026-09-20: `BRIEF_MODEL = 'claude-haiku-4-5'` (`lib/brief/briefPrompt.ts`), switched before any
    > `origin: 'model'` row existed, so the corpus is single-model.
+   > Revised 2026-10-18: `BRIEF_MODEL = 'claude-haiku-5-5'`, effort `medium`. To re-brief the corpus,
+   > a one-off mongosh pass (after the deploy, once `briefBatches` holds no `processing` row created
+   > before it — such a batch can take up to 24 h and still carries old-model results) deletes the `model` / `skipped` rows on open items and re-marks those items
+   > `briefStale`; the sweep then rewrites them. Pinned rows and closed items are left alone.
+   > Harvested rows record the model that served the batch (`message.model`), so leftovers are findable.
 2. **Pinned-but-stale display**: show the user/agent brief with a marker (proposed) or hide it like
    a model brief?
    show the user/agent brief with a marker

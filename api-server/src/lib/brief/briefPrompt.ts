@@ -2,12 +2,12 @@ import type Anthropic from '@anthropic-ai/sdk';
 import type { ItemInterface } from '../../types/entities.js';
 
 /**
- * Model behind brief generation — Haiku 4.5 per the plan's open decision 1 (a one-line summary
- * does not need Opus-tier reasoning; ~5× cheaper per brief). A bare alias on purpose (no date suffix) so the deployed
- * server tracks the current snapshot; the id is also stamped onto every `origin: 'model'` row,
- * so a future switch is visible per brief in the data.
+ * Model behind brief generation — the current Haiku (plan open decision 1: a one-line summary
+ * does not need Opus-tier reasoning). Moved off Haiku 4.5 because it narrated agent-style notes
+ * step by step instead of naming their subject, and overran the length target. The id is stamped
+ * onto every `origin: 'model'` row, so the switch is visible per brief in the data.
  */
-export const BRIEF_MODEL = 'claude-haiku-4-5';
+export const BRIEF_MODEL = 'claude-haiku-5-5';
 
 /**
  * Length the prompt asks for. A SOFT target, not a server-enforced cap: `fitBriefText` no longer
@@ -16,7 +16,14 @@ export const BRIEF_MODEL = 'claude-haiku-4-5';
  */
 export const BRIEF_TARGET_MAX_CHARS = 160;
 
-const MAX_TOKENS = 256;
+/**
+ * Haiku 5.5 thinks by default and thinking tokens count toward `max_tokens` — a budget sized for
+ * the JSON alone (the old 256) can be spent before any text, which `parseBriefOutput` reports as
+ * `malformed_output`. Effort is pinned to `medium` (the model's default, so explicit costs nothing):
+ * on agent-style notes `low` still narrated the steps and leaked dates, `medium` named the subject.
+ */
+const MAX_TOKENS = 2048;
+const EFFORT = 'medium';
 
 export type BriefSourceItem = Pick<ItemInterface, 'title' | 'notes' | 'status'>;
 
@@ -31,6 +38,10 @@ Rules:
   Example — notes listing six threads, four of them waiting on named colleagues, one owned by the user:
     BAD (walks the list): "Six threads: load test awaiting Sasha, ticket on Yosef, ticket on Nir, stats with Yuval, a linked item, and a new transcript-loss issue for Yosef."
     GOOD (states the shape): "Six open threads, most blocked on teammates; only the recurring stats check is yours."
+- Name the SUBJECT the task serves, not the procedure. Notes are often written as step-by-step instructions for an AI agent (tools, commands, numbered steps); those describe HOW, while the brief must say WHAT the work is about and WHY it matters. Never name tools or services (transcription APIs, LLMs, ffmpeg, Slack) unless the tool itself is the subject.
+  Example — notes with steps to transcribe a meeting recording, extract open questions and schedule a follow-up, plus checklists about DB-migration and flag-flip tickets:
+    BAD (narrates the steps): "Transcribe a recording, extract decisions with an LLM, schedule a follow-up and create a Slack channel."
+    GOOD (names the subject): "Close the loop on the DB-migration and flag-flip Jira process meeting: capture its decisions and settle what's still open in a follow-up."
 - Never end with a dangling "and ...", "including ...", a trailing ellipsis, or any phrasing that implies unlisted remainder. The sentence must be complete and self-contained.
 - Write in the same language as the notes.
 - Never include logistics: no phone numbers, opening hours, addresses, links, dates or prices. Those live in the notes and in structured fields.
@@ -48,13 +59,10 @@ const OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 function buildSystemBlocks(): Anthropic.TextBlockParam[] {
-    // The marker is currently INERT: Haiku 4.5's minimum cacheable prefix is 4096 tokens and this
-    // system block measures ~642 (verified with `messages.countTokens`), so the API silently skips
-    // caching — no error, just `cache_creation_input_tokens: 0`. Kept because it is free and
-    // becomes live if the prompt ever grows past the floor or the model changes (Opus 5 is 512,
-    // Sonnet 5 is 1024 — the floor is NOT monotonic across generations). Do not reason "the prefix
-    // is cached, so extra rules are nearly free": every token here is billed at full input rate on
-    // every brief.
+    // Haiku 5.5's minimum cacheable prefix is 512 tokens and this system block is above it, so the
+    // marker is live (it was inert on Haiku 4.5, whose floor is 4096). Caching only pays off when
+    // briefs run back-to-back within the 5-minute TTL; an isolated on-demand brief still pays the
+    // full input rate (plus the 1.25x write) for every token here.
     return [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }];
 }
 
@@ -73,7 +81,7 @@ export function buildBriefRequest(item: BriefSourceItem): Anthropic.MessageCreat
         model: BRIEF_MODEL,
         max_tokens: MAX_TOKENS,
         system: buildSystemBlocks(),
-        output_config: { format: { type: 'json_schema', schema: OUTPUT_SCHEMA } },
+        output_config: { effort: EFFORT, format: { type: 'json_schema', schema: OUTPUT_SCHEMA } },
         messages: [{ role: 'user', content: buildUserTurn(item) }],
     };
 }

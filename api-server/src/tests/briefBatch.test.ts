@@ -118,10 +118,10 @@ async function ttlSecondsOf(collection: string, field: string): Promise<number |
     return ttl?.expireAfterSeconds;
 }
 
-function succeeded(customId: string, brief: string | null) {
+function succeeded(customId: string, brief: string | null, model = BRIEF_MODEL) {
     return {
         custom_id: customId,
-        result: { type: 'succeeded', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ brief }) }] } },
+        result: { type: 'succeeded', message: { model, stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ brief }) }] } },
     };
 }
 
@@ -373,6 +373,31 @@ describe('harvestBriefBatches', () => {
         expect(error).toHaveBeenCalledWith(expect.stringContaining('invalid_request_error'));
         expect(warn.mock.calls.filter(([line]) => String(line).includes('no matching request row'))).toHaveLength(1);
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignored 2 result(s)'));
+    });
+
+    it('stamps the row with the model that served the result, not the current BRIEF_MODEL', async () => {
+        // A batch submitted under the previous model and harvested after a deploy must not be relabelled.
+        const batch = await seedProcessingBatch('msgbatch_old_model');
+        const item = await seedItem();
+        const id = await seedRequest(batch._id, item);
+        batchesRetrieve.mockResolvedValue({ id: batch._id, processing_status: 'ended' });
+        resultsStream([succeeded(id, 'Written by the old model.', 'claude-haiku-4-5')]);
+        await harvestBriefBatches();
+        expect(await briefOf(item._id)).toMatchObject({ origin: 'model', model: 'claude-haiku-4-5', text: 'Written by the old model.' });
+    });
+
+    it('reads the text block when adaptive thinking precedes it in a batch result', async () => {
+        const batch = await seedProcessingBatch('msgbatch_thinking');
+        const item = await seedItem();
+        const id = await seedRequest(batch._id, item);
+        batchesRetrieve.mockResolvedValue({ id: batch._id, processing_status: 'ended' });
+        const content = [
+            { type: 'thinking', thinking: '', signature: 'sig' },
+            { type: 'text', text: JSON.stringify({ brief: 'Close the loop on the migration meeting.' }) },
+        ];
+        resultsStream([{ custom_id: id, result: { type: 'succeeded', message: { model: BRIEF_MODEL, stop_reason: 'end_turn', content } } }]);
+        await harvestBriefBatches();
+        expect(await briefOf(item._id)).toMatchObject({ origin: 'model', text: 'Close the loop on the migration meeting.' });
     });
 
     it('stamps harvested writes with the batch device id', async () => {
