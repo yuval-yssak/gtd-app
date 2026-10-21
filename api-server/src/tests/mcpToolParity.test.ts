@@ -89,6 +89,16 @@ describe('MCP tool parity (api-server copy ↔ mcp-server source of truth)', () 
         expect(REMOTE_SERVER_INSTRUCTIONS).toContain('fieldGuidance');
     });
 
+    // The sweep is the preferred brief source; an agent-authored brief is pinned and goes stale.
+    it('steers agents away from writing briefs themselves', () => {
+        expect(REMOTE_SERVER_INSTRUCTIONS).toContain('Do NOT set or generate briefs');
+        expect(REMOTE_SERVER_INSTRUCTIONS).not.toContain('Prefer setting');
+        const tools = new Map(captureTools(registerAllTools).map((tool) => [tool.name, tool.description]));
+        expect(tools.get('gtd_set_brief')).toMatch(/^Normally do NOT call this/);
+        expect(tools.get('gtd_generate_brief')).toContain('Normally unnecessary');
+        expect(tools.get('gtd_generate_brief')).not.toContain('Prefer gtd_set_brief');
+    });
+
     // Registration-level parity above cannot see response decoration (url stamping, field
     // guidance) — that code only runs when a tool is called. Comparing the copied modules' text
     // catches drift in those paths too, and flags a module added to one side only.

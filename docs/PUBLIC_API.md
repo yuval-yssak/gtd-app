@@ -269,7 +269,7 @@ Sorted by `updatedTs DESC, _id DESC`. Stable across concurrent writes — newly 
 
 ### `PUT /v1/items/:id/brief` — write or clear the item's brief
 
-Requires the `items.write` scope. Bearer callers are agents by definition, so the row is stored with `origin: "agent"` (pinned — the generation sweep never overwrites it).
+Requires the `items.write` scope. Bearer callers are agents by definition, so the row is stored with `origin: "agent"` (pinned — the generation sweep never overwrites it). The sweep is the normal source of briefs and keeps them current as items change; an authored brief is frozen and goes stale as the notes evolve, so write one only when the user asks for specific wording. `{ "brief": null }` hands the item back to the sweep.
 
 **Request body**
 

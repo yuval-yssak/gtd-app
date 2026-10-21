@@ -49,7 +49,8 @@ const BRIEF_FIELD_DESCRIPTION =
     'Each item carries a read-only `brief` field: `{ text, origin, state, generatedTs }` or null. `state` is "fresh" ' +
     '(brief matches the current title + notes), "pinnedStale" (a user/agent-authored brief whose notes changed since), ' +
     '"declined" (the server judged exactly this text and wrote no brief — the model found nothing worth condensing, or ' +
-    'the notes were too short to ask; `text` is null) or "none" (no usable brief). Write one with gtd_set_brief.';
+    'the notes were too short to ask; `text` is null) or "none" (no usable brief). Briefs are ' +
+    'written automatically by a server sweep — do not write one unless the user asks (see gtd_set_brief).';
 
 const listItems = defineTool({
     name: 'gtd_list_items',
@@ -115,11 +116,13 @@ const getItem = defineTool({
 const setBrief = defineTool({
     name: 'gtd_set_brief',
     description:
-        "Write (or clear) an item's brief — a ONE-SENTENCE, review-oriented condensation of its title + notes: what the " +
+        "Normally do NOT call this: a server sweep writes and refreshes every open item's brief automatically, and that " +
+        'is the preferred source. Use it only when the user explicitly asks to word or remove a brief. ' +
+        "Writes (or clears) an item's brief — a ONE-SENTENCE, review-oriented condensation of its title + notes: what the " +
         'commitment is and why it is still open. Never logistics, dates or contexts (those live in structured fields). ' +
         'Write it in the language of the notes, at most ~160 characters. Stored with origin "agent" and PINNED: the ' +
         'automatic generator never overwrites it, and it keeps showing (marked stale) after the notes change until you ' +
-        'set a new one. Pass `brief: null` to delete it. Returns the item with its `brief` field.',
+        'set a new one. Pass `brief: null` to delete it and hand the item back to the sweep. Returns the item with its `brief` field.',
     inputSchema: {
         itemId: idSchema,
         brief: z.string().min(1).max(500).nullable().describe('The brief text (trimmed server-side; 1–500 chars), or null to clear.'),
@@ -145,7 +148,9 @@ const generateBrief = defineTool({
         'exists: pass `force: true` to REPLACE that authored brief with a model one (only when the user asked for it). ' +
         'Fails with 409 `brief_not_applicable` when the item is done or trashed — briefs serve the weekly review, which ' +
         'never shows a closed item, and `force` does NOT override this. Revive the item first if a brief is genuinely wanted. ' +
-        'Rate-limited per user (30 per 10 minutes → 429). Prefer gtd_set_brief when you have already composed a brief. ' +
+        'Rate-limited per user (30 per 10 minutes → 429). Normally unnecessary — the background sweep (every ~15 minutes) ' +
+        'briefs every open item on its own, typically within one or two runs; call it only when the user wants a brief ' +
+        'right away. ' +
         'Returns `{ outcome, item, brief }` where `item` carries its projected `brief` field.',
     inputSchema: {
         itemId: idSchema,

@@ -35,7 +35,7 @@ const batch = defineTool({
         'routine, person, workContext and itemBrief entities. itemBrief snapshots ({_id: itemId, itemId, text, origin, ' +
         'sourceHash, generatedTs, createdTs, updatedTs}) must use origin "user" or "agent" (model/skipped are server-only → ' +
         '400 forbidden_origin) and reference an item you own or create earlier in the same batch (else 404); prefer ' +
-        'gtd_set_brief, which stamps sourceHash for you.',
+        'gtd_set_brief, which stamps sourceHash for you — and, like it, only when the user asked for an authored brief.',
     inputSchema: {
         ops: z
             .array(
