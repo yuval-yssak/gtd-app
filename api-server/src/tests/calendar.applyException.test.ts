@@ -496,8 +496,10 @@ describe('applyExceptionToItems — tiered lookup + create-on-miss', () => {
             status: 'calendar',
             title: 'Standup',
             routineId: 'routine-1',
-            timeStart: `${moveDate}T04:00:00.000Z`,
-            timeEnd: `${moveDate}T05:00:00.000Z`,
+            // Derived from the wall time, not hard-coded: Jerusalem is +03:00 or +02:00 depending on
+            // DST, so a fixed `04:00Z` stops being the same instant once `moveDate` crosses the change.
+            timeStart: dayjs(movedStartOffset).utc().toISOString(),
+            timeEnd: dayjs(movedEndOffset).utc().toISOString(),
             createdTs: dayjs().toISOString(),
             updatedTs: dayjs().toISOString(),
         });
