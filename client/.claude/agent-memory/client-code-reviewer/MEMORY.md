@@ -50,3 +50,5 @@
 - [Fallback navigation clobbers the specific one](feedback_fallback_navigation_clobbers_specific_one.md) — caller's post-pass `href='/'` overrides a callee's `/login`; demand callee return `{ navigated }`.
 - [Deferred side effect lost on loop throw](feedback_deferred_side_effect_lost_on_loop_throw.md) — collect-ids-then-act-after-finally drops collected work when a later pass throws; test pass-1 outcome + pass-2 reject.
 - [Cross-tab broadcast sent before state is durable](feedback_cross_tab_broadcast_before_state_durable.md) — reload-triggering broadcast precedes pointer/cookie pivot; receivers boot onto landing/login.
+- [Blur-exit unmounts the Tab target](feedback_blur_exit_unmounts_tab_target.md) — edit-mode that commits+flips on blur makes Done/Clear keyboard-unreachable (Tab → unmount → body); ask for focusout-contains + Tab e2e.
+- [Own echo resurrects a local delete](project_own_echo_resurrects_local_delete.md) — in-flight pull re-applies the device's own create after a local delete (no row → accept); applyEntityOp ignores pending delete ops.

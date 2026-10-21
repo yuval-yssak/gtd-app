@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { useState } from 'react';
-import { fn } from 'storybook/test';
+import { fn, userEvent, within } from 'storybook/test';
 import type { BriefState } from '../../lib/briefSource';
 import type { BriefOrigin } from '../../types/MyDB';
 import { BriefSection } from './BriefSection';
@@ -58,7 +58,7 @@ function ControlledBriefSection({ initial, state, origin, variant, generation = 
 
 const PINNED_TEXT = 'Renew the passport before the June trip — form is half filled.';
 
-/** No brief yet — the empty field with its placeholder, no clear button, and the sparkle "Generate brief" button. */
+/** No brief yet — the read view's "written automatically" hint, the pencil, and the sparkle "Generate brief" button. */
 export const Empty: Story = {
     render: () => <ControlledBriefSection initial="" state="none" />,
 };
@@ -117,9 +117,9 @@ export const DeclinedNotice: Story = {
 };
 
 /**
- * The model read the notes and judged there was nothing worth condensing. The field stays
- * editable (typing a brief over it replaces the row) and Generate stays live for a retry after a
- * notes edit — only the muted caption says why the field is empty.
+ * The model read the notes and judged there was nothing worth condensing. The pencil still opens
+ * the field (typing a brief over it replaces the row) and Generate stays live for a retry after a
+ * notes edit — only the muted caption says why there is no brief.
  */
 export const DeclinedByModel: Story = {
     render: () => <ControlledBriefSection initial="" state="declined" origin="model" />,
@@ -131,15 +131,18 @@ export const DeclinedAsSkipped: Story = {
 };
 
 /**
- * The same declined row once the user starts typing their own brief: the caption is gone from the
- * first keystroke (the stored row is still declined — only the live field value decides this).
- * Backspacing to empty brings it back.
+ * Edit mode, opened by the pencil (the `play` clicks it): the field, its Done button and the
+ * visible notice that a written brief is pinned and how to unpin it. On a declined row with text
+ * typed, the declined caption is gone — only the live field value decides that.
  */
-export const DeclinedBeingOverwritten: Story = {
+export const Editing: Story = {
     render: () => <ControlledBriefSection initial="Passport before the June trip" state="declined" origin="model" />,
+    play: async ({ canvasElement }) => {
+        await userEvent.click(within(canvasElement).getByTestId('briefEditButton'));
+    },
 };
 
-/** Review presentation: the brief reads as a plain line with the sparkle at its end; clicking the line opens the field in place. */
+/** Review presentation: the brief reads as a plain line (no label) with the pencil and sparkle at its end. */
 export const ReviewLine: Story = {
     render: () => <ControlledBriefSection initial={PINNED_TEXT} state="fresh" variant="line" />,
 };

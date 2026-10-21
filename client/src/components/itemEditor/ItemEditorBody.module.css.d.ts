@@ -3,7 +3,7 @@ declare const styles: {
     readonly bodyExpand: string;
     readonly bodyPopover: string;
     readonly bodyReview: string;
-    readonly briefLine: string;
+    readonly briefText: string;
     readonly empty: string;
     readonly inlineActions: string;
     readonly itemId: string;

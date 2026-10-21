@@ -1,5 +1,8 @@
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import CheckIcon from '@mui/icons-material/Check';
 import ClearIcon from '@mui/icons-material/Clear';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
@@ -10,15 +13,17 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
-import { useState } from 'react';
+import { type KeyboardEvent, type Ref, useEffect, useId, useRef, useState } from 'react';
 import type { BriefState } from '../../lib/briefSource';
 import { collapseToSingleLine } from '../../lib/singleLineText';
 import type { BriefOrigin } from '../../types/MyDB';
 import {
     BRIEF_LABEL,
+    BRIEF_PINNED_NOTICE,
     BRIEF_PLACEHOLDER,
     BRIEF_STALE_MARKER,
     describeDeclinedBrief,
+    describeEmptyBrief,
     describeGenerateButton,
     isDeclinedNoteVisible,
     REPLACE_BRIEF_PROMPT,
@@ -46,90 +51,207 @@ export interface BriefSectionProps {
     /** The AI "Generate brief" button's state machine — see `useBriefGeneration`. */
     generation: BriefGeneration;
     /**
-     * `field` — the always-editable input (the editor's default). It wraps over as many lines as
-     *   the brief needs, but Enter commits rather than inserting a newline.
-     * `line` — review presentation: the brief reads as a plain line under the title; clicking it
-     * (or pressing Enter/Space on it) opens the field in place, and committing returns to the line.
+     * Both variants rest read-only with a pencil; they differ only in presentation.
+     * `field` — the editor's default: a "Brief" section label above the brief.
+     * `line` — review presentation: no label, so the brief reads as a plain line under the title.
      */
     variant?: 'field' | 'line';
+    /**
+     * Whether the item is open (briefs are generated only for open items). A done/trashed item's
+     * empty brief must not promise "one is written automatically" — no sweep will ever write it.
+     */
+    isBriefable?: boolean;
 }
 
-/** The brief under the title — wraps to as many lines as it needs. Saves on blur/Enter through the host's `onCommit`. */
-export function BriefSection({ value, state, origin, onChange, onCommit, generation, variant = 'field' }: BriefSectionProps) {
-    const [isLineEditing, setIsLineEditing] = useState(false);
-    const isLine = variant === 'line' && !isLineEditing;
+/**
+ * The brief under the title. Read-only by default — like the page-mode notes, the pencil is the
+ * only way into the field, because a typed brief is PINNED (the sweep stops refreshing it) and
+ * that should be a deliberate act, never a stray click. While editing, a visible notice says so.
+ * Saves on blur/Enter/Escape/Done/Clear through the host's `onCommit`, then returns to the read view.
+ */
+export function BriefSection({ value, state, origin, onChange, onCommit, generation, variant = 'field', isBriefable = true }: BriefSectionProps) {
+    const [isEditing, setIsEditing] = useState(false);
+    const pencilFocus = useFocusOnViewReturn(isEditing);
+    const noticeId = useId();
     // "Regenerate" whenever the user can SEE a brief — a stale model row still fills the field
     // even though its derived state is `none`. A `declined` row shows no brief text, so the
     // button stays "Generate" there: pressing it after editing the notes is the intended retry.
     const isRegenerate = state === 'fresh' || state === 'pinnedStale' || value.trim().length > 0;
-    const stateNote = <BriefStateNote state={state} origin={origin} fieldValue={value} />;
-    const generateButton = <GenerateBriefButton generation={generation} isRegenerate={isRegenerate} fieldValue={value} />;
-
-    if (isLine) {
-        return (
-            <Box>
-                <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center' }}>
-                    <BriefLine text={value} onActivate={() => setIsLineEditing(true)} />
-                    {generateButton}
-                </Stack>
-                {stateNote}
-                <BriefGenerationFeedback generation={generation} />
-            </Box>
-        );
-    }
-    const commit = (committedValue: string) => {
+    const commitOnLeave = (committedValue: string) => {
         onCommit(committedValue);
-        setIsLineEditing(false);
+        setIsEditing(false);
     };
+    const commitAndExit = (committedValue: string) => {
+        pencilFocus.requestFocus();
+        commitOnLeave(committedValue);
+    };
+
     return (
-        <Box>
+        <Box data-testid="briefSection">
+            {variant === 'field' && (
+                <Typography variant="caption" className={styles.sectionLabel} sx={{ color: 'text.secondary', fontWeight: 600, mb: 0 }}>
+                    {BRIEF_LABEL}
+                </Typography>
+            )}
+            {/* Fixed child order — content, pencil, generate — so the generate button stays the SAME
+                mounted element across the edit→view flip its own click's blur triggers. */}
+            <Stack direction="row" spacing={0.5} sx={{ alignItems: 'flex-start' }}>
+                {isEditing ? (
+                    <BriefEditor value={value} noticeId={noticeId} onChange={onChange} onLeave={commitOnLeave} onExit={commitAndExit} />
+                ) : (
+                    <BriefText text={value} emptyHint={describeEmptyBrief(state, isBriefable)} isLine={variant === 'line'} />
+                )}
+                {isEditing ? null : <BriefEditButton ref={pencilFocus.ref} onEdit={() => setIsEditing(true)} />}
+                <GenerateBriefButton generation={generation} isRegenerate={isRegenerate} fieldValue={value} />
+            </Stack>
+            {isEditing && (
+                // role="status", not MUI's default "alert": the notice must be read WITH the newly
+                // focused field (aria-describedby), not interrupt its announcement on every open.
+                <Alert id={noticeId} role="status" severity="info" variant="outlined" sx={{ mt: 1, py: 0 }} data-testid="briefPinnedNotice">
+                    {BRIEF_PINNED_NOTICE}
+                </Alert>
+            )}
+            <BriefStateNote state={state} origin={origin} fieldValue={value} />
+            <BriefGenerationFeedback generation={generation} />
+        </Box>
+    );
+}
+
+/**
+ * Moves focus to the pencil when the read view returns after an explicit exit (Done/Enter/Escape/
+ * Clear): those unmount the focused control, which would otherwise drop focus to the page body.
+ * A blur exit leaves focus where the user put it, so it never requests this.
+ */
+function useFocusOnViewReturn(isEditing: boolean) {
+    const ref = useRef<HTMLButtonElement | null>(null);
+    const isFocusRequested = useRef(false);
+    useEffect(() => {
+        if (!isEditing && isFocusRequested.current) {
+            isFocusRequested.current = false;
+            ref.current?.focus();
+        }
+    }, [isEditing]);
+    return { ref, requestFocus: () => (isFocusRequested.current = true) };
+}
+
+interface BriefEditorProps {
+    value: string;
+    noticeId: string;
+    onChange: (next: string) => void;
+    /** Focus left the field and its own buttons — commit and let focus stay where it went. */
+    onLeave: (value: string) => void;
+    /** Done / Enter / Escape / Clear — commit and hand focus back to the pencil. */
+    onExit: (value: string) => void;
+}
+
+/**
+ * The open field plus its Done button. The blur commit listens on this WRAPPER, not the textarea:
+ * Tab from the textarea to Clear or Done is focus staying inside the editor, and committing there
+ * would unmount the very button receiving focus (dropping keyboard users onto the page body).
+ */
+function BriefEditor({ value, noticeId, onChange, onLeave, onExit }: BriefEditorProps) {
+    return (
+        <Box
+            sx={{ display: 'flex', flexGrow: 1, alignItems: 'flex-start', gap: 0.5 }}
+            onBlur={(e) => {
+                if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) {
+                    return;
+                }
+                onLeave(value);
+            }}
+        >
             <TextField
-                label={BRIEF_LABEL}
                 placeholder={BRIEF_PLACEHOLDER}
                 value={value}
                 // The field wraps (multiline), so a pasted newline would otherwise survive into a
                 // brief that renders as one line everywhere. Typed Enter commits (below) instead.
                 onChange={(e) => onChange(collapseToSingleLine(e.target.value))}
-                onBlur={() => commit(value)}
-                onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        commit(value);
-                    }
-                }}
                 // Wraps instead of scrolling horizontally so a full brief is readable beside the
                 // title without scrolling. Enter still commits (handled above), so no newline lands.
                 multiline
                 fullWidth
                 size="small"
-                // Only the line→field transition auto-focuses: a freshly opened editor must not
-                // yank focus to the brief (same rule the page-mode title/notes follow).
-                autoFocus={isLineEditing}
+                // Mounted only by the pencil, so focusing it never yanks focus on editor open.
+                autoFocus
                 slotProps={{
+                    htmlInput: {
+                        'aria-label': BRIEF_LABEL,
+                        'aria-describedby': noticeId,
+                        // On the textarea itself, not the TextField root: the Clear button lives in
+                        // the root's end adornment, and a root handler would swallow Enter on it
+                        // (preventDefault cancels the button's click) and commit the old text.
+                        onKeyDown: (e: KeyboardEvent<HTMLElement>) => {
+                            // Mid-composition Enter/Escape belong to the IME (confirm/cancel the candidate).
+                            if (e.nativeEvent.isComposing || (e.key !== 'Enter' && e.key !== 'Escape')) {
+                                return;
+                            }
+                            // Escape steps out of the field only: claim it so the page-level ESC-to-leave
+                            // and a dialog's ESC-to-close don't also fire.
+                            e.preventDefault();
+                            e.stopPropagation();
+                            onExit(value);
+                        },
+                    },
                     input: {
-                        // A multiline field grows downward; the buttons belong on the first line,
-                        // not floating at the vertical centre of a tall box.
+                        // A multiline field grows downward; the clear button belongs on the first line.
                         sx: { alignItems: 'flex-start' },
-                        endAdornment: (
+                        endAdornment: value ? (
                             <InputAdornment position="end">
-                                {value && (
-                                    <BriefClearButton
-                                        onClear={() => {
-                                            onChange('');
-                                            commit('');
-                                        }}
-                                    />
-                                )}
-                                {generateButton}
+                                <BriefClearButton
+                                    onClear={() => {
+                                        onChange('');
+                                        onExit('');
+                                    }}
+                                />
                             </InputAdornment>
-                        ),
+                        ) : undefined,
                     },
                 }}
                 data-testid="briefField"
             />
-            {stateNote}
-            <BriefGenerationFeedback generation={generation} />
+            <BriefDoneButton onDone={() => onExit(value)} />
         </Box>
+    );
+}
+
+/** Read view: the brief as plain text, or a muted hint about why there is none. */
+function BriefText({ text, emptyHint, isLine }: { text: string; emptyHint: string; isLine: boolean }) {
+    if (!text.trim()) {
+        return (
+            <Typography variant="body2" className={styles.briefText} sx={{ color: 'text.secondary' }} data-testid="briefEmpty">
+                {emptyHint}
+            </Typography>
+        );
+    }
+    return (
+        <Typography variant={isLine ? 'body1' : 'body2'} className={styles.briefText} data-testid="briefLine">
+            {text}
+        </Typography>
+    );
+}
+
+function BriefEditButton({ ref, onEdit }: { ref: Ref<HTMLButtonElement>; onEdit: () => void }) {
+    return (
+        <IconButton ref={ref} size="small" aria-label="Edit brief" title="Edit brief" onClick={onEdit} data-testid="briefEditButton">
+            <EditOutlinedIcon fontSize="small" />
+        </IconButton>
+    );
+}
+
+function BriefDoneButton({ onDone }: { onDone: () => void }) {
+    return (
+        <IconButton
+            size="small"
+            aria-label="Done editing brief"
+            title="Done editing brief"
+            // Keep focus in the field on press: otherwise its blur flips to the read view first
+            // and the click would land on the pencil that replaced this button.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onDone}
+            data-testid="briefDoneButton"
+        >
+            <CheckIcon fontSize="small" />
+        </IconButton>
     );
 }
 
@@ -211,30 +333,6 @@ function ReplaceConfirm({ onReplace, onKeep }: { onReplace: () => void; onKeep: 
                 Keep
             </Button>
         </Stack>
-    );
-}
-
-function BriefLine({ text, onActivate }: { text: string; onActivate: () => void }) {
-    return (
-        <Typography
-            variant="body1"
-            className={styles.briefLine}
-            // A focusable, keyboard-activatable line — its content is plain text (no links), so
-            // exposing it as a button hides nothing from assistive tech.
-            role="button"
-            tabIndex={0}
-            aria-label="Edit brief"
-            onClick={onActivate}
-            onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    onActivate();
-                }
-            }}
-            data-testid="briefLine"
-        >
-            {text}
-        </Typography>
     );
 }
 

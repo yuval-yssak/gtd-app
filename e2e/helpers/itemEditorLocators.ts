@@ -11,6 +11,17 @@ export function briefInputOf(scope: Page | Locator): Locator {
     return scope.getByTestId('briefField').getByRole('textbox', { name: 'Brief' });
 }
 
+/** The brief's read view text (both editor variants). Absent while the brief is empty or open for editing. */
+export function briefTextOf(scope: Page | Locator): Locator {
+    return scope.getByTestId('briefSection').getByTestId('briefLine');
+}
+
+/** The brief rests read-only; the pencil is the only way into the field. Returns the opened input. */
+export async function openBriefEditor(scope: Page | Locator): Promise<Locator> {
+    await scope.getByTestId('briefEditButton').click();
+    return briefInputOf(scope);
+}
+
 export function titleInputOf(scope: Page | Locator): Locator {
     return scope.getByRole('textbox', { name: 'Title' });
 }

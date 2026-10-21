@@ -2,7 +2,7 @@ import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoLoggedInDevices } from './helpers/context';
 import { gtd } from './helpers/gtd';
-import { briefInputOf } from './helpers/itemEditorLocators';
+import { briefTextOf, openBriefEditor } from './helpers/itemEditorLocators';
 
 // The on-demand "Generate brief" button (sparkle) in the item editor and on the weekly-review
 // card. Playwright starts the API server with BRIEF_FAKE_MODEL=1, so the model is a deterministic
@@ -32,7 +32,9 @@ async function stubReviewSweepAsCooldown(page: Page): Promise<void> {
 }
 
 test.describe('item brief — generated on demand', () => {
-    test('Generate writes a model brief that the field shows and a second device receives; Regenerate over a typed brief asks first', async ({ browser }) => {
+    test('Generate writes a model brief that the read view shows and a second device receives; Regenerate over a typed brief asks first', async ({
+        browser,
+    }) => {
         const email = `brief-generate-${dayjs().valueOf()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (page1, page2) => {
             const captured = await gtd.collect(page1, 'Renew passport');
@@ -41,14 +43,15 @@ test.describe('item brief — generated on demand', () => {
             await gtd.flush(page1); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
             await page1.goto(`/item/${item._id}`);
-            const briefInput = briefInputOf(page1);
-            await expect(briefInput).toHaveValue('');
+            const briefText = briefTextOf(page1);
+            await expect(page1.getByTestId('briefEmpty')).toBeVisible();
+            await expect(briefText).toHaveCount(0);
             const generateButton = page1.getByTestId('briefGenerateButton');
             await expect(generateButton).toHaveAccessibleName('Generate brief');
 
-            // (1) Generate → the field fills with the fake model's line; the stored row is model-origin.
+            // (1) Generate → the read view shows the fake model's line; the stored row is model-origin.
             await generateButton.click();
-            await expect(briefInput).toHaveValue(FAKE_BRIEF, { timeout: 15_000 });
+            await expect(briefText).toHaveText(FAKE_BRIEF, { timeout: 15_000 });
             await expect(page1.getByTestId('briefReplaceConfirm')).toHaveCount(0);
             const generated = await gtd.getItemBrief(page1, item._id);
             expect(generated?.origin).toBe('model');
@@ -62,7 +65,8 @@ test.describe('item brief — generated on demand', () => {
             await expect.poll(async () => (await gtd.getItemBrief(page2, item._id))?.text, { timeout: 15_000 }).toBe(FAKE_BRIEF);
             expect((await gtd.getItemBrief(page2, item._id))?.origin).toBe('model');
 
-            // (2) Type a user brief over it (blur commits) → the row is pinned.
+            // (2) Type a user brief over it via the pencil (blur commits) → the row is pinned.
+            const briefInput = await openBriefEditor(page1);
             await briefInput.fill('My own one-liner about the passport');
             await page1.getByRole('textbox', { name: 'Title' }).click();
             await expect.poll(async () => (await gtd.getItemBrief(page1, item._id))?.origin).toBe('user');
@@ -75,15 +79,48 @@ test.describe('item brief — generated on demand', () => {
             await expect(confirm).toContainText('Replace your brief?');
             await page1.getByTestId('briefKeepButton').click();
             await expect(confirm).toHaveCount(0);
-            await expect(briefInput).toHaveValue('My own one-liner about the passport');
+            await expect(briefText).toHaveText('My own one-liner about the passport');
             expect((await gtd.getItemBrief(page1, item._id))?.origin).toBe('user');
 
             // Replace → the fake line is back, model-origin again, on both devices.
             await generateButton.click();
             await page1.getByTestId('briefReplaceButton').click();
-            await expect(briefInput).toHaveValue(FAKE_BRIEF, { timeout: 15_000 });
+            await expect(briefText).toHaveText(FAKE_BRIEF, { timeout: 15_000 });
             await expect.poll(async () => (await gtd.getItemBrief(page1, item._id))?.origin).toBe('model');
             await expect.poll(async () => (await gtd.getItemBrief(page2, item._id))?.origin, { timeout: 15_000 }).toBe('model');
+        });
+    });
+
+    test('clicking Regenerate straight from an open field commits the typed text first, then asks before replacing it', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `brief-generate-from-field-${dayjs().valueOf()}@example.com`, async (page) => {
+            const captured = await gtd.collect(page, 'Renew passport');
+            const item = await gtd.updateItem(page, { ...captured, notes: LONG_NOTES });
+            await gtd.flush(page);
+
+            await page.goto(`/item/${item._id}`);
+            const generateButton = page.getByTestId('briefGenerateButton');
+            await generateButton.click();
+            await expect(briefTextOf(page)).toHaveText(FAKE_BRIEF, { timeout: 15_000 });
+            expect((await gtd.getItemBrief(page, item._id))?.origin).toBe('model');
+
+            // Type over the model brief and go STRAIGHT to the sparkle — no blur first. The press
+            // blurs the field (commit → read view) and the click must still land on the same
+            // generate button, now seeing a pinned user brief, so it asks before replacing.
+            const briefInput = await openBriefEditor(page);
+            await briefInput.fill('typed text');
+            await generateButton.click();
+            const confirm = page.getByTestId('briefReplaceConfirm');
+            await expect(confirm).toBeVisible();
+            await expect(confirm).toContainText('Replace your brief?');
+            await expect.poll(async () => (await gtd.getItemBrief(page, item._id))?.origin).toBe('user');
+            expect((await gtd.getItemBrief(page, item._id))?.text).toBe('typed text');
+            await expect(briefInput).toHaveCount(0);
+            await expect(briefTextOf(page)).toHaveText('typed text');
+
+            await page.getByTestId('briefReplaceButton').click();
+            await expect(briefTextOf(page)).toHaveText(FAKE_BRIEF, { timeout: 15_000 });
+            await expect.poll(async () => (await gtd.getItemBrief(page, item._id))?.origin).toBe('model');
+            expect((await gtd.getItemBrief(page, item._id))?.text).toBe(FAKE_BRIEF);
         });
     });
 
@@ -98,12 +135,13 @@ test.describe('item brief — generated on demand', () => {
             await page.getByTestId('startReviewButton').click();
             const card = page.getByTestId('focusStage');
             await expect(card.getByRole('textbox', { name: 'Title' })).toHaveValue('Renew passport');
-            // No brief yet → the plain field (with the sparkle in its adornment) and the notes preview.
-            await expect(briefInputOf(card)).toHaveValue('');
+            // No brief yet → the empty read view (pencil + sparkle beside it) and the notes preview.
+            await expect(card.getByTestId('briefEmpty')).toBeVisible();
+            await expect(card.getByTestId('briefLine')).toHaveCount(0);
             await expect(card.getByTestId('pageNotesPreview')).toBeVisible();
 
             await card.getByTestId('briefGenerateButton').click();
-            // Brief-first once the model row lands: the line replaces the field and the notes fold away.
+            // Brief-first once the model row lands: the line replaces the empty hint and the notes fold away.
             await expect(card.getByTestId('briefLine')).toHaveText(FAKE_BRIEF, { timeout: 15_000 });
             await expect(card.getByTestId('showNotesButton')).toBeVisible();
             await expect(card.getByTestId('briefReplaceConfirm')).toHaveCount(0);
@@ -129,7 +167,7 @@ test.describe('item brief — generated on demand', () => {
             // Deliberately no blur and no gtd.flush: the 800 ms notes autosave is still pending.
             await page.getByTestId('briefGenerateButton').click();
 
-            await expect(briefInputOf(page)).toHaveValue(FAKE_BRIEF, { timeout: 15_000 });
+            await expect(briefTextOf(page)).toHaveText(FAKE_BRIEF, { timeout: 15_000 });
             const generated = await gtd.getItemBrief(page, item._id);
             expect(generated?.text).toBe(FAKE_BRIEF); // not a `skipped` row from the pre-typing notes
             expect(generated?.origin).toBe('model');
@@ -147,7 +185,9 @@ test.describe('item brief — generated on demand', () => {
             await page.goto(`/item/${item._id}`);
             await page.getByTestId('briefGenerateButton').click();
             await expect(page.getByTestId('briefGenerateNotice')).toContainText('Briefs are only generated for open items', { timeout: 15_000 });
-            await expect(briefInputOf(page)).toHaveValue('');
+            await expect(briefTextOf(page)).toHaveCount(0);
+            // A closed item is never briefed, so the empty hint must not promise an automatic one.
+            await expect(page.getByTestId('briefEmpty')).toHaveText('No brief');
             // Nothing was recorded — not even a skip marker.
             expect(await gtd.getItemBrief(page, item._id)).toBeUndefined();
 
@@ -156,7 +196,7 @@ test.describe('item brief — generated on demand', () => {
             await gtd.flush(page);
             await page.goto(`/item/${item._id}`);
             await page.getByTestId('briefGenerateButton').click();
-            await expect(briefInputOf(page)).toHaveValue(FAKE_BRIEF, { timeout: 15_000 });
+            await expect(briefTextOf(page)).toHaveText(FAKE_BRIEF, { timeout: 15_000 });
             expect((await gtd.getItemBrief(page, item._id))?.origin).toBe('model');
         });
     });
@@ -169,8 +209,9 @@ test.describe('item brief — generated on demand', () => {
 
             // Type a brief (origin 'user' — pinned), then close the item.
             await page.goto(`/item/${item._id}`);
-            await briefInputOf(page).fill('My own line for the review');
-            await briefInputOf(page).blur();
+            const briefInput = await openBriefEditor(page);
+            await briefInput.fill('My own line for the review');
+            await briefInput.blur();
             await expect.poll(async () => (await gtd.getItemBrief(page, item._id))?.origin).toBe('user');
             await gtd.updateItem(page, { ...item, status: 'done' });
             await gtd.flush(page);
@@ -200,7 +241,8 @@ test.describe('item brief — generated on demand', () => {
             await expect(page.getByTestId('briefGenerateNotice')).toContainText('Notes are too short for a brief — the title already says it', {
                 timeout: 15_000,
             });
-            await expect(briefInputOf(page)).toHaveValue('');
+            // A `skipped` row is `declined`: an empty read view (the caption stands in for the hint).
+            await expect(page.getByTestId('briefEmpty')).toHaveCount(1);
             await expect(page.getByTestId('briefLine')).toHaveCount(0);
             // The skip is recorded as a text-less row so the sweep will not keep retrying it.
             const skipped = await gtd.getItemBrief(page, item._id);

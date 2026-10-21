@@ -1,9 +1,41 @@
 import { BriefApiError, type GenerateBriefOutcome } from '../../api/briefApi';
 import { type BriefState, isPinnedOrigin } from '../../lib/briefSource';
-import type { BriefOrigin, StoredItemBrief } from '../../types/MyDB';
+import type { BriefOrigin, StoredItem, StoredItemBrief } from '../../types/MyDB';
 
 export const BRIEF_LABEL = 'Brief';
 export const BRIEF_PLACEHOLDER = 'One line for the weekly review';
+/** Read view of an empty brief on an open item: says the brief is not the user's job, so the pencil reads as optional. */
+export const BRIEF_EMPTY_HINT = 'No brief yet — one is written automatically';
+/** Read view of an empty brief on a done/trashed item, which the sweep never briefs. */
+export const BRIEF_EMPTY_CLOSED_HINT = 'No brief';
+
+/**
+ * Mirrors the server's open-items-only rule — an allowlist, like `LIVE_STATUSES` in
+ * api-server/src/lib/brief/briefScope.ts, so a new status stays unbriefed on both sides until added.
+ */
+const BRIEFABLE_STATUSES: ReadonlySet<StoredItem['status']> = new Set(['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe']);
+
+export function isBriefableItemStatus(status: StoredItem['status']): boolean {
+    return BRIEFABLE_STATUSES.has(status);
+}
+
+/**
+ * The muted text standing in for an empty brief in the read view. Blank for `declined`: that row
+ * already has its own caption (`describeDeclinedBrief`) explaining why there is no brief.
+ */
+export function describeEmptyBrief(state: BriefState, isBriefable: boolean): string {
+    if (state === 'declined') {
+        return '';
+    }
+    return isBriefable ? BRIEF_EMPTY_HINT : BRIEF_EMPTY_CLOSED_HINT;
+}
+
+/**
+ * Shown for as long as the brief field is open. Typing a brief pins it, which silently changes how
+ * the item behaves later — it must be said up front, not discovered when the notes move on.
+ */
+export const BRIEF_PINNED_NOTICE =
+    'A brief you write is pinned: it stays exactly as written, even when the title or notes change. To unpin it, click Regenerate brief (✨) and choose Replace.';
 /** Shown under a pinned (user/agent) brief whose source title/notes moved on since it was written. */
 export const BRIEF_STALE_MARKER = 'Notes changed since this brief was written';
 

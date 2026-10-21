@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
-import { briefInputOf } from './helpers/itemEditorLocators';
+import { briefInputOf, briefTextOf, openBriefEditor } from './helpers/itemEditorLocators';
 
 // Weekly-review presentation of item briefs: a review card with a brief on show leads with the
 // brief line and folds the notes behind "Show notes"; the header's "Show briefs" switch restores
@@ -49,6 +49,8 @@ test.describe('weekly review — briefs', () => {
                 return Boolean(line && button && line.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING);
             });
             expect(briefBeforeNotes).toBe(true);
+            // The line variant carries no "Brief" section label — it reads as a plain line.
+            await expect(card.getByTestId('briefSection').getByText('Brief', { exact: true })).toHaveCount(0);
 
             // Expanding in place reveals the normal notes preview under the brief.
             await showNotes.click();
@@ -56,14 +58,15 @@ test.describe('weekly review — briefs', () => {
             await expect(card.getByTestId('briefLine')).toBeVisible();
 
             // Header "Show briefs" off → plain editor: the notes preview is back without a
-            // disclosure and the brief renders as its ordinary field. The full header is one
-            // strip-tap away in item stages.
+            // disclosure and the brief renders in its ordinary `field` variant — read-only text
+            // under a "Brief" section label. The full header is one strip-tap away in item stages.
             await page.getByTestId('reviewHeaderStrip').click();
             await page.getByTestId('showBriefsToggle').click();
             await expect(card.getByTestId('showNotesButton')).toHaveCount(0);
             await expect(card.getByTestId('pageNotesPreview')).toBeVisible();
-            await expect(card.getByTestId('briefLine')).toHaveCount(0);
-            await expect(briefInputOf(card)).toHaveValue('Passport before the June trip — photos are the blocker');
+            await expect(card.getByTestId('briefSection').getByText('Brief', { exact: true })).toBeVisible();
+            await expect(briefTextOf(card)).toHaveText('Passport before the June trip — photos are the blocker');
+            await expect(briefInputOf(card)).toHaveCount(0);
 
             // Toggle back on → brief-first again (the preference is live, no reload needed). The
             // notes stay expanded: the disclosure was already opened on this card, and expanding is
@@ -84,6 +87,20 @@ test.describe('weekly review — briefs', () => {
             await expect.poll(async () => (await gtd.listItems(page)).find((row) => row._id === item._id)?.notes).toContain('Photos done.');
             await expect(card.getByTestId('briefLine')).toHaveText('Passport before the June trip — photos are the blocker');
             await expect(card.getByTestId('briefStaleMarker')).toHaveText('Notes changed since this brief was written');
+
+            // The brief line is read-only: clicking it opens nothing. The pencil opens the field in
+            // place, and Escape steps out of the FIELD only — the review stays on this card.
+            await card.getByTestId('briefLine').click();
+            await expect(briefInputOf(card)).toHaveCount(0);
+            const briefInput = await openBriefEditor(card);
+            await expect(briefInput).toBeFocused();
+            await expect(briefInput).toHaveValue('Passport before the June trip — photos are the blocker');
+            await expect(card.getByTestId('briefPinnedNotice')).toBeVisible();
+            await briefInput.press('Escape');
+            await expect(briefInput).toHaveCount(0);
+            await expect(card.getByTestId('briefLine')).toHaveText('Passport before the June trip — photos are the blocker');
+            await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
+            await expect(card.getByRole('textbox', { name: 'Title' })).toHaveValue('Renew passport');
         });
     });
 
@@ -100,8 +117,9 @@ test.describe('weekly review — briefs', () => {
             await expect(card.getByTestId('pageNotesPreview')).toContainText('Short notes, no brief.');
             await expect(card.getByTestId('showNotesButton')).toHaveCount(0);
             await expect(card.getByTestId('briefLine')).toHaveCount(0);
-            // The brief field is still there to author one.
-            await expect(briefInputOf(card)).toHaveValue('');
+            // The empty read view is still there, with the pencil to author one.
+            await expect(card.getByTestId('briefEmpty')).toHaveCount(1);
+            await expect(card.getByTestId('briefEditButton')).toBeVisible();
             // Opening the review runs the review-start sweep, which writes a `skipped` row for
             // these short notes — so this card ends up `declined`, worded for that origin. Either
             // way there is no brief LINE and the layout is not brief-first; that is what this
@@ -138,12 +156,15 @@ test.describe('weekly review — briefs', () => {
             // The Generate button stays available so the user can retry after editing the notes.
             await expect(page.getByTestId('briefGenerateButton')).toBeEnabled();
 
+            // The declined read view shows no "written automatically" hint — the caption says it.
+            await expect(page.getByTestId('briefEmpty')).toHaveText('');
+
             // Typing their own brief clears the caption on the FIRST keystroke — before any blur,
             // commit or save; the stored row is still the text-less one at that instant.
-            const field = briefInputOf(page);
+            const field = await openBriefEditor(page);
             await expect(field).toHaveValue('');
-            await field.click();
-            // Focus alone keeps the caption: with nothing typed it still reads as a hint.
+            await expect(field).toBeFocused();
+            // Opening the field alone keeps the caption: with nothing typed it still reads as a hint.
             await expect(page.getByTestId('briefDeclinedNote')).toBeVisible();
             await field.pressSequentially('P');
             await expect(page.getByTestId('briefDeclinedNote')).toHaveCount(0);
@@ -159,6 +180,7 @@ test.describe('weekly review — briefs', () => {
             await expect.poll(async () => (await gtd.getItemBrief(page, item._id))?.text).toBe('Photos are the blocker');
             expect(await gtd.getItemBrief(page, item._id)).toMatchObject({ origin: 'user' });
             await expect(page.getByTestId('briefDeclinedNote')).toHaveCount(0);
+            await expect(briefTextOf(page)).toHaveText('Photos are the blocker');
         });
     });
 

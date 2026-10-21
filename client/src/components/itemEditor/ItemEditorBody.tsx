@@ -93,7 +93,7 @@ import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
 import type { FormState as RoutineFormState } from '../routineEditor/routineFormState';
 import { UnsavedChangesDialog } from '../UnsavedChangesDialog';
 import { BriefSection } from './BriefSection';
-import { decideBriefCommit, type EditorPresentation, isBriefFirst } from './briefSectionLogic';
+import { decideBriefCommit, type EditorPresentation, isBriefableItemStatus, isBriefFirst } from './briefSectionLogic';
 import { CalendarEventLinks } from './CalendarEventLinks';
 import { CopyIdButton } from './CopyIdButton';
 import styles from './ItemEditorBody.module.css';
@@ -1081,6 +1081,7 @@ export function ItemEditorBody({
                 onCommit={(value) => void flushBrief(value)}
                 generation={briefGeneration}
                 variant={isBriefLeading ? 'line' : 'field'}
+                isBriefable={isBriefableItemStatus(liveItem.status)}
             />
 
             {status === 'calendar' && (

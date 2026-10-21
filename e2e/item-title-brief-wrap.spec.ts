@@ -2,7 +2,7 @@ import { expect, type Locator, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
-import { briefInputOf, titleInputOf } from './helpers/itemEditorLocators';
+import { briefTextOf, openBriefEditor, titleInputOf } from './helpers/itemEditorLocators';
 
 // A long title and a long brief must be readable in full in a single view — in the item editor
 // and in the weekly review, which renders the same editor body. They used to be single-line
@@ -48,7 +48,12 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
             await expect(title).toHaveValue(LONG_TITLE);
             await expectWrappedAndFullyVisible(title);
 
-            const brief = briefInputOf(page);
+            // The brief rests read-only: its text wraps in full…
+            const briefText = briefTextOf(page);
+            await expect(briefText).toHaveText(LONG_BRIEF);
+            await expectWrappedAndFullyVisible(briefText);
+            // …and so does the field the pencil opens.
+            const brief = await openBriefEditor(page);
             await expect(brief).toHaveValue(LONG_BRIEF);
             await expectWrappedAndFullyVisible(brief);
         });
@@ -100,12 +105,14 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
             await gtd.flush(page);
 
             await page.goto(`/item/${item._id}`);
-            const brief = briefInputOf(page);
-            await brief.click();
+            const brief = await openBriefEditor(page);
+            await expect(brief).toBeFocused();
             await page.keyboard.insertText('Photos are the blocker');
             await brief.press('Enter');
 
-            await expect(brief).toHaveValue('Photos are the blocker');
+            // Enter closes the field; the read view shows the one-line text with no newline in it.
+            await expect(brief).toHaveCount(0);
+            await expect(briefTextOf(page)).toHaveText('Photos are the blocker');
             // Enter commits as well as swallowing the newline — the brief reaches IDB.
             await expect.poll(async () => (await gtd.getItemBrief(page, item._id))?.text).toBe('Photos are the blocker');
         });
@@ -146,11 +153,12 @@ test.describe('Item title and brief wrap instead of clipping to one line', () =>
             // for switching to the field variant, which IS the element this fix changed.
             await expect(card.getByTestId('briefLine')).toHaveText(LONG_BRIEF);
 
-            // "Show briefs" off swaps the line for the ordinary brief field — the review's only
-            // rendering of the changed TextField, and otherwise untested for wrapping.
+            // "Show briefs" off swaps to the ordinary `field` variant; its pencil opens the brief
+            // TextField — the review's only rendering of it, and otherwise untested for wrapping.
             await page.getByTestId('reviewHeaderStrip').click();
             await page.getByTestId('showBriefsToggle').click();
-            const reviewBrief = briefInputOf(card);
+            await expect(card.getByTestId('briefSection').getByText('Brief', { exact: true })).toBeVisible();
+            const reviewBrief = await openBriefEditor(card);
             await expect(reviewBrief).toHaveValue(LONG_BRIEF);
             await expectWrappedAndFullyVisible(reviewBrief);
         });
