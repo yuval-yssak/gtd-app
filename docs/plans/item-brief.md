@@ -1,5 +1,7 @@
 # Item brief — implementation plan
 
+> Note (2026-10-22): the "Clarify with Claude" assist feature this plan refers to (`/v1/claude/assist`, `agentLoop.ts`) was removed; briefs are the only Anthropic-backed feature now.
+
 Status: **draft for approval** (2026-09-20). Branch: `feat/item-brief` off `main`; phases ship
 in order → `staging` → `main`. Each step ends with the repo checklist green (lint:fix → typecheck →
 test → reviewer subagent) with unit + Playwright coverage, and waits for explicit commit approval.
@@ -29,8 +31,8 @@ Five ways a brief comes into existence, in priority order:
 | Staleness | `sourceHash` of `title + '\n' + notes` stored on the brief; a model brief is shown only when it matches the item's current hash |
 | Authored briefs | `origin: 'user' \| 'agent'` briefs are **pinned**: the sweeper never overwrites them; the UI shows them even when stale, with a subtle "notes changed since" marker; explicit Regenerate overrides |
 | Skip rule | notes empty or `< 160` chars after trim → a `text: null, origin: 'skipped'` row is written **without a model call**, so the sweeper does not reselect it. Card then shows title only |
-| Model | `BRIEF_MODEL = 'claude-haiku-5-5'` at effort `medium` (open decision 1, answered "Haiku"; moved off `claude-haiku-4-5` on 2026-10-18 because it narrated agent-style notes instead of naming their subject); `CLAUDE_ASSIST_MODEL` stays `claude-sonnet-4-6` |
-| Output | structured output `output_config.format` → `{ brief: string \| null }`, **soft** target 160 chars (never truncated server-side — an ellipsis would read as "summary incomplete, open the notes"), must abstract the notes as a whole rather than enumerate them, name the subject rather than narrate agent-style steps, language of the notes, `max_tokens: 2048` (Haiku 5.5 thinks by default and thinking counts toward the cap); system block carries `cache_control`, live on Haiku 5.5 (512-token floor; it was inert on Haiku 4.5's 4096 — see `buildSystemBlocks`), notes treated as data (same injection guard wording as `agentLoop.ts`) |
+| Model | `BRIEF_MODEL = 'claude-haiku-5-5'` at effort `medium` (open decision 1, answered "Haiku"; moved off `claude-haiku-4-5` on 2026-10-18 because it narrated agent-style notes instead of naming their subject) |
+| Output | structured output `output_config.format` → `{ brief: string \| null }`, **soft** target 160 chars (never truncated server-side — an ellipsis would read as "summary incomplete, open the notes"), must abstract the notes as a whole rather than enumerate them, name the subject rather than narrate agent-style steps, language of the notes, `max_tokens: 2048` (Haiku 5.5 thinks by default and thinking counts toward the cap); system block carries `cache_control`, live on Haiku 5.5 (512-token floor; it was inert on Haiku 4.5's 4096 — see `buildSystemBlocks`), notes treated as data (injection guard in `lib/brief/briefPrompt.ts`) |
 | Visibility | device-local preference `showBriefs` (localStorage, same pattern as `lib/colorTheme.ts`), toggled in Settings and in the Weekly Review header; default **on** |
 | Cron auth | the scheduler secret, renamed `CRON_SECRET` + `x-cron-secret` header (open decision 6) and shared through `auth/cronSecret.ts`; one new Cloud Scheduler job per environment |
 | Hash function | `cyrb53`-style synchronous string hash mirrored server/client (`lib/briefSource.ts` ↔ `client/src/lib/briefSource.ts`) with a parity test; sha256 would force async hashing in render paths |
@@ -78,15 +80,15 @@ preview instead of showing a lie. Precedent: `reviewInbox` (0c2d7e3 server, ee53
   Run runs `--max-instances=1` and scales to zero, so no in-process timers.
 - **Public API surface**: item projection allowlist `routes/v1/projections/item.ts`; scopes in
   `types/entities.ts` (`ApiTokenScope`); dual cookie-or-bearer auth in
-  `auth/assistAuthMiddleware.ts` (`authenticateBearerOrSession`) is the pattern for the client
+  `auth/dualAuthMiddleware.ts` (`authenticateBearerOrSessionWith`) is the pattern for the client
   button hitting a `/v1` route. Write bucket 60/min, read 600/min (`docs/PUBLIC_API.md`).
 - **MCP tools** live twice: `api-server/src/mcp/tools/*.ts` (remote) copied from
   `mcp-server/src/tools/*.ts` (stdio), locked by `mcpToolParity.test.ts`. `SERVER_INSTRUCTIONS`
   in `mcp/registerTools.ts` mirrors `mcp-server/src/index.ts`.
-- **e2e cannot reach Anthropic** (`e2e/claude-assist.spec.ts` header). Generation e2e needs a
+- **e2e cannot reach Anthropic**. Generation e2e needs a
   deterministic seam: `BRIEF_FAKE_MODEL=1` in the e2e API webServer makes the generator return the
   first sentence of the notes, prefixed `[fake]`. The real SDK call is unit-tested with `vi.mock`
-  on `anthropicClient.js` exactly like `v1ClaudeAssist.test.ts`.
+  on `anthropicClient.js`.
 - **Bootstrap** (`routes/sync.ts` ~217–256) ships all entities in one JSON; `itemBriefs` joins the
   `Promise.all`. Bootstrap is already oversized (see `docs/plans/scalable-bootstrap-phases-0-1.md`);
   briefs add ≤ 200 bytes per item and are excluded for items outside the hot set once that plan lands.
@@ -342,7 +344,7 @@ refusal, force override, op stamps `server:brief`), `briefModel.test.ts` with `v
 
 ## 2.2 On-demand endpoint + client button + MCP
 
-- `POST /v1/items/:id/brief/generate` (dual auth like `/v1/claude/assist`; scope `items.write`),
+- `POST /v1/items/:id/brief/generate` (dual auth; scope `items.write`),
   body `{ force?: boolean }`. Runs `generateBriefText` inline, writes via `briefWriter`, returns
   the brief. Per-user cap: 30 generations / 10 min (`lib/rateLimiter.ts` bucket, env-tunable) so a
   stuck button cannot burn the key.

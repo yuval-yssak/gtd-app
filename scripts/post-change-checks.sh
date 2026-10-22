@@ -68,7 +68,9 @@ run_e2e() {
         npm run lint:fix || { echo "❌ lint:fix failed"; rc=1; }
         # Only run specs that actually changed in this diff — full suite is too slow for a stop hook.
         local changed_specs
-        changed_specs=$(echo "$E2E_CHANGED" | grep '\.spec\.ts$' | sed "s|^e2e/||")
+        # Deleted specs still show up in the diff; Playwright exits non-zero ("No tests found")
+        # when handed a path that no longer exists, so keep only specs that are still on disk.
+        changed_specs=$(echo "$E2E_CHANGED" | grep '\.spec\.ts$' | sed "s|^e2e/||" | while read -r spec; do [ -f "$spec" ] && echo "$spec"; done)
         if [ -n "$changed_specs" ]; then
             # shellcheck disable=SC2086
             npx playwright test --retries=0 $changed_specs || { echo "❌ test failed"; rc=1; }

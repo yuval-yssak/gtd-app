@@ -15,11 +15,11 @@ import { v1WorkContextsRoutes } from './workContexts.js';
  * `/reassign`, `/operations/batch`) while keeping each entity's handlers and middleware
  * self-contained in its own file.
  *
- * NOTE: `v1ClaudeRoutes` is deliberately NOT mounted here. Hono runs a sub-router's `.use('*')`
+ * NOTE: `v1BriefGenerateRoutes` is deliberately NOT mounted here. Hono runs a sub-router's `.use('*')`
  * middleware for ANY sibling path when multiple sub-routers share a base, so `v1ItemsRoutes`'
- * bearer-only `authenticateBearer` would 401 a cookie-session request to `/v1/claude/*` before the
- * dual-auth middleware ran. The assist routes are therefore mounted SEPARATELY (and first) on the
- * app in `index.ts`, isolated from these catch-all middlewares.
+ * bearer-only `authenticateBearer` would 401 a cookie-session request to the dual-auth route before
+ * its middleware ran. It is therefore mounted SEPARATELY (and first) on the app in `index.ts`,
+ * isolated from these catch-all middlewares.
  */
 export const v1Routes = new Hono<{ Variables: BearerVariables }>()
     .route('/', v1ItemsRoutes)

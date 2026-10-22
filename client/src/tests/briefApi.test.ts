@@ -1,5 +1,5 @@
 /** Tests for the on-demand brief generator wrapper (`src/api/briefApi.ts`).
- * Same harness as `assistApi.test.ts` — global fetch replaced per-test, then restored.
+ * Global fetch is replaced per-test, then restored.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BriefApiError, generateBrief, type ServerItemBriefSnapshot, startReviewBriefSweep } from '../api/briefApi';

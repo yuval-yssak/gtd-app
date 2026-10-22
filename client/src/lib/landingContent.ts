@@ -28,7 +28,7 @@ export const LANDING_FEATURES = [
 
 /** Matches the privacy policy: calendar sync is opt-in, briefs are generated automatically. */
 export const LANDING_OPTIONALITY_NOTE =
-    'Your lists work offline and sync across your devices when you are back online. Google Calendar is optional and off until you connect it. AI briefs are generated automatically for items with longer notes, and the clarify-with-AI assistant runs only when you ask it to.';
+    'Your lists work offline and sync across your devices when you are back online. Google Calendar is optional and off until you connect it. AI briefs are generated automatically for items with longer notes.';
 
 export interface GoogleDataUse {
     /** Exact OAuth scope string, as the API server requests it on connect. */
@@ -63,5 +63,5 @@ export const GOOGLE_CALENDAR_DATA_USES: readonly GoogleDataUse[] = [
 export const GOOGLE_SIGN_IN_DATA_USE =
     'Signing in with Google shares your name, email address and profile picture. They identify your account and are shown in the account switcher; nothing else is read from your Google Account unless you connect a calendar.';
 
-/** Mirrors the privacy policy's Google API Services disclosure, including the transfer to Anthropic for the AI features. */
-export const GOOGLE_LIMITED_USE_STATEMENT = `${APP_NAME} uses Google Calendar data only for calendar sync and, as described in the privacy policy, for the AI features: item briefs and the clarify-with-AI assistant, which send event titles and descriptions to Anthropic. It is never used for advertising, never sold, and never used to train machine-learning models. Disconnecting the calendar in Settings deletes the access tokens we hold.`;
+/** Mirrors the privacy policy's Google API Services disclosure, including the transfer to Anthropic for item briefs. */
+export const GOOGLE_LIMITED_USE_STATEMENT = `${APP_NAME} uses Google Calendar data only for calendar sync and, as described in the privacy policy, for item briefs, which send event titles and descriptions to Anthropic. It is never used for advertising, never sold, and never used to train machine-learning models. Disconnecting the calendar in Settings deletes the access tokens we hold.`;

@@ -5,7 +5,7 @@ metadata:
   type: project
 ---
 
-The client side (`src/types/MyDB.ts`) does NOT export an `ItemStatus` named type the way the server's `entities.ts` does. `StoredItem.status` inlines the literal union `'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash'`, and that same union is duplicated inline in several files (`editItemDialogLogic.ts`, `itemSearch.ts`, `api/assistApi.ts`, `routes/_authenticated/item.$itemId.tsx`).
+The client side (`src/types/MyDB.ts`) does NOT export an `ItemStatus` named type the way the server's `entities.ts` does. `StoredItem.status` inlines the literal union `'inbox' | 'nextAction' | 'calendar' | 'waitingFor' | 'somedayMaybe' | 'done' | 'trash'`, and that same union is duplicated inline in several files (`editItemDialogLogic.ts`, `itemSearch.ts`, `routes/_authenticated/item.$itemId.tsx`).
 
 **Why:** `MyDB.ts` mirrors server entities but only re-exports `EnergyLevel`, not `ItemStatus`. No one has centralized the status union on the client.
 

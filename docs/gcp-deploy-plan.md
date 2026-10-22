@@ -71,8 +71,7 @@ Each environment (`production`, `staging`) holds its own set of secrets and vari
 | `VAPID_PRIVATE_KEY` | Web Push VAPID private key |
 | `CALENDAR_ENCRYPTION_KEY` | AES key encrypting stored Google OAuth tokens |
 | `CRON_SECRET` | Shared secret every Cloud Scheduler job sends as `x-cron-secret` — webhook renewal and the brief sweep (see "Calendar webhook renewal" and "Brief sweep" below). Renamed from `CALENDAR_WEBHOOK_CRON_SECRET` on 2026-09-21; see "Operator steps for the rename" |
-| `ANTHROPIC_API_KEY` | Claude-assist ("clarify with AI") endpoint |
-| `EXECUTE_TOKEN_SIGNING_KEY` | Signing key for Claude-assist execute tokens |
+| `ANTHROPIC_API_KEY` | Item-brief generation (sweep + on-demand) |
 
 ### Variables (per environment)
 
@@ -86,7 +85,6 @@ Each environment (`production`, `staging`) holds its own set of secrets and vari
 | `VAPID_SUBJECT` | `mailto:admin@getting-things-done.app` |
 | `CALENDAR_WEBHOOK_URL` | `https://api.getting-things-done.app/calendar/webhooks/google` |
 | `WEBHOOKS_ENABLED` | `true` (outbound webhook delivery worker; empty = off) |
-| `CLAUDE_ASSIST_DAILY_COST_CAP_USD` | `1` |
 | `BRIEF_REVIEW_SWEEP_COOLDOWN_MS` | (optional) minimum gap between two `POST /maintenance/briefs/sweep-mine` runs for one user; defaults to 10 minutes (`600000`) |
 | `BRIEF_GENERATE_PER_10MIN` | (optional) per-user cap on model calls for brief generation — `POST /v1/items/:id/brief/generate` AND the inline hook share it; defaults to `30` |
 | `BRIEF_INLINE_ON_WRITE` | **Operator switch, not set anywhere.** `1` regenerates an item's brief ~30 s after each first-party / API edit (write-path escape hatch, `lib/brief/briefInlineHook.ts`). Server-originated writes (GCal inbound, routine generator, brief writes) never trigger it; inline generations charge the same per-user cap as the endpoint and run strictly one at a time, so a large `/sync/push` flush cannot fan out into a burst of model calls. Leave unset: the Message Batches sweep is the primary path. |

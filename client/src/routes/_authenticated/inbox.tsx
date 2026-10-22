@@ -1,6 +1,5 @@
 import AddIcon from '@mui/icons-material/Add';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditIcon from '@mui/icons-material/Edit';
@@ -36,7 +35,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
-import { useClaudeReview } from '../../components/claudeReview/useClaudeReview';
 import type { EditableStatus } from '../../components/editItemDialogLogic';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
@@ -176,7 +174,6 @@ function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, 
 interface InboxBottomSheetProps {
     item: StoredItem | null;
     onClose: () => void;
-    onClarifyClaude: (item: StoredItem) => void;
     onEdit: (item: StoredItem) => void;
     onDone: (item: StoredItem) => void;
     onNextAction: (item: StoredItem) => void;
@@ -185,7 +182,7 @@ interface InboxBottomSheetProps {
     onTrash: (item: StoredItem) => void;
 }
 
-function InboxBottomSheet({ item, onClose, onClarifyClaude, onEdit, onDone, onNextAction, onCalendar, onWaitingFor, onTrash }: InboxBottomSheetProps) {
+function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalendar, onWaitingFor, onTrash }: InboxBottomSheetProps) {
     if (!item) return null;
 
     const resolvedItem = item;
@@ -210,12 +207,6 @@ function InboxBottomSheet({ item, onClose, onClarifyClaude, onEdit, onDone, onNe
             </Typography>
             <Divider />
             <List disablePadding>
-                <ListItemButton onClick={() => action(onClarifyClaude)} data-testid="inboxSheetClarifyClaude">
-                    <ListItemIcon>
-                        <AutoAwesomeIcon color="primary" />
-                    </ListItemIcon>
-                    <ListItemText primary="Clarify with Claude" />
-                </ListItemButton>
                 <ListItemButton onClick={() => action(onEdit)}>
                     <ListItemIcon>
                         <EditIcon />
@@ -268,7 +259,7 @@ function InboxPage() {
     useDocumentTitle('Inbox');
     const { db } = Route.useRouteContext();
     const { q } = Route.useSearch();
-    const { account, items, workContexts, people, routines, refreshItems, syncAndRefresh, isInitialSyncing, withOwnerSession } = useAppData();
+    const { account, items, workContexts, people, routines, refreshItems, isInitialSyncing } = useAppData();
     const navigate = useNavigate();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -276,10 +267,6 @@ function InboxPage() {
 
     // Inbox is the only page where 'instant' fires the no-fields nextAction shortcut.
     const editor = useItemEditor({ db, people, workContexts, refreshItems, allowInstantNextAction: true, isMobile });
-
-    // Claude "Clarify" review sheet. onApplied pulls from the server (not just refreshItems): the
-    // apply endpoint writes through the op-log server-side, so the change comes back via a sync pull.
-    const review = useClaudeReview({ people, workContexts, onApplied: syncAndRefresh, withOwnerSession });
 
     const [draft, setDraft] = useState('');
     const [notes, setNotes] = useState('');
@@ -544,16 +531,6 @@ function InboxPage() {
                                         secondaryAction={
                                             <Box className={styles.actionButtons}>
                                                 <CopyIdButton id={item._id} testId="inboxItemCopyIdButton" />
-                                                <Tooltip title="Clarify with Claude">
-                                                    <IconButton
-                                                        size="small"
-                                                        color="primary"
-                                                        onClick={() => review.openFor(item)}
-                                                        data-testid="inboxItemClarifyClaudeButton"
-                                                    >
-                                                        <AutoAwesomeIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
                                                 <Tooltip title="Edit">
                                                     <IconButton
                                                         size="small"
@@ -619,7 +596,6 @@ function InboxPage() {
             )}
 
             {editor.renderGlobal()}
-            {review.renderGlobal()}
             <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
             {hiddenAccountNotice}
 
@@ -637,7 +613,6 @@ function InboxPage() {
             <InboxBottomSheet
                 item={bottomSheetItem}
                 onClose={() => setBottomSheetItem(null)}
-                onClarifyClaude={(i) => review.openFor(i)}
                 onEdit={(i) => editor.openEditor({ item: i })}
                 onDone={(i) => void onQuickDone(i)}
                 onNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}

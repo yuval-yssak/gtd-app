@@ -6,7 +6,6 @@ import briefBatchesDAO from '../dataAccess/briefBatchesDAO.js';
 import briefBatchRequestsDAO from '../dataAccess/briefBatchRequestsDAO.js';
 import calendarIntegrationsDAO from '../dataAccess/calendarIntegrationsDAO.js';
 import calendarSyncConfigsDAO from '../dataAccess/calendarSyncConfigsDAO.js';
-import claudeUsageDAO from '../dataAccess/claudeUsageDAO.js';
 import deletedUsersDAO from '../dataAccess/deletedUsersDAO.js';
 import deviceSyncStateDAO from '../dataAccess/deviceSyncStateDAO.js';
 import deviceUsersDAO from '../dataAccess/deviceUsersDAO.js';
@@ -112,7 +111,6 @@ async function loadDataAccess(customDBName?: string) {
         apiTokensDAO.init(dbClient, resolvedDBName),
         webhookSubscriptionsDAO.init(dbClient, resolvedDBName),
         webhookDeliveriesDAO.init(dbClient, resolvedDBName),
-        claudeUsageDAO.init(dbClient, resolvedDBName),
         oauthClientsDAO.init(dbClient, resolvedDBName),
         oauthAuthCodesDAO.init(dbClient, resolvedDBName),
         oauthRefreshTokensDAO.init(dbClient, resolvedDBName),

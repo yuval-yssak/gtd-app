@@ -30,12 +30,8 @@ declare namespace NodeJS {
         TEST_FILE_ID?: string;
         COMMIT_HASH?: string;
         WEBHOOKS_ENABLED?: string;
-        /** Anthropic API key for the Lane A Claude-assist endpoint. Separate billing from any Pro/Max subscription. */
+        /** Anthropic API key for item-brief generation. Separate billing from any Pro/Max subscription. */
         ANTHROPIC_API_KEY?: string;
-        /** HMAC-SHA256 key (hex) for signing/verifying short-lived `executeToken`s. Dev fallback if unset. */
-        EXECUTE_TOKEN_SIGNING_KEY?: string;
-        /** Per-user daily USD cap for Claude-assist spend. Parsed as a float; falls back to a built-in default. */
-        CLAUDE_ASSIST_DAILY_COST_CAP_USD?: string;
         /** TEST-ONLY: `'1'` makes brief generation return a deterministic fake (e2e). Production refuses to boot with it. */
         BRIEF_FAKE_MODEL?: string;
         /** Operator switch: `'1'` regenerates an item's brief ~30 s after each edit (write-path escape hatch). Off by default. */

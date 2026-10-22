@@ -25,12 +25,12 @@ export type BearerVariables = {
 
 /**
  * Resolves an `Authorization: Bearer gtd_<token>` header to a populated `apiAuth` value, or null
- * when no valid bearer token is present. Extracted so the dual-auth assist middleware can reuse the
+ * when no valid bearer token is present. Extracted so the dual-auth middleware can reuse the
  * exact bearer resolution (scope backfill, fire-and-forget `lastUsedTs` bump) without duplicating
  * it — keeping the two auth paths from drifting.
  *
  * Returns null (rather than throwing) so callers can decide the fallback: `authenticateBearer`
- * returns 401, while `authenticateBearerOrSession` falls through to cookie-session resolution.
+ * returns 401, while `authenticateBearerOrSessionWith` falls through to cookie-session resolution.
  * Honors the no-token-cache revocation guardrail — `resolveBearerToken` hits Mongo every call.
  */
 export async function resolveBearerApiAuth(authorizationHeader: string | undefined): Promise<BearerVariables['apiAuth'] | null> {

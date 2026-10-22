@@ -6,10 +6,9 @@
  */
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { assistCors, publicCors, strictCors } from '../auth/corsProfiles.js';
+import { dualAuthCors, publicCors, strictCors } from '../auth/corsProfiles.js';
 import { clientUrl } from '../config.js';
 import { v1RequestLogger } from '../lib/v1Logger.js';
-import { v1ClaudeRoutes } from '../routes/v1/claude.js';
 import { v1Routes } from '../routes/v1/index.js';
 import { v1BriefGenerateRoutes } from '../routes/v1/itemBriefGenerate.js';
 
@@ -142,15 +141,17 @@ describe('publicCors (/v1 bearer-authed routes)', () => {
     });
 });
 
-describe('assistCors (/v1/claude/* — the one credentialed /v1 exception)', () => {
-    // Mirror index.ts's exact mount order: assistCors on /v1/claude/*, the claude route mounted
-    // FIRST, then publicCors on /v1/* and the rest of /v1. Because the claude route fully handles
+const DUAL_AUTH_PATH = '/v1/items/x/brief/generate';
+
+describe('dualAuthCors (/v1/items/:id/brief/generate — the one credentialed /v1 exception)', () => {
+    // Mirror index.ts's exact mount order: dualAuthCors on the brief-generate path, its route mounted
+    // FIRST, then publicCors on /v1/* and the rest of /v1. Because the dual-auth route fully handles
     // its request before the later publicCors `.use('/v1/*')` runs, publicCors can't clobber the
     // credentialed Allow-Origin back to `*`.
-    function buildAssistApp() {
+    function buildDualAuthApp() {
         return new Hono()
-            .use('/v1/claude/*', assistCors())
-            .post('/v1/claude/assist', (c) => c.json({ ok: true }))
+            .use('/v1/items/:id/brief/generate', dualAuthCors())
+            .post('/v1/items/:id/brief/generate', (c) => c.json({ ok: true }))
             .use('/v1/*', publicCors())
             .post('/v1/items', (c) => c.json({ ok: true }));
     }
@@ -160,8 +161,8 @@ describe('assistCors (/v1/claude/* — the one credentialed /v1 exception)', () 
     });
 
     it('echoes the SPA origin and sends Access-Control-Allow-Credentials on preflight', async () => {
-        const app = buildAssistApp();
-        const res = await app.request('/v1/claude/assist', {
+        const app = buildDualAuthApp();
+        const res = await app.request(DUAL_AUTH_PATH, {
             method: 'OPTIONS',
             headers: { Origin: SPA_ORIGIN, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'Content-Type' },
         });
@@ -173,10 +174,10 @@ describe('assistCors (/v1/claude/* — the one credentialed /v1 exception)', () 
     it('rejects a foreign origin in production: no Allow-Origin header (CSRF backstop)', async () => {
         // Load-bearing: the session cookie is sameSite:'none' in prod (cross-domain SPA↔API), so it
         // rides cross-site. Pinning the origin to clientUrl is what stops a malicious page from
-        // making a credentialed request that reads the proposal + minted executeToken. Echoing any
-        // origin here would be a full read+write CSRF on a money-spending endpoint.
-        const app = buildAssistApp();
-        const res = await app.request('/v1/claude/assist', {
+        // making a credentialed request that reads the response. Echoing any origin here would be
+        // a full read+write CSRF on a money-spending endpoint.
+        const app = buildDualAuthApp();
+        const res = await app.request(DUAL_AUTH_PATH, {
             method: 'OPTIONS',
             headers: { Origin: 'https://evil.example', 'Access-Control-Request-Method': 'POST' },
         });
@@ -184,25 +185,25 @@ describe('assistCors (/v1/claude/* — the one credentialed /v1 exception)', () 
     });
 
     it('does NOT let publicCors clobber the credentialed headers on the actual POST', async () => {
-        // The bug this guards: publicCors is mounted on /v1/* after the claude route. The claude
+        // The bug this guards: publicCors is mounted on /v1/* after the dual-auth route. That
         // route handles the request first and returns, so publicCors never runs to reset Allow-Origin
         // to `*` (illegal with credentials) — the pinned origin + credentials survive to the response.
-        const app = buildAssistApp();
-        const res = await app.request('/v1/claude/assist', { method: 'POST', headers: { Origin: SPA_ORIGIN } });
+        const app = buildDualAuthApp();
+        const res = await app.request(DUAL_AUTH_PATH, { method: 'POST', headers: { Origin: SPA_ORIGIN } });
         expect(res.status).toBe(200);
         expect(res.headers.get('access-control-allow-origin')).toBe(SPA_ORIGIN);
         expect(res.headers.get('access-control-allow-credentials')).toBe('true');
     });
 
     it('still allows a no-Origin (bearer) request — external callers keep working', async () => {
-        const app = buildAssistApp();
-        const res = await app.request('/v1/claude/assist', { method: 'POST' });
+        const app = buildDualAuthApp();
+        const res = await app.request(DUAL_AUTH_PATH, { method: 'POST' });
         expect(res.status).toBe(200);
         expect(await res.json()).toEqual({ ok: true });
     });
 
     it('leaves the rest of /v1 on publicCors (no credentials)', async () => {
-        const app = buildAssistApp();
+        const app = buildDualAuthApp();
         const res = await app.request('/v1/items', {
             method: 'OPTIONS',
             headers: { Origin: 'https://example.com', 'Access-Control-Request-Method': 'POST' },
@@ -239,16 +240,13 @@ describe('combined application: /v1 cross-origin allowed, /sync/push not', () =>
 });
 
 /**
- * The REAL /v1 mount order from index.ts, with both cookie-authed exception routers. Guards the
- * catch-all leak: a `.use('*')` inside `v1ClaudeRoutes` expands to `/v1/*` and, mounted first,
- * would 401 every other /v1 preflight before its cors() runs.
+ * The REAL /v1 mount order from index.ts, with the cookie-authed exception router. Guards the
+ * catch-all leak: a `.use('*')` inside `v1BriefGenerateRoutes` would expand to `/v1/*` and, mounted
+ * first, 401 every other /v1 preflight before its cors() runs.
  */
 function buildRealV1App() {
     return new Hono()
-        .use('/v1/claude/*', assistCors())
-        .use('/v1/claude/*', v1RequestLogger())
-        .route('/v1', v1ClaudeRoutes)
-        .use('/v1/items/:id/brief/generate', assistCors())
+        .use('/v1/items/:id/brief/generate', dualAuthCors())
         .use('/v1/items/:id/brief/generate', v1RequestLogger())
         .route('/v1', v1BriefGenerateRoutes)
         .use('/v1/*', publicCors())
@@ -272,12 +270,6 @@ describe('/v1 mount order (index.ts) — cookie-authed exception routers do not 
         const res = await preflight(buildRealV1App(), '/v1/items/x/brief/generate');
         expect(res.status).toBe(204);
         expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:4173');
-        expect(res.headers.get('access-control-allow-credentials')).toBe('true');
-    });
-
-    it('answers the claude-assist preflight with the credentialed profile', async () => {
-        const res = await preflight(buildRealV1App(), '/v1/claude/assist');
-        expect(res.status).toBe(204);
         expect(res.headers.get('access-control-allow-credentials')).toBe('true');
     });
 

@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import 'dotenv/config';
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
-import { assistCors, publicCors, strictCors } from './auth/corsProfiles.js';
+import { dualAuthCors, publicCors, strictCors } from './auth/corsProfiles.js';
 import { assertBriefFakeModelNotInProduction, assertSessionSecretConfiguredInProduction, shouldStartWebhookRenewalTimer } from './config.js';
 import { noStoreCache } from './lib/noStoreCache.js';
 import { v1RequestLogger } from './lib/v1Logger.js';
@@ -17,7 +17,6 @@ import { authorizationServerMetadata, mcpOAuthRoutes, protectedResourceMetadata 
 import { pushRoutes } from './routes/push.js';
 import { syncRoutes } from './routes/sync.js';
 import { tokensRoutes } from './routes/tokens.js';
-import { v1ClaudeRoutes } from './routes/v1/claude.js';
 import { v1Routes } from './routes/v1/index.js';
 import { v1BriefGenerateRoutes } from './routes/v1/itemBriefGenerate.js';
 import { webhookRoutes } from './routes/webhooks.js';
@@ -58,19 +57,15 @@ const app = new Hono()
     .route('/maintenance', maintenanceRoutes)
     .use('/calendar/*', strictCors())
     .route('/calendar', calendarRoutes)
-    // /v1/claude/* — the ONE cookie-authed exception under /v1 (dual-auth: bearer OR first-party
-    // session cookie). Mounted SEPARATELY and BEFORE v1Routes: Hono runs a sibling sub-router's
-    // catch-all `.use('*')` for any matching path, so leaving claude inside v1Routes would let
-    // v1ItemsRoutes' bearer-only middleware 401 a session request before the dual-auth ran (see
-    // routes/v1/index.ts). It gets the credentialed assistCors profile (echoed origin +
-    // Allow-Credentials) instead of the relaxed publicCors below, plus the shared v1 request logger.
-    .use('/v1/claude/*', assistCors())
-    .use('/v1/claude/*', v1RequestLogger())
-    .route('/v1', v1ClaudeRoutes)
-    // /v1/items/:id/brief/generate — the second cookie-authed exception under /v1 (the in-app
-    // "Generate brief" button). Same isolation + credentialed CORS as the assist routes above;
-    // the exact path pattern keeps every other /v1/items route on the bearer-only publicCors.
-    .use('/v1/items/:id/brief/generate', assistCors())
+    // /v1/items/:id/brief/generate — the ONE cookie-authed exception under /v1 (dual-auth: bearer
+    // OR first-party session cookie, behind the in-app "Generate brief" button). Mounted SEPARATELY
+    // and BEFORE v1Routes: Hono runs a sibling sub-router's catch-all `.use('*')` for any matching
+    // path, so leaving it inside v1Routes would let v1ItemsRoutes' bearer-only middleware 401 a
+    // session request before the dual-auth ran (see routes/v1/index.ts). It gets the credentialed
+    // dualAuthCors profile (pinned origin + Allow-Credentials) instead of the relaxed publicCors
+    // below, plus the shared v1 request logger; the exact path pattern keeps every other /v1/items
+    // route on the bearer-only publicCors.
+    .use('/v1/items/:id/brief/generate', dualAuthCors())
     .use('/v1/items/:id/brief/generate', v1RequestLogger())
     .route('/v1', v1BriefGenerateRoutes)
     // /v1 is the public bearer-authed surface — relaxed CORS so external integrations can call it

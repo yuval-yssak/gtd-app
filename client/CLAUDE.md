@@ -63,7 +63,6 @@ All `fetch()` calls live in `src/api/`. Files with a test seam have a paired `.m
 |---|---|---|
 | `#api/syncClient` | `src/api/syncClient.ts` | `src/api/syncClient.mock.ts` |
 | `#api/syncApi` | `src/api/syncApi.ts` | `src/api/syncApi.mock.ts` |
-| `#api/assistApi` | `src/api/assistApi.ts` | `src/api/assistApi.mock.ts` |
 
 ```json
 "#api/syncClient": {

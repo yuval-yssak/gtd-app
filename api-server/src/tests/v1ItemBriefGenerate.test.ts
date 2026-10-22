@@ -4,8 +4,9 @@ import dayjs from 'dayjs';
 import { Hono } from 'hono';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { issueApiToken } from '../auth/apiTokens.js';
-import { assistCors, publicCors } from '../auth/corsProfiles.js';
+import { dualAuthCors, publicCors } from '../auth/corsProfiles.js';
 import { __resetDefaultStoreForTests } from '../auth/rateLimitMiddleware.js';
+import apiTokensDAO from '../dataAccess/apiTokensDAO.js';
 import itemBriefsDAO from '../dataAccess/itemBriefsDAO.js';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import { generationBucket } from '../lib/brief/briefCap.js';
@@ -30,7 +31,7 @@ vi.mock('../lib/claude/anthropicClient.js', () => ({
 // credentialed profile on its exact path, while everything else under /v1 keeps publicCors.
 const app = new Hono()
     .on(['GET', 'POST'], '/auth/*', (c) => auth.handler(c.req.raw))
-    .use('/v1/items/:id/brief/generate', assistCors())
+    .use('/v1/items/:id/brief/generate', dualAuthCors())
     .route('/v1', v1BriefGenerateRoutes)
     .use('/v1/*', publicCors())
     .route('/v1', v1Routes);
@@ -121,12 +122,13 @@ async function seedBrief(userId: string, itemId: string, origin: BriefOrigin): P
     await itemBriefsDAO.insertOne(row);
 }
 
-type Auth = { token: string } | { sessionCookie: string };
+/** Both at once models the SPA sending its cookie alongside a bearer header — the middleware must prefer the bearer. */
+type Auth = { token: string; sessionCookie?: string } | { sessionCookie: string };
 
 function generate(itemId: string, who: Auth, body?: unknown, origin?: string): Promise<Response> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if ('token' in who) headers.Authorization = `Bearer ${who.token}`;
-    else headers.Cookie = `${SESSION_COOKIE}=${who.sessionCookie}`;
+    if (who.sessionCookie) headers.Cookie = `${SESSION_COOKIE}=${who.sessionCookie}`;
     if (origin) headers.Origin = origin;
     return app.fetch(new Request(`http://localhost:4000/v1/items/${itemId}/brief/generate`, { method: 'POST', headers, body: JSON.stringify(body ?? {}) }));
 }
@@ -188,14 +190,40 @@ describe('POST /v1/items/:id/brief/generate — auth', () => {
 
     it('rejects a bearer token without items.write (403 forbidden_scope) and an anonymous call (401)', async () => {
         const session = await login();
-        const { token } = await bearer(session.userId, ['items.read', 'claude.assist']);
+        const { token } = await bearer(session.userId, ['items.read', 'people.write']);
         const itemId = await seedItem(session.userId);
         const forbidden = await generate(itemId, { token });
         expect(forbidden.status).toBe(403);
         expect((await forbidden.json()) as unknown).toMatchObject({ code: 'forbidden_scope' });
         const anonymous = await app.fetch(new Request(`http://localhost:4000/v1/items/${itemId}/brief/generate`, { method: 'POST' }));
         expect(anonymous.status).toBe(401);
+        expect((await anonymous.json()) as unknown).toMatchObject({ code: 'unauthorized' });
         expect(messagesCreate).not.toHaveBeenCalled();
+    });
+
+    it('lets the bearer token govern when a session cookie rides along (token scopes, not session scopes)', async () => {
+        const session = await login();
+        const { token } = await bearer(session.userId, ['items.read']);
+        const itemId = await seedItem(session.userId);
+        const res = await generate(itemId, { token, sessionCookie: session.sessionCookie });
+        expect(res.status).toBe(403);
+        expect((await res.json()) as unknown).toMatchObject({ code: 'forbidden_scope' });
+        expect(messagesCreate).not.toHaveBeenCalled();
+    });
+
+    it('falls through to the session when the bearer token is revoked', async () => {
+        const session = await login();
+        const { token, tokenId } = await bearer(session.userId);
+        await apiTokensDAO.revokeById(tokenId, session.userId, dayjs().toISOString());
+        const itemId = await seedItem(session.userId);
+        modelSays('Renew the passport before March.');
+        const res = await generate(itemId, { token, sessionCookie: session.sessionCookie });
+        expect(res.status).toBe(200);
+        const [op] = await briefOps(session.userId);
+        if (!op) {
+            throw new Error('expected one brief op');
+        }
+        expect(op.deviceId).toBe('server:brief-ondemand');
     });
 
     it("returns 404 for another user's item and for a missing item", async () => {

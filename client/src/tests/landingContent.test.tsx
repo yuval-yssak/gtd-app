@@ -97,6 +97,8 @@ describe('index.html <noscript> mirror', () => {
         expect(noscript).toContain(`href="${LEGAL_DOCUMENTS.terms.path}"`);
         expect(noscript).toContain('Google Calendar');
         expect(noscript).toContain('Anthropic');
+        // The clarify-with-AI assistant was removed; the mirror must not keep describing it.
+        expect(noscript).not.toMatch(/clarify-with-AI|assistant/i);
         expect(noscript).toContain('never used for advertising');
         expect(noscript).toContain(LANDING_TRADEMARK_NOTICE);
     });

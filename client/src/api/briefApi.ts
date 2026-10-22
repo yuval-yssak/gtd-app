@@ -3,9 +3,9 @@ import { isBrowserOffline } from '../lib/onlineStatus';
 import type { BriefOrigin, StoredItemBrief } from '../types/MyDB';
 
 /**
- * HTTP wrapper for the on-demand brief generator (`POST /v1/items/:id/brief/generate`). Mirrors
- * `assistApi.ts`: a first-party `credentials: 'include'` fetch (the route is dual-auth and accepts
- * the Better Auth session cookie — callers pin it to the item's owner via `withOwnerSession`) plus
+ * HTTP wrapper for the on-demand brief generator (`POST /v1/items/:id/brief/generate`): a
+ * first-party `credentials: 'include'` fetch (the route is dual-auth and accepts the Better Auth
+ * session cookie — callers pin it to the item's owner via `withOwnerSession`) plus
  * a typed error class carrying the server's `code` so the button can branch on pinned / rate-limit
  * / unconfigured.
  */

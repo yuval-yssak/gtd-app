@@ -1,13 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 /**
- * Classifies a thrown agent-loop error into a response code + status + user-facing message, and a
- * log line for the operator. The key distinction:
+ * Classifies an error thrown by an Anthropic call into a response code + status + user-facing
+ * message, and a log line for the operator. The key distinction:
  *
  *   - `agent_unavailable` (503) — the failure is on OUR side of the Anthropic relationship and the
  *     END USER cannot act on it: our API account is out of credits, the key is missing/invalid, the
  *     API is overloaded (529) or rate-limited (429), or any 5xx. The user sees a "temporarily
- *     unavailable, try later" message — distinct from THEIR own per-day spend cap (402).
+ *     unavailable, try later" message.
  *   - `agent_error` (500) — a genuinely unexpected failure (malformed request we built, a bug). The
  *     user sees a generic "couldn't finish, try again". Never 502: the Cloudflare proxy replaces an
  *     origin 502/504 with its own HTML page (no CORS headers, no JSON) — see root CLAUDE.md.
@@ -67,5 +67,5 @@ export function classifyAgentError(err: unknown): ClassifiedAgentError {
         };
     }
     const detail = err instanceof Error ? err.message : 'unknown error';
-    return { status: 500, code: 'agent_error', message: GENERIC_MESSAGE, logLine: `Agent loop failed: ${detail}` };
+    return { status: 500, code: 'agent_error', message: GENERIC_MESSAGE, logLine: `Anthropic call failed: ${detail}` };
 }

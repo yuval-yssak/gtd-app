@@ -54,10 +54,6 @@
             "test": "./src/api/syncApi.mock.ts",
             "default": "./src/api/syncApi.ts"
         },
-        "#api/assistApi": {
-            "test": "./src/api/assistApi.mock.ts",
-            "default": "./src/api/assistApi.ts"
-        },
         "#api/accountApi": {
             "test": "./src/api/accountApi.mock.ts",
             "default": "./src/api/accountApi.ts"

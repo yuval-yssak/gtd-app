@@ -12,7 +12,7 @@ If anything here is unclear, write to [yuval.yssak@gmail.com](mailto:yuval.yssak
 
 **Device and session data.** A random device identifier, a browser label (for example "Chrome on macOS"), an optional name you give the device, your time zone, and — if you enable notifications — the push endpoint your browser vendor assigns. Sign-in sessions record the IP address and user agent that created them.
 
-**Integration data.** Personal API tokens you create (we store only a hash), webhook URLs you register with their signing secret, MCP client registrations, and per-day counts of AI usage.
+**Integration data.** Personal API tokens you create (we store only a hash), webhook URLs you register with their signing secret, and MCP client registrations.
 
 **Technical logs.** Our servers log requests (route, timing, status code, your user id, IP address and user agent) and internal identifiers to diagnose problems — never the text of your items or calendar events, and never email addresses. Logs are kept by Google Cloud Logging for 30 days.
 
@@ -24,7 +24,7 @@ We do **not** use third-party analytics, advertising or tracking services, and s
 
 - To run the Service: store and sync your content between your devices, show it back to you, and keep it available offline.
 - To sync with Google Calendar when you connect it: mirror events into the app, push the changes you make back to Google, and mark events done.
-- To generate AI features: one-line item briefs (created automatically for open items with longer notes) and the "clarify with AI" assistant (only when you ask for it).
+- To generate one-line item briefs (created automatically for open items with longer notes).
 - To send notifications you opt into (web push) and, where we have your address, service messages (for example, when a calendar connection needs to be re-authorised).
 - To secure the Service, prevent abuse and enforce our Terms.
 - To understand where the Service helps or gets in the way, and to improve it, using usage metrics — see "Product research" below.
@@ -33,12 +33,11 @@ We never sell personal data, never use your content for advertising, and never u
 
 ## AI processing
 
-Two features send content to Anthropic, the provider of the Claude models:
+One feature sends content to Anthropic, the provider of the Claude models:
 
 - **Item briefs** send an item's status, title and notes; for calendar items this can include an event description imported from Google Calendar. No name, email address or user identifier accompanies them.
-- **Clarify with AI** sends the item you are working on (title, notes, status), any instruction you type, and — only when the assistant needs them — the names of your work contexts, the names and email addresses of people in your address book, the first 500 characters of related items, and the titles and times of calendar events.
 
-Anthropic processes this data under its commercial API terms, which do not permit it to train models on API inputs or outputs. Briefs are generated automatically for every open item whose notes are long enough to need one; the "Show briefs" switch in Settings hides them on that device but does not stop generation. The assistant only runs when you ask it to.
+Anthropic processes this data under its commercial API terms, which do not permit it to train models on API inputs or outputs. Briefs are generated automatically for every open item whose notes are long enough to need one; the "Show briefs" switch in Settings hides them on that device but does not stop generation.
 
 ## Product research
 
@@ -51,7 +50,7 @@ We want to learn where the Service helps and where it gets in the way. To do tha
 
 ## Google API Services disclosure
 
-Done's use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes), including the Limited Use requirements. Calendar data is used only to provide user-facing features of the app: calendar sync, and — as described under "AI processing" — item briefs for calendar items and the event context the "clarify with AI" assistant uses when you ask it to. It is never used for advertising, never sold, never used to train machine-learning models, and only read by a person with your consent (for example, to answer a support request you raised), for security purposes such as investigating abuse, or when required by law. For product research it is used only in aggregated, anonymised form and is never read by a person.
+Done's use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy#additional_requirements_for_specific_api_scopes), including the Limited Use requirements. Calendar data is used only to provide user-facing features of the app: calendar sync, and — as described under "AI processing" — item briefs for calendar items. It is never used for advertising, never sold, never used to train machine-learning models, and only read by a person with your consent (for example, to answer a support request you raised), for security purposes such as investigating abuse, or when required by law. For product research it is used only in aggregated, anonymised form and is never read by a person.
 
 Disconnecting the calendar in Settings deletes the tokens we hold and asks Google to revoke the grant, which ends our access. If that revocation does not go through (for example, Google was unreachable at that moment), you can also remove the grant from [your Google Account permissions](https://myaccount.google.com/permissions).
 

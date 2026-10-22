@@ -55,9 +55,9 @@ Two parallel auth modes share the same user identity space.
 - Resolution: `resolveBearerToken(authorizationHeader)` looks up by `tokenHash` and rejects revoked rows.
 - Middleware: `authenticateBearer` (`src/auth/bearerMiddleware.ts`) parses `Authorization: Bearer gtd_<…>` and sets `c.var.apiAuth = { userId, tokenId, scopes }`. Bumps `lastUsedTs` fire-and-forget. On failed auth, consumes from the IP-keyed anon rate-limit bucket so a flood of bad credentials cannot exhaust tokenHash lookups.
 - Production token-mint UI lives at `Settings → Personal API tokens`. Cap of `PROD_TOKEN_CAP_PER_USER` (20) active tokens; dev's `POST /dev/api-tokens` has its own higher cap (50) — **the two caps are deliberately not a shared constant**.
-- **Scopes** (`ApiTokenScope` in `types/entities.ts`): `items.capture|read|write`, `routines.read|write`, `people.read|write`, `contexts.read|write`, `reassign`, `reassign.accept`, `webhooks.manage`, `claude.assist`. Default-mint is `DEFAULT_API_TOKEN_SCOPES` = `[items.capture, items.read]`. Pre-scopes tokens are lazily backfilled on first authenticated use.
+- **Scopes** (`ApiTokenScope` in `types/entities.ts`): `items.capture|read|write`, `routines.read|write`, `people.read|write`, `contexts.read|write`, `reassign`, `reassign.accept`, `webhooks.manage`. Default-mint is `DEFAULT_API_TOKEN_SCOPES` = `[items.capture, items.read]`. Pre-scopes tokens are lazily backfilled on first authenticated use.
 
-Some routes are dual-auth (`authenticateBearerOrSession`) — the Claude-assist and brief-generate endpoints, reached both by the SPA's cookie and by bearer callers.
+The brief-generate endpoint is dual-auth (`authenticateBearerOrSessionWith`, `auth/dualAuthMiddleware.ts`) — reached both by the SPA's cookie and by bearer callers.
 
 > ⚠️ **Do not add an in-process token cache** in `apiTokens.ts` or `bearerMiddleware.ts` without
 > also wiring an invalidation channel (SSE/Redis pub-sub). Revocation today goes straight to
@@ -72,7 +72,7 @@ A user identified by Better Auth and a user identified by a bearer token resolve
 Three per-router profiles in `src/auth/corsProfiles.ts`, applied per-route rather than globally — pick deliberately when mounting a new router:
 - `strictCors()` — cookie-authenticated routes. Origin pinned to `clientUrl` in production, `credentials: true`.
 - `publicCors()` — bearer-only `/v1/*`. `origin: '*'`, `credentials: false` (the bearer token is the auth gate).
-- `assistCors()` — credentialed `/v1` routes (Claude-assist, brief generate). Origin pinned to `clientUrl`; a wildcard is illegal alongside credentials and would let a malicious origin ride the victim's `sameSite: 'none'` session cookie.
+- `dualAuthCors()` — credentialed `/v1` routes (brief generate). Origin pinned to `clientUrl`; a wildcard is illegal alongside credentials and would let a malicious origin ride the victim's `sameSite: 'none'` session cookie.
 
 ### Adding New Routes
 1. Create a router in `src/routes/<feature>.ts`
@@ -81,8 +81,7 @@ Three per-router profiles in `src/auth/corsProfiles.ts`, applied per-route rathe
 Currently mounted:
 - `/sync` — offline-first batch sync (the first-party client's only mutation surface — see "Sync Architecture")
 - `/v1` — public REST API (`routes/v1/`); bearer-auth, idempotent create + list/search + composites + reassign + batch. Documented in `../docs/PUBLIC_API.md`. Reuses `recordOperation` + SSE/web-push/GCal pushback so public-API writes flow through the same fan-out as `/sync`.
-- `/v1/claude` — Lane A Claude-assist (propose/apply); mounted **before** the `/v1/*` catch-all so its `assistCors` + logger win
-- `/v1/items/:id/brief/generate` — on-demand brief generation; likewise mounted before the catch-all
+- `/v1/items/:id/brief/generate` — on-demand brief generation; mounted **before** the `/v1/*` catch-all so its `dualAuthCors` + logger win
 - `/v1/webhooks` — outbound webhook subscriptions
 - `/push` — web push subscriptions
 - `/devices` — device-side session list (which accounts a device hosts) + device management

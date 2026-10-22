@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { withTimeout } from '../lib/withTimeout.js';
 
 /**
- * Unit-tests the real timer + Promise.race behavior of withTimeout (the degrade test in
- * v1ClaudeAssist only simulates a timeout by reproducing the error string, so the real timer, race
- * ordering, and no-leak property are unverified there). Fake timers are safe here — no I/O.
+ * Unit-tests the real timer + Promise.race behavior of withTimeout (its callers only ever see
+ * the rejection, so the real timer, race ordering, and no-leak property are verified here). Fake
+ * timers are safe here — no I/O.
  */
 describe('withTimeout', () => {
     beforeEach(() => {

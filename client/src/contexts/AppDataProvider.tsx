@@ -121,9 +121,9 @@ export interface AppData {
     /**
      * Like `withActiveAccountSession`, but pins the session to a SPECIFIC owner `userId` rather than
      * the active account. Wrap API calls that target an entity owned by a possibly-non-active account
-     * — e.g. Clarify-with-Claude on an inbox item that belongs to a different signed-in account, where
-     * the ambient cookie session would otherwise resolve as the wrong owner (404 not_found on assist /
-     * 403 forbidden on apply). No-op pivot on a single-account device.
+     * — e.g. "Generate brief" on an item that belongs to a different signed-in account, where the
+     * ambient cookie session would otherwise resolve as the wrong owner (404 not_found). No-op pivot
+     * on a single-account device.
      */
     withOwnerSession: <T>(userId: string, task: () => Promise<T>) => Promise<T>;
 }
@@ -472,9 +472,9 @@ export function AppDataProvider({ db, children }: PropsWithChildren<{ db: IDBPDa
     const withActiveAccountSession = useCallback(<T,>(task: () => Promise<T>) => (account ? withAccountSession(db, account.id, task) : task()), [db, account]);
 
     // Pins the active Better Auth session to a specific entity owner (not necessarily the active
-    // account) for the duration of `task`. Used by Clarify-with-Claude, where the reviewed item may
-    // belong to a non-active signed-in account; without the pivot the assist/apply calls resolve
-    // under the ambient cookie session and the server rejects them (404 not_found / 403 forbidden).
+    // account) for the duration of `task`. Used by the brief generator and the calendar sweeps, where
+    // the target entity may belong to a non-active signed-in account; without the pivot the call
+    // resolves under the ambient cookie session and the server rejects it (404 not_found).
     const withOwnerSession = useCallback(<T,>(userId: string, task: () => Promise<T>) => withAccountSession(db, userId, task), [db]);
 
     const authBundle = useMemo<AuthBundle>(

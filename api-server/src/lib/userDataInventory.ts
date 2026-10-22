@@ -122,6 +122,9 @@ export const USER_DATA_COLLECTIONS: readonly UserCollectionSpec[] = [
     // `rotatedToId` is the hash of the successor token — the live one — so it goes too.
     { collection: 'oauthRefreshTokens', ownedBy: 'user', filter: byUser, export: { kind: 'redacted', redact: omitFields('_id', 'rotatedToId') } },
     // ── AI ────────────────────────────────────────────────────────────────────
+    // RETIRED: the per-user daily spend ledger of the removed "Clarify with Claude" feature (2026-10-22).
+    // No DAO writes it any more, but rows already in staging/prod stay user-scoped until the collection
+    // is dropped — keep it in the deletion scope so `DELETE /auth/me` still removes them.
     { collection: 'claudeUsage', ownedBy: 'user', filter: byUser, export: { kind: 'full' } },
     // Batch rows themselves are cross-user (see NOT_USER_SCOPED_COLLECTIONS); only the per-user request identities are the user's.
     { collection: 'briefBatchRequests', ownedBy: 'user', filter: byUser, export: { kind: 'full' } },

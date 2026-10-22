@@ -1,6 +1,6 @@
 import { type Context, Hono } from 'hono';
-import { authenticateBearerOrSessionWith } from '../../auth/assistAuthMiddleware.js';
 import type { BearerVariables } from '../../auth/bearerMiddleware.js';
+import { authenticateBearerOrSessionWith } from '../../auth/dualAuthMiddleware.js';
 import { authenticatedRateLimit } from '../../auth/rateLimitMiddleware.js';
 import { requireScope } from '../../auth/scopeMiddleware.js';
 import itemsDAO from '../../dataAccess/itemsDAO.js';
@@ -13,10 +13,10 @@ import { presentItem } from './projections/item.js';
 /**
  * `POST /v1/items/:id/brief/generate` — on-demand brief generation (docs/plans/item-brief.md § 2.2).
  *
- * Dual auth like `/v1/claude/*`: an external bearer token carrying `items.write`, OR the
- * first-party session cookie (which synthesises `items.write` — the user acting on their own
- * data). Mounted SEPARATELY from `v1Routes` and BEFORE it in `index.ts`, under the credentialed
- * `assistCors()` profile, for the same reason the assist routes are (see routes/v1/index.ts).
+ * Dual auth: an external bearer token carrying `items.write`, OR the first-party session cookie
+ * (which synthesises `items.write` — the user acting on their own data). Mounted SEPARATELY from
+ * `v1Routes` and BEFORE it in `index.ts`, under the credentialed `dualAuthCors()` profile, so the
+ * sibling routers' bearer-only catch-all cannot 401 a session request first (see routes/v1/index.ts).
  *
  * Two rate limits stack: the token's write bucket (`authenticatedRateLimit`) and the per-USER
  * generation cap (`lib/brief/briefCap.ts`), charged only for a plan that will reach the model.
