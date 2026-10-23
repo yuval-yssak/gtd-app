@@ -21,7 +21,7 @@
     vertical-align: middle;
 }
 
-/* pr widened to accommodate copy-id + edit + received buttons in secondaryAction */
+/* pr widened to accommodate move-to ("By date") + copy-id + edit + received buttons in secondaryAction */
 .listItemText {
-    padding-right: 7.5rem;
+    padding-right: 10.5rem;
 }

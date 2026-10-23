@@ -40,6 +40,7 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { RowActionButton } from '../../components/RowActionButton';
 import { useRoutineEditor } from '../../components/routineEditor/useRoutineEditor';
 import { PauseRoutineConfirmDialog } from '../../components/routines/PauseRoutineConfirmDialog';
 import { RoutineWeekGrid } from '../../components/routines/RoutineWeekGrid';
@@ -54,6 +55,7 @@ import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { filterRoutinesByTitle, groupRoutinesByFrequency, splitActivePaused } from '../../lib/routineGrouping';
 import { buildRoutineNextItemIndex, describeNextItemDate } from '../../lib/routineNextItem';
 import { parseRoutinesSearch, type RoutinesTab, type RoutinesView } from '../../lib/routinesUrlParams';
+import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import { formatRoutineSchedule } from '../../lib/rruleUtils';
 import type { StoredRoutine } from '../../types/MyDB';
 import styles from './-routines.module.css';
@@ -179,11 +181,12 @@ function RoutinesPage() {
     function renderRoutineRow(routine: StoredRoutine) {
         return (
             <ListItem
+                {...SHORTCUT_ROW_PROPS}
                 disablePadding
                 className={styles.item}
                 secondaryAction={
                     <Box sx={{ display: 'flex', gap: 0.5 }}>
-                        <CopyIdButton id={routine._id} testId="routineRowCopyIdButton" />
+                        <CopyIdButton isRowAction id={routine._id} testId="routineRowCopyIdButton" />
                         <Tooltip title="Open routine page">
                             <IconButton size="small" onClick={(e) => openRoutinePage(routine, e)} data-testid="routineRowOpenPageButton">
                                 <OpenInNewIcon fontSize="small" />
@@ -209,11 +212,14 @@ function RoutinesPage() {
                                 </IconButton>
                             </Tooltip>
                         )}
-                        <Tooltip title="Edit">
-                            <IconButton size="small" onClick={(e) => editor.openEditor({ routine, event: e })} data-testid="routineRowEditButton">
-                                <EditIcon fontSize="small" />
-                            </IconButton>
-                        </Tooltip>
+                        <RowActionButton
+                            rowAction="edit"
+                            label="Edit"
+                            icon={<EditIcon fontSize="small" />}
+                            size="small"
+                            onClick={(e) => editor.openEditor({ routine, event: e })}
+                            data-testid="routineRowEditButton"
+                        />
                         <Tooltip title="Delete">
                             <IconButton size="small" color="error" onClick={() => setRoutineToDelete(routine)} data-testid="routineRowDeleteButton">
                                 <DeleteOutlineIcon fontSize="small" />

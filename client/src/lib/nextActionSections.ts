@@ -54,12 +54,18 @@ export function groupIntoSections<T extends Pick<StoredItem, 'expectedBy'>>(sort
     }, []);
 }
 
+/** The one section of a flat list (the Inbox, Someday / Maybe): no day, no header. */
+export function flatSection<T>(key: string, label: string, items: T[]): NextActionSection<T> {
+    return { dayKey: null, key, label, isOverdue: false, items };
+}
+
 /** A virtualizer row: section headers are rows too, so they scroll with the list. */
 export type FlatRow<T> = { kind: 'header'; section: NextActionSection<T> } | { kind: 'item'; section: NextActionSection<T>; item: T; isLastInSection: boolean };
 
-export function flattenSections<T>(sections: ReadonlyArray<NextActionSection<T>>): FlatRow<T>[] {
+/** Every section's rows in order, each preceded by its header row unless `hasHeaders` is false (a flat list — the Inbox, Someday). */
+export function flattenSections<T>(sections: ReadonlyArray<NextActionSection<T>>, hasHeaders = true): FlatRow<T>[] {
     return sections.flatMap((section) => [
-        { kind: 'header' as const, section },
+        ...(hasHeaders ? [{ kind: 'header' as const, section }] : []),
         ...section.items.map((item, idx) => ({ kind: 'item' as const, section, item, isLastInSection: idx === section.items.length - 1 })),
     ]);
 }
@@ -67,4 +73,9 @@ export function flattenSections<T>(sections: ReadonlyArray<NextActionSection<T>>
 /** Virtualizer index of an item's row (headers count as rows), or -1 when the item is not rendered. */
 export function flatIndexOfItem<T extends { _id: string }>(rows: readonly FlatRow<T>[], itemId: string): number {
     return rows.findIndex((row) => row.kind === 'item' && row.item._id === itemId);
+}
+
+/** The item rows of a flattened list (a flat list renders no header rows anyway). */
+export function itemRows<T>(rows: readonly FlatRow<T>[]): Array<Extract<FlatRow<T>, { kind: 'item' }>> {
+    return rows.flatMap((row) => (row.kind === 'item' ? [row] : []));
 }

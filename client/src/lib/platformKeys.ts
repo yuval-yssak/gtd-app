@@ -4,7 +4,23 @@
  * teaches is built from arrows and the modifiers both keyboards have, and only its LABEL differs.
  */
 
-export type ChordPart = 'alt' | 'shift' | 'up' | 'down' | 'left' | 'right' | 'space' | 'enter' | 'esc' | 'tab' | 'home' | 'end' | 'pageUp' | 'pageDown';
+export type ChordPart =
+    | 'alt'
+    | 'shift'
+    | 'up'
+    | 'down'
+    | 'left'
+    | 'right'
+    | 'space'
+    | 'enter'
+    | 'esc'
+    | 'tab'
+    | 'home'
+    | 'end'
+    | 'pageUp'
+    | 'pageDown'
+    | 'f6'
+    | 'mod';
 
 /** macOS and iOS: ⌥ / ⇧ glyphs, and Cmd rather than Ctrl for the browser's own shortcuts. */
 export function isApplePlatform(): boolean {
@@ -26,6 +42,10 @@ const APPLE_GLYPHS: Record<ChordPart, string> = {
     end: 'Fn →',
     pageUp: 'Fn ↑',
     pageDown: 'Fn ↓',
+    // Mac keyboards send the media key unless "Use F1, F2, etc. keys as standard function keys" is on.
+    f6: 'Fn F6',
+    // The platform's command key: ⌘ on a Mac, Ctrl elsewhere (Cmd/Ctrl+Enter saves the editor).
+    mod: '⌘',
 };
 
 const PC_LABELS: Record<ChordPart, string> = {
@@ -43,6 +63,8 @@ const PC_LABELS: Record<ChordPart, string> = {
     end: 'End',
     pageUp: 'PgUp',
     pageDown: 'PgDn',
+    f6: 'F6',
+    mod: 'Ctrl',
 };
 
 /** "⌥⇧↑" on a Mac, "Alt+Shift+↑" elsewhere. */

@@ -1,8 +1,6 @@
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
-import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import EditIcon from '@mui/icons-material/Edit';
-import KeyboardIcon from '@mui/icons-material/KeyboardOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
 import SellOutlinedIcon from '@mui/icons-material/SellOutlined';
@@ -11,7 +9,6 @@ import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
 import FormControlLabel from '@mui/material/FormControlLabel';
-import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -24,10 +21,9 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import classNames from 'classnames';
 import dayjs from 'dayjs';
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { WindowVirtualizer, type WindowVirtualizerHandle } from 'virtua';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
@@ -35,23 +31,24 @@ import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
-import { MoveToSheet } from '../../components/nextActions/MoveToSheet';
-import { ReorderShortcutsDialog } from '../../components/nextActions/ReorderShortcutsDialog';
 import { CollapsibleChipGroup } from '../../components/pickers/CollapsibleChipGroup';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
+import { RowActionButton } from '../../components/RowActionButton';
+import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
+import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
+import { rankedHeaderClassName, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { clarifyToDone, reorderItem } from '../../db/itemMutations';
+import { clarifyToDone } from '../../db/itemMutations';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
-import { type ReorderCommit, useNextActionsDrag } from '../../hooks/useNextActionsDrag';
-import { type RowCommand, useNextActionsRovingFocus } from '../../hooks/useNextActionsRovingFocus';
+import { useRankedList } from '../../hooks/useRankedList';
+import { type RovingRegionApi, useRovingRegion } from '../../hooks/useRovingRegion';
 import { useTodayIso } from '../../hooks/useTodayIso';
 import { compareNextActions } from '../../lib/compareNextActions';
 import { getTodayIso } from '../../lib/dayClock';
-import { grabPreviewOrder } from '../../lib/dragReorder';
 import { omitArchived, rankMergedOptionsByUsage } from '../../lib/entityUsage';
 import { filterItemsByQuery, itemContextTags, itemPersonRefIds, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
 import { isGhostOf } from '../../lib/listGhosts';
@@ -64,10 +61,9 @@ import {
     sameNameIds,
 } from '../../lib/mergedFilterOptions';
 import { missingClarifications } from '../../lib/missingClarifications';
-import { flatIndexOfItem, flattenSections, groupIntoSections, type NextActionSection } from '../../lib/nextActionSections';
-import { isFocusFree, ROW_BUTTON_ATTR, ROW_HANDLE_ATTR, ROW_ITEM_ATTR, ROW_SECTION_ATTR, rowElement } from '../../lib/nextActionsRowDom';
+import { groupIntoSections } from '../../lib/nextActionSections';
+import { NEXT_ACTIONS_ROW_ACTIONS } from '../../lib/nextActionsKeys';
 import { type NextActionsUrlState, parseNextActionsSearch, TIME_FILTER_OPTIONS } from '../../lib/nextActionsUrlParams';
-import { chordLabel, isApplePlatform } from '../../lib/platformKeys';
 import { isTicklerHidden } from '../../lib/ticklerVisibility';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import type { EnergyLevel, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -139,13 +135,15 @@ interface MergedFilterChipRowProps {
     activeColor: 'primary' | 'info';
     icon?: React.ReactElement;
     testId: string;
+    /** The filter bar's keyboard-region item props (out of the tab order, walked by arrows). */
+    itemProps: RovingRegionApi['itemProps'];
 }
 
 // One row of merged filter chips (contexts or people). Active state comes from the resolved
 // selection — the same source matchesFilters uses — so an applied filter always lights its chip,
 // even when the URL holds a hidden account's twin id. Long rows collapse to the most-used chips
 // behind a "+N more" expander (see CollapsibleChipGroup).
-function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activeColor, icon, testId }: MergedFilterChipRowProps) {
+function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activeColor, icon, testId, itemProps }: MergedFilterChipRowProps) {
     if (options.length === 0) {
         return null;
     }
@@ -158,6 +156,7 @@ function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activ
             keyOf={(option) => option.canonicalId}
             testId={testId}
             sx={{ mb: 1 }}
+            expanderChipProps={itemProps}
             renderChip={(option) => {
                 const isActive = option.canonicalId === selected?.option?.canonicalId;
                 return (
@@ -169,6 +168,7 @@ function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activ
                         color={isActive ? activeColor : 'default'}
                         onClick={() => onToggle(option)}
                         data-testid={testId}
+                        {...itemProps}
                     />
                 );
             }}
@@ -256,36 +256,14 @@ export function buildRowSecondary(item: StoredItem, { showTags, contextsById, pe
  */
 export const TOUCH_UI_MEDIA_QUERY = '(hover: none) and (pointer: coarse)';
 
-/** A contextmenu raised by a touch long press (Chrome/Android dispatch it as a PointerEvent); a mouse right-click is not. */
-function isTouchContextMenu(event: Event): boolean {
-    return 'pointerType' in event && event.pointerType === 'touch';
-}
-
-/** The rows' (and the handle's) screen-reader description, spelled for the platform (⌥ on a Mac, Alt elsewhere). */
-export function reorderHintText(isApple: boolean): string {
-    const label = (parts: Parameters<typeof chordLabel>[0]) => chordLabel(parts, isApple);
-    return (
-        'Arrow Up or Down moves between rows, Home and End to the first and last row, Arrow Right into the row’s buttons. ' +
-        'Enter opens the row; E edits, D marks it done, C copies its id, M opens Move to. ' +
-        `Press Space to pick the row up, Arrow Up or Down to move it, ${label(['shift', 'up'])} or ${label(['shift', 'down'])} to jump to the top or bottom, ` +
-        `Space to drop, Escape to cancel. ${label(['alt', 'up'])} or ${label(['alt', 'down'])} moves the row one slot; ` +
-        `${label(['alt', 'shift', 'up'])} or ${label(['alt', 'shift', 'down'])} moves it to the top or bottom of its day.`
-    );
-}
-
 function NextActionsPage() {
     useDocumentTitle('Next Actions');
     const { db } = Route.useRouteContext();
     const { items, workContexts, people, allWorkContexts, allPeople, routines, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-    const isApple = useMemo(isApplePlatform, []);
-    const virtualizerRef = useRef<WindowVirtualizerHandle>(null);
-    const dragHintId = useId();
-    const rowHintId = useId();
-    // Stored by id so the sheet always commits against the LIVE section (a pull can change it while the sheet is open).
-    const [moveTarget, setMoveTarget] = useState<{ itemId: string; sectionKey: string } | null>(null);
-    const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
+    // The filter bar is one keyboard region: Tab lands on it once, arrows walk the chips and the switch.
+    const filterRegion = useRovingRegion({ orientation: 'both', label: 'Filters' });
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
     const urlFilters = Route.useSearch();
     const navigate = useNavigate();
@@ -421,100 +399,12 @@ function NextActionsPage() {
         handOff();
     }
 
-    /**
-     * A keyboard user (D, or Enter on the Done button) must not be left on the fading ghost row:
-     * captured BEFORE the row leaves, the hand-off moves focus to its neighbour afterwards — unless
-     * the user has put focus somewhere else meanwhile (the search field), which is never stolen.
-     */
-    function focusHandOffFrom(itemId: string): () => void {
-        const row = rowElement(itemId);
-        const hadFocus = row?.contains(document.activeElement) === true;
-        const next = roving.neighbourRowId(itemId);
-        return () => {
-            const current = rowElement(itemId);
-            if (hadFocus && next !== undefined && (!current || isFocusFree(current))) {
-                roving.focusRow(next);
-            }
-        };
-    }
-
-    const openMoveTo = useCallback(
-        (item: StoredItem, section: NextActionSection<StoredItem>) => setMoveTarget({ itemId: item._id, sectionKey: section.key }),
-        [],
-    );
-
-    // The one commit every reorder gesture (drag, keyboard, Move to…) runs: the section's LIVE
-    // rows (ghosts are fading leftovers — never a neighbour, never re-keyed) as displayed, plus the
-    // neighbours by id; `reorderItem` reads the full day section itself. D5: this runs under active
-    // filters/search too — the key is minted between the visible neighbours.
-    const sectionsRef = useRef(sections);
-    useLayoutEffect(() => {
-        sectionsRef.current = sections;
-    }, [sections]);
     // Every account in the merged view, whether or not any of its rows is visible right now: they
     // share the keyspace, so a re-key must include them.
     const ownerIds = useMemo(() => [...new Set(visibleNextActions.map((row) => row.userId))], [visibleNextActions]);
-    const commitReorder = useCallback(
-        async ({ sectionKey, itemId, aboveId, belowId }: ReorderCommit) => {
-            const section = sectionsRef.current.find((candidate) => candidate.key === sectionKey);
-            const live = section?.items.filter((row) => !isGhost(row)) ?? [];
-            const moved = await reorderItem(db, { sectionItems: live, itemId, aboveId, belowId, ownerIds });
-            if (moved) {
-                await refreshItems();
-            }
-            return moved !== null;
-        },
-        [db, isGhost, refreshItems, ownerIds],
-    );
-    // Reads the rendered rows through a ref: they are derived from the drag state this callback feeds.
-    const flatRowsRef = useRef<ReturnType<typeof flattenSections<StoredItem>>>([]);
-    const scrollRowIntoView = useCallback((itemId: string) => {
-        const flatIndex = flatIndexOfItem(flatRowsRef.current, itemId);
-        if (flatIndex >= 0) {
-            virtualizerRef.current?.scrollToIndex(flatIndex, { align: 'nearest' });
-        }
-    }, []);
-    const drag = useNextActionsDrag({ sections, isGhost, onCommit: commitReorder, scrollRowIntoView });
-    // A keyboard grab renders its section in preview order — the grabbed row really moves to its
-    // slot (so it stays mounted wherever the slot scrolls to); a pointer drag shifts rows with
-    // transforms instead and renders the true order.
-    const grabState = drag.previewGrab;
-    const renderedSections = useMemo(
-        () =>
-            grabState
-                ? sections.map((section) =>
-                      section.key === grabState.sectionKey ? { ...section, items: grabPreviewOrder(section.items, grabState) } : section,
-                  )
-                : sections,
-        [sections, grabState],
-    );
-    const flatRows = useMemo(() => flattenSections(renderedSections), [renderedSections]);
-    useLayoutEffect(() => {
-        flatRowsRef.current = flatRows;
-    }, [flatRows]);
-    const onRowCommand = useCallback(
-        (command: RowCommand, item: StoredItem, section: NextActionSection<StoredItem>) => {
-            if (command.type === 'grab') {
-                drag.grab(item, section);
-            } else if (command.type === 'commitNudge') {
-                drag.commitStep(item, section, { delta: command.delta });
-            } else if (command.type === 'commitJump') {
-                drag.commitStep(item, section, { edge: command.edge });
-            }
-        },
-        [drag.grab, drag.commitStep],
-    );
-    const roving = useNextActionsRovingFocus({ flatRows, isGhost, virtualizerRef, isReorderActive: drag.drag !== null, onRowCommand });
-    const moveTargetSection = useMemo(() => sections.find((section) => section.key === moveTarget?.sectionKey), [sections, moveTarget]);
-    const moveTargetItem = useMemo(() => moveTargetSection?.items.find((row) => row._id === moveTarget?.itemId) ?? null, [moveTargetSection, moveTarget]);
-    const moveTargetLive = useMemo(() => moveTargetSection?.items.filter((row) => !isGhost(row)) ?? [], [moveTargetSection, isGhost]);
-    // A target that vanished while the sheet was open (completed elsewhere, pulled away) closes the
-    // sheet on its own; forget it too, or an undo bringing the row back would reopen the sheet.
-    useEffect(() => {
-        if (moveTarget && !moveTargetItem) {
-            setMoveTarget(null);
-        }
-    }, [moveTarget, moveTargetItem]);
+    // The drag, keyboard grab, roving focus and Move to sheet (shared with every list that has a manual order).
+    const ranked = useRankedList({ db, sections, isGhost, ownerIds, refreshItems, regionLabel: 'Next actions' });
+    const { roving, flatRows, virtualizerRef, openMoveTo, focusHandOffFrom } = ranked;
 
     // Ghosts are fading leftovers, not open work — the header count reflects live rows only.
     const liveNextActionCount = nextActions.filter((item) => !isGhost(item)).length;
@@ -535,11 +425,6 @@ function NextActionsPage() {
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
                 <ListSearchButton onToggle={search.toggleSearch} testId="nextActionsSearchButton" />
-                <Tooltip title="Keyboard shortcuts">
-                    <IconButton size="small" aria-label="Keyboard shortcuts" onClick={() => setIsShortcutsOpen(true)} data-testid="nextActionsShortcutsButton">
-                        <KeyboardIcon fontSize="small" />
-                    </IconButton>
-                </Tooltip>
             </Box>
             {search.isOpen && (
                 <ListSearchField
@@ -550,11 +435,13 @@ function NextActionsPage() {
                     testId="nextActionsSearchInput"
                 />
             )}
-            {/* Filter bar */}
+            {/* Filter bar — one keyboard region (role="toolbar": arrows walk it, Tab leaves it). */}
             <Box
+                role="toolbar"
                 sx={{
                     mb: 2,
                 }}
+                {...filterRegion.regionProps}
             >
                 <MergedFilterChipRow
                     options={liveContextOptions}
@@ -563,6 +450,7 @@ function NextActionsPage() {
                     onToggle={(option) => toggleMergedFilter('context', option)}
                     activeColor="primary"
                     testId="nextActionsContextFilterChip"
+                    itemProps={filterRegion.itemProps}
                 />
                 <MergedFilterChipRow
                     options={livePersonOptions}
@@ -572,6 +460,7 @@ function NextActionsPage() {
                     activeColor="info"
                     icon={<PersonOutlineIcon />}
                     testId="nextActionsPersonFilterChip"
+                    itemProps={filterRegion.itemProps}
                 />
                 <Stack
                     direction="row"
@@ -589,6 +478,7 @@ function NextActionsPage() {
                             color={urlFilters.energy === e ? energyColors[e] : 'default'}
                             onClick={() => toggleFilter('energy', e)}
                             data-testid="nextActionsEnergyFilterChip"
+                            {...filterRegion.itemProps}
                         />
                     ))}
                     {TIME_FILTER_OPTIONS.map((t) => (
@@ -600,13 +490,20 @@ function NextActionsPage() {
                             color={urlFilters.time === t ? 'primary' : 'default'}
                             onClick={() => toggleFilter('time', t)}
                             data-testid="nextActionsTimeFilterChip"
+                            {...filterRegion.itemProps}
                         />
                     ))}
                 </Stack>
                 <FormControlLabel
                     sx={{ mt: 0.5 }}
                     control={
-                        <Switch size="small" checked={showTags} onChange={(e) => onShowTagsToggled(e.target.checked)} data-testid="nextActionsShowTagsToggle" />
+                        <Switch
+                            size="small"
+                            checked={showTags}
+                            onChange={(e) => onShowTagsToggled(e.target.checked)}
+                            data-testid="nextActionsShowTagsToggle"
+                            slotProps={{ input: filterRegion.itemProps }}
+                        />
                     }
                     label={<Typography variant="body2">Show tags</Typography>}
                 />
@@ -640,7 +537,7 @@ function NextActionsPage() {
                     role="list"
                     className={styles.list}
                     aria-label="Next actions"
-                    aria-describedby={dragHintId}
+                    aria-describedby={ranked.hintIds.list}
                     data-testid="nextActionsList"
                     {...roving.listProps}
                 >
@@ -654,10 +551,7 @@ function NextActionsPage() {
                                         // subtitle2, not overline: overline's text-transform would shout "TODAY" and
                                         // turn the weekday/month casing into noise.
                                         variant="subtitle2"
-                                        className={classNames(styles.sectionHeader, {
-                                            [styles.sectionHeaderOverdue]: row.section.isOverdue,
-                                            [styles.dimmedSection]: drag.drag !== null && drag.drag.sectionKey !== row.section.key,
-                                        })}
+                                        className={rankedHeaderClassName(ranked, row.section)}
                                         data-testid="nextActionSectionHeader"
                                         data-section-key={row.section.key}
                                     >
@@ -667,70 +561,54 @@ function NextActionsPage() {
                             }
                             const { item, section } = row;
                             const missingLabels = missingClarifications(item, hasAtLeastOne(workContexts));
-                            const isDragged = drag.drag?.itemId === item._id;
-                            const isPointerDragged = isDragged && !drag.drag?.isKeyboard;
-                            const isOtherSection = drag.drag !== null && drag.drag.sectionKey !== section.key;
                             const rowIsGhost = isGhost(item);
                             return (
                                 <ListRowShell key={item._id} itemId={item._id} isGhost={rowIsGhost} onGhostExited={onGhostExited}>
                                     <ListItem
                                         disablePadding
-                                        className={classNames(styles.item, styles.rowShell, {
-                                            [styles.dragging]: isDragged,
-                                            [styles.shifted]: !isDragged && drag.drag !== null,
-                                            [styles.dimmedSection]: isOtherSection,
-                                        })}
-                                        // The displacement is measured geometry (the dragged row's own height), so it
-                                        // travels as a CSS variable the module's `transform` reads — see the CSS note.
-                                        // The dragged row itself is moved imperatively by the hook (every frame), so React
-                                        // leaves its variable alone. The literal is `DRAG_SHIFT_VAR` (typed through
-                                        // `types/cssCustomProperties.d.ts`); keep the two in step.
-                                        style={isPointerDragged ? undefined : { '--drag-shift': `${drag.shiftFor(item._id)}px` }}
-                                        {...{ [ROW_SECTION_ATTR]: section.key, [ROW_ITEM_ATTR]: item._id }}
+                                        {...rankedRowProps(ranked, row, styles.item)}
                                         secondaryAction={
                                             <Box className={styles.actionButtons}>
                                                 {/* A ghost is a stale snapshot of a row that already left the list: only its id may still be copied. */}
                                                 {!rowIsGhost && (
-                                                    <Tooltip title="Move to…">
-                                                        <IconButton
-                                                            size="small"
-                                                            onClick={() => openMoveTo(item, section)}
-                                                            data-testid="nextActionMoveToButton"
-                                                            {...roving.actionButtonProps('moveTo')}
-                                                        >
-                                                            <MoreVertIcon fontSize="small" />
-                                                        </IconButton>
-                                                    </Tooltip>
+                                                    <RowActionButton
+                                                        rowAction="moveTo"
+                                                        label="Move to…"
+                                                        icon={<MoreVertIcon fontSize="small" />}
+                                                        size="small"
+                                                        onClick={() => openMoveTo(item, section)}
+                                                        data-testid="nextActionMoveToButton"
+                                                        {...roving.actionButtonProps}
+                                                    />
                                                 )}
                                                 <CopyIdButton
+                                                    isRowAction
                                                     id={item._id}
                                                     testId="nextActionItemCopyIdButton"
-                                                    buttonProps={roving.actionButtonProps('copyId')}
+                                                    buttonProps={roving.actionButtonProps}
                                                 />
                                                 {!rowIsGhost && (
-                                                    <Tooltip title="Edit">
-                                                        <IconButton
-                                                            size="small"
-                                                            onClick={(e) => editor.openEditor({ item, event: e })}
-                                                            data-testid="nextActionItemEditButton"
-                                                            {...roving.actionButtonProps('edit')}
-                                                        >
-                                                            <EditIcon fontSize="small" />
-                                                        </IconButton>
-                                                    </Tooltip>
+                                                    <RowActionButton
+                                                        rowAction="edit"
+                                                        label="Edit"
+                                                        icon={<EditIcon fontSize="small" />}
+                                                        size="small"
+                                                        onClick={(e) => editor.openEditor({ item, event: e })}
+                                                        data-testid="nextActionItemEditButton"
+                                                        {...roving.actionButtonProps}
+                                                    />
                                                 )}
                                                 {!rowIsGhost && (
-                                                    <Tooltip title="Mark done">
-                                                        <IconButton
-                                                            size="small"
-                                                            color="success"
-                                                            onClick={() => void onDone(item)}
-                                                            data-testid="nextActionItemDoneButton"
-                                                            {...roving.actionButtonProps('done')}
-                                                        >
-                                                            <CheckCircleOutlineIcon />
-                                                        </IconButton>
-                                                    </Tooltip>
+                                                    <RowActionButton
+                                                        rowAction="done"
+                                                        label="Mark done"
+                                                        icon={<CheckCircleOutlineIcon />}
+                                                        size="small"
+                                                        color="success"
+                                                        onClick={() => void onDone(item)}
+                                                        data-testid="nextActionItemDoneButton"
+                                                        {...roving.actionButtonProps}
+                                                    />
                                                 )}
                                             </Box>
                                         }
@@ -738,38 +616,13 @@ function NextActionsPage() {
                                         {/* A real button beside (not inside) the row button — nested interactive content is
                                             invalid ARIA, and the row's ripple/click would fire on every drop. A ghost (a row
                                             fading out of this list) gets none: it is not a valid drag source. */}
-                                        {!rowIsGhost && (
-                                            <IconButton
-                                                size="small"
-                                                className={styles.dragHandle}
-                                                aria-label="Reorder"
-                                                aria-describedby={dragHintId}
-                                                data-testid="nextActionDragHandle"
-                                                // Out of the tab order (Space on the row grabs too); still focusable by click.
-                                                tabIndex={-1}
-                                                {...{ [ROW_HANDLE_ATTR]: '' }}
-                                                {...drag.getHandleProps(item, section)}
-                                                // Right-click on the handle is the mouse way to the "Move to…" sheet. A touch
-                                                // long press already drags (and fires contextmenu mid-press), so the gesture is
-                                                // told apart by its pointer type, not by the device: a touch laptop has both.
-                                                onContextMenu={(e) => {
-                                                    e.preventDefault();
-                                                    if (!isTouchContextMenu(e.nativeEvent)) {
-                                                        openMoveTo(item, section);
-                                                    }
-                                                }}
-                                            >
-                                                <DragIndicatorIcon fontSize="small" />
-                                            </IconButton>
-                                        )}
+                                        {!rowIsGhost && <RankedRowHandle ranked={ranked} item={item} section={section} testId="nextActionDragHandle" />}
                                         <ListItemButton
                                             onClick={(e) => editor.openEditor({ item, event: e })}
                                             className={styles.rowButton}
                                             data-testid="nextActionItemRow"
                                             // Short, per row (screen readers re-read it on every row focus); the full key list sits on the list and the handle.
-                                            aria-describedby={rowHintId}
-                                            {...{ [ROW_BUTTON_ATTR]: '' }}
-                                            {...roving.rowButtonProps}
+                                            {...rankedRowButtonProps(ranked)}
                                         >
                                             <ListItemText
                                                 primary={
@@ -802,31 +655,8 @@ function NextActionsPage() {
                     </WindowVirtualizer>
                 </List>
             )}
-            {/* Keyboard affordances for the reorder handle (D6) + the polite announcer for every reorder outcome. */}
-            <span id={dragHintId} className={styles.srOnly}>
-                {reorderHintText(isApple)}
-            </span>
-            <span id={rowHintId} className={styles.srOnly}>
-                Space to reorder, Arrow Right for the row’s buttons.
-            </span>
-            <ReorderShortcutsDialog open={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} isApple={isApple} />
-            <div aria-live="polite" className={styles.srOnly} data-testid="nextActionsReorderLive">
-                {drag.liveText}
-            </div>
-            <Snackbar open={drag.error !== null} autoHideDuration={4000} onClose={drag.clearError} message={drag.error ?? ''} />
-            {/* Keyed by the target so a vanished row (the Drawer closes on its own) cannot leak its step/search into the next open. */}
-            <MoveToSheet
-                key={moveTarget?.itemId ?? 'closed'}
-                item={moveTargetItem}
-                sectionItems={moveTargetLive}
-                sectionLabel={moveTargetSection?.label ?? ''}
-                onClose={() => setMoveTarget(null)}
-                onMove={(neighbours) => {
-                    if (moveTarget) {
-                        drag.commit({ sectionKey: moveTarget.sectionKey, itemId: moveTarget.itemId, ...neighbours });
-                    }
-                }}
-            />
+            {/* Keyboard hints, the polite announcer for every reorder outcome, the failure toast and the Move to sheet. */}
+            <RankedListChrome ranked={ranked} actions={NEXT_ACTIONS_ROW_ACTIONS} sectionNoun="day" liveTestId="nextActionsReorderLive" />
             {editor.renderGlobal()}
             <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
         </Box>

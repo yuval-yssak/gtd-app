@@ -45,6 +45,10 @@ import { MarkdownNotesEditor, NOTES_PLACEHOLDER } from '../../components/markdow
 import { MarkdownPreview } from '../../components/markdown/MarkdownPreview';
 import { batchChromeFor, ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
+import { RowActionButton } from '../../components/RowActionButton';
+import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
+import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
+import { rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } from '../../db/draftHelpers';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
@@ -56,10 +60,15 @@ import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptu
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
+import { useRankedList } from '../../hooks/useRankedList';
 import { useSwipeGesture } from '../../hooks/useSwipeGesture';
 import { CLARIFY_MODE_KEY, parseClarifyMode } from '../../lib/clarifyMode';
-import { filterItemsByQuery, sortItems } from '../../lib/itemSearch';
+import { compareByRank } from '../../lib/compareNextActions';
+import { filterItemsByQuery } from '../../lib/itemSearch';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
+import { flatSection, itemRows } from '../../lib/nextActionSections';
+import { ownerIdsOfStatus } from '../../lib/rankSections';
+import { RANKED_LIST_ROW_ACTIONS } from '../../lib/rowShortcuts';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-inbox.module.css';
 
@@ -180,9 +189,11 @@ interface InboxBottomSheetProps {
     onCalendar: (item: StoredItem) => void;
     onWaitingFor: (item: StoredItem) => void;
     onTrash: (item: StoredItem) => void;
+    /** Opens the "Move to…" sheet — the touch way to change the item's place in the inbox. */
+    onMoveTo: (item: StoredItem) => void;
 }
 
-function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalendar, onWaitingFor, onTrash }: InboxBottomSheetProps) {
+function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalendar, onWaitingFor, onTrash, onMoveTo }: InboxBottomSheetProps) {
     if (!item) return null;
 
     const resolvedItem = item;
@@ -212,6 +223,12 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
                         <EditIcon />
                     </ListItemIcon>
                     <ListItemText primary="Edit" />
+                </ListItemButton>
+                <ListItemButton onClick={() => action(onMoveTo)} data-testid="inboxSheetMoveTo">
+                    <ListItemIcon>
+                        <MoreVertIcon />
+                    </ListItemIcon>
+                    <ListItemText primary="Move to…" />
                 </ListItemButton>
                 <ListItemButton onClick={() => action(onDone)}>
                     <ListItemIcon>
@@ -337,18 +354,23 @@ function InboxPage() {
 
     // Deferred query: typing re-filters in an interruptible background render (see useListSearch).
     const { deferredQuery } = search;
+    // The manual order (`rank`; a capture is minted at the top, so untouched it stays newest-first).
     const inboxItems = useMemo(
         () =>
-            sortItems(
-                filterItemsByQuery(
+            [
+                ...filterItemsByQuery(
                     itemsWithGhosts.filter((item) => item.status === 'inbox'),
                     deferredQuery,
                 ),
-                'createdTs',
-                'desc',
-            ),
+            ].sort(compareByRank),
         [itemsWithGhosts, deferredQuery],
     );
+    // One section, no header: the whole inbox is one manual order (see lib/rankSections).
+    const inboxSections = useMemo(() => [flatSection('inbox', 'Inbox', inboxItems)], [inboxItems]);
+    // Every account of the merged inbox (visible rows or not) shares the keyspace a re-key must see.
+    const inboxOwnerIds = useMemo(() => ownerIdsOfStatus(items, 'inbox'), [items]);
+    const ranked = useRankedList({ db, sections: inboxSections, isGhost, ownerIds: inboxOwnerIds, refreshItems, hasHeaders: false, regionLabel: 'Inbox' });
+    const [inboxSection] = inboxSections;
 
     // Lookup map so each row doesn't rescan the routines array for its indicator title.
     const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
@@ -379,14 +401,19 @@ function InboxPage() {
         if (e.key === 'Enter') await onCapture();
     }
 
+    // Both take focus on to the next row once the row leaves (a keyboard user must not be left on its ghost).
     async function onQuickDone(item: StoredItem) {
+        const handOff = ranked.focusHandOffFrom(item._id);
         await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
         await refreshItems();
+        handOff();
     }
 
     async function onTrash(item: StoredItem) {
+        const handOff = ranked.focusHandOffFrom(item._id);
         await clarifyToTrash(db, item);
         await refreshItems();
+        handOff();
     }
 
     function openWithStatus(item: StoredItem, status: EditableStatus, clickEvent?: React.MouseEvent<HTMLElement>) {
@@ -511,86 +538,149 @@ function InboxPage() {
                 // component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
                 // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
                 // inbox doesn't block the main thread on navigation.
-                <List disablePadding component="div" className={styles.list}>
-                    <WindowVirtualizer>
-                        {inboxItems.map((item, idx) => (
-                            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
-                                {isMobile ? (
-                                    <InboxSwipeItem
-                                        item={item}
-                                        routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
-                                        onTap={(i) => editor.openEditor({ item: i })}
-                                        onMore={setBottomSheetItem}
-                                        onSwipeNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
-                                        onSwipeTrash={(i) => void onTrash(i)}
-                                    />
-                                ) : (
-                                    <ListItem
-                                        disablePadding
-                                        className={styles.item}
-                                        secondaryAction={
-                                            <Box className={styles.actionButtons}>
-                                                <CopyIdButton id={item._id} testId="inboxItemCopyIdButton" />
-                                                <Tooltip title="Edit">
-                                                    <IconButton
-                                                        size="small"
-                                                        onClick={(e) => editor.openEditor({ item, event: e })}
-                                                        data-testid="inboxItemEditButton"
-                                                    >
-                                                        <EditIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
-                                                <Tooltip title="Done (< 2 min)">
-                                                    <IconButton size="small" onClick={() => void onQuickDone(item)}>
-                                                        <PlaylistAddCheckIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
-                                                <Tooltip title="Next Action">
-                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'nextAction', e)}>
-                                                        <ArrowForwardIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
-                                                <Tooltip title="Calendar">
-                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'calendar', e)}>
-                                                        <CalendarTodayIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
-                                                <Tooltip title="Waiting For">
-                                                    <IconButton size="small" onClick={(e) => openWithStatus(item, 'waitingFor', e)}>
-                                                        <HourglassEmptyIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
-                                                <Tooltip title="Trash">
-                                                    <IconButton size="small" color="error" onClick={() => void onTrash(item)}>
-                                                        <DeleteOutlineIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
-                                            </Box>
-                                        }
-                                    >
-                                        <ListItemButton onClick={(e) => editor.openEditor({ item, event: e })} data-testid="inboxItemRow">
-                                            <ListItemText
-                                                primary={
-                                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                        <span>{item.title}</span>
-                                                        {item.routineId && (
-                                                            <RoutineIndicator routineId={item.routineId} routineTitle={routineTitleById.get(item.routineId)} />
-                                                        )}
-                                                        <AccountChip userId={item.userId} />
-                                                    </Box>
-                                                }
-                                                secondary={dayjs(item.createdTs).fromNow()}
-                                                className={styles.listItemText}
-                                            />
-                                        </ListItemButton>
-                                    </ListItem>
-                                )}
+                // One tab stop for the whole list on desktop (see useNextActionsRovingFocus); phones use the swipe rows.
+                <List
+                    disablePadding
+                    component="div"
+                    role="list"
+                    className={styles.list}
+                    aria-label="Inbox"
+                    // The reorder key hint describes keyboard reordering, which phones (swipe rows) do not have.
+                    {...(isMobile ? {} : { 'aria-describedby': ranked.hintIds.list })}
+                    data-testid="inboxList"
+                    {...(isMobile ? {} : ranked.roving.listProps)}
+                >
+                    <WindowVirtualizer ref={ranked.virtualizerRef}>
+                        {itemRows(ranked.flatRows).map((row) => {
+                            const { item, section, isLastInSection } = row;
+                            return (
+                                <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
+                                    {isMobile ? (
+                                        <InboxSwipeItem
+                                            item={item}
+                                            routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
+                                            onTap={(i) => editor.openEditor({ item: i })}
+                                            onMore={setBottomSheetItem}
+                                            onSwipeNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
+                                            onSwipeTrash={(i) => void onTrash(i)}
+                                        />
+                                    ) : (
+                                        <ListItem
+                                            disablePadding
+                                            {...rankedRowProps(ranked, row, styles.item)}
+                                            secondaryAction={
+                                                <Box className={styles.actionButtons}>
+                                                    {/* Everything but Copy id is hidden on a ghost: pressing Done or Trash on its stale snapshot (even by keyboard) would act twice. */}
+                                                    {!isGhost(item) && (
+                                                        <RowActionButton
+                                                            rowAction="moveTo"
+                                                            label="Move to…"
+                                                            icon={<MoreVertIcon fontSize="small" />}
+                                                            onClick={() => ranked.openMoveTo(item, section)}
+                                                            data-testid="inboxItemMoveToButton"
+                                                            {...ranked.roving.actionButtonProps}
+                                                        />
+                                                    )}
+                                                    <CopyIdButton
+                                                        isRowAction
+                                                        id={item._id}
+                                                        testId="inboxItemCopyIdButton"
+                                                        buttonProps={ranked.roving.actionButtonProps}
+                                                    />
+                                                    {!isGhost(item) && (
+                                                        <>
+                                                            <RowActionButton
+                                                                rowAction="edit"
+                                                                label="Edit"
+                                                                icon={<EditIcon fontSize="small" />}
+                                                                size="small"
+                                                                onClick={(e) => editor.openEditor({ item, event: e })}
+                                                                data-testid="inboxItemEditButton"
+                                                                {...ranked.roving.actionButtonProps}
+                                                            />
+                                                            <Tooltip title="Done (< 2 min)">
+                                                                <IconButton
+                                                                    size="small"
+                                                                    onClick={() => void onQuickDone(item)}
+                                                                    {...ranked.roving.actionButtonProps}
+                                                                >
+                                                                    <PlaylistAddCheckIcon fontSize="small" />
+                                                                </IconButton>
+                                                            </Tooltip>
+                                                            <Tooltip title="Next Action">
+                                                                <IconButton
+                                                                    size="small"
+                                                                    onClick={(e) => openWithStatus(item, 'nextAction', e)}
+                                                                    {...ranked.roving.actionButtonProps}
+                                                                >
+                                                                    <ArrowForwardIcon fontSize="small" />
+                                                                </IconButton>
+                                                            </Tooltip>
+                                                            <Tooltip title="Calendar">
+                                                                <IconButton
+                                                                    size="small"
+                                                                    onClick={(e) => openWithStatus(item, 'calendar', e)}
+                                                                    {...ranked.roving.actionButtonProps}
+                                                                >
+                                                                    <CalendarTodayIcon fontSize="small" />
+                                                                </IconButton>
+                                                            </Tooltip>
+                                                            <Tooltip title="Waiting For">
+                                                                <IconButton
+                                                                    size="small"
+                                                                    onClick={(e) => openWithStatus(item, 'waitingFor', e)}
+                                                                    {...ranked.roving.actionButtonProps}
+                                                                >
+                                                                    <HourglassEmptyIcon fontSize="small" />
+                                                                </IconButton>
+                                                            </Tooltip>
+                                                            <Tooltip title="Trash">
+                                                                <IconButton
+                                                                    size="small"
+                                                                    color="error"
+                                                                    onClick={() => void onTrash(item)}
+                                                                    {...ranked.roving.actionButtonProps}
+                                                                >
+                                                                    <DeleteOutlineIcon fontSize="small" />
+                                                                </IconButton>
+                                                            </Tooltip>
+                                                        </>
+                                                    )}
+                                                </Box>
+                                            }
+                                        >
+                                            {!isGhost(item) && <RankedRowHandle ranked={ranked} item={item} section={section} testId="inboxDragHandle" />}
+                                            <ListItemButton
+                                                onClick={(e) => editor.openEditor({ item, event: e })}
+                                                {...rankedRowButtonProps(ranked)}
+                                                data-testid="inboxItemRow"
+                                            >
+                                                <ListItemText
+                                                    primary={
+                                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                            <span>{item.title}</span>
+                                                            {item.routineId && (
+                                                                <RoutineIndicator
+                                                                    routineId={item.routineId}
+                                                                    routineTitle={routineTitleById.get(item.routineId)}
+                                                                />
+                                                            )}
+                                                            <AccountChip userId={item.userId} />
+                                                        </Box>
+                                                    }
+                                                    secondary={dayjs(item.createdTs).fromNow()}
+                                                    className={styles.listItemText}
+                                                />
+                                            </ListItemButton>
+                                        </ListItem>
+                                    )}
 
-                                {editor.renderExpandFor(item._id)}
+                                    {editor.renderExpandFor(item._id)}
 
-                                {idx < inboxItems.length - 1 && <Divider />}
-                            </ListRowShell>
-                        ))}
+                                    {!isLastInSection && <Divider />}
+                                </ListRowShell>
+                            );
+                        })}
                     </WindowVirtualizer>
                 </List>
             )}
@@ -610,8 +700,16 @@ function InboxPage() {
                 />
             )}
 
+            {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */}
+            <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="list" liveTestId="inboxReorderLive" />
+
             <InboxBottomSheet
                 item={bottomSheetItem}
+                onMoveTo={(i) => {
+                    if (inboxSection) {
+                        ranked.openMoveTo(i, inboxSection);
+                    }
+                }}
                 onClose={() => setBottomSheetItem(null)}
                 onEdit={(i) => editor.openEditor({ item: i })}
                 onDone={(i) => void onQuickDone(i)}

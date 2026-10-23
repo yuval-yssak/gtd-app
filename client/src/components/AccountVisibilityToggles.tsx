@@ -5,6 +5,7 @@ import Tooltip from '@mui/material/Tooltip';
 import classNames from 'classnames';
 import { useSyncExternalStore } from 'react';
 import { ensureHiddenAccountsCrossTabBridge, getHiddenAccountIds, subscribeHiddenAccounts, toggleAccountHidden } from '../contexts/hiddenAccounts';
+import type { RovingRegionApi } from '../hooks/useRovingRegion';
 import { getAccountColor } from '../lib/accountColors';
 import type { StoredAccount } from '../types/MyDB';
 import { AccountAvatar } from './AccountAvatar';
@@ -16,6 +17,8 @@ ensureHiddenAccountsCrossTabBridge();
 
 interface Props {
     accounts: StoredAccount[];
+    /** The accounts region's item props: the avatars leave the tab order and ←/→ walk them. */
+    itemProps: RovingRegionApi['itemProps'];
 }
 
 /**
@@ -24,7 +27,7 @@ interface Props {
  * mutations still write under the active account). Hidden accounts render dimmed with an eye-off
  * badge. Self-suppresses on single-account devices, mirroring AccountChip.
  */
-export function AccountVisibilityToggles({ accounts }: Props) {
+export function AccountVisibilityToggles({ accounts, itemProps }: Props) {
     const hiddenUserIds = useSyncExternalStore(subscribeHiddenAccounts, getHiddenAccountIds);
     if (accounts.length <= 1) {
         return null;
@@ -44,6 +47,7 @@ export function AccountVisibilityToggles({ accounts }: Props) {
                             aria-pressed={isHidden}
                             data-testid={`accountVisibilityToggle-${account.id}`}
                             data-account-hidden={isHidden}
+                            {...itemProps}
                         >
                             <Badge
                                 overlap="circular"

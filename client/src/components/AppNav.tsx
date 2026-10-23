@@ -29,12 +29,14 @@ import Toolbar from '@mui/material/Toolbar';
 import Typography from '@mui/material/Typography';
 import { createLink, useLocation } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
+import { type RovingRegionApi, useRovingRegion } from '../hooks/useRovingRegion';
 import { APP_NAME } from '../lib/appName';
 import { useNewTabAwareNavigate } from '../lib/newTabNavigation';
 import type { FileRouteTypes } from '../routeTree.gen';
 import type { MyDB } from '../types/MyDB';
 import { AccountSwitcher } from './AccountSwitcher';
 import styles from './AppNav.module.css';
+import { KeyboardShortcutsButton } from './KeyboardShortcutsButton';
 import { StatusBar } from './StatusBar';
 
 export const DRAWER_WIDTH = 240;
@@ -89,9 +91,11 @@ interface NavListItemProps {
     item: NavItemConfig;
     isActive: boolean;
     onItemClick: () => void;
+    /** The menu region's item props: the links leave the tab order and ↑/↓ walk them. */
+    itemProps: RovingRegionApi['itemProps'];
 }
 
-function NavListItem({ item, isActive, onItemClick }: NavListItemProps) {
+function NavListItem({ item, isActive, onItemClick, itemProps }: NavListItemProps) {
     const iconNode =
         item.badgeCount != null ? (
             <Badge badgeContent={item.badgeCount} color="primary" max={99}>
@@ -104,7 +108,7 @@ function NavListItem({ item, isActive, onItemClick }: NavListItemProps) {
     return (
         <ListItem disablePadding>
             {/* createLink fuses ListItemButton + TanStack Link into one element so the row has a single tab stop instead of nested <a> + role=button div */}
-            <NavListItemButton to={item.to} selected={isActive} onClick={onItemClick} dense className={styles.navLink}>
+            <NavListItemButton to={item.to} selected={isActive} onClick={onItemClick} dense className={styles.navLink} {...itemProps}>
                 <ListItemIcon className={styles.listItemIcon}>{iconNode}</ListItemIcon>
                 <ListItemText primary={item.label} slotProps={{ primary: { variant: 'body2' } }} />
             </NavListItemButton>
@@ -119,6 +123,12 @@ interface DrawerContentProps {
 
 function DrawerContent({ onItemClick, db }: DrawerContentProps) {
     const { pathname } = useLocation();
+    // The whole menu is ONE tab stop entered on the current page's link; ↑/↓/Home/End walk it.
+    // `aria-current="page"` is TanStack Link's own mark for the active link (semantic, not an MUI class name).
+    const menu = useRovingRegion({ orientation: 'vertical', label: 'Main menu', preferredItemSelector: '[aria-current="page"]', isPreferredSticky: true });
+    const renderItem = (item: NavItemConfig) => (
+        <NavListItem key={item.to} item={item} isActive={pathname === item.to} onItemClick={onItemClick} itemProps={menu.itemProps} />
+    );
 
     return (
         <Box className={styles.drawerContent}>
@@ -134,26 +144,21 @@ function DrawerContent({ onItemClick, db }: DrawerContentProps) {
                 >
                     {APP_NAME}
                 </Typography>
+                <KeyboardShortcutsButton />
             </Box>
             {/* Spacer on mobile so nav list starts below the fixed AppBar */}
             <Box className={styles.toolbarSpacer}>
                 <Toolbar />
             </Box>
-            <Box className={styles.navScrollArea}>
-                <List disablePadding>
-                    {primaryItems.map((item) => (
-                        <NavListItem key={item.to} item={item} isActive={pathname === item.to} onItemClick={onItemClick} />
-                    ))}
+            <Box component="nav" aria-label="Main" className={styles.navScrollArea}>
+                <List disablePadding data-testid="mainMenu" {...menu.regionProps}>
+                    {primaryItems.map(renderItem)}
                     <Divider className={styles.divider} />
-                    {secondaryItems.map((item) => (
-                        <NavListItem key={item.to} item={item} isActive={pathname === item.to} onItemClick={onItemClick} />
-                    ))}
+                    {secondaryItems.map(renderItem)}
                     <Divider className={styles.divider} />
-                    {tertiaryItems.map((item) => (
-                        <NavListItem key={item.to} item={item} isActive={pathname === item.to} onItemClick={onItemClick} />
-                    ))}
+                    {tertiaryItems.map(renderItem)}
                     <Divider className={styles.divider} />
-                    <NavListItem item={settingsNavItem} isActive={pathname === settingsNavItem.to} onItemClick={onItemClick} />
+                    {renderItem(settingsNavItem)}
                 </List>
             </Box>
             {/* Account + status — pinned to sidebar bottom */}

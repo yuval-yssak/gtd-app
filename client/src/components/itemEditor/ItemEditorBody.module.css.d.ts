@@ -7,6 +7,7 @@ declare const styles: {
     readonly empty: string;
     readonly inlineActions: string;
     readonly itemId: string;
+    readonly keyScope: string;
     readonly metaRow: string;
     readonly notesHeader: string;
     readonly pagePreview: string;

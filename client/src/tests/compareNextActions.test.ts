@@ -1,6 +1,6 @@
 import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
-import { compareNextActions, expectedDayKey } from '../lib/compareNextActions';
+import { compareByRank, compareNextActions, expectedDayKey } from '../lib/compareNextActions';
 import type { StoredItem } from '../types/MyDB';
 
 function makeItem(overrides: Partial<StoredItem> & { _id: string }): StoredItem {
@@ -80,5 +80,30 @@ describe('expectedDayKey', () => {
         expect(expectedDayKey({ expectedBy: '2026-09-01' })).toBe('2026-09-01');
         expect(expectedDayKey({})).toBeNull();
         expect(expectedDayKey({ expectedBy: '' })).toBeNull();
+    });
+});
+
+describe('compareByRank (the order inside any ranked section)', () => {
+    const byRank = (items: StoredItem[]) => [...items].sort(compareByRank).map((item) => item._id);
+
+    it('orders by rank by code unit, regardless of createdTs', () => {
+        expect(
+            byRank([
+                makeItem({ _id: 'old', rank: 'a1', createdTs: '2026-01-01T00:00:00.000Z' }),
+                makeItem({ _id: 'new', rank: 'a0', createdTs: '2026-09-01T00:00:00.000Z' }),
+            ]),
+        ).toEqual(['new', 'old']);
+        expect(byRank([makeItem({ _id: 'lower', rank: 'a0' }), makeItem({ _id: 'upper', rank: 'B0' })])).toEqual(['upper', 'lower']);
+    });
+
+    it('puts unranked rows first, newest first, and breaks every tie by _id', () => {
+        expect(
+            byRank([
+                makeItem({ _id: 'ranked', rank: 'a0' }),
+                makeItem({ _id: 'olderUnranked', createdTs: '2026-01-01T00:00:00.000Z' }),
+                makeItem({ _id: 'newerUnranked', createdTs: '2026-02-01T00:00:00.000Z' }),
+            ]),
+        ).toEqual(['newerUnranked', 'olderUnranked', 'ranked']);
+        expect(byRank([makeItem({ _id: 'b', rank: 'a0' }), makeItem({ _id: 'a', rank: 'a0' })])).toEqual(['a', 'b']);
     });
 });

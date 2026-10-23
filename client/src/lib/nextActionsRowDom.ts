@@ -1,3 +1,5 @@
+import { ROW_ACTION_ATTR } from './rowShortcuts';
+
 /**
  * DOM lookups the Next Actions row hooks share (drag + roving focus). Rows are found through the
  * data attributes every row carries, never through test ids. Not unit-tested (no jsdom here);
@@ -10,8 +12,6 @@ export const ROW_ITEM_ATTR = 'data-item-id';
 /** The row's two focusable elements: the row button and the reorder handle. */
 export const ROW_BUTTON_ATTR = 'data-row-button';
 export const ROW_HANDLE_ATTR = 'data-row-handle';
-/** The action one of the row's buttons performs (`RowActionName`) — the letter shortcuts click it. */
-export const ROW_ACTION_ATTR = 'data-row-action';
 
 /** How many frames to wait for virtua to mount a row that was just scrolled into its range. */
 const MOUNT_WAIT_FRAMES = 12;
@@ -28,8 +28,11 @@ export function rowHandleOf(row: HTMLElement): HTMLElement | null {
     return row.querySelector<HTMLElement>(`[${ROW_HANDLE_ATTR}]`);
 }
 
+/** Marks a row button → / ← walk to (every button of a ranked row: the lettered ones and the rest, e.g. the Inbox's clarify buttons). */
+export const ROW_WALK_ATTR = 'data-row-walk';
+
 export function rowActionButtonsOf(row: HTMLElement): HTMLElement[] {
-    return Array.from(row.querySelectorAll<HTMLElement>(`[${ROW_ACTION_ATTR}]`));
+    return Array.from(row.querySelectorAll<HTMLElement>(`[${ROW_ACTION_ATTR}], [${ROW_WALK_ATTR}]`));
 }
 
 /** True when nothing else has taken focus: it is on the body (a moved/unmounted node dropped it) or still inside `row`. */

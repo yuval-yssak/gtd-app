@@ -161,6 +161,31 @@ export function mergeFormGroup<T extends object>(form: T, seed: T, incoming: T, 
     return { merged, conflicts };
 }
 
+/** A merge's verdict for one field (or form group): the form snapshot it ran on, and what it decided. */
+export interface MergeOutcome<T> {
+    snapshot: T;
+    merged: T;
+}
+
+/**
+ * Applies a merge verdict onto the editor's CURRENT value: only a value the merge changed (merged ≠
+ * snapshot, i.e. it adopted the incoming version) is written. Otherwise `current` stays — the merge
+ * ran on a render-time snapshot that can predate a local edit landing in the same tick (a status
+ * letter pressed as the title autosave echoes back), and writing the snapshot back would undo it.
+ */
+export function applyMergeOutcome<T>(current: T, outcome: MergeOutcome<T>): T {
+    return valuesEqual(outcome.merged, outcome.snapshot) ? current : outcome.merged;
+}
+
+/** `applyMergeOutcome` per key of a form group; returns `current` itself when the merge changed no key. */
+export function applyGroupMergeOutcome<T extends object>(current: T, outcome: MergeOutcome<T>): T {
+    const adoptedKeys = (Object.keys(outcome.merged) as Array<keyof T>).filter((key) => !valuesEqual(outcome.merged[key], outcome.snapshot[key]));
+    if (adoptedKeys.length === 0) {
+        return current;
+    }
+    return { ...current, ...Object.fromEntries(adoptedKeys.map((key) => [key, outcome.merged[key]])) };
+}
+
 export interface ItemFormsMergeResult {
     merged: ItemFormSeeds;
     /** Labels of fields where both the user and the incoming version diverged — show the notice. */

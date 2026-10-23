@@ -1,4 +1,4 @@
-import { compareNextActions } from '../../lib/compareNextActions';
+import { compareByRank, compareNextActions } from '../../lib/compareNextActions';
 import { isTicklerHidden, participatesInTickler } from '../../lib/ticklerVisibility';
 import { compareWaitingForByExpectedBy } from '../../lib/waitingForGroups';
 import type { StoredItem, StoredRoutine } from '../../types/MyDB';
@@ -180,8 +180,8 @@ export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<
             return [];
         case 'clarify':
         case 'finalSweep':
-            // Newest-first (LIFO), matching the /inbox page.
-            return items.filter((item) => item.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+            // The manual order, matching the /inbox page (a capture is minted at the top: untouched it is newest-first).
+            return items.filter((item) => item.status === 'inbox').sort(compareByRank);
         case 'calendar':
             // "Undone" = still status:calendar — a completed entry became done. Past AND future
             // both qualify (per design: only done-ness excludes an entry, not its date).
@@ -202,11 +202,9 @@ export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<
                 .filter((item) => participatesInTickler(item) && isTicklerHidden(item, todayIso))
                 .sort((a, b) => (a.ignoreBefore ?? '').localeCompare(b.ignoreBefore ?? ''));
         case 'somedayMaybe':
-            // Newest-first, matching the /someday page (which hides tickler-snoozed items — they
+            // The manual order, matching the /someday page (which hides tickler-snoozed items — they
             // are reviewed by the tickler stage instead).
-            return items
-                .filter((item) => item.status === 'somedayMaybe' && !isTicklerHidden(item, todayIso))
-                .sort((a, b) => b.createdTs.localeCompare(a.createdTs));
+            return items.filter((item) => item.status === 'somedayMaybe' && !isTicklerHidden(item, todayIso)).sort(compareByRank);
     }
 }
 

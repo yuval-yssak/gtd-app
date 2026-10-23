@@ -6,3 +6,9 @@
     margin-left: 0.5rem;
     color: var(--mui-palette-primary-main, #1976d2);
 }
+
+/* The avatars' keyboard region (one tab stop) — laid out exactly as the bare siblings were. */
+.accountsRegion {
+    display: inline-flex;
+    align-items: center;
+}

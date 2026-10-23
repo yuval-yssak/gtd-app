@@ -10,6 +10,8 @@ import { AccountReauthDialog } from '../components/AccountReauthDialog';
 import { AccountSwitcher } from '../components/AccountSwitcher';
 import { AppErrorBoundary } from '../components/AppErrorBoundary';
 import { AppNav } from '../components/AppNav';
+import { GlobalShortcuts } from '../components/GlobalShortcuts';
+import { KeyboardShortcutsDialog } from '../components/KeyboardShortcutsDialog';
 import { NavigationProgress } from '../components/NavigationProgress';
 import { NotificationNudge } from '../components/NotificationNudge';
 import { QuickCaptureFab } from '../components/quickCapture/QuickCaptureFab';
@@ -62,6 +64,9 @@ export function AuthenticatedLayout() {
             </AppBar>
 
             <AppNav isMobileDrawerOpen={isMobileDrawerOpen} setIsMobileDrawerOpen={setIsMobileDrawerOpen} db={db} />
+            {/* App-wide keyboard layer: `g` jumps, `?` legend, `/` search, F6 regions. */}
+            <KeyboardShortcutsDialog />
+            <GlobalShortcuts />
 
             <Box component="main" className={styles.mainContent}>
                 <PendingReassignProvider db={db}>

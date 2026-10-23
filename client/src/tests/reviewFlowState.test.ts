@@ -59,7 +59,24 @@ function makeCalendarRoutine(overrides: Partial<StoredRoutine> & { _id: string }
 }
 
 describe('stageEligibleItems', () => {
-    it('clarify and finalSweep take inbox items newest-first (LIFO), matching the inbox page', () => {
+    it("clarify and finalSweep follow the inbox page's manual order — rank beats creation time", () => {
+        const items = [
+            makeItem({ _id: 'olderFirst', status: 'inbox', rank: 'a0', createdTs: '2026-01-01T00:00:00.000Z' }),
+            makeItem({ _id: 'newerSecond', status: 'inbox', rank: 'a1', createdTs: '2026-02-01T00:00:00.000Z' }),
+        ];
+        expect(stageEligibleItems('clarify', items, CTX).map((item) => item._id)).toEqual(['olderFirst', 'newerSecond']);
+        expect(stageEligibleItems('finalSweep', items, CTX).map((item) => item._id)).toEqual(['olderFirst', 'newerSecond']);
+    });
+
+    it("somedayMaybe follows the someday page's manual order too", () => {
+        const items = [
+            makeItem({ _id: 'second', status: 'somedayMaybe', rank: 'a1', createdTs: '2026-02-01T00:00:00.000Z' }),
+            makeItem({ _id: 'first', status: 'somedayMaybe', rank: 'a0', createdTs: '2026-01-01T00:00:00.000Z' }),
+        ];
+        expect(stageEligibleItems('somedayMaybe', items, CTX).map((item) => item._id)).toEqual(['first', 'second']);
+    });
+
+    it('unranked inbox items (before the rank backfill) are newest-first, matching the inbox page', () => {
         const items = [
             makeItem({ _id: 'a', status: 'inbox', createdTs: '2026-01-01T00:00:00.000Z' }),
             makeItem({ _id: 'b', status: 'inbox', createdTs: '2026-02-01T00:00:00.000Z' }),

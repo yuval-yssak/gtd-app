@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { isParkedEditorFocus } from '../../hooks/useEditorShortcuts';
 
 /**
  * Interchangeable pinned-bar primaries: a lost control restores onto whichever of these the new
@@ -81,6 +82,11 @@ export function useTransitionFocusRestore(rootRef: React.RefObject<HTMLElement |
         // container itself (canFocus rejects it) — the bar primary takes it instead.
         const onFocusIn = (event: FocusEvent) => {
             const target = event.target instanceof HTMLElement ? event.target : null;
+            // A click on an editor's empty space focuses the editor root (for its shortcuts): parked
+            // focus, not a control — keep the last control recorded, as a click to <body> always did.
+            if (isParkedEditorFocus(target)) {
+                return;
+            }
             const recorded = target?.closest<HTMLElement>('[data-testid]') ?? null;
             const testId = recorded?.getAttribute('data-testid');
             focusedControlRef.current = recorded && testId ? { element: recorded, testId } : null;

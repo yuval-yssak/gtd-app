@@ -71,6 +71,17 @@ export function getOpenSseUserIds(): string[] {
     return Array.from(eventSources.keys());
 }
 
+/**
+ * The userIds whose channel is CONNECTED (readyState OPEN), not merely created: a change broadcast
+ * while a channel is still connecting never reaches it (opening does not pull), so an e2e spec
+ * that relies on live delivery waits for this first.
+ */
+export function getConnectedSseUserIds(): string[] {
+    return Array.from(eventSources.entries())
+        .filter(([, source]) => source.readyState === EventSource.OPEN)
+        .map(([userId]) => userId);
+}
+
 function closeStaleConnections(activeUserIds: string[]): void {
     const next = new Set(activeUserIds);
     for (const [userId, source] of eventSources.entries()) {

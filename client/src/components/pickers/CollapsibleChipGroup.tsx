@@ -1,4 +1,4 @@
-import Chip from '@mui/material/Chip';
+import Chip, { type ChipProps } from '@mui/material/Chip';
 import Stack from '@mui/material/Stack';
 import type { SxProps, Theme } from '@mui/material/styles';
 import { Fragment, useState } from 'react';
@@ -16,6 +16,8 @@ interface CollapsibleChipGroupProps<T> {
     /** Test id for the expander chips (`<testId>ShowMore` / `<testId>ShowFewer`). */
     testId: string;
     sx?: SxProps<Theme>;
+    /** Extra props for the "+N more" / "Show fewer" chips — a keyboard region takes them out of the tab order. */
+    expanderChipProps?: Partial<ChipProps> & Record<`data-${string}`, string>;
 }
 
 /**
@@ -24,7 +26,7 @@ interface CollapsibleChipGroupProps<T> {
  * "Show fewer" chip. Chip appearance stays with the caller (each row has its own colors/icons) —
  * only the collapse behavior is centralized here.
  */
-export function CollapsibleChipGroup<T>({ ranked, alphabetical, selectedIds, keyOf, renderChip, testId, sx }: CollapsibleChipGroupProps<T>) {
+export function CollapsibleChipGroup<T>({ ranked, alphabetical, selectedIds, keyOf, renderChip, testId, sx, expanderChipProps }: CollapsibleChipGroupProps<T>) {
     const [expanded, setExpanded] = useState(false);
     const { visible, hiddenCount } = collapsePickerOptions({ ranked, alphabetical, selectedIds, keyOf, expanded });
     return (
@@ -33,12 +35,26 @@ export function CollapsibleChipGroup<T>({ ranked, alphabetical, selectedIds, key
                 <Fragment key={keyOf(option)}>{renderChip(option)}</Fragment>
             ))}
             {hiddenCount > 0 && (
-                <Chip label={`+${hiddenCount} more`} size="small" variant="outlined" onClick={() => setExpanded(true)} data-testid={`${testId}ShowMore`} />
+                <Chip
+                    label={`+${hiddenCount} more`}
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setExpanded(true)}
+                    data-testid={`${testId}ShowMore`}
+                    {...expanderChipProps}
+                />
             )}
             {/* Gate on collapsibility, not just `expanded`: a live-faceted list can shrink below the
                 fold threshold while expanded, making "Show fewer" a dead no-op chip. */}
             {expanded && isPickerCollapsible(ranked.length) && (
-                <Chip label="Show fewer" size="small" variant="outlined" onClick={() => setExpanded(false)} data-testid={`${testId}ShowFewer`} />
+                <Chip
+                    label="Show fewer"
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setExpanded(false)}
+                    data-testid={`${testId}ShowFewer`}
+                    {...expanderChipProps}
+                />
             )}
         </Stack>
     );

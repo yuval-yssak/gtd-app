@@ -5,6 +5,7 @@ import InputAdornment from '@mui/material/InputAdornment';
 import TextField from '@mui/material/TextField';
 import Tooltip from '@mui/material/Tooltip';
 import { useAutoFocus } from '../hooks/useAutoFocus';
+import { LIST_SEARCH_INPUT_ATTR, LIST_SEARCH_TOGGLE_ATTR } from '../lib/keyboardRegionDom';
 import styles from './ListSearch.module.css';
 
 interface ListSearchButtonProps {
@@ -15,8 +16,15 @@ interface ListSearchButtonProps {
 /** Header toggle for the in-page search field on virtualized list pages. */
 export function ListSearchButton({ onToggle, testId }: ListSearchButtonProps) {
     return (
-        <Tooltip title="Search this list">
-            <IconButton size="small" aria-label="Search this list" onClick={onToggle} data-testid={testId}>
+        <Tooltip title="Search this list (/)">
+            <IconButton
+                size="small"
+                aria-label="Search this list"
+                aria-keyshortcuts="/"
+                onClick={onToggle}
+                data-testid={testId}
+                {...{ [LIST_SEARCH_TOGGLE_ATTR]: '' }}
+            >
                 <SearchIcon fontSize="small" />
             </IconButton>
         </Tooltip>
@@ -50,12 +58,12 @@ export function ListSearchField({ value, onValueChange, onClose, placeholder, te
             }}
             className={styles.searchField}
             slotProps={{
-                htmlInput: { ref: inputRef, 'data-testid': testId },
+                htmlInput: { ref: inputRef, 'data-testid': testId, [LIST_SEARCH_INPUT_ATTR]: '' },
                 input: {
                     endAdornment: (
                         <InputAdornment position="end">
-                            <Tooltip title="Close search">
-                                <IconButton size="small" aria-label="Close search" edge="end" onClick={onClose}>
+                            <Tooltip title="Close search (Esc)">
+                                <IconButton size="small" aria-label="Close search" aria-keyshortcuts="Escape" edge="end" onClick={onClose}>
                                     <CloseIcon fontSize="small" />
                                 </IconButton>
                             </Tooltip>

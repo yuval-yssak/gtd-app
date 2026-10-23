@@ -1,4 +1,5 @@
 import type { StoredItem, StoredPerson } from '../types/MyDB';
+import { compareByRank, expectedDayKey } from './compareNextActions';
 
 export const UNASSIGNED_GROUP_KEY = '__none__';
 
@@ -12,15 +13,15 @@ export function personNameMap(people: ReadonlyArray<StoredPerson>): Record<strin
 }
 
 /**
- * Chronological order for waitingFor items: `expectedBy` ascending. Undated items sort FIRST
- * (`''` precedes any ISO date) — the /waiting-for "By date" view and the weekly review's
- * Waiting For stage both walk this order, so keep them on one comparator. Note this is the
- * inverse of `compareNextActions`, which puts the undated day section LAST: an open-ended
- * obligation owed to you deserves a look before dated ones, whereas an undated next action is
- * the lowest tier (ordered by rank inside its section).
+ * The Waiting For "By date" order: expected DAY ascending, undated FIRST, then the manual rank
+ * inside a day (`compareByRank`). The /waiting-for "By date" view and the weekly review's Waiting
+ * For stage both walk this order, so keep them on one comparator. Note this is the inverse of
+ * `compareNextActions`, which puts the undated day section LAST: an open-ended obligation owed to
+ * you deserves a look before dated ones, whereas an undated next action is the lowest tier.
  */
 export function compareWaitingForByExpectedBy(a: StoredItem, b: StoredItem) {
-    return (a.expectedBy ?? '').localeCompare(b.expectedBy ?? '');
+    const dayDiff = (expectedDayKey(a) ?? '').localeCompare(expectedDayKey(b) ?? '');
+    return dayDiff !== 0 ? dayDiff : compareByRank(a, b);
 }
 
 /** Groups waitingFor items by `waitingForPersonId`, falling back to the "Unassigned" bucket. */

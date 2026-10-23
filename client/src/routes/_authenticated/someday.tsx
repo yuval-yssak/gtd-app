@@ -1,9 +1,9 @@
 import BookmarkAddIcon from '@mui/icons-material/BookmarkAdd';
 import EditIcon from '@mui/icons-material/Edit';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import Box from '@mui/material/Box';
 import Chip from '@mui/material/Chip';
 import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
 import List from '@mui/material/List';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -11,7 +11,6 @@ import ListItemText from '@mui/material/ListItemText';
 import Paper from '@mui/material/Paper';
 import Snackbar from '@mui/material/Snackbar';
 import { useTheme } from '@mui/material/styles';
-import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
@@ -19,7 +18,14 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useCallback, useMemo } from 'react';
 import { WindowVirtualizer } from 'virtua';
+import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
+import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
+import { rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { useRankedList } from '../../hooks/useRankedList';
+import { flatSection, itemRows } from '../../lib/nextActionSections';
+import { ownerIdsOfStatus } from '../../lib/rankSections';
+import { RANKED_LIST_ROW_ACTIONS } from '../../lib/rowShortcuts';
 
 dayjs.extend(relativeTime);
 
@@ -31,12 +37,14 @@ import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
+import { RowActionButton } from '../../components/RowActionButton';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
 import { useTodayIso } from '../../hooks/useTodayIso';
-import { filterItemsByQuery, sortItems } from '../../lib/itemSearch';
+import { compareByRank } from '../../lib/compareNextActions';
+import { filterItemsByQuery } from '../../lib/itemSearch';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import { isTicklerHidden } from '../../lib/ticklerVisibility';
 import styles from './-someday.module.css';
@@ -72,7 +80,21 @@ function SomedayPage() {
         () => itemsWithGhosts.filter((item) => item.status === 'somedayMaybe' && !isTicklerHidden(item, todayIso)),
         [itemsWithGhosts, todayIso],
     );
-    const somedayItems = useMemo(() => sortItems(filterItemsByQuery(parkedItems, deferredQuery), 'createdTs', 'desc'), [parkedItems, deferredQuery]);
+    // The manual order (`rank`; untouched it stays newest-first, as a fresh item is minted at the top).
+    const somedayItems = useMemo(() => [...filterItemsByQuery(parkedItems, deferredQuery)].sort(compareByRank), [parkedItems, deferredQuery]);
+    // One section, no header: all of Someday / Maybe is one manual order (see lib/rankSections).
+    const somedaySections = useMemo(() => [flatSection('somedayMaybe', 'Someday / Maybe', somedayItems)], [somedayItems]);
+    // Every account of the merged list (visible rows or not) shares the keyspace a re-key must see.
+    const somedayOwnerIds = useMemo(() => ownerIdsOfStatus(items, 'somedayMaybe'), [items]);
+    const ranked = useRankedList({
+        db,
+        sections: somedaySections,
+        isGhost,
+        ownerIds: somedayOwnerIds,
+        refreshItems,
+        hasHeaders: false,
+        regionLabel: 'Someday / Maybe',
+    });
 
     // Lookup map so each row doesn't rescan the routines array for its indicator title.
     const routineTitleById = useMemo(() => new Map(routines.map((r) => [r._id, r.title])), [routines]);
@@ -125,47 +147,84 @@ function SomedayPage() {
             // component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
             // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
             // someday/maybe backlog doesn't block the main thread on navigation.
-            <List disablePadding component="div" className={styles.list}>
-                <WindowVirtualizer>
-                    {somedayItems.map((item, idx) => (
-                        <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
-                            <ListItem
-                                disablePadding
-                                className={styles.item}
-                                secondaryAction={
-                                    <Box className={styles.actionButtons}>
-                                        <CopyIdButton id={item._id} testId="somedayItemCopyIdButton" />
-                                        <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={(e) => editor.openEditor({ item, event: e })} data-testid="somedayItemEditButton">
-                                                <EditIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                    </Box>
-                                }
-                            >
-                                <ListItemButton
-                                    onClick={(e) => editor.openEditor({ item, event: e })}
-                                    className={styles.rowButton}
-                                    data-testid="somedayItemRow"
+            // One tab stop for the whole list (see useNextActionsRovingFocus).
+            <List
+                disablePadding
+                component="div"
+                role="list"
+                className={styles.list}
+                aria-label="Someday / Maybe"
+                aria-describedby={ranked.hintIds.list}
+                data-testid="somedayList"
+                {...ranked.roving.listProps}
+            >
+                <WindowVirtualizer ref={ranked.virtualizerRef}>
+                    {itemRows(ranked.flatRows).map((row) => {
+                        const { item, section, isLastInSection } = row;
+                        return (
+                            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
+                                <ListItem
+                                    disablePadding
+                                    {...rankedRowProps(ranked, row, styles.item)}
+                                    secondaryAction={
+                                        <Box className={styles.actionButtons}>
+                                            {/* Everything but Copy id is hidden on a ghost: it is a stale snapshot of a row that already left the list. */}
+                                            {!isGhost(item) && (
+                                                <RowActionButton
+                                                    rowAction="moveTo"
+                                                    label="Move to…"
+                                                    icon={<MoreVertIcon fontSize="small" />}
+                                                    onClick={() => ranked.openMoveTo(item, section)}
+                                                    data-testid="somedayItemMoveToButton"
+                                                    {...ranked.roving.actionButtonProps}
+                                                />
+                                            )}
+                                            <CopyIdButton
+                                                isRowAction
+                                                id={item._id}
+                                                testId="somedayItemCopyIdButton"
+                                                buttonProps={ranked.roving.actionButtonProps}
+                                            />
+                                            {!isGhost(item) && (
+                                                <RowActionButton
+                                                    rowAction="edit"
+                                                    label="Edit"
+                                                    icon={<EditIcon fontSize="small" />}
+                                                    size="small"
+                                                    onClick={(e) => editor.openEditor({ item, event: e })}
+                                                    data-testid="somedayItemEditButton"
+                                                    {...ranked.roving.actionButtonProps}
+                                                />
+                                            )}
+                                        </Box>
+                                    }
                                 >
-                                    <ListItemText
-                                        primary={
-                                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                                <span>{item.title}</span>
-                                                {item.routineId && (
-                                                    <RoutineIndicator routineId={item.routineId} routineTitle={routineTitleById.get(item.routineId)} />
-                                                )}
-                                                <AccountChip userId={item.userId} />
-                                            </Box>
-                                        }
-                                        secondary={dayjs(item.createdTs).fromNow()}
-                                    />
-                                </ListItemButton>
-                            </ListItem>
-                            {editor.renderExpandFor(item._id)}
-                            {idx < somedayItems.length - 1 && <Divider />}
-                        </ListRowShell>
-                    ))}
+                                    {!isGhost(item) && <RankedRowHandle ranked={ranked} item={item} section={section} testId="somedayDragHandle" />}
+                                    <ListItemButton
+                                        onClick={(e) => editor.openEditor({ item, event: e })}
+                                        className={styles.rowButton}
+                                        data-testid="somedayItemRow"
+                                        {...rankedRowButtonProps(ranked)}
+                                    >
+                                        <ListItemText
+                                            primary={
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                    <span>{item.title}</span>
+                                                    {item.routineId && (
+                                                        <RoutineIndicator routineId={item.routineId} routineTitle={routineTitleById.get(item.routineId)} />
+                                                    )}
+                                                    <AccountChip userId={item.userId} />
+                                                </Box>
+                                            }
+                                            secondary={dayjs(item.createdTs).fromNow()}
+                                        />
+                                    </ListItemButton>
+                                </ListItem>
+                                {editor.renderExpandFor(item._id)}
+                                {!isLastInSection && <Divider />}
+                            </ListRowShell>
+                        );
+                    })}
                 </WindowVirtualizer>
             </List>
         );
@@ -199,6 +258,8 @@ function SomedayPage() {
                 />
             )}
             {renderBody()}
+            {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */}
+            <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="list" liveTestId="somedayReorderLive" />
             {editor.renderGlobal()}
             <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
         </Box>

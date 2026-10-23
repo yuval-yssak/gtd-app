@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { briefTextOf, itemToFormSeeds, mergeFormGroup, mergeItemForms } from '../components/itemEditor/itemEditorLiveMerge';
+import {
+    applyGroupMergeOutcome,
+    applyMergeOutcome,
+    briefTextOf,
+    itemToFormSeeds,
+    mergeFormGroup,
+    mergeItemForms,
+} from '../components/itemEditor/itemEditorLiveMerge';
 import type { StoredItem, StoredItemBrief } from '../types/MyDB';
 
 function makeItem(overrides: Partial<StoredItem> = {}): StoredItem {
@@ -190,5 +197,34 @@ describe('mergeItemForms', () => {
         const { merged, conflicts } = mergeItemForms(form, seed, incoming);
         expect(merged.na.energy).toBe('high');
         expect(conflicts).toEqual(['Energy']);
+    });
+});
+
+describe('applyMergeOutcome', () => {
+    it('keeps the current value when the merge kept the snapshot (a status picked after the snapshot survives an echo)', () => {
+        expect(applyMergeOutcome('somedayMaybe', { snapshot: 'inbox', merged: 'inbox' })).toBe('somedayMaybe');
+    });
+
+    it('writes the merged value when the merge adopted the incoming version', () => {
+        expect(applyMergeOutcome('inbox', { snapshot: 'inbox', merged: 'nextAction' })).toBe('nextAction');
+    });
+
+    it('keeps text typed after the snapshot when the merge kept the local title', () => {
+        expect(applyMergeOutcome('Decide laterss', { snapshot: 'Decide laters', merged: 'Decide laters' })).toBe('Decide laterss');
+    });
+});
+
+describe('applyGroupMergeOutcome', () => {
+    it('returns the current group itself when the merge changed no key', () => {
+        const current = { energy: 'high', time: 15 };
+        expect(applyGroupMergeOutcome(current, { snapshot: { energy: 'low', time: 15 }, merged: { energy: 'low', time: 15 } })).toBe(current);
+    });
+
+    it('overwrites only the keys the merge adopted', () => {
+        const current = { energy: 'high', time: 15 };
+        expect(applyGroupMergeOutcome(current, { snapshot: { energy: 'low', time: 15 }, merged: { energy: 'low', time: 30 } })).toEqual({
+            energy: 'high',
+            time: 30,
+        });
     });
 });

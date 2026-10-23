@@ -33,6 +33,9 @@ export function shouldOpenQuickCapture(event: CaptureShortcutEvent, context: Cap
     return !context.isModalOpen && !context.isEditableTarget;
 }
 
+/** Input types that take no typed text — a focused switch or checkbox must not swallow the letter shortcuts. */
+const NON_TEXT_INPUT_TYPES = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file', 'image']);
+
 /** True for targets where a bare letter keystroke is text input rather than a shortcut. */
 export function isEditableEventTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) {
@@ -41,5 +44,8 @@ export function isEditableEventTarget(target: EventTarget | null): boolean {
     if (target.isContentEditable) {
         return true;
     }
-    return target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
+    if (target.tagName === 'INPUT') {
+        return !NON_TEXT_INPUT_TYPES.has((target.getAttribute('type') ?? 'text').toLowerCase());
+    }
+    return target.tagName === 'TEXTAREA' || target.tagName === 'SELECT';
 }

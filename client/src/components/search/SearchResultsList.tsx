@@ -11,6 +11,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { memo } from 'react';
 import { WindowVirtualizer } from 'virtua';
 import { groupByStatus, STATUS_LABELS } from '../../lib/itemSearch';
+import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import type { SearchView } from '../../lib/searchUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import { AccountChip } from '../AccountChip';
@@ -32,7 +33,7 @@ const renderItemSecondary = (item: StoredItem) => `Updated ${dayjs(item.updatedT
 // a full-list reconcile into a prop comparison per row.
 const ResultRow = memo(function ResultRow({ item, showStatusChip }: { item: StoredItem; showStatusChip: boolean }) {
     return (
-        <ListItem disablePadding secondaryAction={<CopyIdButton id={item._id} testId="searchResultCopyIdButton" />}>
+        <ListItem {...SHORTCUT_ROW_PROPS} disablePadding secondaryAction={<CopyIdButton isRowAction id={item._id} testId="searchResultCopyIdButton" />}>
             <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
                 <ListItemButton dense className={styles.rowButton}>
                     <ListItemText

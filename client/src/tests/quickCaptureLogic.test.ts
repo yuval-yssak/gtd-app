@@ -45,6 +45,10 @@ describe('shouldOpenQuickCapture', () => {
 class FakeHTMLElement {
     tagName = 'DIV';
     isContentEditable = false;
+    type: string | null = null;
+    getAttribute(name: string) {
+        return name === 'type' ? this.type : null;
+    }
 }
 
 const asTarget = (value: unknown) => value as EventTarget;
@@ -59,6 +63,14 @@ describe('isEditableEventTarget', () => {
 
     it.each(['INPUT', 'TEXTAREA', 'SELECT'] as const)('treats %s as a text-entry surface', (tagName) => {
         expect(isEditableEventTarget(asTarget(Object.assign(new FakeHTMLElement(), { tagName })))).toBe(true);
+    });
+
+    it.each(['text', 'search', 'email', null])('treats an input of type %s as a text-entry surface', (type) => {
+        expect(isEditableEventTarget(asTarget(Object.assign(new FakeHTMLElement(), { tagName: 'INPUT', type })))).toBe(true);
+    });
+
+    it.each(['checkbox', 'radio', 'button', 'range', 'CHECKBOX'])('a %s input takes no text — shortcuts still fire on it (a focused switch)', (type) => {
+        expect(isEditableEventTarget(asTarget(Object.assign(new FakeHTMLElement(), { tagName: 'INPUT', type })))).toBe(false);
     });
 
     it('treats a contenteditable host as a text-entry surface', () => {

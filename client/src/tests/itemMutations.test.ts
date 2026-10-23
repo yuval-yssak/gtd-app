@@ -859,6 +859,51 @@ describe('reorderItem / ensureRunRanked', () => {
         expect(moved.expectedBy).toBeUndefined();
     });
 
+    it.each(['inbox', 'somedayMaybe'] as const)('%s rows reorder within their one section (no day keying)', async (status) => {
+        const items = await seedSection(['a0', 'a1', 'a2'], [{ status }, { status, expectedBy: '2026-11-01' }, { status }]);
+        const [a, , c] = items;
+        if (!a || !c) throw new Error('seed');
+        const moved = await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: undefined, belowId: a._id });
+        expect(moved?.status).toBe(status);
+        expect(compareRank(await storedRank(c._id), await storedRank(a._id))).toBeLessThan(0);
+    });
+
+    it('waiting-for rows reorder within their expected day only; another day is another section', async () => {
+        const items = await seedSection(
+            ['a0', 'a1', 'a2'],
+            [
+                { status: 'waitingFor', expectedBy: '2026-11-01' },
+                { status: 'waitingFor', expectedBy: '2026-11-01' },
+                { status: 'waitingFor', expectedBy: '2026-11-02' },
+            ],
+        );
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('seed');
+        const moved = await reorderItem(db, { sectionItems: [a, b], itemId: b._id, aboveId: undefined, belowId: a._id });
+        expect(compareRank(await storedRank(b._id), await storedRank(a._id))).toBeLessThan(0);
+        expect(moved?.expectedBy).toBe('2026-11-01');
+        // A neighbour from another day is a different section: nothing is written.
+        expect(await reorderItem(db, { sectionItems: [a, c], itemId: c._id, aboveId: undefined, belowId: a._id })).toBeNull();
+    });
+
+    it('a row whose status changed since the page rendered (shown as inbox, stored as nextAction) writes nothing', async () => {
+        const items = await seedSection(['a0', 'a1'], [{ status: 'nextAction' }, { status: 'nextAction' }]);
+        const [a, b] = items;
+        if (!a || !b) throw new Error('seed');
+        const shownAsInbox = [
+            { ...a, status: 'inbox' as const },
+            { ...b, status: 'inbox' as const },
+        ];
+        expect(await reorderItem(db, { sectionItems: shownAsInbox, itemId: b._id, aboveId: undefined, belowId: a._id })).toBeNull();
+    });
+
+    it('a calendar row has no manual order: nothing is written', async () => {
+        const items = await seedSection(['a0', 'a1'], [{ status: 'calendar' }, { status: 'calendar' }]);
+        const [a, b] = items;
+        if (!a || !b) throw new Error('seed');
+        expect(await reorderItem(db, { sectionItems: items, itemId: b._id, aboveId: undefined, belowId: a._id })).toBeNull();
+    });
+
     it('a drop at the top / bottom of the section uses an open end', async () => {
         const items = await seedSection(['a0', 'a1', 'a2']);
         const [a, b, c] = items;

@@ -21,12 +21,14 @@ import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
+import { RowActionButton } from '../../components/RowActionButton';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { releaseFromTickler } from '../../db/itemMutations';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useTodayIso } from '../../hooks/useTodayIso';
+import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import { ticklerDayLabel } from '../../lib/ticklerDayLabel';
 import { isTicklerHidden, participatesInTickler } from '../../lib/ticklerVisibility';
 import type { StoredItem } from '../../types/MyDB';
@@ -140,20 +142,20 @@ function TicklerPage() {
                         {groupItems.map((item, idx) => (
                             <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
                                 <ListItem
+                                    {...SHORTCUT_ROW_PROPS}
                                     disablePadding
                                     className={styles.item}
                                     secondaryAction={
                                         <Box className={styles.actionButtons}>
-                                            <CopyIdButton id={item._id} testId="ticklerItemCopyIdButton" />
-                                            <Tooltip title="Edit">
-                                                <IconButton
-                                                    size="small"
-                                                    onClick={(e) => editor.openEditor({ item, event: e })}
-                                                    data-testid="ticklerItemEditButton"
-                                                >
-                                                    <EditIcon fontSize="small" />
-                                                </IconButton>
-                                            </Tooltip>
+                                            <CopyIdButton isRowAction id={item._id} testId="ticklerItemCopyIdButton" />
+                                            <RowActionButton
+                                                rowAction="edit"
+                                                label="Edit"
+                                                icon={<EditIcon fontSize="small" />}
+                                                size="small"
+                                                onClick={(e) => editor.openEditor({ item, event: e })}
+                                                data-testid="ticklerItemEditButton"
+                                            />
                                             <Tooltip title="Release now">
                                                 <IconButton size="small" onClick={() => void onRelease(item)}>
                                                     <EventAvailableIcon fontSize="small" />

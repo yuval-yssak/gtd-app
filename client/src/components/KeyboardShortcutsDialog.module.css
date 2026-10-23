@@ -1,8 +1,9 @@
+/* On a span inside the TableCell (MUI's emotion styles win over a module rule on the cell itself). */
 .groupTitle {
+    display: block;
     padding-top: 0.75rem;
     font-weight: 600;
     color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
-    border-bottom: 0;
 }
 
 .chord {

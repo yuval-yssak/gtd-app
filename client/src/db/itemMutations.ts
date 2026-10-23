@@ -1,8 +1,9 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
-import { compareNextActions, expectedDayKey } from '../lib/compareNextActions';
+import { compareByRank } from '../lib/compareNextActions';
 import { compareRank, evenlySpacedRanks, isRankTooLong, rankAt, rankBetween, ranksBetween } from '../lib/itemRank';
 import { recordGhostSnapshot } from '../lib/listGhosts';
+import { rankSectionKeyOf } from '../lib/rankSections';
 import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { deleteItemById, getItemsAcrossUsers, putItem, topRankForUser } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
@@ -453,8 +454,8 @@ export async function ensureRunRanked(
     return byId;
 }
 
-/** The moved row AS STORED plus every other LIVE `nextAction` row of its expected day across the owners, in display order. */
-interface DaySection {
+/** The moved row AS STORED plus every other row of its rank section (`rankSectionKeyOf`) across the owners, in display order. */
+interface RankSection {
     moved: StoredItem;
     others: StoredItem[];
 }
@@ -464,16 +465,17 @@ interface DaySection {
  * database too, never from the page's copy: a pull or another tab may have changed it since the
  * page rendered, and a write built from the rendered row would revert that edit under LWW. Hidden
  * rows (filters, search, the tickler, an account whose rows are all filtered out) are included on
- * purpose: they share the keyspace. Returns null when the moved row is gone or no longer `nextAction`.
+ * purpose: they share the keyspace. Returns null when the moved row is gone or its status has no
+ * manual order (it changed status mid-gesture to calendar, done or trash).
  */
-async function readDaySection(db: IDBPDatabase<MyDB>, itemId: string, ownerIds: readonly string[]): Promise<DaySection | null> {
+async function readRankSection(db: IDBPDatabase<MyDB>, itemId: string, ownerIds: readonly string[]): Promise<RankSection | null> {
     const rows = await getItemsAcrossUsers(db, [...new Set(ownerIds)]);
     const moved = rows.find((row) => row._id === itemId);
-    if (!moved || moved.status !== 'nextAction') {
+    const sectionKey = moved ? rankSectionKeyOf(moved) : null;
+    if (!moved || sectionKey === null) {
         return null;
     }
-    const dayKey = expectedDayKey(moved);
-    const others = rows.filter((row) => row.status === 'nextAction' && row._id !== moved._id && expectedDayKey(row) === dayKey).sort(compareNextActions);
+    const others = rows.filter((row) => row._id !== moved._id && rankSectionKeyOf(row) === sectionKey).sort(compareByRank);
     return { moved, others };
 }
 
@@ -483,8 +485,8 @@ async function readDaySection(db: IDBPDatabase<MyDB>, itemId: string, ownerIds: 
  * then belong to another section), and at least one named neighbour still exists (both vanished
  * means the slot no longer exists; one vanished is a section edge).
  */
-function isSameContext(section: DaySection, shown: StoredItem, neighbours: Pick<ReorderRequest, 'aboveId' | 'belowId'>): boolean {
-    if (expectedDayKey(section.moved) !== expectedDayKey(shown)) {
+function isSameContext(section: RankSection, shown: StoredItem, neighbours: Pick<ReorderRequest, 'aboveId' | 'belowId'>): boolean {
+    if (rankSectionKeyOf(section.moved) !== rankSectionKeyOf(shown)) {
         return false;
     }
     const named = [neighbours.aboveId, neighbours.belowId].filter((id): id is string => id !== undefined);
@@ -498,11 +500,12 @@ function isSamePlace(visible: readonly StoredItem[], moved: StoredItem, neighbou
 }
 
 /**
- * Moves one row between two visible neighbours inside its day section by writing ONE field on ONE
- * row (one sync op on the happy path). Never touches `expectedBy`: a drag cannot change the date.
+ * Moves one row between two visible neighbours inside its rank section (`rankSectionKeyOf`: a Next
+ * Actions or Waiting For day, the Inbox, Someday / Maybe) by writing ONE field on ONE row (one sync
+ * op on the happy path). Never touches `expectedBy` or `status`: a drag changes only the order.
  * Returns the moved row, or null when nothing may be written: it already sits in the requested slot,
- * it is no longer a live `nextAction` row (vanished or changed status mid-gesture), it was re-dated
- * elsewhere (its neighbours belong to another day), or both named neighbours are gone.
+ * it vanished or its status changed mid-gesture, it moved to another section (re-dated elsewhere —
+ * its neighbours belong to another section), or both named neighbours are gone.
  */
 export async function reorderItem(db: IDBPDatabase<MyDB>, request: ReorderRequest): Promise<StoredItem | null> {
     const shown = request.sectionItems.find((row) => row._id === request.itemId);
@@ -510,7 +513,7 @@ export async function reorderItem(db: IDBPDatabase<MyDB>, request: ReorderReques
         return null;
     }
     const owners = request.ownerIds ?? request.sectionItems.map((row) => row.userId);
-    const section = await readDaySection(db, request.itemId, [...owners, shown.userId]);
+    const section = await readRankSection(db, request.itemId, [...owners, shown.userId]);
     if (!section || !isSameContext(section, shown, request)) {
         return null;
     }

@@ -22,6 +22,7 @@ import { collectItem } from '../../db/itemMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCaptureNotesPanel } from '../../hooks/useCaptureNotesPanel';
 import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptureNotice';
+import { isModalOpen } from '../../lib/keyboardRegionDom';
 import type { MyDB } from '../../types/MyDB';
 import { MarkdownNotesEditor, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
@@ -88,10 +89,7 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
-            // :not([aria-hidden]) — keep-mounted modals (AppNav's mobile drawer) sit in the DOM
-            // permanently; MUI marks them aria-hidden while closed, so bare presence ≠ open.
-            const isModalOpen = document.querySelector('.MuiModal-root:not([aria-hidden="true"])') !== null;
-            if (shouldOpenQuickCapture(event, { isModalOpen, isEditableTarget: isEditableEventTarget(event.target) })) {
+            if (shouldOpenQuickCapture(event, { isModalOpen: isModalOpen(), isEditableTarget: isEditableEventTarget(event.target) })) {
                 event.preventDefault();
                 openDialogRef.current();
             }
@@ -142,7 +140,14 @@ export function QuickCaptureFab({ db }: { db: IDBPDatabase<MyDB> }) {
     return (
         <>
             <Tooltip title="Add to inbox (c)">
-                <Fab color="primary" aria-label="add to inbox" className={styles.fab} onClick={() => setIsOpen(true)} data-testid="quickCaptureFab">
+                <Fab
+                    color="primary"
+                    aria-label="add to inbox"
+                    aria-keyshortcuts="C"
+                    className={styles.fab}
+                    onClick={() => setIsOpen(true)}
+                    data-testid="quickCaptureFab"
+                >
                     <AddIcon />
                 </Fab>
             </Tooltip>

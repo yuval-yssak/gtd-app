@@ -47,6 +47,14 @@ describe('compareWaitingForByExpectedBy', () => {
         ];
         expect([...items].sort(compareWaitingForByExpectedBy).map((i) => i._id)).toEqual(['undated', 'soon', 'later']);
     });
+
+    it('inside one day, the manual rank decides — not the time of day or the creation time', () => {
+        const items = [
+            mkItem({ _id: 'morning', expectedBy: '2026-08-25T08:00:00', rank: 'a2', createdTs: '2026-08-01T00:00:00.000Z' }),
+            mkItem({ _id: 'evening', expectedBy: '2026-08-25T20:00:00', rank: 'a1', createdTs: '2026-08-02T00:00:00.000Z' }),
+        ];
+        expect([...items].sort(compareWaitingForByExpectedBy).map((i) => i._id)).toEqual(['evening', 'morning']);
+    });
 });
 
 describe('resolvePersonName', () => {

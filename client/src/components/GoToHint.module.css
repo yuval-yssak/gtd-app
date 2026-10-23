@@ -1,0 +1,33 @@
+/* Bottom-left, clear of the quick-capture FAB (bottom-right) and the snackbars (bottom-centre). */
+.hint {
+    position: fixed;
+    left: 1rem;
+    bottom: 1rem;
+    z-index: var(--mui-zIndex-snackbar, 1400);
+    padding: 0.75rem 1rem;
+    max-width: 18rem;
+}
+
+.title {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+.targets {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    columns: 2;
+    column-gap: 1rem;
+    font-size: 0.8125rem;
+}
+
+.key {
+    display: inline-block;
+    min-width: 1.25rem;
+    text-align: center;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+    border-radius: 0.25rem;
+}

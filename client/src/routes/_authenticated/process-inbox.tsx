@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { ProcessInboxWizard } from '../../components/ProcessInboxWizard';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
+import { compareByRank } from '../../lib/compareNextActions';
 import type { StoredItem } from '../../types/MyDB';
 
 export const Route = createFileRoute('/_authenticated/process-inbox')({
@@ -29,7 +30,7 @@ function ProcessInboxPage() {
     // Snapshot inbox items once at mount — saves that move items out of the inbox shrink the live
     // `items` array, which would skew the wizard's index. useState lazy initialiser holds the
     // snapshot stable across re-renders without the lint-trap that comes from `useMemo([])`.
-    const [inboxSnapshot] = useState<StoredItem[]>(() => items.filter((i) => i.status === 'inbox').sort((a, b) => b.createdTs.localeCompare(a.createdTs)));
+    const [inboxSnapshot] = useState<StoredItem[]>(() => items.filter((i) => i.status === 'inbox').sort(compareByRank));
 
     const close = () => void navigate({ to: '/inbox' });
 

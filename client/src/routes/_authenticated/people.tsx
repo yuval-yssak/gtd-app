@@ -26,6 +26,7 @@ import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { PersonEditDialog } from '../../components/people/PersonEditDialog';
+import { RowActionButton } from '../../components/RowActionButton';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
@@ -35,6 +36,7 @@ import { useListSearch } from '../../hooks/useListSearch';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { orderPeople } from '../../lib/peopleList';
+import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import type { StoredPerson } from '../../types/MyDB';
 import styles from './-people.module.css';
 
@@ -202,15 +204,19 @@ function PeoplePage() {
                         // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
                         <Box key={person._id} data-list-item-id={person._id}>
                             <ListItem
+                                {...SHORTCUT_ROW_PROPS}
                                 disablePadding
                                 className={styles.item}
                                 secondaryAction={
                                     <Box className={styles.actionButtons}>
-                                        <Tooltip title="Edit">
-                                            <IconButton size="small" onClick={() => setEditing(person)} data-testid="personRowEditButton">
-                                                <EditIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
+                                        <RowActionButton
+                                            rowAction="edit"
+                                            label="Edit"
+                                            icon={<EditIcon fontSize="small" />}
+                                            size="small"
+                                            onClick={() => setEditing(person)}
+                                            data-testid="personRowEditButton"
+                                        />
                                         <Tooltip title={person.archived ? 'Unarchive' : 'Archive — hide from pickers, keep on items'}>
                                             <IconButton size="small" onClick={() => void onToggleArchived(person)} data-testid="personRowArchiveButton">
                                                 {person.archived ? <UnarchiveOutlinedIcon fontSize="small" /> : <ArchiveOutlinedIcon fontSize="small" />}

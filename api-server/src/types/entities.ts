@@ -148,8 +148,9 @@ export interface ItemInterface {
     energy?: EnergyLevel; // relevant for `nextAction` items
     time?: number; // estimated duration in minutes — relevant for `nextAction` items
     /**
-     * Fractional-indexing key (`lib/itemRank.ts`) — the manual priority order of Next Actions inside
-     * one expected-day section (date is the gate, rank the order within it). UNIVERSAL, like `title`:
+     * Fractional-indexing key (`lib/itemRank.ts`) — the manual priority order of a list: a Next
+     * Actions or Waiting For expected-day section (date is the gate, rank the order within it), the
+     * Inbox, Someday / Maybe (the Calendar has none: it is chronological). UNIVERSAL, like `title`:
      * minted when the item is created (public API, routine generator, import, the client's collect),
      * or when it first enters `nextAction`; kept across every status change and NEVER cleared.
      * Absent therefore always means "not minted yet / not pulled yet" — which is what lets the apply

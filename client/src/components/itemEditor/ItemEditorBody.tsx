@@ -14,6 +14,7 @@ import DialogActions from '@mui/material/DialogActions';
 import Divider from '@mui/material/Divider';
 import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import classNames from 'classnames';
 import dayjs from 'dayjs';
@@ -44,14 +45,19 @@ import { offlineReassignMessage } from '../../db/reassignMutations';
 import { clarifyToRoutine, undoClarifyToRoutine } from '../../db/routineClarifyMutations';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCalendarOptions } from '../../hooks/useCalendarOptions';
+import { EDITOR_KEY_SCOPE_ATTR, useEditorShortcuts } from '../../hooks/useEditorShortcuts';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { usePageEscapeToClose } from '../../hooks/usePageEscapeToClose';
 import { useUnsavedChangesGuard } from '../../hooks/useUnsavedChangesGuard';
 import { useShowBriefs } from '../../lib/briefPreference';
 import { briefState } from '../../lib/briefSource';
+import { statusKeyOf } from '../../lib/editorShortcuts';
 import { omitArchived } from '../../lib/entityUsage';
 import { isBrowserOffline } from '../../lib/onlineStatus';
 import { scopeOptionsToOwner } from '../../lib/ownerScopedPickerOptions';
+import { chordLabel, isApplePlatform } from '../../lib/platformKeys';
+import { rankSectionKeyOf } from '../../lib/rankSections';
+import { withShortcutHint } from '../../lib/rowShortcuts';
 import { collapseToSingleLine } from '../../lib/singleLineText';
 import { offerUndo } from '../../lib/undoStore';
 import type { GCalAttendee, MyDB, StoredItem, StoredPerson, StoredRoutine, StoredWorkContext } from '../../types/MyDB';
@@ -100,6 +106,8 @@ import { CopyIdButton } from './CopyIdButton';
 import styles from './ItemEditorBody.module.css';
 import { resolveActionsPlacement } from './itemEditorActionsPlacement';
 import {
+    applyGroupMergeOutcome,
+    applyMergeOutcome,
     briefTextOf,
     isOwnerOrStructurallyEdited,
     itemToCalendarForm,
@@ -137,6 +145,12 @@ const STATUS_CHIPS: StatusChipConfig[] = [
     { value: 'done', label: 'Done', icon: <CheckCircleOutlineIcon fontSize="small" />, color: 'success' },
     { value: 'trash', label: 'Trash', icon: <DeleteOutlineIcon fontSize="small" />, color: 'error' },
 ];
+
+/** A status chip's tooltip: its label, plus its letter when it has one. */
+function chipTitle(cfg: StatusChipConfig): string {
+    const key = statusKeyOf(cfg.value);
+    return key ? withShortcutHint(cfg.label, key) : cfg.label;
+}
 
 /**
  * Surface the body exposes to a custom actions renderer. Wizards (batch Process Inbox) supply
@@ -392,6 +406,17 @@ export function ItemEditorBody({
     formRefs.current = { title, notes, brief, status, na: naForm, cal: calForm, wf: wfForm, sm: smForm, ownerUserId };
 
     /**
+     * A user edit writes the ref THROUGH before setting state: the live-merge effect can run before
+     * the next render (an autosave echo landing in the same tick as a keystroke or a status letter),
+     * and must merge against what the user has, not the last render's snapshot — or it rebaselines
+     * the autosave over an unsaved keystroke and misses a conflict.
+     */
+    function writeFormField<K extends keyof typeof formRefs.current>(key: K, value: (typeof formRefs.current)[K], commit: (next: typeof value) => void) {
+        formRefs.current = { ...formRefs.current, [key]: value };
+        commit(value);
+    }
+
+    /**
      * Shared structural-dirty core for the render-time `isDirty` and the navigation guard's
      * `hasStructuralEdits()` — see isOwnerOrStructurallyEdited for the remote-reassign nuance.
      * A `routine` destination is always dirty through the status check (an item's status is never
@@ -478,7 +503,7 @@ export function ItemEditorBody({
         // title, which is a single-line value everywhere it is shown. Typed Enter is swallowed by
         // the field's own onKeyDown; this covers paste, drop and autofill.
         const nextTitle = collapseToSingleLine(rawTitle);
-        setTitle(nextTitle);
+        writeFormField('title', nextTitle, setTitle);
         setHasTextEdits(nextTitle !== seedForms.title || formRefs.current.notes !== seedForms.notes);
         if (textAutosaveEnabled) {
             textAutosave.onChange({ title: nextTitle, notes: formRefs.current.notes });
@@ -486,7 +511,7 @@ export function ItemEditorBody({
     }
 
     function onNotesChange(nextNotes: string) {
-        setNotes(nextNotes);
+        writeFormField('notes', nextNotes, setNotes);
         setHasTextEdits(formRefs.current.title !== seedForms.title || nextNotes !== seedForms.notes);
         if (textAutosaveEnabled) {
             textAutosave.onChange({ title: formRefs.current.title, notes: nextNotes });
@@ -611,14 +636,16 @@ export function ItemEditorBody({
             return true;
         });
 
-        setTitle(merged.title);
-        setNotes(merged.notes);
-        setBrief(merged.brief);
-        setStatus(merged.status);
-        setNaForm(merged.na);
-        setCalForm(merged.cal);
-        setWfForm(merged.wf);
-        setSmForm(merged.sm);
+        // Functional updates over the CURRENT state, as a safeguard behind the write-through refs
+        // (writeFormField): only what the merge adopted is written, never a copy of `form` itself.
+        setTitle((current) => applyMergeOutcome(current, { snapshot: form.title, merged: merged.title }));
+        setNotes((current) => applyMergeOutcome(current, { snapshot: form.notes, merged: merged.notes }));
+        setBrief((current) => applyMergeOutcome(current, { snapshot: form.brief, merged: merged.brief }));
+        setStatus((current) => applyMergeOutcome(current, { snapshot: form.status, merged: merged.status }));
+        setNaForm((current) => applyGroupMergeOutcome(current, { snapshot: form.na, merged: merged.na }));
+        setCalForm((current) => applyGroupMergeOutcome(current, { snapshot: form.cal, merged: merged.cal }));
+        setWfForm((current) => applyGroupMergeOutcome(current, { snapshot: form.wf, merged: merged.wf }));
+        setSmForm((current) => applyGroupMergeOutcome(current, { snapshot: form.sm, merged: merged.sm }));
         if (merged.title === incoming.title && merged.notes === incoming.notes) {
             // Text fully clean (or adopted) — tighten the controller baseline to the live values.
             // When text is still dirty we leave the controller alone: its pending commit must
@@ -1008,6 +1035,22 @@ export function ItemEditorBody({
         await onSaved();
     }
 
+    // Keyboard: Cmd/Ctrl+Enter saves; outside a text field a letter picks a status chip and
+    // Alt(⌥)+arrows move the item in its list (lib/editorShortcuts.ts).
+    const isApple = useMemo(isApplePlatform, []);
+    const onEditorKeyDown = useEditorShortcuts({
+        onSave: () => onSave(),
+        // A host with its own actions (Weekly Review, the Process Inbox wizard) runs its own save
+        // handshake (decision + undo capture) around `triggerSave`: a body-level Cmd/Ctrl+Enter would
+        // bypass it, so the shortcut is off there.
+        isSaveDisabled: saveDisabled || renderActions !== undefined,
+        onPickStatus: (next) => {
+            setRoutineSaveError(null);
+            writeFormField('status', next, setStatus);
+        },
+        canPick: (next) => next !== 'routine' || canClarifyToRoutine(liveItem),
+    });
+
     if (reassignInFlight) {
         // Dialog wrapper short-circuits to ReassignInFlightDialog before mounting the body, so this
         // branch only fires under popover/expand/page.
@@ -1027,9 +1070,14 @@ export function ItemEditorBody({
     ) : (
         <>
             <Button onClick={closeEditor}>Cancel</Button>
-            <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()}>
-                Save changes
-            </Button>
+            <Tooltip title={`Save changes (${chordLabel(['mod', 'enter'], isApple)})`} describeChild>
+                {/* The span keeps the tooltip working while the button is disabled (MUI needs an enabled child). */}
+                <span>
+                    <Button variant="contained" disabled={saveDisabled} onClick={() => onSave()} aria-keyshortcuts={isApple ? 'Meta+Enter' : 'Control+Enter'}>
+                        Save changes
+                    </Button>
+                </span>
+            </Tooltip>
         </>
     );
     const actionsPlacement = resolveActionsPlacement(actionsContainer);
@@ -1042,7 +1090,14 @@ export function ItemEditorBody({
         );
 
     return (
-        <Box className={bodyClassFor(chrome, presentation)}>
+        // tabIndex -1: a click on the editor's empty space focuses the editor itself (not the page body), so its
+        // letter and Alt+arrow shortcuts keep working; it is never a Tab stop.
+        <Box
+            className={classNames(bodyClassFor(chrome, presentation), styles.keyScope)}
+            tabIndex={-1}
+            {...{ [EDITOR_KEY_SCOPE_ATTR]: '' }}
+            onKeyDown={onEditorKeyDown}
+        >
             {conflictFields.length > 0 && (
                 <Alert
                     severity="info"
@@ -1083,7 +1138,7 @@ export function ItemEditorBody({
                 value={brief}
                 state={briefRowState}
                 origin={liveBrief?.origin}
-                onChange={setBrief}
+                onChange={(next) => writeFormField('brief', next, setBrief)}
                 onCommit={(value) => void flushBrief(value)}
                 generation={briefGeneration}
                 variant={isBriefLeading ? 'line' : 'field'}
@@ -1093,7 +1148,7 @@ export function ItemEditorBody({
             {status === 'calendar' && (
                 <CalendarFields
                     value={calForm}
-                    onChange={(patch) => setCalForm((f) => applyCalendarPatch(f, patch))}
+                    onChange={(patch) => writeFormField('cal', applyCalendarPatch(formRefs.current.cal, patch), setCalForm)}
                     calendarOptions={visibleCalendarOptions}
                     forceShowPicker={ownerUserId !== item.userId}
                 />
@@ -1123,17 +1178,23 @@ export function ItemEditorBody({
                     }}
                 >
                     {STATUS_CHIPS.filter((cfg) => cfg.value !== 'routine' || canClarifyToRoutine(liveItem)).map((cfg) => (
-                        <Chip
-                            key={cfg.value}
-                            icon={cfg.icon}
-                            label={cfg.label}
-                            variant={status === cfg.value ? 'filled' : 'outlined'}
-                            color={status === cfg.value ? (cfg.color ?? 'primary') : 'default'}
-                            onClick={() => {
-                                setRoutineSaveError(null);
-                                setStatus(cfg.value);
-                            }}
-                        />
+                        // The tooltip teaches the chip's letter (it works with focus outside a text field).
+                        <Tooltip key={cfg.value} title={chipTitle(cfg)}>
+                            <Chip
+                                icon={cfg.icon}
+                                label={cfg.label}
+                                variant={status === cfg.value ? 'filled' : 'outlined'}
+                                color={status === cfg.value ? (cfg.color ?? 'primary') : 'default'}
+                                // The Tooltip would name the chip by its title ("Done (d)"); the name stays the label,
+                                // the key is announced from aria-keyshortcuts.
+                                aria-label={cfg.label}
+                                aria-keyshortcuts={statusKeyOf(cfg.value)?.toUpperCase()}
+                                onClick={() => {
+                                    setRoutineSaveError(null);
+                                    writeFormField('status', cfg.value, setStatus);
+                                }}
+                            />
+                        </Tooltip>
                     ))}
                 </Stack>
             </Box>
@@ -1149,9 +1210,13 @@ export function ItemEditorBody({
                     <AccountPicker
                         value={ownerUserId}
                         onChange={(uid) => {
-                            setOwnerUserId(uid);
+                            writeFormField('ownerUserId', uid, setOwnerUserId);
                             setReassignError(null);
-                            setCalForm((f) => ({ ...f, calendarSyncConfigId: pickDefaultConfigForUser(calendarOptions, uid, item) }));
+                            writeFormField(
+                                'cal',
+                                { ...formRefs.current.cal, calendarSyncConfigId: pickDefaultConfigForUser(calendarOptions, uid, item) },
+                                setCalForm,
+                            );
                         }}
                         disabled={isRoutineGenerated || isSaving}
                         {...(reassignError ? { error: reassignError } : {})}
@@ -1176,17 +1241,12 @@ export function ItemEditorBody({
                     <Divider />
                     <NextActionFields
                         value={naForm}
-                        onChange={(patch) => setNaForm((f) => ({ ...f, ...patch }))}
+                        onChange={(patch) => writeFormField('na', { ...formRefs.current.na, ...patch }, setNaForm)}
                         workContexts={pickerWorkContexts}
                         people={pickerPeople}
                         usage={entityUsage}
                         dense={presentation === 'review'}
                     />
-                    {/* Only a SAVED next action has a position (an inbox item being clarified lands at the top on
-                        save); the dense weekly-review card leaves it out — reordering is a list concern there. */}
-                    {liveItem.status === 'nextAction' && presentation !== 'review' && (
-                        <NextActionPositionRow db={db} item={liveItem} onBeforeMove={() => flushItemTextLocallyRef.current()} />
-                    )}
                 </>
             )}
 
@@ -1210,7 +1270,11 @@ export function ItemEditorBody({
             {status === 'waitingFor' && (
                 <>
                     <Divider />
-                    <WaitingForFields value={wfForm} onChange={(patch) => setWfForm((f) => ({ ...f, ...patch }))} people={pickerPeople} />
+                    <WaitingForFields
+                        value={wfForm}
+                        onChange={(patch) => writeFormField('wf', { ...formRefs.current.wf, ...patch }, setWfForm)}
+                        people={pickerPeople}
+                    />
                 </>
             )}
 
@@ -1230,7 +1294,7 @@ export function ItemEditorBody({
                         >
                             Parked for later review. Optionally set a deadline or hide it from review until a date.
                         </Typography>
-                        <TicklerDateFields value={smForm} onChange={(patch) => setSmForm((f) => ({ ...f, ...patch }))} />
+                        <TicklerDateFields value={smForm} onChange={(patch) => writeFormField('sm', { ...formRefs.current.sm, ...patch }, setSmForm)} />
                     </Stack>
                 </>
             )}
@@ -1268,6 +1332,14 @@ export function ItemEditorBody({
                         />
                     </Stack>
                 </>
+            )}
+
+            {/* The item's place in its list's manual order — only while the chosen status is the SAVED one
+                (an item being moved to another list lands at that list's top on save) and the list has a
+                manual order (not the calendar). The weekly-review cards and the Process Inbox wizard (hosts
+                with their own actions) leave it out — reordering is a list concern, not a step of their walk. */}
+            {status === liveItem.status && rankSectionKeyOf(liveItem) !== null && presentation !== 'review' && !renderActions && (
+                <NextActionPositionRow db={db} item={liveItem} onBeforeMove={() => flushItemTextLocallyRef.current()} />
             )}
 
             <Divider />

@@ -44,6 +44,15 @@ export function compareNextActions(a: StoredItem, b: StoredItem): number {
     if (dayDiff !== 0) {
         return dayDiff;
     }
+    return compareByRank(a, b);
+}
+
+/**
+ * The manual order inside one section of any ranked list (a Next Actions day, the Inbox, Someday /
+ * Maybe, a Waiting For day): unranked rows first, newest first; then `rank` by code unit; `_id`
+ * breaks every remaining tie, so the order is total.
+ */
+export function compareByRank(a: StoredItem, b: StoredItem): number {
     const withinDay = compareWithinDay(a, b);
     return withinDay !== 0 ? withinDay : compareCodeUnits(a._id, b._id);
 }

@@ -21,7 +21,8 @@
 
 .rowButton {
     padding: 0.625rem 1rem;
-    padding-right: 7.5rem;
+    /* Room for the move-to + copy-id + edit buttons in secondaryAction. */
+    padding-right: 10rem;
 }
 
 .rowButton :global(.MuiListItemText-root) {

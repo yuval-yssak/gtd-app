@@ -75,3 +75,9 @@
 - [Keyed reorder loses focus in one direction](feedback_keyed_reorder_focus_loss_one_direction.md) — Downward moves move the focused node; one-shot refocus + refocus-per-press e2e hide it; cancel-refocus steals focus.
 - [refresh resolves before commit](project_refresh_resolves_before_transition_commit.md) — refreshItems() returns before the transition commits; await+rAF is no render barrier. flushItemTextRef also pushes to network.
 - [Id-only guard on the shared ghost store](feedback_id_only_guard_on_shared_ghost_store.md) — `hasGhost(id)` as an "already done" guard matches other lists' ghosts and stranded entries, so a fresh row's Done does nothing; match status+updatedTs.
+- [DOM focus tricks miss unmount / hidden / WebKit](feedback_focus_state_on_dom_misses_unmount_and_hidden.md) — tabIndex flip sticks on child unmount; getClientRects passes visibility:hidden drawers; WebKit focus-visible false.
+- [Shortcut key mapping by event.code](feedback_layout_key_mapping_by_code_breaks_punctuation.md) — code→letter fallback sends AZERTY `?` to m and Dvorak `,` to w; test AZERTY/Dvorak, not just US+Hebrew.
+- [Absence assertion after navigation is vacuous](feedback_absence_assertion_after_navigation_is_vacuous.md) — `toHaveCount(0)` on the unmounted page's testid after `g x`; script-wired N pages tested on 2-3.
+- [Root onKeyDown gets portal keys](feedback_root_onkeydown_gets_portal_keys.md) — Editor-root letter shortcuts fire from open Select menus / nested dialogs via React bubbling; demand containment guard.
+- [Body shortcut bypasses host primary](feedback_body_shortcut_bypasses_host_primary.md) — Cmd+Enter in ItemEditorBody skips renderActions hosts' armExplicitSave/undo; grep hosts.
+- [Stale-snapshot race fix leaves side effects](feedback_stale_snapshot_fix_leaves_side_effects.md) — Functional-updater fixes repair state, but `textAutosave.reset` etc. still decide from the stale snapshot; silent text loss.

@@ -24,11 +24,13 @@ import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { RowActionButton } from '../../components/RowActionButton';
 import { WorkContextEditDialog } from '../../components/workContexts/WorkContextEditDialog';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createWorkContext, removeWorkContext, updateWorkContext } from '../../db/workContextMutations';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
+import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import type { StoredWorkContext } from '../../types/MyDB';
 import styles from './-work-contexts.module.css';
 
@@ -123,15 +125,19 @@ function WorkContextsPage() {
                     {orderedContexts.map((ctx, idx) => (
                         <Box key={ctx._id}>
                             <ListItem
+                                {...SHORTCUT_ROW_PROPS}
                                 disablePadding
                                 className={styles.item}
                                 secondaryAction={
                                     <Box className={styles.actionButtons}>
-                                        <Tooltip title="Rename">
-                                            <IconButton size="small" onClick={() => setEditing(ctx)} data-testid="workContextRowEditButton">
-                                                <EditIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
+                                        <RowActionButton
+                                            rowAction="edit"
+                                            label="Rename"
+                                            icon={<EditIcon fontSize="small" />}
+                                            size="small"
+                                            onClick={() => setEditing(ctx)}
+                                            data-testid="workContextRowEditButton"
+                                        />
                                         <Tooltip title={ctx.archived ? 'Unarchive' : 'Archive — hide from pickers, keep on items'}>
                                             <IconButton size="small" onClick={() => void onToggleArchived(ctx)} data-testid="workContextRowArchiveButton">
                                                 {ctx.archived ? <UnarchiveOutlinedIcon fontSize="small" /> : <ArchiveOutlinedIcon fontSize="small" />}

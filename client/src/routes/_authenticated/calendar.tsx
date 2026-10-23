@@ -26,6 +26,7 @@ import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
+import { RowActionButton } from '../../components/RowActionButton';
 import { SyncingChip } from '../../components/SyncingChip';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
@@ -35,6 +36,7 @@ import { useListSearch } from '../../hooks/useListSearch';
 import { formatAllDayDate, fromGCalExclusive } from '../../lib/allDayDate';
 import { filterItemsByQuery } from '../../lib/itemSearch';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
+import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-calendar.module.css';
 
@@ -123,20 +125,20 @@ function CalendarPage() {
                                 // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
                                 <Box key={item._id} data-list-item-id={item._id}>
                                     <ListItem
+                                        {...SHORTCUT_ROW_PROPS}
                                         disablePadding
                                         className={styles.item}
                                         secondaryAction={
                                             <Box className={styles.actionButtons}>
-                                                <CopyIdButton id={item._id} testId="calendarItemCopyIdButton" />
-                                                <Tooltip title="Edit">
-                                                    <IconButton
-                                                        size="small"
-                                                        onClick={(e) => editor.openEditor({ item, event: e })}
-                                                        data-testid="calendarItemEditButton"
-                                                    >
-                                                        <EditIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
+                                                <CopyIdButton isRowAction id={item._id} testId="calendarItemCopyIdButton" />
+                                                <RowActionButton
+                                                    rowAction="edit"
+                                                    label="Edit"
+                                                    icon={<EditIcon fontSize="small" />}
+                                                    size="small"
+                                                    onClick={(e) => editor.openEditor({ item, event: e })}
+                                                    data-testid="calendarItemEditButton"
+                                                />
                                                 <Tooltip title="Mark done">
                                                     <IconButton
                                                         size="small"

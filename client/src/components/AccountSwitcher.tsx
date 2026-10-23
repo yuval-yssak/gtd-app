@@ -17,6 +17,7 @@ import type { IDBPDatabase } from 'idb';
 import { useState } from 'react';
 import { type PendingAction, useAccounts } from '../hooks/useAccounts';
 import { useOnline } from '../hooks/useOnline';
+import { useRovingRegion } from '../hooks/useRovingRegion';
 import type { MyDB } from '../types/MyDB';
 import { AccountAvatar } from './AccountAvatar';
 import styles from './AccountSwitcher.module.css';
@@ -38,6 +39,8 @@ export function AccountSwitcher({ db }: Props) {
         useAccounts(db);
     const isOnline = useOnline();
     const isPending = pendingAction !== null;
+    // The avatars (visibility toggles + the switcher) are ONE tab stop; ←/→ walk them.
+    const accountsRegion = useRovingRegion({ orientation: 'horizontal', label: 'Accounts' });
 
     function openMenu(e: React.MouseEvent<HTMLElement>) {
         setMenuAnchor(e.currentTarget);
@@ -50,10 +53,19 @@ export function AccountSwitcher({ db }: Props) {
         <>
             {/* Per-account show/hide toggles — rendered here so every AccountSwitcher mount point
                 (sidebar footer + mobile AppBar) gets them without an extra useAccounts fetch. */}
-            <AccountVisibilityToggles accounts={allAccounts} />
-            <IconButton onClick={openMenu} size="small" className={styles.menuButton} data-testid="accountSwitcherTrigger">
-                <AccountAvatar account={activeAccount} size={32} />
-            </IconButton>
+            <span role="toolbar" className={styles.accountsRegion} data-testid="accountsRegion" {...accountsRegion.regionProps}>
+                <AccountVisibilityToggles accounts={allAccounts} itemProps={accountsRegion.itemProps} />
+                <IconButton
+                    onClick={openMenu}
+                    size="small"
+                    className={styles.menuButton}
+                    aria-label="Accounts menu"
+                    data-testid="accountSwitcherTrigger"
+                    {...accountsRegion.itemProps}
+                >
+                    <AccountAvatar account={activeAccount} size={32} />
+                </IconButton>
+            </span>
 
             <Menu anchorEl={menuAnchor} open={Boolean(menuAnchor)} onClose={closeMenu} onClick={closeMenu}>
                 {/* Switching accounts is local-first (IDB write + reload — see useAccounts) so it

@@ -225,7 +225,7 @@ interface ItemInterface {
     energy?: 'low' | 'medium' | 'high';
     time?: number;                   // estimated minutes
     urgent?: boolean;
-    rank?: string;                   // Next Actions priority key (fractional indexing, code-unit order); universal, never cleared — absent = not minted yet
+    rank?: string;                   // manual priority key (fractional indexing, code-unit order) — orders Next Actions & Waiting For inside a day, the Inbox, Someday; universal, never cleared — absent = not minted yet
     notes?: string;                  // freeform markdown
     briefStale?: boolean;            // server-owned brief-sweep selection marker (see below)
 

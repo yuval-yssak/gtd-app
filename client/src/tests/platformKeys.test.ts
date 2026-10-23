@@ -14,6 +14,10 @@ describe('chordLabel', () => {
         expect(chordLabel(['pageDown'], true)).toBe('Fn ↓');
         expect(chordLabel(['home'], false)).toBe('Home');
         expect(chordLabel(['pageDown'], false)).toBe('PgDn');
+        expect(chordLabel(['shift', 'f6'], true)).toBe('⇧Fn F6');
+        expect(chordLabel(['shift', 'f6'], false)).toBe('Shift+F6');
+        expect(chordLabel(['mod', 'enter'], true)).toBe('⌘↩');
+        expect(chordLabel(['mod', 'enter'], false)).toBe('Ctrl+Enter');
     });
 
     it('lists alternative chords with a slash', () => {

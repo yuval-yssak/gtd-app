@@ -42,7 +42,7 @@ import { getRoutinesByUser } from './routineHelpers';
 import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from './routineItemHelpers';
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
-import { closeSseConnections, getOpenSseUserIds } from './sseClient';
+import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds } from './sseClient';
 import { flushSyncQueue, pullFromServer, waitForPendingFlush } from './syncHelpers';
 import { getWorkContextsByUser } from './workContextHelpers';
 import { createWorkContext } from './workContextMutations';
@@ -215,6 +215,8 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // Returns the set of userIds with an open SSE channel right now. Used by the
         // multi-account-sync e2e spec to assert the device opened one channel per account.
         sseChannelUserIds: () => getOpenSseUserIds(),
+        // The subset whose channel has finished connecting (a broadcast before that is missed).
+        sseConnectedUserIds: () => getConnectedSseUserIds(),
 
         // Test-only: drops every SSE channel without going offline, reproducing the state iOS
         // leaves a PWA in after freezing its web view (socket gone, app still "online"). The
@@ -257,6 +259,7 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         '\n  __gtd.pullOnly()                       → pull for the active account, no flush first',
         '\n  __gtd.syncState()                      → device cursor + deviceId',
         '\n  __gtd.sseChannelUserIds()              → userIds with a live SSE channel',
+        '\n  __gtd.sseConnectedUserIds()            → userIds whose SSE channel has connected',
         '\n  __gtd.closeSse()                       → drop SSE channels (simulates an OS freeze)',
         '\n  __gtd.queuedOps()                      → pending offline queue',
     );

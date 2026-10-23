@@ -5,9 +5,16 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
 import routinesDAO from '../dataAccess/routinesDAO.js';
 import { applyAndPublishOperation } from '../lib/applyOperation.js';
-import { compareRank, isStrictlyIncreasing } from '../lib/itemRank.js';
+import { compareRank, isStrictlyIncreasing, isValidRank } from '../lib/itemRank.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
-import { BACKFILL_DEVICE_ID, type BackfillOptions, backfillUserItemRanks, compareLegacyOrder, stampedExpectedBy } from '../scripts/backfillItemRanks.js';
+import {
+    BACKFILL_DEVICE_ID,
+    type BackfillOptions,
+    backfillUserItemRanks,
+    compareLegacyOrder,
+    planOpenListRanks,
+    stampedExpectedBy,
+} from '../scripts/backfillItemRanks.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 
 beforeAll(async () => {
@@ -74,6 +81,55 @@ describe('compareLegacyOrder', () => {
         const b = seed('b', { rank: 'a0', createdTs: '2026-10-10T00:00:00.000Z' });
         const fresh = seed('fresh', { createdTs: '2026-09-01T00:00:00.000Z' });
         expect([a, b, fresh].sort(compareLegacyOrder).map((row) => row._id)).toEqual(['fresh', 'b', 'a']);
+    });
+});
+
+describe('planOpenListRanks (pass 5)', () => {
+    const ordered = (planned: ReturnType<typeof planOpenListRanks>, status: string) =>
+        planned
+            .filter((row) => row.after.status === status)
+            .sort((a, b) => compareRank(a.after.rank ?? '', b.after.rank ?? ''))
+            .map((row) => row.after._id);
+
+    it("ranks only unranked rows, after the status's highest rank, in the old order (inbox/someday newest first)", () => {
+        const planned = planOpenListRanks([
+            seed('freshCapture', { status: 'inbox', rank: 'Zx', createdTs: '2026-10-22T00:00:00.000Z' }),
+            seed('oldA', { status: 'inbox', createdTs: '2026-10-10T00:00:00.000Z' }),
+            seed('oldB', { status: 'inbox', createdTs: '2026-10-15T00:00:00.000Z' }),
+            seed('parked', { status: 'somedayMaybe', createdTs: '2026-10-01T00:00:00.000Z' }),
+        ]);
+        expect(planned.map((row) => row.after._id).sort()).toEqual(['oldA', 'oldB', 'parked']);
+        expect(ordered(planned, 'inbox')).toEqual(['oldB', 'oldA']);
+        for (const row of planned.filter((r) => r.after.status === 'inbox')) {
+            expect(compareRank('Zx', row.after.rank ?? '')).toBe(-1);
+        }
+        expect(planned.every((row) => !row.stamped && row.after.expectedBy === row.before.expectedBy)).toBe(true);
+    });
+
+    it('waiting-for rows keep their date order, undated first; a malformed rank is no upper bound and gets repaired', () => {
+        const planned = planOpenListRanks([
+            seed('bad', { status: 'waitingFor', rank: 'not a key!' }),
+            seed('later', { status: 'waitingFor', expectedBy: '2026-11-02' }),
+            seed('undated', { status: 'waitingFor' }),
+            seed('sooner', { status: 'waitingFor', expectedBy: '2026-11-01' }),
+        ]);
+        // 'bad' (created like the others) sorts with the undated rows; the dated rows keep their date order after it.
+        expect(ordered(planned, 'waitingFor').filter((id) => id !== 'bad')).toEqual(['undated', 'sooner', 'later']);
+        // The malformed key is repaired (re-keyed with the unranked rows), and every planned key is valid.
+        expect(planned.map((row) => row.after._id)).toContain('bad');
+        expect(planned.every((row) => isValidRank(row.after.rank ?? ''))).toBe(true);
+    });
+
+    it('someday rows keep their newest-first order too', () => {
+        const planned = planOpenListRanks([
+            seed('older', { status: 'somedayMaybe', createdTs: '2026-09-01T00:00:00.000Z' }),
+            seed('newer', { status: 'somedayMaybe', createdTs: '2026-10-01T00:00:00.000Z' }),
+        ]);
+        expect(ordered(planned, 'somedayMaybe')).toEqual(['newer', 'older']);
+    });
+
+    it('nothing to do when every open row is ranked (idempotent on its own)', () => {
+        expect(planOpenListRanks([seed('a', { status: 'inbox', rank: 'a0' }), seed('b', { status: 'waitingFor', rank: 'a1' })])).toEqual([]);
     });
 });
 
@@ -154,12 +210,77 @@ describe('backfillUserItemRanks', () => {
         expect(ops.map((op) => op.entityId)).toEqual(['plain']);
     });
 
+    it('an open row edited between planning and writing keeps its state and gets no op (the guard filters on its updatedTs)', async () => {
+        await itemsDAO.insertMany([seed('movedOn', { status: 'inbox' }), seed('plainInbox', { status: 'inbox' })]);
+        const original = itemsDAO.findArray.bind(itemsDAO);
+        // The second read is the open lists': let a device rank `movedOn` (a newer updatedTs) before the write lands.
+        const spy = vi
+            .spyOn(itemsDAO, 'findArray')
+            .mockImplementationOnce(original)
+            .mockImplementationOnce(async (...args) => {
+                const planned = await original(...args);
+                await itemsDAO.updateOne({ _id: 'movedOn', user: USER } as never, { $set: { rank: 'Zz', updatedTs: '2026-10-22T00:00:00.000Z' } } as never);
+                return planned;
+            });
+        await backfillUserItemRanks(USER, OPTS, NOW);
+        spy.mockRestore();
+        const byId = await rows();
+        expect(byId.get('movedOn')).toMatchObject({ rank: 'Zz', updatedTs: '2026-10-22T00:00:00.000Z' });
+        expect((await operationsDAO.findArray({ user: USER })).map((op) => op.entityId)).toEqual(['plainInbox']);
+    });
+
+    it('one run ranks an unranked next action and an unranked inbox row together: two ops', async () => {
+        await itemsDAO.insertMany([seed('na'), seed('capture', { status: 'inbox' })]);
+        const summary = await backfillUserItemRanks(USER, OPTS, NOW);
+        expect(summary).toMatchObject({ ranked: 1, openListRanked: 1, skippedAlreadyRanked: false });
+        const ops = await operationsDAO.findArray({ user: USER });
+        expect(ops.map((op) => op.entityId).sort()).toEqual(['capture', 'na']);
+    });
+
+    it('a dry run counts the open lists and writes nothing', async () => {
+        await itemsDAO.insertMany([seed('capture', { status: 'inbox' }), seed('parked', { status: 'somedayMaybe' })]);
+        const summary = await backfillUserItemRanks(USER, { ...OPTS, dryRun: true }, NOW);
+        expect(summary.openListRanked).toBe(2);
+        expect((await rows()).get('capture')?.rank).toBeUndefined();
+        expect(await operationsDAO.countDocuments({ user: USER })).toBe(0);
+    });
+
+    it("a failed op insert takes the open rows' new keys back, so a rerun ranks and publishes them", async () => {
+        await itemsDAO.insertMany([seed('capture', { status: 'inbox' }), seed('parked', { status: 'somedayMaybe' })]);
+        const spy = vi.spyOn(operationsDAO, 'insertMany').mockRejectedValueOnce(new Error('write blocked'));
+        await expect(backfillUserItemRanks(USER, OPTS, NOW)).rejects.toThrow('write blocked');
+        spy.mockRestore();
+        const afterFailure = await rows();
+        expect(afterFailure.get('capture')?.rank).toBeUndefined();
+        expect(afterFailure.get('parked')?.rank).toBeUndefined();
+        const rerun = await backfillUserItemRanks(USER, OPTS, NOW);
+        expect(rerun.openListRanked).toBe(2);
+        expect((await operationsDAO.findArray({ user: USER })).map((op) => op.entityId).sort()).toEqual(['capture', 'parked']);
+    });
+
     it('an already-ranked user still gets the closed-row / routine focus cleanup', async () => {
         await itemsDAO.insertMany([seed('ranked', { rank: 'a0' }), seed('doneFocus', { status: 'done', focus: true })]);
         const summary = await backfillUserItemRanks(USER, OPTS, NOW);
         expect(summary.skippedAlreadyRanked).toBe(true);
         expect(summary.focusUnsetElsewhere).toBe(1);
         expect((await rows()).get('doneFocus')).not.toHaveProperty('focus');
+    });
+
+    it('an already-ranked user still gets the open-list pass: an old unranked capture lands below the ranked ones, with one op', async () => {
+        await itemsDAO.insertMany([
+            seed('ranked', { rank: 'a0' }),
+            seed('newCapture', { status: 'inbox', rank: 'Zz', createdTs: '2026-10-22T00:00:00.000Z' }),
+            seed('oldCapture', { status: 'inbox', createdTs: '2026-09-01T00:00:00.000Z' }),
+        ]);
+        const summary = await backfillUserItemRanks(USER, OPTS, NOW);
+        expect(summary).toMatchObject({ skippedAlreadyRanked: true, openListRanked: 1 });
+        const after = await rows();
+        expect(compareRank('Zz', after.get('oldCapture')?.rank ?? '')).toBe(-1);
+        expect(after.get('oldCapture')?.updatedTs).toBe('2026-10-01T00:00:00.000Z');
+        const ops = await operationsDAO.findArray({ user: USER });
+        expect(ops.map((op) => op.entityId)).toEqual(['oldCapture']);
+        // A rerun finds nothing left to rank.
+        expect((await backfillUserItemRanks(USER, OPTS, NOW)).openListRanked).toBe(0);
     });
 
     it('focused done/trash rows lose focus with no date, no rank and no op; routine templates lose focus too', async () => {

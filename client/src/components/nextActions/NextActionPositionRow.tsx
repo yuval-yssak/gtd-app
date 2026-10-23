@@ -8,11 +8,11 @@ import type { IDBPDatabase } from 'idb';
 import { useMemo, useState, useTransition } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { reorderItem } from '../../db/itemMutations';
+import { POSITION_MOVE_ATTR } from '../../hooks/useEditorShortcuts';
 import { useTodayIso } from '../../hooks/useTodayIso';
-import { expectedDayKey } from '../../lib/compareNextActions';
 import type { NeighbourIds } from '../../lib/dragReorder';
-import { daySectionOf, positionMoves, sectionOwnerIds } from '../../lib/nextActionPosition';
-import { sectionLabel } from '../../lib/nextActionSections';
+import { daySectionOf, positionMoves, positionSectionLabel, sectionOwnerIds } from '../../lib/nextActionPosition';
+import { chordLabel, isApplePlatform } from '../../lib/platformKeys';
 import type { MyDB, StoredItem } from '../../types/MyDB';
 import { MoveToSheet } from './MoveToSheet';
 import styles from './NextActionPositionRow.module.css';
@@ -37,6 +37,8 @@ interface Props {
  * the new rank silently (no form field reads it).
  */
 export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
+    // Each button names its key (native title: a Tooltip wrapper would break the ButtonGroup); the editor's Alt(⌥)+arrows press them.
+    const isApple = useMemo(isApplePlatform, []);
     const { items, refreshItems } = useAppData();
     const todayIso = useTodayIso();
     const [isPending, startTransition] = useTransition();
@@ -44,7 +46,7 @@ export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
     const [isSheetOpen, setIsSheetOpen] = useState(false);
     const section = useMemo(() => daySectionOf(items, item, todayIso), [items, item, todayIso]);
     const moves = useMemo(() => positionMoves(section, item._id), [section, item._id]);
-    const label = sectionLabel(expectedDayKey(item), todayIso);
+    const label = positionSectionLabel(item, todayIso);
 
     function move(neighbours: NeighbourIds | null) {
         if (!neighbours) {
@@ -71,16 +73,40 @@ export function NextActionPositionRow({ db, item, onBeforeMove }: Props) {
             <Stack direction="row" className={styles.controls}>
                 {/* Each button states `isPending` itself: a child's own `disabled` prop overrides the group's. */}
                 <ButtonGroup size="small" variant="outlined" aria-label="Change position">
-                    <Button onClick={() => move(moves.top)} disabled={isPending || !moves.top} data-testid="nextActionPositionTop">
+                    <Button
+                        onClick={() => move(moves.top)}
+                        disabled={isPending || !moves.top}
+                        data-testid="nextActionPositionTop"
+                        title={`Top (${chordLabel(['alt', 'shift', 'up'], isApple)})`}
+                        {...{ [POSITION_MOVE_ATTR]: 'top' }}
+                    >
                         Top
                     </Button>
-                    <Button onClick={() => move(moves.up)} disabled={isPending || !moves.up} data-testid="nextActionPositionUp">
+                    <Button
+                        onClick={() => move(moves.up)}
+                        disabled={isPending || !moves.up}
+                        data-testid="nextActionPositionUp"
+                        title={`Up (${chordLabel(['alt', 'up'], isApple)})`}
+                        {...{ [POSITION_MOVE_ATTR]: 'up' }}
+                    >
                         Up
                     </Button>
-                    <Button onClick={() => move(moves.down)} disabled={isPending || !moves.down} data-testid="nextActionPositionDown">
+                    <Button
+                        onClick={() => move(moves.down)}
+                        disabled={isPending || !moves.down}
+                        data-testid="nextActionPositionDown"
+                        title={`Down (${chordLabel(['alt', 'down'], isApple)})`}
+                        {...{ [POSITION_MOVE_ATTR]: 'down' }}
+                    >
                         Down
                     </Button>
-                    <Button onClick={() => move(moves.bottom)} disabled={isPending || !moves.bottom} data-testid="nextActionPositionBottom">
+                    <Button
+                        onClick={() => move(moves.bottom)}
+                        disabled={isPending || !moves.bottom}
+                        data-testid="nextActionPositionBottom"
+                        title={`Bottom (${chordLabel(['alt', 'shift', 'down'], isApple)})`}
+                        {...{ [POSITION_MOVE_ATTR]: 'bottom' }}
+                    >
                         Bottom
                     </Button>
                     <Button onClick={() => setIsSheetOpen(true)} disabled={isPending || moves.total < 2} data-testid="nextActionPositionMoveTo">

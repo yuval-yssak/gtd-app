@@ -19,6 +19,7 @@ import { useListGhosts } from '../hooks/useListGhosts';
 import { useListScrollRestoration } from '../hooks/useListScrollRestoration';
 import { useListSearch } from '../hooks/useListSearch';
 import { filterItemsByQuery, type ItemSortDir, type ItemSortKey, sortItems } from '../lib/itemSearch';
+import { SHORTCUT_ROW_PROPS } from '../lib/rowShortcuts';
 import type { StoredItem } from '../types/MyDB';
 import { AccountChip } from './AccountChip';
 import { AccountSyncChip } from './AccountSyncChip';
@@ -73,7 +74,7 @@ const ArchivedRow = memo(function ArchivedRow({ item, sortKey, routineTitle, isG
     const verb = sortKey === 'updatedTs' ? 'Updated' : 'Created';
     return (
         <ListRowShell itemId={item._id} isGhost={isGhost} onGhostExited={onGhostExited}>
-            <ListItem disablePadding secondaryAction={<CopyIdButton id={item._id} testId="archivedItemCopyIdButton" />}>
+            <ListItem {...SHORTCUT_ROW_PROPS} disablePadding secondaryAction={<CopyIdButton isRowAction id={item._id} testId="archivedItemCopyIdButton" />}>
                 <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
                     <ListItemButton dense className={styles.rowButton}>
                         <ListItemText

@@ -1,9 +1,11 @@
 import { type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject, useCallback, useLayoutEffect, useRef } from 'react';
 import type { WindowVirtualizerHandle } from 'virtua';
 import type { SectionEdge } from '../lib/dragReorder';
+import { isKeyboardEntry, KEYBOARD_REGION_ATTR, skipContainerOnShiftTab } from '../lib/keyboardRegionDom';
 import { type FlatRow, flatIndexOfItem, type NextActionSection } from '../lib/nextActionSections';
-import { type RowActionName, type RowKeyAction, resolveRowKey } from '../lib/nextActionsKeys';
-import { ROW_ACTION_ATTR, ROW_ITEM_ATTR, rowActionButtonsOf, rowButtonOf, rowElement, rowOfTarget, whenRowMounted } from '../lib/nextActionsRowDom';
+import { type RowKeyAction, resolveRowKey } from '../lib/nextActionsKeys';
+import { ROW_ITEM_ATTR, ROW_WALK_ATTR, rowActionButtonsOf, rowButtonOf, rowElement, rowOfTarget, whenRowMounted } from '../lib/nextActionsRowDom';
+import { ROW_ACTION_ATTR } from '../lib/rowShortcuts';
 import type { StoredItem } from '../types/MyDB';
 
 /** A row key the page acts on (the hook keeps the focus-only keys to itself). */
@@ -17,6 +19,8 @@ interface UseNextActionsRovingFocusOptions {
     /** True while a drag or keyboard grab is live — the grab's window listener owns the keys then. */
     isReorderActive: boolean;
     onRowCommand: (command: RowCommand, item: StoredItem, section: NextActionSection<StoredItem>) => void;
+    /** The list's name as a keyboard region (F6 cycles to it by this name). */
+    regionLabel: string;
 }
 
 export interface NextActionsRovingFocusApi {
@@ -25,16 +29,21 @@ export interface NextActionsRovingFocusApi {
         tabIndex: 0;
         onFocus: (e: ReactFocusEvent<HTMLElement>) => void;
         onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => void;
+        /** F6 cycles to the list like to every other keyboard region (see useRovingRegion). */
+        [KEYBOARD_REGION_ATTR]: string;
     };
     /** Spread on each row button: out of the tab order, and Space must not "click" it (Space grabs). */
     rowButtonProps: { tabIndex: -1; onKeyUp: (e: ReactKeyboardEvent<HTMLElement>) => void };
-    /** Spread on each of the row's action buttons (`action` names it for the letter shortcuts). */
-    actionButtonProps: (action: RowActionName) => { tabIndex: -1; [ROW_ACTION_ATTR]: RowActionName };
+    /** Spread on each of the row's action buttons: out of the tab order (their action marker comes from RowActionButton / CopyIdButton). */
+    actionButtonProps: { tabIndex: -1; [ROW_WALK_ATTR]: '' };
     /** Focus a row by id (scrolling it into virtua's range first when needed). */
     focusRow: (itemId: string) => void;
     /** The live row after `itemId` in list order (or before it, at the end) — where focus goes once a row leaves the list. */
     neighbourRowId: (itemId: string) => string | undefined;
 }
+
+/** The row's action buttons leave the tab order: → walks them instead. */
+const ACTION_BUTTON_PROPS = { tabIndex: -1, [ROW_WALK_ATTR]: '' } as const;
 
 const isElement = (target: EventTarget | null): target is HTMLElement => target instanceof HTMLElement;
 
@@ -67,6 +76,7 @@ export function useNextActionsRovingFocus({
     virtualizerRef,
     isReorderActive,
     onRowCommand,
+    regionLabel,
 }: UseNextActionsRovingFocusOptions): NextActionsRovingFocusApi {
     const activeRowId = useRef<string | null>(null);
     // Read by event handlers, which outlive a render.
@@ -138,10 +148,9 @@ export function useNextActionsRovingFocus({
         return remembered !== null && ids.includes(remembered) ? remembered : ids[0];
     }, [liveRowIds]);
 
-    // Keyboard focus onto the container (Tab from outside it) → the remembered row. Focus arriving
-    // from inside the list (Shift+Tab out of a row) stays on the container, so the next Shift+Tab
-    // leaves — forwarding it back would trap the user. A mouse click on a header or divider also
-    // focuses the container, and must not scroll the page to a far-away remembered row.
+    // Keyboard focus onto the container (Tab from outside it, F6) → the remembered row. A mouse
+    // click on a header or divider also focuses the container, and must not scroll the page to a
+    // far-away remembered row; focus coming back from inside (a row's node moved) is left alone.
     const onListFocus = useCallback(
         (e: ReactFocusEvent<HTMLElement>) => {
             const row = rowOfTarget(e.target);
@@ -150,7 +159,7 @@ export function useNextActionsRovingFocus({
                 return;
             }
             const fromInside = isElement(e.relatedTarget) && e.currentTarget.contains(e.relatedTarget);
-            if (e.target !== e.currentTarget || fromInside || !e.currentTarget.matches(':focus-visible')) {
+            if (e.target !== e.currentTarget || fromInside || !isKeyboardEntry(e.currentTarget)) {
                 return;
             }
             const target = rememberedRowId();
@@ -161,7 +170,7 @@ export function useNextActionsRovingFocus({
         [rememberedRowId, focusRow],
     );
 
-    /** Arrow keys while focus sits on the container itself (the Shift+Tab stop): step into the rows. */
+    /** Arrow keys while focus sits on the container itself (a mouse click on a header, a row that never mounted): step into the rows. */
     const onContainerKey = useCallback(
         (key: string) => {
             if (key === 'ArrowDown' || key === 'Home') {
@@ -196,6 +205,11 @@ export function useNextActionsRovingFocus({
 
     const onListKeyDown = useCallback(
         (e: ReactKeyboardEvent<HTMLElement>) => {
+            // Shift+Tab from a row leaves the list in one press, like every region (see skipContainerOnShiftTab).
+            if (e.key === 'Tab' && e.shiftKey) {
+                skipContainerOnShiftTab(e.currentTarget, e.target);
+                return;
+            }
             if (reorderActiveRef.current || !isElement(e.target)) {
                 return;
             }
@@ -206,24 +220,29 @@ export function useNextActionsRovingFocus({
                 }
                 return;
             }
-            const actionButton = e.target.closest(`[${ROW_ACTION_ATTR}]`);
-            if (actionButton instanceof HTMLElement) {
-                // Space/Enter/letters on a button press the button itself — only the walking keys are ours.
+            const action = resolveRowKey(e);
+            // A row letter belongs to the row wherever focus is inside it — on one of its buttons too —
+            // and is always consumed (never falls through to quick capture's `c`).
+            const isLetter = action?.type === 'rowAction';
+            const actionButton = e.target.closest(`[${ROW_ACTION_ATTR}], [${ROW_WALK_ATTR}]`);
+            if (actionButton instanceof HTMLElement && !isLetter) {
+                // Space/Enter on a button press the button itself — only the walking keys are ours.
                 if (walkActionButtons(e.key, row, actionButton)) {
                     e.preventDefault();
                 }
                 return;
             }
-            const action = resolveRowKey(e);
             const flat = rowsRef.current.find((candidate) => candidate.kind === 'item' && candidate.item._id === row.getAttribute(ROW_ITEM_ATTR));
-            // A ghost (a row fading out after Done) can only be walked away from: pressing its buttons
-            // would act on a stale snapshot (Done twice re-runs the routine follow-up).
-            const isWalk = action?.type === 'focusStep' || action?.type === 'focusEdge';
-            if (!action || !flat || flat.kind !== 'item' || (isGhost(flat.item) && !isWalk)) {
+            if (!action || !flat || flat.kind !== 'item') {
                 return;
             }
             e.preventDefault();
-            runRowKey(action, row, flat);
+            // A ghost (a row fading out after Done) can only be walked away from: pressing its buttons
+            // would act on a stale snapshot (Done twice re-runs the routine follow-up).
+            const isWalk = action.type === 'focusStep' || action.type === 'focusEdge';
+            if (!isGhost(flat.item) || isWalk) {
+                runRowKey(action, row, flat);
+            }
         },
         [onContainerKey, runRowKey, isGhost],
     );
@@ -235,12 +254,15 @@ export function useNextActionsRovingFocus({
         }
     }, []);
 
-    const actionButtonProps = useCallback((action: RowActionName) => ({ tabIndex: -1 as const, [ROW_ACTION_ATTR]: action }), []);
-
     return {
-        listProps: { tabIndex: 0, onFocus: onListFocus, onKeyDown: onListKeyDown },
+        listProps: {
+            tabIndex: 0,
+            onFocus: onListFocus,
+            onKeyDown: onListKeyDown,
+            [KEYBOARD_REGION_ATTR]: regionLabel,
+        },
         rowButtonProps: { tabIndex: -1, onKeyUp: onRowButtonKeyUp },
-        actionButtonProps,
+        actionButtonProps: ACTION_BUTTON_PROPS,
         focusRow,
         neighbourRowId,
     };

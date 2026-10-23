@@ -343,6 +343,13 @@ const gtdImpl = {
     sseChannelUserIds: (page: Page): Promise<string[]> =>
         page.evaluate(() => (window as unknown as { __gtd: { sseChannelUserIds(): string[] } }).__gtd.sseChannelUserIds()),
 
+    /**
+     * The userIds whose SSE channel has finished connecting. A change another device makes before
+     * then is never delivered live (opening a channel does not pull) — wait on this before one.
+     */
+    sseConnectedUserIds: (page: Page): Promise<string[]> =>
+        page.evaluate(() => (window as unknown as { __gtd: { sseConnectedUserIds(): string[] } }).__gtd.sseConnectedUserIds()),
+
     // ── Reassign (Step 5) ────────────────────────────────────────────────────
     /** Calls /sync/reassign via the harness. Returns the discriminated server response. */
     reassign: (

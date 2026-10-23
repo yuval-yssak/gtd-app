@@ -1,4 +1,5 @@
 import type { SectionEdge } from './dragReorder';
+import { type RowActionName, rowActionForKey } from './rowShortcuts';
 
 /** The parts of a keyboard event the resolvers look at — a plain object so they are unit-testable in node. */
 export interface KeyChord {
@@ -16,7 +17,6 @@ export const PAGE_STEP = 5;
 export type GrabKeyAction = { type: 'nudge'; delta: number } | { type: 'jump'; edge: SectionEdge } | { type: 'drop' } | { type: 'cancel' };
 
 /** The row's own buttons, by the `data-row-action` each carries; a bare letter "clicks" one of them. */
-export type RowActionName = 'edit' | 'done' | 'copyId' | 'moveTo';
 
 export type RowKeyAction =
     | { type: 'focusStep'; delta: -1 | 1 }
@@ -30,8 +30,12 @@ export type RowKeyAction =
 const ARROW_DELTA: Record<string, -1 | 1> = { ArrowUp: -1, ArrowDown: 1 };
 const EDGE_KEYS: Record<string, SectionEdge> = { Home: 'top', End: 'bottom' };
 const PAGE_KEYS: Record<string, number> = { PageUp: -PAGE_STEP, PageDown: PAGE_STEP };
-/** Bare letters only — ⌥+letter types an accented character on a Mac, so no letter ever takes a modifier. */
-const LETTER_ACTIONS: Record<string, RowActionName> = { e: 'edit', d: 'done', c: 'copyId', m: 'moveTo' };
+/**
+ * Every row action — the Next Actions list guards Done and has a Move to sheet (see `EVERY_ROW_ACTIONS`
+ * for other lists). Bare letters only: ⌥+letter types an accented character on a Mac, so no letter
+ * ever takes a modifier.
+ */
+export const NEXT_ACTIONS_ROW_ACTIONS: readonly RowActionName[] = ['edit', 'done', 'copyId', 'moveTo'];
 
 function hasCommandModifier(chord: KeyChord): boolean {
     return chord.metaKey || chord.ctrlKey;
@@ -111,6 +115,6 @@ function resolvePlainRowKey(chord: KeyChord): RowKeyAction | null {
     if (chord.key === ' ') {
         return { type: 'grab' };
     }
-    const action = LETTER_ACTIONS[chord.key.toLowerCase()];
-    return action === undefined ? null : { type: 'rowAction', action };
+    const action = rowActionForKey(chord.key, NEXT_ACTIONS_ROW_ACTIONS);
+    return action === null ? null : { type: 'rowAction', action };
 }

@@ -140,3 +140,8 @@
     padding: 0.3125rem 0;
     overflow-wrap: anywhere;
 }
+
+/* The editor root takes focus on a click into its empty space (keyboard shortcuts) — no ring for that. */
+.keyScope:focus {
+    outline: none;
+}

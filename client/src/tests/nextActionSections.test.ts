@@ -82,6 +82,12 @@ describe('flattenSections / flatIndexOfItem', () => {
         ]);
     });
 
+    it('a flat list (no headers) emits only item rows, so virtualizer indexes match the items', () => {
+        const flat = flattenSections(groupIntoSections(items, TODAY), false);
+        expect(flat.every((row) => row.kind === 'item')).toBe(true);
+        expect(flatIndexOfItem(flat, 'u1')).toBe(1);
+    });
+
     it('maps an item to its virtualizer row (headers count), -1 when it is not rendered', () => {
         // Today's header is row 0, d1 row 1; the no-date header is row 2, u1..u3 rows 3..5.
         expect(flatIndexOfItem(rows, 'd1')).toBe(1);

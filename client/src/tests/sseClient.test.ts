@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { closeSseConnections, getOpenSseUserIds, openSseConnections, reopenSseConnections } from '../db/sseClient';
+import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds, openSseConnections, reopenSseConnections } from '../db/sseClient';
 
 // Mock the API_SERVER constant so URLs are predictable in assertions.
 vi.mock('../constants/globals', () => ({ API_SERVER: 'http://test.local' }));
@@ -245,5 +245,17 @@ describe('reopenSseConnections', () => {
         fresh?.onmessage?.({ data: JSON.stringify({ type: 'update' }) } as MessageEvent);
 
         expect(onUpdate).toHaveBeenCalledWith('user-a');
+    });
+});
+
+describe('getConnectedSseUserIds', () => {
+    it('lists only channels that finished connecting, not ones still connecting', () => {
+        openSseConnections({ onUpdate: () => {}, localDeviceId: 'dev-1' }, ['user-a', 'user-b']);
+        const [first] = created;
+        if (!first) throw new Error('expected a channel for user-a');
+        first.readyState = 0; // still CONNECTING: a broadcast now would be missed
+
+        expect(getOpenSseUserIds().sort()).toEqual(['user-a', 'user-b']);
+        expect(getConnectedSseUserIds()).toEqual(['user-b']);
     });
 });

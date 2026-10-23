@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { daySectionOf, positionMoves, sectionOwnerIds } from '../lib/nextActionPosition';
+import { daySectionOf, positionMoves, positionSectionLabel, sectionOwnerIds } from '../lib/nextActionPosition';
 import type { StoredItem } from '../types/MyDB';
 
 const row = (id: string, overrides: Partial<StoredItem> = {}): StoredItem => ({
@@ -63,5 +63,31 @@ describe('positionMoves', () => {
         expect(atTop.bottom).toEqual({ aboveId: 'c', belowId: undefined });
         const alone = positionMoves([row('a')], 'a');
         expect(alone).toEqual({ position: 1, total: 1, top: null, up: null, down: null, bottom: null });
+    });
+});
+
+describe('daySectionOf / positionSectionLabel for the other ranked lists', () => {
+    it('an inbox item is positioned among the inbox, a waiting item among its day; the calendar has no section', () => {
+        const items = [
+            row('i1', { status: 'inbox' }),
+            row('i2', { status: 'inbox' }),
+            row('w1', { status: 'waitingFor', expectedBy: '2026-11-01' }),
+            row('w2', { status: 'waitingFor', expectedBy: '2026-11-02' }),
+        ];
+        expect(daySectionOf(items, row('i0', { status: 'inbox' }), TODAY).map((r) => r._id)).toEqual(['i0', 'i1', 'i2']);
+        expect(daySectionOf(items, row('w0', { status: 'waitingFor', expectedBy: '2026-11-01' }), TODAY).map((r) => r._id)).toEqual(['w0', 'w1']);
+        expect(daySectionOf(items, row('c', { status: 'calendar' }), TODAY)).toEqual([]);
+    });
+
+    it('labels the section by its list for the flat lists, by its day for the dated ones', () => {
+        expect(positionSectionLabel(row('i', { status: 'inbox' }), TODAY)).toBe('Inbox');
+        expect(positionSectionLabel(row('s', { status: 'somedayMaybe' }), TODAY)).toBe('Someday / Maybe');
+        expect(positionSectionLabel(row('w', { status: 'waitingFor', expectedBy: TODAY }), TODAY)).toBe('Today');
+        expect(positionSectionLabel(row('n'), TODAY)).toBe('No date');
+    });
+
+    it("owners span the item's status only", () => {
+        const items = [row('a', { status: 'inbox', userId: 'u2' }), row('b', { userId: 'u3' })];
+        expect(sectionOwnerIds(items, row('x', { status: 'inbox' }))).toEqual(['u2', 'u1']);
     });
 });

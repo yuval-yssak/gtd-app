@@ -288,8 +288,8 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await page.waitForSelector('text=Alpha');
             expect(await geometricOrder(page)).toEqual(['Charlie', 'Alpha', 'Bravo', 'Delta']);
 
-            await page.getByTestId('nextActionsShortcutsButton').click();
-            await expect(page.getByTestId('nextActionsShortcutsDialog')).toContainText('Keyboard shortcuts');
+            await page.locator('[data-testid="keyboardShortcutsButton"]:visible').click();
+            await expect(page.getByTestId('keyboardShortcutsDialog')).toContainText('Keyboard shortcuts');
             await page.keyboard.press('Escape');
 
             // An inbox item being clarified has no position yet: the row stays hidden until it is saved as a next action.
@@ -424,7 +424,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
         });
     });
 
-    test('the container stop: Shift+Tab from a row lands on the list once, arrows from there enter the rows; Space on a button presses it', async ({
+    test('Shift+Tab from a row leaves the list in one press (no pause on the container), Tab returns to the same row; Space on a button presses it', async ({
         browser,
     }) => {
         await withOneLoggedInDevice(browser, `na-kb-container-${dayjs().valueOf()}@example.com`, async (page) => {
@@ -434,11 +434,11 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
 
             await rowOf(page, 'Bravo').focus();
             await page.keyboard.press('Shift+Tab');
-            await expect.poll(() => focusedTestId(page)).toBe('nextActionsList');
-            await page.keyboard.press('ArrowDown');
-            await expect.poll(() => focusedRowTitle(page)).toBe('Charlie');
-            await page.keyboard.press('Shift+Tab');
-            await page.keyboard.press('ArrowUp');
+            // Straight into the filter bar (the region before the list), entered on its first chip.
+            await expect.poll(() => focusedTestId(page)).toBe('nextActionsEnergyFilterChip');
+            await page.keyboard.press('Tab');
+            await expect.poll(() => focusedRowTitle(page)).toBe('Bravo');
+            await page.keyboard.press('End');
             await expect.poll(() => focusedRowTitle(page)).toBe('Alpha');
 
             // → onto the Edit button, Space presses it (no grab), the editor opens.
@@ -598,11 +598,17 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await gtd.flush(page);
             await page.goto('/someday');
             await page.waitForSelector('text=Parked');
-            // The status change happens while on this page (its ghost, with the OLD status, stays in the
-            // shared store); no reload afterwards — a reload would wipe the store and hide the bug.
-            await gtd.clarifyToNextAction(page, parked, {});
+            // The status change happens through the editor on this page (its ghost, with the OLD status,
+            // stays in the shared store); no reload afterwards — a reload would wipe the store and hide the bug.
+            await page.getByTestId('somedayItemRow').filter({ hasText: 'Parked' }).click();
+            const dialog = page.getByRole('dialog', { name: 'Edit item' });
+            await dialog.getByRole('button', { name: 'Next Action' }).click();
+            await dialog.getByRole('button', { name: 'Save changes' }).click();
+            await expect(dialog).toBeHidden();
             await page.getByRole('link', { name: 'Next Actions' }).click();
-            await page.waitForSelector('text=Parked');
+            // Two steps so a failure under load says which one stalled: the navigation or the list render.
+            await expect(page).toHaveURL(/\/next-actions/);
+            await expect(rowOf(page, 'Parked')).toBeVisible({ timeout: 15_000 });
 
             await rowOf(page, 'Parked').focus();
             await page.keyboard.press('d');

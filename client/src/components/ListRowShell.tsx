@@ -7,6 +7,9 @@ import styles from './ListRowShell.module.css';
 /** How long a ghost row lingers fully visible before collapsing away. */
 const GHOST_LINGER_MS = 700;
 
+/** Marks a row that already left its list (a fading ghost) — row shortcuts must not act on its stale snapshot. */
+export const GHOST_ROW_ATTR = 'data-ghost-row';
+
 interface ListRowShellProps {
     itemId: string;
     isGhost?: boolean;
@@ -35,7 +38,11 @@ export function ListRowShell({ itemId, isGhost = false, onGhostExited, children 
     }, [isGhost]);
     return (
         <Collapse in={!isCollapsing} appear={false} onExited={() => onGhostExited?.(itemId)}>
-            <Box data-list-item-id={itemId} className={classNames({ [styles.ghostRow]: isGhost })} {...(isGhost ? { 'data-testid': 'ghostListRow' } : {})}>
+            <Box
+                data-list-item-id={itemId}
+                className={classNames({ [styles.ghostRow]: isGhost })}
+                {...(isGhost ? { 'data-testid': 'ghostListRow', [GHOST_ROW_ATTR]: '' } : {})}
+            >
                 {children}
             </Box>
         </Collapse>

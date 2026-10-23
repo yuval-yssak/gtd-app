@@ -10,3 +10,5 @@
 - [Event-ownership checks miss instance ids](project_event_ownership_checks_miss_instance_ids.md) — calendarEventId-keyed owner checks forget calendarInstanceEventId + done owners; pushback patches instance ids directly.
 - [Line-regex guard tests miss Biome wrapping](project_line_regex_guards_miss_biome_wrapping.md) — anchored per-line regex guards miss a status arg alone on its own line; test the wrapped shape.
 - [API-origin cookie session flaps + prod SameSite=None](project_api_origin_cookie_session_flaps.md) — Server-rendered forms keyed on getSession() need CSRF token + displayed-user binding; web app pivots the active session.
+- [Backfill write-then-publish unrecoverable](project_backfill_write_then_publish_unrecoverable.md) — 'field present → skip' idempotency + separate op publish = publish failure never repaired on rerun; ask for rollback/republish.
+- [Rank backfill per-user vs merged keyspace](project_rank_backfill_per_user_vs_merged_keyspace.md) — server mints ranks per user; client merges accounts into one ranked list, so keys interleave. Non-blocking so far.

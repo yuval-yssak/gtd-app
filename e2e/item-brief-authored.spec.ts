@@ -201,7 +201,9 @@ test.describe('item brief — authored in the editor', () => {
             await page.goto(`/item/${item._id}`);
             const briefInput = await openBriefEditor(page);
             await expect(briefInput).toBeFocused();
-            await briefInput.press('End');
+            // Caret to the end directly, not with End: on macOS the first End in a textarea scrolls a
+            // page taller than the viewport (the inbox Position row makes it so) instead of moving the caret.
+            await briefInput.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(el.value.length, el.value.length));
             await briefInput.pressSequentially(' and the form');
 
             // Tab into the field's own buttons is focus staying INSIDE the editor: no commit, no

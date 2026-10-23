@@ -63,7 +63,8 @@ export const ItemSnapshotSchema = z
         // nor the op log carries it.
         focus: z.boolean().optional(),
         urgent: z.boolean().optional(),
-        // Priority order inside a Next Actions day section (`lib/itemRank.ts`). Universal, not in
+        // Manual priority order inside a list section — a Next Actions / Waiting For day, the Inbox,
+        // Someday / Maybe (`lib/itemRank.ts`). Universal, not in
         // the status matrix: it rides along through every status so a done→revive or
         // calendar→nextAction transition keeps its place. Refined to a well-formed key: a malformed
         // one planted through /v1/operations/batch or /sync/push would otherwise make every later

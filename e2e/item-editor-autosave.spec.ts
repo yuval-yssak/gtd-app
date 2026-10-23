@@ -166,6 +166,9 @@ test.describe('item editor — live merge while open', () => {
             await page1.getByRole('button', { name: 'Edit' }).first().click();
             const dialog = page1.getByRole('dialog', { name: 'Edit item' });
             await expect(dialog.getByLabel('Title')).toHaveValue('Merge target');
+            // The rename must arrive live: wait until device 1's channel (re)connected after the navigation,
+            // or a broadcast sent while it is still connecting is lost (opening a channel does not pull).
+            await expect.poll(async () => (await gtd.sseConnectedUserIds(page1)).length).toBeGreaterThan(0);
 
             // Device 2 renames while device 1's editor sits open with a clean title field.
             const onDevice2 = (await gtd.listItems(page2)).find((i) => i._id === item._id);
