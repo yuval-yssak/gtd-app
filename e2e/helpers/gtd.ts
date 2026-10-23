@@ -158,6 +158,10 @@ const gtdImpl = {
     removeItem: (page: Page, itemId: string): Promise<void> =>
         page.evaluate((id) => (window as unknown as { __gtd: { removeItem(id: string): Promise<void> } }).__gtd.removeItem(id), itemId),
 
+    /** Slows the app's items snapshot read by `ms` (a stand-in for a large account); 0 restores it. */
+    setItemsReadDelay: (page: Page, ms: number): Promise<void> =>
+        page.evaluate((delay) => (window as unknown as { __gtd: { setItemsReadDelay(d: number): void } }).__gtd.setItemsReadDelay(delay), ms),
+
     /** Programmatic reorder — the same `reorderItem` commit the drag gesture runs. */
     reorderItem: (page: Page, request: ReorderRequest): Promise<StoredItem | null> =>
         page.evaluate(

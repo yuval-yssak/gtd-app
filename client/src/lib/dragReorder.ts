@@ -10,6 +10,13 @@
  * viewport — so the drop slot is resolved from mounted rows and mapped back onto the full list.
  */
 
+import { hasAtLeastOne } from './typeUtils';
+
+export type SectionEdge = 'top' | 'bottom';
+
+/** One committed keyboard step on an un-grabbed row: Alt+arrow (one slot) or Alt+Shift+arrow / Alt+Home/End (a section edge). */
+export type RowStep = { delta: -1 | 1 } | { edge: SectionEdge };
+
 export interface RowRect {
     id: string;
     top: number;
@@ -42,7 +49,10 @@ export type DragEvent =
     | { type: 'rectsChanged'; rects: RowRect[] }
     /** One animation frame of a pointer drag: fresh mounted rects + the latest pointer, re-targeted once. */
     | { type: 'frame'; rects: RowRect[]; pointerY: number }
-    | { type: 'nudge'; delta: -1 | 1 }
+    /** Grab mode: move the slot by `delta` rows (clamped to the section); PageUp/Down pass several. */
+    | { type: 'nudge'; delta: number }
+    /** Grab mode: Shift+arrow / Home / End — straight to the first or last slot. */
+    | { type: 'jump'; edge: SectionEdge }
     | { type: 'drop' }
     | { type: 'cancel' };
 
@@ -54,7 +64,8 @@ export interface NeighbourIds {
 }
 
 export type DragEffect =
-    | ({ type: 'commit'; itemId: string; sectionKey: string; fromIndex: number; toIndex: number } & NeighbourIds)
+    /** `isKeyboard`: a grab-mode drop — the hook gives focus back to the row once the move has rendered. */
+    | ({ type: 'commit'; itemId: string; sectionKey: string; fromIndex: number; toIndex: number; isKeyboard: boolean } & NeighbourIds)
     /** `hadMoved`: the slot left its origin at some point (a bare press-and-release has not). */
     | { type: 'snapBack'; hadMoved: boolean }
     | { type: 'slotChanged'; toIndex: number };
@@ -85,7 +96,9 @@ export function dragReducer(state: DragState | null, event: DragEvent): DragStep
         case 'frame':
             return retarget({ ...state, rects: event.rects, pointerY: event.pointerY });
         case 'nudge':
-            return nudge(state, event.delta);
+            return moveSlot(state, state.toIndex + event.delta);
+        case 'jump':
+            return moveSlot(state, event.edge === 'top' ? 0 : state.itemIds.length - 1);
         case 'drop':
             return { state: null, effects: [dropEffect(state)] };
         case 'cancel':
@@ -131,8 +144,9 @@ export function needsRender(previous: DragState | null, next: DragState | null):
     return previous.toIndex !== next.toIndex || previous.isOutside !== next.isOutside || previous.itemId !== next.itemId;
 }
 
-function nudge(state: DragState, delta: -1 | 1): DragStep {
-    const toIndex = Math.min(Math.max(state.toIndex + delta, 0), state.itemIds.length - 1);
+/** Grab mode: the slot moves to `requested`, clamped to the section; landing where it already is changes nothing. */
+function moveSlot(state: DragState, requested: number): DragStep {
+    const toIndex = Math.min(Math.max(requested, 0), state.itemIds.length - 1);
     if (toIndex === state.toIndex) {
         return { state, effects: NO_EFFECTS };
     }
@@ -150,6 +164,7 @@ function dropEffect(state: DragState): DragEffect {
         sectionKey: state.sectionKey,
         fromIndex: state.fromIndex,
         toIndex: state.toIndex,
+        isKeyboard: state.isKeyboard,
         aboveId: others[state.toIndex - 1],
         belowId: others[state.toIndex],
     };
@@ -221,8 +236,15 @@ export function shiftFor(fromIndex: number, toIndex: number, draggedHeight: numb
     };
 }
 
-/** The displacement of the row with `id` (dragged rows follow the pointer and are not shifted here). */
+/**
+ * The displacement of the row with `id` (dragged rows follow the pointer and are not shifted here).
+ * A keyboard grab shifts nothing: the page renders the section in `grabPreviewOrder` instead, so
+ * the grabbed row really sits at its slot (virtua keeps it mounted wherever the slot scrolls to).
+ */
 export function shiftForRow(state: DragState, id: string): number {
+    if (state.isKeyboard) {
+        return 0;
+    }
     const others = othersOf(state.itemIds, state.itemId);
     const otherIndex = others.indexOf(id);
     return otherIndex < 0 ? 0 : shiftFor(state.fromIndex, state.toIndex, state.draggedHeight)(otherIndex);
@@ -241,6 +263,59 @@ export interface Neighbours<T> {
 export function neighboursAt<T extends { _id: string }>(sectionItems: readonly T[], draggedId: string, toIndex: number): Neighbours<T> {
     const others = sectionItems.filter((item) => item._id !== draggedId);
     return { above: others[toIndex - 1], below: others[toIndex] };
+}
+
+/**
+ * Keyboard grab: the section's rows (ghosts included) with the grabbed row moved to its slot —
+ * right before the live row at `toIndex` among the others, or last. The pointer path shifts rows
+ * with transforms instead; see `shiftForRow`.
+ */
+export function grabPreviewOrder<T extends { _id: string }>(sectionItems: readonly T[], state: DragState): T[] {
+    const dragged = sectionItems.find((row) => row._id === state.itemId);
+    if (!dragged) {
+        return [...sectionItems];
+    }
+    const rest = sectionItems.filter((row) => row._id !== state.itemId);
+    const belowId = othersOf(state.itemIds, state.itemId)[state.toIndex];
+    const insertAt = belowId === undefined ? rest.length : rest.findIndex((row) => row._id === belowId);
+    return insertAt < 0 ? [...rest, dragged] : [...rest.slice(0, insertAt), dragged, ...rest.slice(insertAt)];
+}
+
+/** Alt+Shift+arrow / Home / End: the neighbours at the section's first or last slot, or null when the row is already there. */
+export function sectionEdgeNeighbours(itemIds: readonly string[], draggedId: string, edge: SectionEdge): NeighbourIds | null {
+    const others = othersOf(itemIds, draggedId);
+    const fromIndex = itemIds.indexOf(draggedId);
+    if (fromIndex < 0 || !hasAtLeastOne(others) || fromIndex === (edge === 'top' ? 0 : others.length)) {
+        return null;
+    }
+    return edge === 'top' ? { aboveId: undefined, belowId: others[0] } : { aboveId: others[others.length - 1], belowId: undefined };
+}
+
+/** The slot a "Move to…" request lands in among the OTHER rows: right before `belowId`, or last; a vanished `belowId` reads as the top (the commit itself then refuses). */
+export function slotOfNeighbours(itemIds: readonly string[], itemId: string, belowId: string | undefined): number {
+    const others = othersOf(itemIds, itemId);
+    return belowId === undefined ? others.length : Math.max(others.indexOf(belowId), 0);
+}
+
+/**
+ * True once a committed move shows in the rendered section: the row sits at the slot it was
+ * planned for, or it left the section altogether (completed elsewhere meanwhile). The render
+ * barrier the commit queue waits on — `refreshItems()` resolves when the refresh STARTS (a
+ * transition), not when the new list is on screen.
+ */
+export function hasMoveRendered(liveIds: readonly string[], itemId: string, toIndex: number): boolean {
+    const index = liveIds.indexOf(itemId);
+    return index < 0 || index === toIndex;
+}
+
+/** A committed keyboard step resolved against the section's live rows: the neighbours to land between and the final slot, or null when it goes nowhere. */
+export function planStep(itemIds: readonly string[], draggedId: string, step: RowStep): { neighbours: NeighbourIds; toIndex: number } | null {
+    if ('delta' in step) {
+        const neighbours = nudgeNeighbours(itemIds, draggedId, step.delta);
+        return neighbours && { neighbours, toIndex: itemIds.indexOf(draggedId) + step.delta };
+    }
+    const neighbours = sectionEdgeNeighbours(itemIds, draggedId, step.edge);
+    return neighbours && { neighbours, toIndex: step.edge === 'top' ? 0 : itemIds.length - 1 };
 }
 
 /** Grab mode / Alt+arrow: the slot one step up or down from the item's current position, or null at the edge. */

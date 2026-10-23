@@ -88,6 +88,7 @@ import {
     shouldDetachFromRoutine,
     stripRoutineId,
 } from '../editItemDialogLogic';
+import { NextActionPositionRow } from '../nextActions/NextActionPositionRow';
 import { RoutineIndicator } from '../RoutineIndicator';
 import { RoutineScheduleFields } from '../routineEditor/RoutineScheduleFields';
 import type { FormState as RoutineFormState } from '../routineEditor/routineFormState';
@@ -296,6 +297,7 @@ export function ItemEditorBody({
     // Hook order: must sit above the reassign-in-flight early return below. `flushItemText` goes
     // through a ref because `textAutosave` is created further down (it needs the form state).
     const flushItemTextRef = useRef(async () => {});
+    const flushItemTextLocallyRef = useRef(async () => {});
     const briefGeneration = useBriefGeneration(db, { item: liveItem, brief: liveBrief, flushItemText: () => flushItemTextRef.current() });
 
     const [title, setTitle] = useState(item.title);
@@ -502,6 +504,10 @@ export function ItemEditorBody({
         await textAutosave.flush();
         await dispatchOpFlush(db, liveItemRef.current.userId);
     };
+    // The LOCAL half only: the Position row needs the pending text written to IDB before it
+    // re-keys the row (an autosave firing between the two writes would put the old rank back),
+    // but must never wait on — or fail with — the network push; a reorder is an offline write.
+    flushItemTextLocallyRef.current = () => textAutosave.flush();
 
     // ── Brief (sidecar entity, its own op) ───────────────────────────────────
     // Saves on blur/Enter/clear and on unmount (like the text autosave's unmount flush). The last
@@ -1176,6 +1182,11 @@ export function ItemEditorBody({
                         usage={entityUsage}
                         dense={presentation === 'review'}
                     />
+                    {/* Only a SAVED next action has a position (an inbox item being clarified lands at the top on
+                        save); the dense weekly-review card leaves it out — reordering is a list concern there. */}
+                    {liveItem.status === 'nextAction' && presentation !== 'review' && (
+                        <NextActionPositionRow db={db} item={liveItem} onBeforeMove={() => flushItemTextLocallyRef.current()} />
+                    )}
                 </>
             )}
 

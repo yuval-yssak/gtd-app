@@ -2,6 +2,7 @@ import BoltIcon from '@mui/icons-material/Bolt';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import EditIcon from '@mui/icons-material/Edit';
+import KeyboardIcon from '@mui/icons-material/KeyboardOutlined';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
 import SellOutlinedIcon from '@mui/icons-material/SellOutlined';
@@ -35,6 +36,7 @@ import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
 import { MoveToSheet } from '../../components/nextActions/MoveToSheet';
+import { ReorderShortcutsDialog } from '../../components/nextActions/ReorderShortcutsDialog';
 import { CollapsibleChipGroup } from '../../components/pickers/CollapsibleChipGroup';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
@@ -44,12 +46,15 @@ import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
-import { type ReorderCommit, ROW_ITEM_ATTR, ROW_SECTION_ATTR, useNextActionsDrag } from '../../hooks/useNextActionsDrag';
+import { type ReorderCommit, useNextActionsDrag } from '../../hooks/useNextActionsDrag';
+import { type RowCommand, useNextActionsRovingFocus } from '../../hooks/useNextActionsRovingFocus';
 import { useTodayIso } from '../../hooks/useTodayIso';
 import { compareNextActions } from '../../lib/compareNextActions';
 import { getTodayIso } from '../../lib/dayClock';
+import { grabPreviewOrder } from '../../lib/dragReorder';
 import { omitArchived, rankMergedOptionsByUsage } from '../../lib/entityUsage';
 import { filterItemsByQuery, itemContextTags, itemPersonRefIds, itemPersonTags, type ResolvedTag } from '../../lib/itemSearch';
+import { isGhostOf } from '../../lib/listGhosts';
 import {
     filterOptionsToReferenced,
     type MergedFilterOption,
@@ -59,8 +64,10 @@ import {
     sameNameIds,
 } from '../../lib/mergedFilterOptions';
 import { missingClarifications } from '../../lib/missingClarifications';
-import { flatIndexOfSlot, flattenSections, groupIntoSections } from '../../lib/nextActionSections';
+import { flatIndexOfItem, flattenSections, groupIntoSections, type NextActionSection } from '../../lib/nextActionSections';
+import { isFocusFree, ROW_BUTTON_ATTR, ROW_HANDLE_ATTR, ROW_ITEM_ATTR, ROW_SECTION_ATTR, rowElement } from '../../lib/nextActionsRowDom';
 import { type NextActionsUrlState, parseNextActionsSearch, TIME_FILTER_OPTIONS } from '../../lib/nextActionsUrlParams';
+import { chordLabel, isApplePlatform } from '../../lib/platformKeys';
 import { isTicklerHidden } from '../../lib/ticklerVisibility';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
 import type { EnergyLevel, StoredItem, StoredPerson, StoredWorkContext } from '../../types/MyDB';
@@ -249,17 +256,36 @@ export function buildRowSecondary(item: StoredItem, { showTags, contextsById, pe
  */
 export const TOUCH_UI_MEDIA_QUERY = '(hover: none) and (pointer: coarse)';
 
+/** A contextmenu raised by a touch long press (Chrome/Android dispatch it as a PointerEvent); a mouse right-click is not. */
+function isTouchContextMenu(event: Event): boolean {
+    return 'pointerType' in event && event.pointerType === 'touch';
+}
+
+/** The rows' (and the handle's) screen-reader description, spelled for the platform (⌥ on a Mac, Alt elsewhere). */
+export function reorderHintText(isApple: boolean): string {
+    const label = (parts: Parameters<typeof chordLabel>[0]) => chordLabel(parts, isApple);
+    return (
+        'Arrow Up or Down moves between rows, Home and End to the first and last row, Arrow Right into the row’s buttons. ' +
+        'Enter opens the row; E edits, D marks it done, C copies its id, M opens Move to. ' +
+        `Press Space to pick the row up, Arrow Up or Down to move it, ${label(['shift', 'up'])} or ${label(['shift', 'down'])} to jump to the top or bottom, ` +
+        `Space to drop, Escape to cancel. ${label(['alt', 'up'])} or ${label(['alt', 'down'])} moves the row one slot; ` +
+        `${label(['alt', 'shift', 'up'])} or ${label(['alt', 'shift', 'down'])} moves it to the top or bottom of its day.`
+    );
+}
+
 function NextActionsPage() {
     useDocumentTitle('Next Actions');
     const { db } = Route.useRouteContext();
     const { items, workContexts, people, allWorkContexts, allPeople, routines, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-    const isTouchUi = useMediaQuery(TOUCH_UI_MEDIA_QUERY);
+    const isApple = useMemo(isApplePlatform, []);
     const virtualizerRef = useRef<WindowVirtualizerHandle>(null);
     const dragHintId = useId();
+    const rowHintId = useId();
     // Stored by id so the sheet always commits against the LIVE section (a pull can change it while the sheet is open).
     const [moveTarget, setMoveTarget] = useState<{ itemId: string; sectionKey: string } | null>(null);
+    const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
     const urlFilters = Route.useSearch();
     const navigate = useNavigate();
@@ -339,7 +365,6 @@ function NextActionsPage() {
     }, [visibleNextActions, urlFilters, filterGroups, deferredQuery]);
     // One section per expected day (+ "No date"); headers roll at local midnight via todayIso.
     const sections = useMemo(() => groupIntoSections(nextActions, todayIso), [nextActions, todayIso]);
-    const flatRows = useMemo(() => flattenSections(sections), [sections]);
 
     // Facet-style live options: each row offers only chips that still match at least one row under
     // all the OTHER filters (a zero-result chip is noise; its own filter is excluded so switching
@@ -369,10 +394,54 @@ function NextActionsPage() {
     const rankedContextOptions = useMemo(() => rankMergedOptionsByUsage(liveContextOptions, usage.contexts), [liveContextOptions, usage.contexts]);
     const rankedPersonOptions = useMemo(() => rankMergedOptionsByUsage(livePersonOptions, usage.people), [livePersonOptions, usage.people]);
 
-    async function onDone(item: StoredItem) {
-        await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
-        await refreshItems();
+    // Rows whose Done is mid-flight. A second D (or click) would run clarifyToDone again from the
+    // same stale snapshot — for a routine's item, a second follow-up. The guard must outlive
+    // `refreshItems()` (it resolves when the refresh STARTS, not when the row is gone): the ghost
+    // store, written synchronously by the mutation, says whether THIS snapshot has already left
+    // (matched by snapshot, not by id — a ghost another page recorded must not block a live row).
+    const doneInFlight = useRef(new Set<string>());
+    async function runDoneOnce(item: StoredItem, markDone: () => Promise<void>) {
+        if (doneInFlight.current.has(item._id) || isGhostOf(item)) {
+            return;
+        }
+        doneInFlight.current.add(item._id);
+        try {
+            await markDone();
+        } finally {
+            doneInFlight.current.delete(item._id);
+        }
     }
+
+    async function onDone(item: StoredItem) {
+        const handOff = focusHandOffFrom(item._id);
+        await runDoneOnce(item, async () => {
+            await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
+            await refreshItems();
+        });
+        handOff();
+    }
+
+    /**
+     * A keyboard user (D, or Enter on the Done button) must not be left on the fading ghost row:
+     * captured BEFORE the row leaves, the hand-off moves focus to its neighbour afterwards — unless
+     * the user has put focus somewhere else meanwhile (the search field), which is never stolen.
+     */
+    function focusHandOffFrom(itemId: string): () => void {
+        const row = rowElement(itemId);
+        const hadFocus = row?.contains(document.activeElement) === true;
+        const next = roving.neighbourRowId(itemId);
+        return () => {
+            const current = rowElement(itemId);
+            if (hadFocus && next !== undefined && (!current || isFocusFree(current))) {
+                roving.focusRow(next);
+            }
+        };
+    }
+
+    const openMoveTo = useCallback(
+        (item: StoredItem, section: NextActionSection<StoredItem>) => setMoveTarget({ itemId: item._id, sectionKey: section.key }),
+        [],
+    );
 
     // The one commit every reorder gesture (drag, keyboard, Move to…) runs: the section's LIVE
     // rows (ghosts are fading leftovers — never a neighbour, never re-keyed) as displayed, plus the
@@ -397,11 +466,45 @@ function NextActionsPage() {
         },
         [db, isGhost, refreshItems, ownerIds],
     );
-    const scrollSlotIntoView = useCallback(
-        (sectionKey: string, toIndex: number) => virtualizerRef.current?.scrollToIndex(flatIndexOfSlot(flatRows, sectionKey, toIndex), { align: 'nearest' }),
-        [flatRows],
+    // Reads the rendered rows through a ref: they are derived from the drag state this callback feeds.
+    const flatRowsRef = useRef<ReturnType<typeof flattenSections<StoredItem>>>([]);
+    const scrollRowIntoView = useCallback((itemId: string) => {
+        const flatIndex = flatIndexOfItem(flatRowsRef.current, itemId);
+        if (flatIndex >= 0) {
+            virtualizerRef.current?.scrollToIndex(flatIndex, { align: 'nearest' });
+        }
+    }, []);
+    const drag = useNextActionsDrag({ sections, isGhost, onCommit: commitReorder, scrollRowIntoView });
+    // A keyboard grab renders its section in preview order — the grabbed row really moves to its
+    // slot (so it stays mounted wherever the slot scrolls to); a pointer drag shifts rows with
+    // transforms instead and renders the true order.
+    const grabState = drag.previewGrab;
+    const renderedSections = useMemo(
+        () =>
+            grabState
+                ? sections.map((section) =>
+                      section.key === grabState.sectionKey ? { ...section, items: grabPreviewOrder(section.items, grabState) } : section,
+                  )
+                : sections,
+        [sections, grabState],
     );
-    const drag = useNextActionsDrag({ sections, isGhost, onCommit: commitReorder, scrollSlotIntoView });
+    const flatRows = useMemo(() => flattenSections(renderedSections), [renderedSections]);
+    useLayoutEffect(() => {
+        flatRowsRef.current = flatRows;
+    }, [flatRows]);
+    const onRowCommand = useCallback(
+        (command: RowCommand, item: StoredItem, section: NextActionSection<StoredItem>) => {
+            if (command.type === 'grab') {
+                drag.grab(item, section);
+            } else if (command.type === 'commitNudge') {
+                drag.commitStep(item, section, { delta: command.delta });
+            } else if (command.type === 'commitJump') {
+                drag.commitStep(item, section, { edge: command.edge });
+            }
+        },
+        [drag.grab, drag.commitStep],
+    );
+    const roving = useNextActionsRovingFocus({ flatRows, isGhost, virtualizerRef, isReorderActive: drag.drag !== null, onRowCommand });
     const moveTargetSection = useMemo(() => sections.find((section) => section.key === moveTarget?.sectionKey), [sections, moveTarget]);
     const moveTargetItem = useMemo(() => moveTargetSection?.items.find((row) => row._id === moveTarget?.itemId) ?? null, [moveTargetSection, moveTarget]);
     const moveTargetLive = useMemo(() => moveTargetSection?.items.filter((row) => !isGhost(row)) ?? [], [moveTargetSection, isGhost]);
@@ -432,6 +535,11 @@ function NextActionsPage() {
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
                 <ListSearchButton onToggle={search.toggleSearch} testId="nextActionsSearchButton" />
+                <Tooltip title="Keyboard shortcuts">
+                    <IconButton size="small" aria-label="Keyboard shortcuts" onClick={() => setIsShortcutsOpen(true)} data-testid="nextActionsShortcutsButton">
+                        <KeyboardIcon fontSize="small" />
+                    </IconButton>
+                </Tooltip>
             </Box>
             {search.isOpen && (
                 <ListSearchField
@@ -524,7 +632,18 @@ function NextActionsPage() {
                 // component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
                 // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
                 // next-actions list doesn't block the main thread on navigation.
-                <List disablePadding component="div" className={styles.list}>
+                // One tab stop for the whole list (see useNextActionsRovingFocus): the container
+                // forwards focus to the remembered row, the rows and their buttons are tabIndex -1.
+                <List
+                    disablePadding
+                    component="div"
+                    role="list"
+                    className={styles.list}
+                    aria-label="Next actions"
+                    aria-describedby={dragHintId}
+                    data-testid="nextActionsList"
+                    {...roving.listProps}
+                >
                     <WindowVirtualizer ref={virtualizerRef}>
                         {flatRows.map((row) => {
                             if (row.kind === 'header') {
@@ -549,10 +668,11 @@ function NextActionsPage() {
                             const { item, section } = row;
                             const missingLabels = missingClarifications(item, hasAtLeastOne(workContexts));
                             const isDragged = drag.drag?.itemId === item._id;
+                            const isPointerDragged = isDragged && !drag.drag?.isKeyboard;
                             const isOtherSection = drag.drag !== null && drag.drag.sectionKey !== section.key;
                             const rowIsGhost = isGhost(item);
                             return (
-                                <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
+                                <ListRowShell key={item._id} itemId={item._id} isGhost={rowIsGhost} onGhostExited={onGhostExited}>
                                     <ListItem
                                         disablePadding
                                         className={classNames(styles.item, styles.rowShell, {
@@ -565,36 +685,53 @@ function NextActionsPage() {
                                         // The dragged row itself is moved imperatively by the hook (every frame), so React
                                         // leaves its variable alone. The literal is `DRAG_SHIFT_VAR` (typed through
                                         // `types/cssCustomProperties.d.ts`); keep the two in step.
-                                        style={isDragged ? undefined : { '--drag-shift': `${drag.shiftFor(item._id)}px` }}
+                                        style={isPointerDragged ? undefined : { '--drag-shift': `${drag.shiftFor(item._id)}px` }}
                                         {...{ [ROW_SECTION_ATTR]: section.key, [ROW_ITEM_ATTR]: item._id }}
                                         secondaryAction={
                                             <Box className={styles.actionButtons}>
-                                                {isTouchUi && !rowIsGhost && (
+                                                {/* A ghost is a stale snapshot of a row that already left the list: only its id may still be copied. */}
+                                                {!rowIsGhost && (
                                                     <Tooltip title="Move to…">
                                                         <IconButton
                                                             size="small"
-                                                            onClick={() => setMoveTarget({ itemId: item._id, sectionKey: section.key })}
+                                                            onClick={() => openMoveTo(item, section)}
                                                             data-testid="nextActionMoveToButton"
+                                                            {...roving.actionButtonProps('moveTo')}
                                                         >
                                                             <MoreVertIcon fontSize="small" />
                                                         </IconButton>
                                                     </Tooltip>
                                                 )}
-                                                <CopyIdButton id={item._id} testId="nextActionItemCopyIdButton" />
-                                                <Tooltip title="Edit">
-                                                    <IconButton
-                                                        size="small"
-                                                        onClick={(e) => editor.openEditor({ item, event: e })}
-                                                        data-testid="nextActionItemEditButton"
-                                                    >
-                                                        <EditIcon fontSize="small" />
-                                                    </IconButton>
-                                                </Tooltip>
-                                                <Tooltip title="Mark done">
-                                                    <IconButton size="small" color="success" onClick={() => void onDone(item)}>
-                                                        <CheckCircleOutlineIcon />
-                                                    </IconButton>
-                                                </Tooltip>
+                                                <CopyIdButton
+                                                    id={item._id}
+                                                    testId="nextActionItemCopyIdButton"
+                                                    buttonProps={roving.actionButtonProps('copyId')}
+                                                />
+                                                {!rowIsGhost && (
+                                                    <Tooltip title="Edit">
+                                                        <IconButton
+                                                            size="small"
+                                                            onClick={(e) => editor.openEditor({ item, event: e })}
+                                                            data-testid="nextActionItemEditButton"
+                                                            {...roving.actionButtonProps('edit')}
+                                                        >
+                                                            <EditIcon fontSize="small" />
+                                                        </IconButton>
+                                                    </Tooltip>
+                                                )}
+                                                {!rowIsGhost && (
+                                                    <Tooltip title="Mark done">
+                                                        <IconButton
+                                                            size="small"
+                                                            color="success"
+                                                            onClick={() => void onDone(item)}
+                                                            data-testid="nextActionItemDoneButton"
+                                                            {...roving.actionButtonProps('done')}
+                                                        >
+                                                            <CheckCircleOutlineIcon />
+                                                        </IconButton>
+                                                    </Tooltip>
+                                                )}
                                             </Box>
                                         }
                                     >
@@ -608,16 +745,31 @@ function NextActionsPage() {
                                                 aria-label="Reorder"
                                                 aria-describedby={dragHintId}
                                                 data-testid="nextActionDragHandle"
+                                                // Out of the tab order (Space on the row grabs too); still focusable by click.
+                                                tabIndex={-1}
+                                                {...{ [ROW_HANDLE_ATTR]: '' }}
                                                 {...drag.getHandleProps(item, section)}
+                                                // Right-click on the handle is the mouse way to the "Move to…" sheet. A touch
+                                                // long press already drags (and fires contextmenu mid-press), so the gesture is
+                                                // told apart by its pointer type, not by the device: a touch laptop has both.
+                                                onContextMenu={(e) => {
+                                                    e.preventDefault();
+                                                    if (!isTouchContextMenu(e.nativeEvent)) {
+                                                        openMoveTo(item, section);
+                                                    }
+                                                }}
                                             >
                                                 <DragIndicatorIcon fontSize="small" />
                                             </IconButton>
                                         )}
                                         <ListItemButton
                                             onClick={(e) => editor.openEditor({ item, event: e })}
-                                            onKeyDown={(e) => drag.onRowKeyDown(item, section, e)}
                                             className={styles.rowButton}
                                             data-testid="nextActionItemRow"
+                                            // Short, per row (screen readers re-read it on every row focus); the full key list sits on the list and the handle.
+                                            aria-describedby={rowHintId}
+                                            {...{ [ROW_BUTTON_ATTR]: '' }}
+                                            {...roving.rowButtonProps}
                                         >
                                             <ListItemText
                                                 primary={
@@ -652,8 +804,12 @@ function NextActionsPage() {
             )}
             {/* Keyboard affordances for the reorder handle (D6) + the polite announcer for every reorder outcome. */}
             <span id={dragHintId} className={styles.srOnly}>
-                Press Space to pick up, Arrow Up or Down to move, Space to drop, Escape to cancel. Alt plus Arrow Up or Down moves the row one slot.
+                {reorderHintText(isApple)}
             </span>
+            <span id={rowHintId} className={styles.srOnly}>
+                Space to reorder, Arrow Right for the row’s buttons.
+            </span>
+            <ReorderShortcutsDialog open={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} isApple={isApple} />
             <div aria-live="polite" className={styles.srOnly} data-testid="nextActionsReorderLive">
                 {drag.liveText}
             </div>

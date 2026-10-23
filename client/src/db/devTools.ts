@@ -7,6 +7,7 @@ import type { IDBPDatabase } from 'idb';
 import { getAllSyncConfigs } from '../api/calendarApi';
 import { getPushStatus } from '../api/pushApi';
 import { announceAccountReauthResolved } from '../contexts/accountReauthEvents';
+import { setItemsReadDelayForTesting } from '../data/appResource';
 import { briefSourceHash } from '../lib/briefSource';
 import type { MyDB, StoredItem, StoredItemBrief } from '../types/MyDB';
 import { getActiveAccount } from './accountHelpers';
@@ -112,6 +113,8 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         removeItem: (itemId: string) => removeItem(db, itemId),
         // Next Actions priority order — the same commit the drag/keyboard/Move-to gestures run.
         reorderItem: (request: ReorderRequest) => reorderItem(db, request),
+        // Slows the items snapshot read (ms) to stand in for a large account — see appResource.ts.
+        setItemsReadDelay: (ms: number) => setItemsReadDelayForTesting(ms),
         recordRoutineInstanceModification: (
             routineId: string,
             originalDate: string,

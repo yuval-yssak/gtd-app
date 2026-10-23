@@ -1,16 +1,18 @@
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import IconButton from '@mui/material/IconButton';
+import IconButton, { type IconButtonProps } from '@mui/material/IconButton';
 import Snackbar from '@mui/material/Snackbar';
 import Tooltip from '@mui/material/Tooltip';
 import { useState } from 'react';
 
-interface Props {
+export interface CopyButtonProps {
     value: string;
     /** What is being copied, in words ("item ID", "connector URL") — drives the tooltip and aria-label. */
     label: string;
     testId: string;
     /** Snackbar text on success; defaults to "Copied <label>". */
     copiedMessage?: string;
+    /** Extra props for the icon button — a list row takes it out of the tab order and names it for the letter shortcut. */
+    buttonProps?: Partial<IconButtonProps> & Record<`data-${string}`, string>;
 }
 
 type Feedback = 'idle' | 'copied' | 'failed';
@@ -21,7 +23,7 @@ type Feedback = 'idle' | 'copied' | 'failed';
  * (Safari Private, iframes without permission, unfocused document); silent degradation is
  * unacceptable, so the failure Snackbar tells the user to select the text manually.
  */
-export function CopyButton({ value, label, testId, copiedMessage = `Copied ${label}` }: Props) {
+export function CopyButton({ value, label, testId, copiedMessage = `Copied ${label}`, buttonProps }: CopyButtonProps) {
     const [feedback, setFeedback] = useState<Feedback>('idle');
 
     async function onCopy() {
@@ -46,7 +48,7 @@ export function CopyButton({ value, label, testId, copiedMessage = `Copied ${lab
     return (
         <>
             <Tooltip title={tooltipTitle}>
-                <IconButton size="small" onClick={onClick} aria-label={`Copy ${label}`} data-testid={testId}>
+                <IconButton size="small" {...buttonProps} onClick={onClick} aria-label={`Copy ${label}`} data-testid={testId}>
                     <ContentCopyIcon fontSize="small" />
                 </IconButton>
             </Tooltip>

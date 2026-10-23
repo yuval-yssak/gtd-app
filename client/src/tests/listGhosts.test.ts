@@ -3,6 +3,7 @@ import {
     consumeGhost,
     GHOST_TTL_MS,
     getGhostSnapshots,
+    isGhostOf,
     mergeGhostsIntoItems,
     pruneExpiredGhosts,
     recordGhostSnapshot,
@@ -75,6 +76,25 @@ describe('ghost store', () => {
     it('keeps the snapshot referentially stable between mutations', () => {
         recordGhostSnapshot(buildItem('a'), 1_000);
         expect(getGhostSnapshots()).toBe(getGhostSnapshots());
+    });
+});
+
+describe('isGhostOf', () => {
+    it('matches only the exact recorded snapshot: true after record, false after consume or past the TTL (no prune needed)', () => {
+        const item = buildItem('a');
+        recordGhostSnapshot(item, 1_000);
+        expect(isGhostOf(item, 1_500)).toBe(true);
+        expect(isGhostOf(item, 1_000 + GHOST_TTL_MS + 1)).toBe(false);
+        consumeGhost('a');
+        expect(isGhostOf(item, 1_500)).toBe(false);
+    });
+
+    it('a ghost from another list (older status) or a row restored by undo (newer updatedTs) never matches the live row', () => {
+        recordGhostSnapshot(buildItem('a', 'calendar'), 1_000);
+        expect(isGhostOf(buildItem('a'), 1_500)).toBe(false);
+        recordGhostSnapshot(buildItem('b'), 1_000);
+        expect(isGhostOf({ ...buildItem('b'), updatedTs: '2026-07-04T10:00:01.000Z' }, 1_500)).toBe(false);
+        expect(isGhostOf(buildItem('c'), 1_500)).toBe(false);
     });
 });
 

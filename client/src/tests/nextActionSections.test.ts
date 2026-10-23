@@ -1,7 +1,7 @@
 import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 import { compareNextActions } from '../lib/compareNextActions';
-import { flatIndexOfSlot, flattenSections, groupIntoSections, NO_DATE_SECTION_KEY, sectionLabel } from '../lib/nextActionSections';
+import { flatIndexOfItem, flattenSections, groupIntoSections, NO_DATE_SECTION_KEY, sectionLabel } from '../lib/nextActionSections';
 import type { StoredItem } from '../types/MyDB';
 
 const TODAY = '2026-10-23';
@@ -62,7 +62,7 @@ describe('groupIntoSections', () => {
     });
 });
 
-describe('flattenSections / flatIndexOfSlot', () => {
+describe('flattenSections / flatIndexOfItem', () => {
     const items = [
         makeItem({ _id: 'd1', expectedBy: TODAY, rank: 'a0' }),
         makeItem({ _id: 'u1', rank: 'a0' }),
@@ -82,13 +82,10 @@ describe('flattenSections / flatIndexOfSlot', () => {
         ]);
     });
 
-    it('maps a grab-mode slot to the virtualizer row currently at that position', () => {
-        // No-date items start at flat index 3. Slot 1 → the row at position 1 (u2): row 4.
-        expect(flatIndexOfSlot(rows, 'no-date', 1)).toBe(4);
-        // Slot 0 → row 3.
-        expect(flatIndexOfSlot(rows, 'no-date', 0)).toBe(3);
-        // Clamped to the section.
-        expect(flatIndexOfSlot(rows, 'no-date', 99)).toBe(5);
-        expect(flatIndexOfSlot(rows, 'missing', 0)).toBe(0);
+    it('maps an item to its virtualizer row (headers count), -1 when it is not rendered', () => {
+        // Today's header is row 0, d1 row 1; the no-date header is row 2, u1..u3 rows 3..5.
+        expect(flatIndexOfItem(rows, 'd1')).toBe(1);
+        expect(flatIndexOfItem(rows, 'u2')).toBe(4);
+        expect(flatIndexOfItem(rows, 'zzz')).toBe(-1);
     });
 });

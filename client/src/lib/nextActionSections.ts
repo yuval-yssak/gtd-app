@@ -64,17 +64,7 @@ export function flattenSections<T>(sections: ReadonlyArray<NextActionSection<T>>
     ]);
 }
 
-/**
- * Virtualizer index of the row a grab-mode slot points at, so the page can scroll it into view.
- * `toIndex` is the dragged row's FINAL position in the section (the reducer's slot among the other
- * rows); the row currently rendered at that position — the dragged row is still at its origin —
- * is the one to bring into view, whichever direction the move goes.
- */
-export function flatIndexOfSlot<T>(rows: readonly FlatRow<T>[], sectionKey: string, toIndex: number): number {
-    const first = rows.findIndex((row) => row.kind === 'item' && row.section.key === sectionKey);
-    if (first < 0) {
-        return 0;
-    }
-    const count = rows.filter((row) => row.kind === 'item' && row.section.key === sectionKey).length;
-    return first + Math.min(Math.max(toIndex, 0), count - 1);
+/** Virtualizer index of an item's row (headers count as rows), or -1 when the item is not rendered. */
+export function flatIndexOfItem<T extends { _id: string }>(rows: readonly FlatRow<T>[], itemId: string): number {
+    return rows.findIndex((row) => row.kind === 'item' && row.item._id === itemId);
 }

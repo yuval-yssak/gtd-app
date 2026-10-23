@@ -28,9 +28,9 @@
     flex-wrap: wrap;
 }
 
-/* pr widened to accommodate copy-id + edit + done buttons in secondaryAction */
+/* pr widened to accommodate the move-to + copy-id + edit + done buttons in secondaryAction */
 .listItemText {
-    padding-right: 7.5rem;
+    padding-right: 9.5rem;
 }
 
 /* Second line: work-context + people chips, then the optional "Due" text. Wraps independently of the title row. */

@@ -3,15 +3,20 @@ import {
     computeDropIndex,
     type DragState,
     dragReducer,
+    grabPreviewOrder,
+    hasMoveRendered,
     isOutsideSection,
     needsRender,
     neighboursAt,
     nudgedSlot,
     nudgeNeighbours,
+    planStep,
     type RowRect,
     SECTION_WALL_SLACK_PX,
+    sectionEdgeNeighbours,
     shiftFor,
     shiftForRow,
+    slotOfNeighbours,
     translateYOf,
 } from '../lib/dragReorder';
 
@@ -111,11 +116,13 @@ describe('dragReducer', () => {
         const moved = dragReducer(lift('d', 275).state, { type: 'move', pointerY: 160 });
         const dropped = dragReducer(moved.state, { type: 'drop' });
         expect(dropped.state).toBeNull();
-        expect(dropped.effects).toEqual([{ type: 'commit', itemId: 'd', sectionKey: 'no-date', fromIndex: 3, toIndex: 1, aboveId: 'a', belowId: 'b' }]);
+        expect(dropped.effects).toEqual([
+            { type: 'commit', itemId: 'd', sectionKey: 'no-date', fromIndex: 3, toIndex: 1, isKeyboard: false, aboveId: 'a', belowId: 'b' },
+        ]);
         // Section edges have an open neighbour.
         const toTop = dragReducer(lift('d', 275).state, { type: 'move', pointerY: 110 });
         expect(dragReducer(toTop.state, { type: 'drop' }).effects).toEqual([
-            { type: 'commit', itemId: 'd', sectionKey: 'no-date', fromIndex: 3, toIndex: 0, aboveId: undefined, belowId: 'a' },
+            { type: 'commit', itemId: 'd', sectionKey: 'no-date', fromIndex: 3, toIndex: 0, isKeyboard: false, aboveId: undefined, belowId: 'a' },
         ]);
     });
 
@@ -200,8 +207,54 @@ describe('dragReducer', () => {
         expect(stateOf(atEnd).toIndex).toBe(3);
         expect(dragReducer(atEnd.state, { type: 'nudge', delta: 1 }).effects).toEqual([]);
         expect(dragReducer(atEnd.state, { type: 'drop' }).effects).toEqual([
-            { type: 'commit', itemId: 'b', sectionKey: 'no-date', fromIndex: 1, toIndex: 3, aboveId: 'd', belowId: undefined },
+            { type: 'commit', itemId: 'b', sectionKey: 'no-date', fromIndex: 1, toIndex: 3, isKeyboard: true, aboveId: 'd', belowId: undefined },
         ]);
+    });
+
+    it('keyboard grab: jump goes straight to the first or last slot; a multi-row nudge (PageUp/Down) clamps at the edge', () => {
+        const lifted = lift('b', 0, { rects: [], isKeyboard: true });
+        const bottom = dragReducer(lifted.state, { type: 'jump', edge: 'bottom' });
+        expect(bottom.effects).toEqual([{ type: 'slotChanged', toIndex: 3 }]);
+        expect(dragReducer(bottom.state, { type: 'jump', edge: 'bottom' }).effects).toEqual([]);
+        const top = dragReducer(bottom.state, { type: 'jump', edge: 'top' });
+        expect(stateOf(top).toIndex).toBe(0);
+        const paged = dragReducer(top.state, { type: 'nudge', delta: 5 });
+        expect(stateOf(paged).toIndex).toBe(3);
+        expect(dragReducer(paged.state, { type: 'drop' }).effects).toEqual([
+            { type: 'commit', itemId: 'b', sectionKey: 'no-date', fromIndex: 1, toIndex: 3, isKeyboard: true, aboveId: 'd', belowId: undefined },
+        ]);
+    });
+
+    it('keyboard grab: no row is shifted — the page renders the preview order instead (the grabbed row sits at its slot)', () => {
+        const lifted = lift('b', 0, { rects: [], isKeyboard: true });
+        const down = stateOf(dragReducer(lifted.state, { type: 'nudge', delta: 1 }));
+        expect(ids.map((id) => shiftForRow(down, id))).toEqual([0, 0, 0, 0]);
+        const rows = ids.map((id) => ({ _id: id }));
+        expect(grabPreviewOrder(rows, down).map((row) => row._id)).toEqual(['a', 'c', 'b', 'd']);
+        const up = stateOf(dragReducer(lifted.state, { type: 'nudge', delta: -1 }));
+        expect(grabPreviewOrder(rows, up).map((row) => row._id)).toEqual(['b', 'a', 'c', 'd']);
+        const last = stateOf(dragReducer(lifted.state, { type: 'jump', edge: 'bottom' }));
+        expect(grabPreviewOrder(rows, last).map((row) => row._id)).toEqual(['a', 'c', 'd', 'b']);
+        // Ghost rows (not among the live itemIds) keep their place; a slot past the last live row lands after them.
+        const withGhost = [...rows, { _id: 'ghost' }];
+        expect(grabPreviewOrder(withGhost, last).map((row) => row._id)).toEqual(['a', 'c', 'd', 'ghost', 'b']);
+        expect(grabPreviewOrder(withGhost, down).map((row) => row._id)).toEqual(['a', 'c', 'b', 'd', 'ghost']);
+        // A grabbed row that vanished from the section (pulled away) leaves the order untouched.
+        expect(grabPreviewOrder(rows.slice(0, 1).concat(rows.slice(2)), down).map((row) => row._id)).toEqual(['a', 'c', 'd']);
+        // The row above the slot vanished: the grabbed row still lands right before its row below.
+        expect(
+            grabPreviewOrder(
+                rows.filter((row) => row._id !== 'c'),
+                down,
+            ).map((row) => row._id),
+        ).toEqual(['a', 'b', 'd']);
+        // The row below the slot vanished too: it lands last rather than nowhere.
+        expect(
+            grabPreviewOrder(
+                rows.filter((row) => row._id === 'a' || row._id === 'b'),
+                down,
+            ).map((row) => row._id),
+        ).toEqual(['a', 'b']);
     });
 
     it('events without an active drag are ignored', () => {
@@ -238,6 +291,45 @@ describe('nudgedSlot / nudgeNeighbours', () => {
         expect(nudgeNeighbours(ids, 'b', 1)).toEqual({ aboveId: 'c', belowId: 'd' });
         expect(nudgeNeighbours(ids, 'c', 1)).toEqual({ aboveId: 'd', belowId: undefined });
         expect(nudgeNeighbours(ids, 'a', -1)).toBeNull();
+    });
+});
+
+describe('sectionEdgeNeighbours', () => {
+    it('resolves the top / bottom slot, or null when the row is already there (or alone)', () => {
+        expect(sectionEdgeNeighbours(ids, 'c', 'top')).toEqual({ aboveId: undefined, belowId: 'a' });
+        expect(sectionEdgeNeighbours(ids, 'b', 'bottom')).toEqual({ aboveId: 'd', belowId: undefined });
+        expect(sectionEdgeNeighbours(ids, 'a', 'top')).toBeNull();
+        expect(sectionEdgeNeighbours(ids, 'd', 'bottom')).toBeNull();
+        expect(sectionEdgeNeighbours(['a'], 'a', 'bottom')).toBeNull();
+        expect(sectionEdgeNeighbours(ids, 'zzz', 'top')).toBeNull();
+    });
+});
+
+describe('hasMoveRendered', () => {
+    it('is true once the row is at its planned slot or has left the section, false while the old order still shows', () => {
+        expect(hasMoveRendered(['a', 'b', 'c'], 'c', 2)).toBe(true);
+        expect(hasMoveRendered(['a', 'b', 'c'], 'c', 0)).toBe(false);
+        expect(hasMoveRendered(['c', 'a', 'b'], 'c', 0)).toBe(true);
+        expect(hasMoveRendered(['a', 'b'], 'c', 0)).toBe(true);
+    });
+});
+
+describe('slotOfNeighbours', () => {
+    it('is the index of the row below among the others, the end when there is none, the top when it vanished', () => {
+        expect(slotOfNeighbours(ids, 'd', 'a')).toBe(0);
+        expect(slotOfNeighbours(ids, 'a', 'c')).toBe(1);
+        expect(slotOfNeighbours(ids, 'a', undefined)).toBe(3);
+        expect(slotOfNeighbours(ids, 'a', 'zzz')).toBe(0);
+    });
+});
+
+describe('planStep', () => {
+    it('resolves a one-slot step or an edge jump to neighbours and the final slot, null when it goes nowhere', () => {
+        expect(planStep(ids, 'b', { delta: 1 })).toEqual({ neighbours: { aboveId: 'c', belowId: 'd' }, toIndex: 2 });
+        expect(planStep(ids, 'b', { delta: -1 })).toEqual({ neighbours: { aboveId: undefined, belowId: 'a' }, toIndex: 0 });
+        expect(planStep(ids, 'b', { edge: 'bottom' })).toEqual({ neighbours: { aboveId: 'd', belowId: undefined }, toIndex: 3 });
+        expect(planStep(ids, 'a', { delta: -1 })).toBeNull();
+        expect(planStep(ids, 'a', { edge: 'top' })).toBeNull();
     });
 });
 

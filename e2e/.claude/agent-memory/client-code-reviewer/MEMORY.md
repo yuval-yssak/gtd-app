@@ -72,3 +72,6 @@
 - [Fallback navigation clobbers the specific one](feedback_fallback_navigation_clobbers_specific_one.md) — caller's post-pass `href='/'` overrides a callee's `/login`; demand callee return `{ navigated }`.
 - [Deferred side effect lost on loop throw](feedback_deferred_side_effect_lost_on_loop_throw.md) — collect-ids-then-act-after-finally drops collected work when a later pass throws; test pass-1 outcome + pass-2 reject.
 - [API-origin OAuth binds the cookie-active session](feedback_api_origin_oauth_uses_cookie_active_session.md) — Guides promising "sign in with that account" are false for multi-account users; app switch is IDB-only.
+- [Keyed reorder loses focus in one direction](feedback_keyed_reorder_focus_loss_one_direction.md) — Downward moves move the focused node; one-shot refocus + refocus-per-press e2e hide it; cancel-refocus steals focus.
+- [refresh resolves before commit](project_refresh_resolves_before_transition_commit.md) — refreshItems() returns before the transition commits; await+rAF is no render barrier. flushItemTextRef also pushes to network.
+- [Id-only guard on the shared ghost store](feedback_id_only_guard_on_shared_ghost_store.md) — `hasGhost(id)` as an "already done" guard matches other lists' ghosts and stranded entries, so a fresh row's Done does nothing; match status+updatedTs.

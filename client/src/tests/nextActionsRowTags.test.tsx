@@ -1,7 +1,7 @@
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ResolvedTag } from '../lib/itemSearch';
-import { buildRowSecondary, RowTags, readShowTags } from '../routes/_authenticated/next-actions';
+import { buildRowSecondary, RowTags, readShowTags, reorderHintText } from '../routes/_authenticated/next-actions';
 import type { StoredItem, StoredPerson, StoredWorkContext } from '../types/MyDB';
 
 // RowTags returns a single <Box> wrapper; these helpers walk its children without a DOM (vitest runs in node env).
@@ -126,5 +126,18 @@ describe('readShowTags', () => {
         // A non-'true' value exercises the `!== 'false'` contract (a buggy `=== 'true'` would fail here).
         localStorage.setItem('nextActions.showTags', '1');
         expect(readShowTags()).toBe(true);
+    });
+});
+
+describe('reorderHintText', () => {
+    it('spells the chords for the platform and names every key the list answers to', () => {
+        const mac = reorderHintText(true);
+        expect(mac).toContain('⇧↑ or ⇧↓ to jump');
+        expect(mac).toContain('⌥⇧↑ or ⌥⇧↓ moves it to the top or bottom');
+        const pc = reorderHintText(false);
+        expect(pc).toContain('Alt+Shift+↑ or Alt+Shift+↓');
+        for (const key of ['Arrow Right', 'Home and End', 'E edits', 'D marks it done', 'C copies', 'M opens', 'Space to pick', 'Escape to cancel']) {
+            expect(pc).toContain(key);
+        }
     });
 });

@@ -1,0 +1,15 @@
+.groupTitle {
+    padding-top: 0.75rem;
+    font-weight: 600;
+    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    border-bottom: 0;
+}
+
+.chord {
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.letters {
+    margin-top: 0.75rem;
+}

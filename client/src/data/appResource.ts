@@ -54,10 +54,22 @@ export function shouldAdoptSnapshotDuringRender(renderedKey: string, nextKey: st
     return nextKey !== renderedKey;
 }
 
+// Test seam: e2e delays the items read to stand in for a large account, proving that callers
+// awaiting a refresh wait for the RENDERED list rather than for the transition to start.
+let itemsReadDelayMs = 0;
+export function setItemsReadDelayForTesting(ms: number) {
+    itemsReadDelayMs = ms;
+}
+
+function readItems(db: IDBPDatabase<MyDB>, userIds: string[]) {
+    const rows = getItemsAcrossUsers(db, userIds);
+    return itemsReadDelayMs > 0 ? new Promise<StoredItem[]>((resolve) => setTimeout(() => resolve(rows), itemsReadDelayMs)) : rows;
+}
+
 function buildSnapshot(db: IDBPDatabase<MyDB>, userIds: readonly string[]): AppResourceSnapshot {
     const ids = [...userIds];
     return {
-        items: getItemsAcrossUsers(db, ids),
+        items: readItems(db, ids),
         routines: getRoutinesAcrossUsers(db, ids),
         people: getPeopleAcrossUsers(db, ids),
         workContexts: getWorkContextsAcrossUsers(db, ids),
@@ -103,7 +115,7 @@ export function invalidateAppResource(db: IDBPDatabase<MyDB>, userIds: readonly 
 function replaceField(prev: AppResourceSnapshot, db: IDBPDatabase<MyDB>, userIds: string[], scope: Exclude<ResourceScope, 'all'>): AppResourceSnapshot {
     switch (scope) {
         case 'items':
-            return { ...prev, items: getItemsAcrossUsers(db, userIds) };
+            return { ...prev, items: readItems(db, userIds) };
         case 'routines':
             return { ...prev, routines: getRoutinesAcrossUsers(db, userIds) };
         case 'people':

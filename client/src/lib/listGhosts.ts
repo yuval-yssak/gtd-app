@@ -42,6 +42,21 @@ export function recordGhostSnapshot(item: StoredItem, nowMs = dayjs().valueOf())
     notifyGhostListeners();
 }
 
+/**
+ * True while THIS exact snapshot of an item (same status and `updatedTs`) was just moved off a
+ * list and the list has not finished showing it go — i.e. a caller holding it is about to resubmit
+ * a stale row. Matched by snapshot, never by id alone: the store is shared across pages, and a
+ * ghost recorded by another list (an old status) or a row restored by undo (a newer `updatedTs`)
+ * must not block a fresh action on the live row. Honours the TTL without a prune.
+ */
+export function isGhostOf(item: StoredItem, nowMs = dayjs().valueOf()): boolean {
+    const entry = ghostsByItemId.get(item._id);
+    if (!entry || nowMs - entry.recordedAtMs > GHOST_TTL_MS) {
+        return false;
+    }
+    return entry.item.status === item.status && entry.item.updatedTs === item.updatedTs;
+}
+
 /** Removes a ghost once its collapse animation finished (or it was otherwise handled). */
 export function consumeGhost(itemId: string): void {
     if (ghostsByItemId.delete(itemId)) {

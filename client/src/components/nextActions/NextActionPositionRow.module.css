@@ -1,0 +1,13 @@
+.row {
+    gap: 0.5rem;
+}
+
+.label {
+    font-size: 0.875rem;
+}
+
+.controls {
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
