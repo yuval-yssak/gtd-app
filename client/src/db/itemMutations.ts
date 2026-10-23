@@ -1,8 +1,10 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { compareNextActions, expectedDayKey } from '../lib/compareNextActions';
+import { compareRank, evenlySpacedRanks, isRankTooLong, rankAt, rankBetween, ranksBetween } from '../lib/itemRank';
 import { recordGhostSnapshot } from '../lib/listGhosts';
 import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
-import { deleteItemById, putItem } from './itemHelpers';
+import { deleteItemById, getItemsAcrossUsers, putItem, topRankForUser } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
 import { createNextRoutineItem, isCalendarRoutineExhausted, RruleExhaustedError } from './routineItemHelpers';
 import { updateRoutine } from './routineMutations';
@@ -47,7 +49,8 @@ function buildBaseItem(userId: string, title: string): StoredItem {
 // ── Collect ───────────────────────────────────────────────────────────────────
 
 export async function collectItem(db: IDBPDatabase<MyDB>, userId: string, { title, notes }: { title: string; notes?: string }): Promise<StoredItem> {
-    const base = buildBaseItem(userId, title);
+    // Every new item is minted a priority key above the user's existing ones (StoredItem.rank).
+    const base = { ...buildBaseItem(userId, title), rank: await topRankForUser(db, userId) };
     // exactOptionalPropertyTypes: omit key rather than assigning undefined
     const item = notes?.trim() ? { ...base, notes: notes.trim() } : base;
     await putItem(db, item);
@@ -62,7 +65,6 @@ export interface NextActionMeta {
     peopleIds?: string[];
     energy?: EnergyLevel;
     time?: number;
-    focus?: boolean;
     urgent?: boolean;
     expectedBy?: string;
     ignoreBefore?: string;
@@ -80,7 +82,13 @@ export async function clarifyToNextAction(db: IDBPDatabase<MyDB>, item: StoredIt
         allDay: _ad,
         ...rest
     } = item;
-    const updated: StoredItem = { ...rest, status: 'nextAction', ...meta, updatedTs: nowIso() };
+    // Clarifying an inbox capture is when the item becomes actionable, so it is minted a FRESH key
+    // at the top of its section (its collect-time key may be a week old). Any other transition into
+    // Next Actions (calendar detach, a revive from done) keeps its place; an item without a key
+    // (born before the rollout, or through a path that does not mint) gets one. Mirrors the server's
+    // `withRankOnEnteringNextAction`.
+    const rank = item.status === 'inbox' || item.rank === undefined ? await topRankForUser(db, item.userId) : item.rank;
+    const updated: StoredItem = { ...rest, status: 'nextAction', ...meta, rank, updatedTs: nowIso() };
     recordGhostIfLeavingList(item, updated);
     await putItem(db, updated);
     await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
@@ -104,7 +112,6 @@ export async function clarifyToCalendar(db: IDBPDatabase<MyDB>, item: StoredItem
         workContextIds: _wc,
         energy: _e,
         time: _t,
-        focus: _f,
         urgent: _u,
         waitingForPersonId: _wfp,
         // expectedBy is not allowed on calendar items — leaving it on the snapshot makes
@@ -153,7 +160,6 @@ export async function clarifyToWaitingFor(db: IDBPDatabase<MyDB>, item: StoredIt
         workContextIds: _wc,
         energy: _e,
         time: _t,
-        focus: _f,
         urgent: _u,
         allDay: _ad,
         waitingForPersonId: _wfp,
@@ -172,7 +178,6 @@ export async function clarifyToInbox(db: IDBPDatabase<MyDB>, item: StoredItem): 
         workContextIds: _wc,
         energy: _e,
         time: _t,
-        focus: _f,
         urgent: _u,
         expectedBy: _eb,
         ignoreBefore: _ib,
@@ -205,7 +210,6 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
         workContextIds: _wc,
         energy: _e,
         time: _t,
-        focus: _f,
         urgent: _u,
         expectedBy: _eb,
         ignoreBefore: _ib,
@@ -320,6 +324,216 @@ async function createNextCalendarRoutineItem(db: IDBPDatabase<MyDB>, item: Store
     if (await isCalendarRoutineExhausted(db, item.userId, effectiveRoutine)) {
         await updateRoutine(db, { ...effectiveRoutine, active: false });
     }
+}
+
+// ── Priority order (Next Actions drag and drop) ──────────────────────────────
+
+/** A reorder as every gesture (drag, keyboard, Move to…) expresses it: the moved row and the VISIBLE rows it lands between. */
+export interface ReorderRequest {
+    /** The section's LIVE rows as displayed (filters applied, ghosts excluded — a ghost is a pre-mutation snapshot and must never be written back). */
+    sectionItems: readonly StoredItem[];
+    itemId: string;
+    /** Ids of the visible neighbours the row lands between; either is absent at a section edge. Resolved against live rows, never by index. */
+    aboveId?: string | undefined;
+    belowId?: string | undefined;
+    /**
+     * Every account of the merged list, visible rows or not: an account whose rows in this day are
+     * all filtered out still shares the keyspace, so a re-key must see them. Defaults to the owners
+     * of the visible rows.
+     */
+    ownerIds?: readonly string[] | undefined;
+}
+
+/**
+ * Re-keys `orderedItems` (rows of one day section in display order) with `keys`, one update op
+ * per row. Every row gets a fresh `updatedTs`, so this can beat a concurrent offline edit of a
+ * neighbour on another device under last-write-wins — accepted, and kept small: `ensureRunRanked`
+ * re-keys only the non-increasing run around the drop, and the happy-path drag writes one row.
+ */
+async function rekeyRows(db: IDBPDatabase<MyDB>, orderedItems: readonly StoredItem[], keys: readonly string[]): Promise<StoredItem[]> {
+    const now = nowIso();
+    const rekeyed = orderedItems.map((item, idx) => ({ ...item, rank: rankAt(keys, idx), updatedTs: now }));
+    for (const item of rekeyed) {
+        await putItem(db, item);
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: item._id, snapshot: item, userId: item.userId });
+    }
+    return rekeyed;
+}
+
+/** Re-keys a whole section in its displayed order with fresh keys from the origin. */
+export async function rebalanceSection(db: IDBPDatabase<MyDB>, orderedItems: readonly StoredItem[]): Promise<StoredItem[]> {
+    return rekeyRows(db, orderedItems, evenlySpacedRanks(orderedItems.length));
+}
+
+/** True when a pair of neighbours can take a key between them: both missing (an empty section), one
+ *  missing and the other ranked (a section edge), or both ranked and strictly ordered. */
+function isOrderedPair(a: StoredItem | undefined, b: StoredItem | undefined): boolean {
+    if (!a && !b) {
+        return true;
+    }
+    if (!a || !b) {
+        return (a ?? b)?.rank !== undefined;
+    }
+    return isRankedBelow(a, b);
+}
+
+function isRankedBelow(a: StoredItem | undefined, b: StoredItem | undefined): boolean {
+    return a?.rank !== undefined && b?.rank !== undefined && compareRank(a.rank, b.rank) < 0;
+}
+
+/**
+ * The minimal contiguous window of `rows` (display order) around `[from, to]` whose keys must be
+ * re-minted. It grows outward while a boundary pair is unranked or not strictly increasing, then
+ * trims back an edge row whose key already fits between the row outside the window and the rows
+ * that will be re-minted inside it (its old key stays; one op fewer, one fewer chance to override
+ * another device's edit). Keys from different accounts share no keyspace, so EQUAL keys across a
+ * merged section are the normal case, not a corner one — re-keying only this run keeps a drop to
+ * one or two ops instead of one per row of both accounts.
+ */
+export function nonIncreasingRun(rows: readonly StoredItem[], from: number, to: number): { lo: number; hi: number } {
+    const ordered = (i: number) => isOrderedPair(rows[i], rows[i + 1]);
+    const bounds = { lo: Math.max(Math.min(from, to), 0), hi: Math.min(Math.max(from, to), rows.length - 1) };
+    while (bounds.lo > 0 && !ordered(bounds.lo - 1)) {
+        bounds.lo -= 1;
+    }
+    while (bounds.hi < rows.length - 1 && !ordered(bounds.hi)) {
+        bounds.hi += 1;
+    }
+    const last = rows.length - 1;
+    const hiEdgeFits = () =>
+        rows[bounds.hi]?.rank !== undefined &&
+        (bounds.hi === last || isRankedBelow(rows[bounds.hi], rows[bounds.hi + 1])) &&
+        (bounds.lo === 0 || isRankedBelow(rows[bounds.lo - 1], rows[bounds.hi]));
+    const loEdgeFits = () =>
+        rows[bounds.lo]?.rank !== undefined &&
+        (bounds.lo === 0 || isRankedBelow(rows[bounds.lo - 1], rows[bounds.lo])) &&
+        (bounds.hi === last || isRankedBelow(rows[bounds.lo], rows[bounds.hi + 1]));
+    while (bounds.hi > bounds.lo && hiEdgeFits()) {
+        bounds.hi -= 1;
+    }
+    while (bounds.lo < bounds.hi && loEdgeFits()) {
+        bounds.lo += 1;
+    }
+    return bounds;
+}
+
+/** The run to re-key for a drop between `above` and `below` (either may be absent at a section edge). */
+function runBounds(rows: readonly StoredItem[], above: StoredItem | undefined, below: StoredItem | undefined): { lo: number; hi: number } {
+    const from = above ? rows.indexOf(above) : below ? rows.indexOf(below) : 0;
+    const to = below ? rows.indexOf(below) : from;
+    return nonIncreasingRun(rows, from, to);
+}
+
+/**
+ * Guarantees `rankBetween` is never called with an unranked neighbour or with `above >= below`.
+ * `rows` is the FULL day section minus the moved row, in display order (hidden rows included —
+ * re-keying only the visible rows would scramble the hidden ones). Returns the rows by id after
+ * any re-key; nothing is written when the two neighbours are already strictly ordered.
+ */
+export async function ensureRunRanked(
+    db: IDBPDatabase<MyDB>,
+    rows: readonly StoredItem[],
+    neighbours: Pick<ReorderRequest, 'aboveId' | 'belowId'>,
+): Promise<Map<string, StoredItem>> {
+    const byId = new Map(rows.map((row) => [row._id, row]));
+    const above = neighbours.aboveId === undefined ? undefined : byId.get(neighbours.aboveId);
+    const below = neighbours.belowId === undefined ? undefined : byId.get(neighbours.belowId);
+    if (isOrderedPair(above, below) || rows.length === 0) {
+        return byId;
+    }
+    const { lo, hi } = runBounds(rows, above, below);
+    const lower = rows[lo - 1]?.rank ?? null;
+    const upper = rows[hi + 1]?.rank ?? null;
+    // The run's bounds can still be inverted (keys are not monotone outside the run either) — then the whole section is re-keyed.
+    const boundsOrdered = lower === null || upper === null || compareRank(lower, upper) < 0;
+    const rekeyed = boundsOrdered ? await rekeyRows(db, rows.slice(lo, hi + 1), ranksBetween(lower, upper, hi - lo + 1)) : await rebalanceSection(db, rows);
+    for (const row of rekeyed) {
+        byId.set(row._id, row);
+    }
+    return byId;
+}
+
+/** The moved row AS STORED plus every other LIVE `nextAction` row of its expected day across the owners, in display order. */
+interface DaySection {
+    moved: StoredItem;
+    others: StoredItem[];
+}
+
+/**
+ * Reads the day section from IndexedDB — the source of truth. The moved row is taken from the
+ * database too, never from the page's copy: a pull or another tab may have changed it since the
+ * page rendered, and a write built from the rendered row would revert that edit under LWW. Hidden
+ * rows (filters, search, the tickler, an account whose rows are all filtered out) are included on
+ * purpose: they share the keyspace. Returns null when the moved row is gone or no longer `nextAction`.
+ */
+async function readDaySection(db: IDBPDatabase<MyDB>, itemId: string, ownerIds: readonly string[]): Promise<DaySection | null> {
+    const rows = await getItemsAcrossUsers(db, [...new Set(ownerIds)]);
+    const moved = rows.find((row) => row._id === itemId);
+    if (!moved || moved.status !== 'nextAction') {
+        return null;
+    }
+    const dayKey = expectedDayKey(moved);
+    const others = rows.filter((row) => row.status === 'nextAction' && row._id !== moved._id && expectedDayKey(row) === dayKey).sort(compareNextActions);
+    return { moved, others };
+}
+
+/**
+ * True when the stored section still matches the one the gesture was planned against: the row is
+ * on the same day it was rendered in (a pull may have re-dated it meanwhile — the neighbours would
+ * then belong to another section), and at least one named neighbour still exists (both vanished
+ * means the slot no longer exists; one vanished is a section edge).
+ */
+function isSameContext(section: DaySection, shown: StoredItem, neighbours: Pick<ReorderRequest, 'aboveId' | 'belowId'>): boolean {
+    if (expectedDayKey(section.moved) !== expectedDayKey(shown)) {
+        return false;
+    }
+    const named = [neighbours.aboveId, neighbours.belowId].filter((id): id is string => id !== undefined);
+    return named.length === 0 || named.some((id) => section.others.some((row) => row._id === id));
+}
+
+/** True when the requested slot is where the row already sits — nothing to write. */
+function isSamePlace(visible: readonly StoredItem[], moved: StoredItem, neighbours: Pick<ReorderRequest, 'aboveId' | 'belowId'>): boolean {
+    const idx = visible.findIndex((row) => row._id === moved._id);
+    return visible[idx - 1]?._id === neighbours.aboveId && visible[idx + 1]?._id === neighbours.belowId;
+}
+
+/**
+ * Moves one row between two visible neighbours inside its day section by writing ONE field on ONE
+ * row (one sync op on the happy path). Never touches `expectedBy`: a drag cannot change the date.
+ * Returns the moved row, or null when nothing may be written: it already sits in the requested slot,
+ * it is no longer a live `nextAction` row (vanished or changed status mid-gesture), it was re-dated
+ * elsewhere (its neighbours belong to another day), or both named neighbours are gone.
+ */
+export async function reorderItem(db: IDBPDatabase<MyDB>, request: ReorderRequest): Promise<StoredItem | null> {
+    const shown = request.sectionItems.find((row) => row._id === request.itemId);
+    if (!shown || isSamePlace(request.sectionItems, shown, request)) {
+        return null;
+    }
+    const owners = request.ownerIds ?? request.sectionItems.map((row) => row.userId);
+    const section = await readDaySection(db, request.itemId, [...owners, shown.userId]);
+    if (!section || !isSameContext(section, shown, request)) {
+        return null;
+    }
+    const { moved, others } = section;
+    const ranked = await ensureRunRanked(db, others, request);
+    const above = request.aboveId === undefined ? undefined : ranked.get(request.aboveId);
+    const below = request.belowId === undefined ? undefined : ranked.get(request.belowId);
+    const rank = rankBetween(above?.rank, below?.rank);
+    if (isRankTooLong(rank)) {
+        return rebalanceAround(db, [...ranked.values()], moved, below);
+    }
+    const updated: StoredItem = { ...moved, rank, updatedTs: nowIso() };
+    await putItem(db, updated);
+    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
+    return updated;
+}
+
+/** Re-keys the whole section with `item` placed right above `below` (or last) — the too-long-key escape hatch. */
+async function rebalanceAround(db: IDBPDatabase<MyDB>, others: readonly StoredItem[], item: StoredItem, below: StoredItem | undefined): Promise<StoredItem> {
+    const insertAt = below ? others.findIndex((row) => row._id === below._id) : others.length;
+    const ordered = insertAt < 0 ? [...others, item] : [...others.slice(0, insertAt), item, ...others.slice(insertAt)];
+    const rekeyed = await rebalanceSection(db, ordered);
+    return rekeyed.find((row) => row._id === item._id) ?? item;
 }
 
 // ── Generic edit ──────────────────────────────────────────────────────────────

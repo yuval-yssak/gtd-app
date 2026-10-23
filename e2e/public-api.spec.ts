@@ -240,6 +240,41 @@ test.describe('public /v1 API', () => {
         });
     });
 
+    test('rank: a created item carries one; PATCH rejects rank with forbidden_field and drops the deprecated focus flag', async ({ browser }) => {
+        const email = `rank-${dayjs().valueOf()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const { plaintext } = await mintTokenViaSession(page.context().request, 'rank');
+            await withBearerOnlyContext(browser, async (apiContext) => {
+                const auth = { headers: { Authorization: `Bearer ${plaintext}` } };
+                const first = await apiContext.request.post(`${API_URL}/v1/items`, { ...auth, data: { title: 'Ranked first', externalId: 'rank-1' } });
+                const firstBody = (await first.json()) as { _id: string; rank?: string };
+                expect(firstBody.rank).toBe('a0');
+                const second = await apiContext.request.post(`${API_URL}/v1/items`, { ...auth, data: { title: 'Ranked second', externalId: 'rank-2' } });
+                const secondBody = (await second.json()) as { rank?: string };
+                // Each mint goes ABOVE the previous one (code-unit order).
+                expect((secondBody.rank ?? '') < (firstBody.rank ?? '')).toBe(true);
+
+                const forbidden = await apiContext.request.patch(`${API_URL}/v1/items/${firstBody._id}`, { ...auth, data: { rank: 'Zz' } });
+                expect(forbidden.status()).toBe(400);
+                expect(((await forbidden.json()) as { code: string }).code).toBe('forbidden_field');
+
+                const dropped = await apiContext.request.patch(`${API_URL}/v1/items/${firstBody._id}`, {
+                    ...auth,
+                    data: { status: 'nextAction', focus: true, urgent: true },
+                });
+                expect(dropped.status()).toBe(200);
+                const droppedBody = (await dropped.json()) as Record<string, unknown>;
+                expect(droppedBody.urgent).toBe(true);
+                // Clarifying inbox → nextAction re-mints a fresh key at the top (below every existing key).
+                expect(typeof droppedBody.rank).toBe('string');
+                expect(String(droppedBody.rank) < (secondBody.rank ?? '')).toBe(true);
+                expect(droppedBody).not.toHaveProperty('focus');
+            });
+        });
+    });
+
     test('PATCH refuses a second link to a Google Calendar event another item owns; GET ?calendarEventId finds the owner', async ({ browser }) => {
         const email = `cal-link-${dayjs().valueOf()}@example.com`;
         await resetServerForEmails([email]);

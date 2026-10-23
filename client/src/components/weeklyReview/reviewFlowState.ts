@@ -188,7 +188,7 @@ export function stageEligibleItems(stageId: ReviewStageId, items: ReadonlyArray<
             // compareCalendarItems is the /calendar page's rendered order flattened.
             return items.filter((item) => item.status === 'calendar').sort(compareCalendarItems);
         case 'nextActions':
-            // Same comparator as the Next Actions page (focus first, then expectedBy tiers).
+            // Same comparator as the Next Actions page (expected day ascending, then the manual rank inside each day).
             return items.filter((item) => item.status === 'nextAction' && !isTicklerHidden(item, todayIso)).sort(compareNextActions);
         case 'waitingFor':
             // DELIBERATE divergence from the /waiting-for page's default (person-grouped) view:

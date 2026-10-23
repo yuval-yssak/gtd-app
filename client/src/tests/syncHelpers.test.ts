@@ -769,6 +769,82 @@ describe('pullFromServer — item ops', () => {
         expect(item?.lastPushedToGCalTs).toBe('2025-06-01T00:00:05.000Z');
     });
 
+    it('an older backfill/reorder op still hands its rank to a newer local row that lacks one (field-level merge)', async () => {
+        // The device edited the row offline before pulling the rank the backfill (or another
+        // device's drag) wrote. Whole-row LWW keeps the local row; the rank must still land, or the
+        // item sits at the top of its section until the device's own edit echoes back.
+        await db.put('items', { ...makeItem('item-rank', '2025-06-01T00:00:30.000Z'), status: 'nextAction', title: 'edited locally' });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'item',
+                    entityId: 'item-rank',
+                    opType: 'update',
+                    snapshot: { ...serverItem('item-rank', '2025-06-01T00:00:05.000Z'), status: 'nextAction', rank: 'a0V' },
+                },
+            ],
+            serverTs: '2025-06-01T00:00:30.000Z',
+            serverId: '',
+        });
+
+        await pullFromServer(db, USER_ID);
+
+        const item = await db.get('items', 'item-rank');
+        expect(item?.title).toBe('edited locally');
+        expect(item?.updatedTs).toBe('2025-06-01T00:00:30.000Z');
+        expect(item?.rank).toBe('a0V');
+    });
+
+    it('one losing snapshot can hand BOTH its Google link and its rank to the newer local row', async () => {
+        await db.put('items', {
+            ...makeItem('item-both', '2025-06-01T00:00:30.000Z'),
+            status: 'calendar',
+            timeStart: '2025-06-02T10:00:00Z',
+            timeEnd: '2025-06-02T11:00:00Z',
+        });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'item',
+                    entityId: 'item-both',
+                    opType: 'update',
+                    snapshot: {
+                        ...serverItem('item-both', '2025-06-01T00:00:05.000Z'),
+                        status: 'calendar',
+                        calendarEventId: 'gtd-evt-both',
+                        calendarIntegrationId: 'integ-1',
+                        rank: 'a0V',
+                    },
+                },
+            ],
+            serverTs: '2025-06-01T00:00:30.000Z',
+            serverId: '',
+        });
+        await pullFromServer(db, USER_ID);
+        const item = await db.get('items', 'item-both');
+        expect(item?.updatedTs).toBe('2025-06-01T00:00:30.000Z');
+        expect(item?.calendarEventId).toBe('gtd-evt-both');
+        expect(item?.rank).toBe('a0V');
+    });
+
+    it("a losing snapshot never overrides a local rank (the device's own reorder wins)", async () => {
+        await db.put('items', { ...makeItem('item-rank-2', '2025-06-01T00:00:30.000Z'), status: 'nextAction', rank: 'Zz' });
+        vi.mocked(fetchSyncOps).mockResolvedValueOnce({
+            ops: [
+                {
+                    entityType: 'item',
+                    entityId: 'item-rank-2',
+                    opType: 'update',
+                    snapshot: { ...serverItem('item-rank-2', '2025-06-01T00:00:05.000Z'), rank: 'a0' },
+                },
+            ],
+            serverTs: '2025-06-01T00:00:30.000Z',
+            serverId: '',
+        });
+        await pullFromServer(db, USER_ID);
+        expect((await db.get('items', 'item-rank-2'))?.rank).toBe('Zz');
+    });
+
     it('does not hand a source account’s link to a target-owned row (cross-account reassign replays the source’s older ops)', async () => {
         // Multi-account device: the target account's pull landed the reassigned (link-less) row first;
         // the source account's pull then replays an older update op that still carries the source's link.

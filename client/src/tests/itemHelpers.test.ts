@@ -1,6 +1,6 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { getActiveNextActions, getItemsAcrossUsers, getItemsByStatus, getOverdueItems, getUpcomingCalendarItems } from '../db/itemHelpers';
+import { getActiveNextActions, getItemsAcrossUsers, getItemsByStatus, getOverdueItems, getUpcomingCalendarItems, topRankForUser } from '../db/itemHelpers';
 import type { MyDB, StoredItem } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
 
@@ -110,17 +110,6 @@ describe('getActiveNextActions', () => {
         expect(result[0]?._id).toBe('na8');
     });
 
-    it('filters by focus', async () => {
-        await seed([
-            baseItem('na11', { status: 'nextAction', focus: true }),
-            baseItem('na12', { status: 'nextAction', focus: false }),
-            baseItem('na13', { status: 'nextAction' }),
-        ]);
-
-        const focused = await getActiveNextActions(db, USER_ID, { focus: true });
-        expect(focused.map((i) => i._id)).toEqual(['na11']);
-    });
-
     it('filters by urgent', async () => {
         await seed([baseItem('na14', { status: 'nextAction', urgent: true }), baseItem('na15', { status: 'nextAction', urgent: false })]);
 
@@ -210,5 +199,18 @@ describe('getOverdueItems', () => {
     it('returns an empty array when nothing is overdue', async () => {
         await seed([baseItem('o6', { status: 'nextAction', expectedBy: FAR_FUTURE })]);
         expect(await getOverdueItems(db, USER_ID)).toHaveLength(0);
+    });
+});
+
+describe('topRankForUser', () => {
+    it('starts at the origin, then mints below the lowest key in CODE-UNIT order (Zz sorts below a0), across every status', async () => {
+        expect(await topRankForUser(db, USER_ID)).toBe('a0');
+        await seed([baseItem('r1', { status: 'nextAction', rank: 'a0' }), baseItem('r2', { status: 'done', rank: 'Zz' })]);
+        expect(await topRankForUser(db, USER_ID)).toBe('Zy');
+        await seed([baseItem('r3', { status: 'trash', rank: 'Zb' }), baseItem('other', { status: 'nextAction', rank: 'Zy', userId: 'someone-else' })]);
+        expect(await topRankForUser(db, USER_ID)).toBe('Za');
+        // A malformed stored key is ignored rather than thrown on.
+        await seed([baseItem('bad', { status: 'nextAction', rank: 'A' })]);
+        expect(await topRankForUser(db, USER_ID)).toBe('Za');
     });
 });

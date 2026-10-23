@@ -354,16 +354,16 @@ test.describe('weekly review', () => {
         });
     });
 
-    test('next-actions stage walks items in the Next Actions page order (focus first, then expectedBy)', async ({ browser }) => {
+    test('next-actions stage walks items in the Next Actions page order (expected day ascending, undated last)', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `wr-na-order-${dayjs().valueOf()}@example.com`, async (page) => {
-            // Created oldest-first as plain → focus-later → focus-soon, so createdTs order would
-            // present 'Plain undated' first — the page comparator must present 'Focus soon' first.
+            // Created oldest-first as undated → later → soon, so createdTs order would present
+            // 'Plain undated' first — the page comparator must present 'Due soon' first.
             const plain = await gtd.collect(page, 'Plain undated');
             await gtd.clarifyToNextAction(page, plain, {});
-            const focusLater = await gtd.collect(page, 'Focus later');
-            await gtd.clarifyToNextAction(page, focusLater, { focus: true, expectedBy: '2026-12-01' });
-            const focusSoon = await gtd.collect(page, 'Focus soon');
-            await gtd.clarifyToNextAction(page, focusSoon, { focus: true, expectedBy: '2026-09-01' });
+            const later = await gtd.collect(page, 'Due later');
+            await gtd.clarifyToNextAction(page, later, { expectedBy: '2026-12-01' });
+            const soon = await gtd.collect(page, 'Due soon');
+            await gtd.clarifyToNextAction(page, soon, { expectedBy: '2026-09-01' });
             await gtd.flush(page); // never navigate mid-flush — see clarify-to-routine.spec.ts
 
             await page.goto('/weekly-review?stage=nextActions');
@@ -371,9 +371,9 @@ test.describe('weekly review', () => {
             await expect(page.getByTestId('reviewStageTitle')).toHaveText('Next Actions');
 
             const focusStage = page.getByTestId('focusStage');
-            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Focus soon');
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Due soon');
             await page.getByTestId('focusKeep').click();
-            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Focus later');
+            await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Due later');
             await page.getByTestId('focusKeep').click();
             await expect(focusStage.getByRole('textbox', { name: 'Title' })).toHaveValue('Plain undated');
         });

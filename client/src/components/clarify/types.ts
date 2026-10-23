@@ -18,7 +18,6 @@ export interface NextActionFormState {
     energy: EnergyLevel | '';
     time: string;
     urgent: boolean;
-    focus: boolean;
     expectedBy: string;
 }
 
@@ -29,7 +28,6 @@ export const emptyNextAction: NextActionFormState = {
     energy: '',
     time: '',
     urgent: false,
-    focus: false,
     expectedBy: '',
 };
 
@@ -78,7 +76,6 @@ export function buildNextActionMeta(form: NextActionFormState) {
         ...(form.energy && { energy: form.energy }),
         ...(form.time && { time: Number(form.time) }),
         ...(form.urgent && { urgent: form.urgent }),
-        ...(form.focus && { focus: form.focus }),
         ...(form.expectedBy && { expectedBy: form.expectedBy }),
         ...(form.ignoreBefore && { ignoreBefore: form.ignoreBefore }),
     };

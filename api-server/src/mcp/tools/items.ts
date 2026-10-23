@@ -174,7 +174,7 @@ const updateItem = defineTool({
         'Update any user-settable field on an existing item. Supports status transitions ' +
         '(except → trash, which is rejected). Field combinations must satisfy the status×field matrix:\n' +
         '- inbox: title/notes only\n' +
-        '- nextAction: workContextIds, peopleIds, energy, time, focus, urgent, expectedBy, ignoreBefore\n' +
+        '- nextAction: workContextIds, peopleIds, energy, time, urgent, expectedBy, ignoreBefore\n' +
         '- calendar: timeStart, timeEnd, workContextIds, peopleIds (calendarEventId / calendarIntegrationId are server-managed ' +
         'linkage — never set them to "attach" an item to an existing Google event; the sync already created and linked ' +
         'that item, so gtd_list_items({ calendarEventId }) and update it. A second link is refused with 409 calendar_event_linked ' +
@@ -201,7 +201,9 @@ const updateItem = defineTool({
         waitingForPersonId: clearable(z.string()).describe('Person the waitingFor item is blocked on. null clears it (the item stays waitingFor).'),
         energy: clearable(z.enum(['low', 'medium', 'high'])).describe('Energy the task demands. Every nextAction should carry one. null clears.'),
         time: clearable(z.number().nonnegative()).describe('Estimated duration in minutes. Every nextAction should carry one. null clears.'),
-        focus: clearable(z.boolean()),
+        // Deprecated and ignored (the shortlist flag was replaced by the in-app priority order, read
+        // back as `rank`); still accepted so older prompts keep working.
+        focus: clearable(z.boolean()).describe('Deprecated — accepted and ignored. Priority is the read-only `rank` order set in the app.'),
         urgent: clearable(z.boolean()),
         expectedBy: clearable(z.string()).describe(
             'YYYY-MM-DD or ISO datetime. Allowed on nextAction / waitingFor / somedayMaybe. Every waitingFor should carry ' +

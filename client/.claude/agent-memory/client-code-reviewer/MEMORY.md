@@ -53,3 +53,4 @@
 - [Blur-exit unmounts the Tab target](feedback_blur_exit_unmounts_tab_target.md) — edit-mode that commits+flips on blur makes Done/Clear keyboard-unreachable (Tab → unmount → body); ask for focusout-contains + Tab e2e.
 - [Own echo resurrects a local delete](project_own_echo_resurrects_local_delete.md) — in-flight pull re-applies the device's own create after a local delete (no row → accept); applyEntityOp ignores pending delete ops.
 - [Disclosure copy has three mirrors](project_disclosure_copy_has_three_mirrors.md) — legal md + landingContent + index.html noscript; removals miss noscript, stale 'What we collect', LEGAL_EFFECTIVE_DATE.
+- [Drag geometry reads own transform](project_drag_geometry_reads_own_transform.md) — rect anchor = transformed element → shifted rects break wall/drop math; e2e releases mid-transition so it passes. Also TZ-unpinned date fixtures.

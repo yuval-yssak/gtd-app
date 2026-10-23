@@ -17,7 +17,6 @@ const form: NextActionFormState = {
     energy: '',
     time: '',
     urgent: false,
-    focus: false,
     expectedBy: '',
     ignoreBefore: '',
 };
@@ -66,7 +65,8 @@ describe('NextActionFields dense layout', () => {
         expect(html).toContain('Energy');
         expect(html).toContain('Time estimate');
         expect(html).toContain('Urgent');
-        expect(html).toContain('In focus');
+        // The "In focus" checkbox is gone: priority is the drag order on the Next Actions page.
+        expect(html).not.toContain('In focus');
         expect(html).toContain('Expected by');
     });
 });

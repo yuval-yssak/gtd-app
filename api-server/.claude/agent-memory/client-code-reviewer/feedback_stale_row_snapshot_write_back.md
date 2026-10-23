@@ -22,3 +22,14 @@ silent data revert, not an error. Contrast against the corresponding dialog in t
 show the author the in-repo precedent.
 
 Related: [[collapse-state-vs-shrinking-option-lists]], [[shared-dialog-refresh-gap]]
+
+Recurred 2026-10-23 in the Next Actions reorder commit: the db mutation itself read the neighbours
+fresh from IDB but spread the MOVED row from the page's `sectionItems`. Check every row in a
+multi-row mutation, not just the obviously-stale ones — "reads IDB" for some rows hides the one that
+doesn't.
+
+Follow-up (round 3, same feature): once the fix re-read the moved row from IDB, the code derived
+the GROUPING key (expected day) from the fresh row but still trusted neighbour ids from the
+rendered section. A re-dated row then gets minted against an empty neighbour set. When a fix
+switches to a fresh read, also check that the context the gesture was planned against (section,
+status, owner) still holds, and abort if it does not.

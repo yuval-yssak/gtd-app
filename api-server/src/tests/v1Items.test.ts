@@ -562,7 +562,7 @@ describe('GET /v1/items', () => {
             peopleIds: ['p-1'],
             energy: 'high',
             time: 30,
-            focus: true,
+            rank: 'a0V',
             urgent: false,
             expectedBy: '2026-06-01',
             ignoreBefore: '2026-05-15',
@@ -573,7 +573,7 @@ describe('GET /v1/items', () => {
         expect(body.peopleIds).toEqual(['p-1']);
         expect(body.energy).toBe('high');
         expect(body.time).toBe(30);
-        expect(body.focus).toBe(true);
+        expect(body.rank).toBe('a0V');
         expect(body.urgent).toBe(false);
         expect(body.expectedBy).toBe('2026-06-01');
         expect(body.ignoreBefore).toBe('2026-05-15');
@@ -1139,7 +1139,6 @@ describe('PATCH /v1/items/:id — null clears optional fields', () => {
                 peopleIds: ['p-1'],
                 energy: 'high',
                 time: 30,
-                focus: true,
                 urgent: true,
                 expectedBy: '2099-01-01',
                 ignoreBefore: '2098-12-01',
@@ -1151,7 +1150,6 @@ describe('PATCH /v1/items/:id — null clears optional fields', () => {
             peopleIds: null,
             energy: null,
             time: null,
-            focus: null,
             urgent: null,
             expectedBy: null,
             ignoreBefore: null,
@@ -1209,13 +1207,122 @@ describe('PATCH /v1/items/:id — null clears optional fields', () => {
     it('false and 0 are assignments, not clears — the keys stay present', async () => {
         const { userId, plaintext } = await newUserWithToken();
         const item = await seedItem({ userId, title: 'na', status: 'nextAction' });
-        await db.collection('items').updateOne({ _id: item._id } as never, { $set: { focus: true, urgent: true, time: 30 } });
-        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { focus: false, time: 0 } });
+        await db.collection('items').updateOne({ _id: item._id } as never, { $set: { urgent: true, time: 30, energy: 'low' } });
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { urgent: false, time: 0 } });
         expect(res.status).toBe(200);
         const stored = await itemsDAO.findByOwnerAndId(item._id ?? '', userId);
-        expect(stored?.focus).toBe(false);
+        expect(stored?.urgent).toBe(false);
         expect(stored?.time).toBe(0);
-        expect(stored?.urgent).toBe(true);
+        // An untouched key stays put.
+        expect(stored?.energy).toBe('low');
+    });
+
+    // ── rank (priority order) + deprecated focus ──────────────────────────────────────────
+
+    it("a created item carries a rank, minted above the user's existing ones", async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const first = await callApi({ method: 'POST', path: '/v1/items', token: plaintext, body: { title: 'first' } });
+        const firstBody = (await first.json()) as { _id: string; rank: string };
+        expect(firstBody.rank).toBe('a0');
+        const second = await callApi({ method: 'POST', path: '/v1/items', token: plaintext, body: { title: 'second' } });
+        const secondBody = (await second.json()) as { rank: string };
+        expect(secondBody.rank < firstBody.rank).toBe(true);
+        expect((await itemsDAO.findByOwnerAndId(firstBody._id, userId))?.rank).toBe('a0');
+    });
+
+    it('PATCH rejects rank with forbidden_field (read-only on this surface)', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'na', status: 'nextAction' });
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { rank: 'a0' } });
+        expect(res.status).toBe(400);
+        expect(((await res.json()) as { code: string }).code).toBe('forbidden_field');
+    });
+
+    it('PATCH accepts and drops the deprecated focus flag — as an assignment and as a null clear', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'na', status: 'nextAction' });
+        const set = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { focus: true, urgent: true } });
+        expect(set.status).toBe(200);
+        expect(await set.json()).not.toHaveProperty('focus');
+        expect(await itemsDAO.findByOwnerAndId(item._id ?? '', userId)).not.toHaveProperty('focus');
+        const clear = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { focus: null, time: 5 } });
+        expect(clear.status).toBe(200);
+        expect(((await clear.json()) as { time: number }).time).toBe(5);
+    });
+
+    it('a PATCH body made only of focus is a no-op: 200 with the current row and no new op', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const item = await seedItem({ userId, title: 'na', status: 'nextAction' });
+        const before = await db.collection('operations').countDocuments({ user: userId });
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${item._id}`, token: plaintext, body: { focus: false } });
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { title: string }).title).toBe('na');
+        expect(await db.collection('operations').countDocuments({ user: userId })).toBe(before);
+    });
+
+    it('PATCH inbox → nextAction mints a rank for an unranked item', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const unranked = await seedItem({ userId, title: 'inbox', status: 'inbox' });
+        const res = await callApi({ method: 'PATCH', path: `/v1/items/${unranked._id}`, token: plaintext, body: { status: 'nextAction' } });
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { rank: string }).rank).toBe('a0');
+    });
+
+    it('PATCH inbox → nextAction replaces an old key with a FRESH top key (clarifying is when a capture becomes actionable)', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        await seedItem({ userId, title: 'existing', status: 'nextAction' });
+        await db.collection('items').updateOne({ title: 'existing', user: userId } as never, { $set: { rank: 'a0' } });
+        const captured = await seedItem({ userId, title: 'captured', status: 'inbox' });
+        await db.collection('items').updateOne({ _id: captured._id } as never, { $set: { rank: 'a1' } });
+        const clarified = await callApi({ method: 'PATCH', path: `/v1/items/${captured._id}`, token: plaintext, body: { status: 'nextAction' } });
+        expect(((await clarified.json()) as { rank: string }).rank).toBe('Zz');
+    });
+
+    it("PATCH into nextAction from any other status keeps the item's key", async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const parked = await seedItem({ userId, title: 'parked', status: 'somedayMaybe' });
+        await db.collection('items').updateOne({ _id: parked._id } as never, { $set: { rank: 'a1' } });
+        const kept = await callApi({ method: 'PATCH', path: `/v1/items/${parked._id}`, token: plaintext, body: { status: 'nextAction' } });
+        expect(((await kept.json()) as { rank: string }).rank).toBe('a1');
+    });
+
+    it('a plain PATCH never mints: an inbox edit stays unranked', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const inbox = await seedItem({ userId, title: 'stay', status: 'inbox' });
+        const edited = await callApi({ method: 'PATCH', path: `/v1/items/${inbox._id}`, token: plaintext, body: { title: 'stay edited' } });
+        expect(await edited.json()).not.toHaveProperty('rank');
+    });
+
+    it('a plain PATCH never mints: an unranked item already in nextAction keeps its place in the unranked group', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const legacy = await seedItem({ userId, title: 'legacy', status: 'nextAction' });
+        const retitled = await callApi({ method: 'PATCH', path: `/v1/items/${legacy._id}`, token: plaintext, body: { title: 'legacy edited' } });
+        expect(await retitled.json()).not.toHaveProperty('rank');
+    });
+
+    it('bulk import mints one distinct rank per row, in request order, above the existing keys', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        await callApi({ method: 'POST', path: '/v1/items', token: plaintext, body: { title: 'existing' } }); // a0
+        const items = Array.from({ length: 5 }, (_, i) => ({ title: `bulk ${i}`, externalId: `bulk-${i}` }));
+        const res = await callApi({ method: 'POST', path: '/v1/items/bulk', token: plaintext, body: { items, chunkSize: 2 } });
+        expect(res.status).toBe(200);
+        const rows = await itemsDAO.findArray({ user: userId, externalId: { $exists: true } });
+        const ranks = items.map((row) => rows.find((stored) => stored.externalId === row.externalId)?.rank ?? '');
+        expect(ranks.every(Boolean)).toBe(true);
+        expect(new Set(ranks).size).toBe(5);
+        for (let idx = 1; idx < ranks.length; idx++) {
+            expect((ranks[idx - 1] ?? '') < (ranks[idx] ?? '')).toBe(true);
+        }
+        expect((ranks[4] ?? '') < 'a0').toBe(true);
+    });
+
+    it('a malformed STORED rank does not break minting (rejection on write is covered in v1OperationsBatch.test.ts)', async () => {
+        const { userId, plaintext } = await newUserWithToken();
+        const bad = await seedItem({ userId, title: 'bad', status: 'nextAction' });
+        await db.collection('items').updateOne({ _id: bad._id } as never, { $set: { rank: 'A' } });
+        const created = await callApi({ method: 'POST', path: '/v1/items', token: plaintext, body: { title: 'still mints' } });
+        expect(created.status).toBe(201);
+        expect(((await created.json()) as { rank: string }).rank).toBe('a0');
     });
 
     it('peopleIds: [] stores a present empty array while peopleIds: null removes the key', async () => {

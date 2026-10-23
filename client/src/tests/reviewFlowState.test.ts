@@ -89,28 +89,30 @@ describe('stageEligibleItems', () => {
             makeItem({ _id: 'snoozedWait', status: 'waitingFor', ignoreBefore: '2026-09-01' }),
             // somedayMaybe participates in the tickler too — mirror of the /tickler page status set.
             makeItem({ _id: 'snoozedPark', status: 'somedayMaybe', ignoreBefore: '2026-09-20' }),
-            // Focus does NOT override the tickler gate — a snoozed focus item stays hidden.
-            makeItem({ _id: 'snoozedFocus', status: 'nextAction', focus: true, ignoreBefore: '2026-09-15' }),
+            // Urgency does NOT override the tickler gate — a snoozed urgent item stays hidden.
+            makeItem({ _id: 'snoozedFocus', status: 'nextAction', urgent: true, ignoreBefore: '2026-09-15' }),
         ];
         // ignoreBefore === today is visible (the tickler gate is strict >), matching /next-actions.
-        expect(stageEligibleItems('nextActions', items, CTX).map((item) => item._id)).toEqual(['visible', 'boundary']);
+        // Both undated, unranked and created in the same ms → the total order falls back to _id.
+        expect(stageEligibleItems('nextActions', items, CTX).map((item) => item._id)).toEqual(['boundary', 'visible']);
         expect(stageEligibleItems('tickler', items, CTX).map((item) => item._id)).toEqual(['snoozedWait', 'snoozed', 'snoozedFocus', 'snoozedPark']);
     });
 
-    it('nextActions mirrors the Next Actions page order: focus first, then expectedBy tiers', () => {
+    it('nextActions mirrors the Next Actions page order: expected day ascending, rank inside a day, undated last', () => {
         const items = [
-            makeItem({ _id: 'plainUndated', status: 'nextAction' }),
-            makeItem({ _id: 'plainDated', status: 'nextAction', expectedBy: '2026-09-10' }),
-            makeItem({ _id: 'focusUndated', status: 'nextAction', focus: true }),
-            makeItem({ _id: 'focusDated', status: 'nextAction', focus: true, expectedBy: '2026-09-20' }),
-            makeItem({ _id: 'focusSooner', status: 'nextAction', focus: true, expectedBy: '2026-08-25' }),
+            makeItem({ _id: 'undatedRanked', status: 'nextAction', rank: 'a1' }),
+            makeItem({ _id: 'laterDay', status: 'nextAction', expectedBy: '2026-09-20', rank: 'a0' }),
+            makeItem({ _id: 'soonerDaySecond', status: 'nextAction', expectedBy: '2026-08-25', rank: 'a1' }),
+            // A datetime (local wall clock, no offset) collapses to the same day as the date-only sibling.
+            makeItem({ _id: 'soonerDayFirst', status: 'nextAction', expectedBy: '2026-08-25T09:00:00', rank: 'a0' }),
+            makeItem({ _id: 'undatedFresh', status: 'nextAction', createdTs: '2026-08-20T00:00:00.000Z' }),
         ];
         expect(stageEligibleItems('nextActions', items, CTX).map((item) => item._id)).toEqual([
-            'focusSooner',
-            'focusDated',
-            'focusUndated',
-            'plainDated',
-            'plainUndated',
+            'soonerDayFirst',
+            'soonerDaySecond',
+            'laterDay',
+            'undatedFresh',
+            'undatedRanked',
         ]);
     });
 

@@ -169,7 +169,7 @@ describe('PATCH /v1/items/:id', () => {
         expect(stored?.waitingForPersonId).toBeUndefined();
     });
 
-    it('rejects field type errors via Zod (energy / focus / time) with invalid_operation', async () => {
+    it('rejects field type errors via Zod (energy / urgent / time) with invalid_operation', async () => {
         const userId = await login();
         const { plaintext } = await issueApiToken(userId, 't', ['items.capture', 'items.read', 'items.write']);
         const id = await createInboxItem(plaintext, 'ext-1');
@@ -178,7 +178,7 @@ describe('PATCH /v1/items/:id', () => {
         const r1 = await patch(plaintext, id, { energy: 'med', status: 'nextAction' });
         const b1 = (await r1.json()) as { code: string; path?: string[] };
         expect(b1.code).toBe('invalid_operation');
-        const r2 = await patch(plaintext, id, { focus: 'deep', status: 'nextAction' });
+        const r2 = await patch(plaintext, id, { urgent: 'deep', status: 'nextAction' });
         expect(((await r2.json()) as { code: string }).code).toBe('invalid_operation');
         const r3 = await patch(plaintext, id, { time: -1, status: 'nextAction' });
         expect(((await r3.json()) as { code: string }).code).toBe('invalid_operation');

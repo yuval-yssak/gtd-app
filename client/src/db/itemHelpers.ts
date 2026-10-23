@@ -1,5 +1,6 @@
 import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
+import { compareRank, isValidRank, topRank } from '../lib/itemRank';
 import { isTicklerHidden } from '../lib/ticklerVisibility';
 import type { EnergyLevel, MyDB, StoredItem } from '../types/MyDB';
 
@@ -41,7 +42,6 @@ export async function getItemsByStatus(db: IDBPDatabase<MyDB>, userId: string, s
 export interface NextActionFilters {
     energy?: EnergyLevel;
     maxMinutes?: number;
-    focus?: boolean;
     urgent?: boolean;
     workContextId?: string;
 }
@@ -58,11 +58,22 @@ export async function getActiveNextActions(db: IDBPDatabase<MyDB>, userId: strin
         if (isTicklerHidden(item, today)) return false;
         if (filters.energy && item.energy !== filters.energy) return false;
         if (filters.maxMinutes !== undefined && (item.time === undefined || item.time > filters.maxMinutes)) return false;
-        if (filters.focus !== undefined && item.focus !== filters.focus) return false;
         if (filters.urgent !== undefined && item.urgent !== filters.urgent) return false;
         if (filters.workContextId && !item.workContextIds?.includes(filters.workContextId)) return false;
         return true;
     });
+}
+
+/**
+ * The rank a new item of this user is minted with: strictly below the user's lowest existing key,
+ * so it sorts to the top of its date section (see `StoredItem.rank`). Scans the user's rows —
+ * hundreds at most, no IDB index needed. Mirrors `topRankForUser` in `api-server/src/lib/topRankForUser.ts`.
+ */
+export async function topRankForUser(db: IDBPDatabase<MyDB>, userId: string): Promise<string> {
+    // A malformed stored key (the server refuses them now, but a row may predate that) is skipped so it cannot break every later mint.
+    const ranks = (await getItemsByUser(db, userId)).flatMap((item) => (item.rank !== undefined && isValidRank(item.rank) ? [item.rank] : []));
+    const lowest = ranks.reduce<string | undefined>((min, rank) => (min === undefined || compareRank(rank, min) < 0 ? rank : min), undefined);
+    return topRank(lowest);
 }
 
 export async function getUpcomingCalendarItems(db: IDBPDatabase<MyDB>, userId: string): Promise<StoredItem[]> {

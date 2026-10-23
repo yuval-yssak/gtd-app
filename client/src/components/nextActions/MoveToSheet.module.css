@@ -1,0 +1,20 @@
+.sheet {
+    padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom));
+    border-top-left-radius: 0.75rem;
+    border-top-right-radius: 0.75rem;
+    max-height: 70vh;
+}
+
+.title {
+    margin-bottom: 0.75rem;
+}
+
+.actions {
+    gap: 0.5rem;
+}
+
+/* The same-section picker scrolls inside the sheet so the Back button stays reachable. */
+.targets {
+    max-height: 40vh;
+    overflow-y: auto;
+}

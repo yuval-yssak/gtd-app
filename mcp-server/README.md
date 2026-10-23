@@ -229,7 +229,7 @@ To clear an optional field that is already set, pass `null` for it — e.g. `gtd
 | Status | Allowed status-specific fields |
 |---|---|
 | `inbox` | (none — title/notes only) |
-| `nextAction` | `workContextIds`, `peopleIds`, `energy`, `time`, `focus`, `urgent`, `expectedBy`, `ignoreBefore` |
+| `nextAction` | `workContextIds`, `peopleIds`, `energy`, `time`, `urgent`, `expectedBy`, `ignoreBefore` (`focus` is deprecated: accepted and ignored; the priority order is read back as `rank`) |
 | `calendar` | `timeStart`, `timeEnd`, `calendarEventId`, `calendarIntegrationId`, `workContextIds`, `peopleIds` |
 | `waitingFor` | `waitingForPersonId`, `peopleIds`, `expectedBy`, `ignoreBefore` |
 | `somedayMaybe` | (none) |

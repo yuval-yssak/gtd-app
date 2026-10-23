@@ -73,7 +73,6 @@ export function itemToNextActionForm(item: StoredItem): NextActionFormState {
         energy: item.energy ?? '',
         time: item.time?.toString() ?? '',
         urgent: item.urgent ?? false,
-        focus: item.focus ?? false,
         expectedBy: item.expectedBy ?? '',
     };
 }
@@ -119,7 +118,6 @@ const NA_LABELS: Record<keyof NextActionFormState, string> = {
     energy: 'Energy',
     time: 'Time estimate',
     urgent: 'Urgent',
-    focus: 'Focus',
     expectedBy: 'Expected by',
 };
 const CAL_LABELS: Record<keyof CalendarFormState, string> = {

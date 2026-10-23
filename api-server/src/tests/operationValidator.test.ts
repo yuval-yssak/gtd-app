@@ -347,7 +347,6 @@ describe('assertStatusFieldRules — exhaustive status × field matrix', () => {
         'waitingForPersonId',
         'energy',
         'time',
-        'focus',
         'urgent',
         'expectedBy',
         'ignoreBefore',
@@ -362,7 +361,7 @@ describe('assertStatusFieldRules — exhaustive status × field matrix', () => {
     const ALL_FIELDS_SET: ReadonlySet<(typeof ALL_FIELDS)[number]> = new Set(ALL_FIELDS);
     const ALLOWED: Record<ItemInterface['status'], ReadonlySet<(typeof ALL_FIELDS)[number]>> = {
         inbox: new Set(),
-        nextAction: new Set(['workContextIds', 'peopleIds', 'energy', 'time', 'focus', 'urgent', 'expectedBy', 'ignoreBefore']),
+        nextAction: new Set(['workContextIds', 'peopleIds', 'energy', 'time', 'urgent', 'expectedBy', 'ignoreBefore']),
         calendar: new Set(['timeStart', 'timeEnd', 'calendarEventId', 'calendarIntegrationId', 'workContextIds', 'peopleIds']),
         waitingFor: new Set(['waitingForPersonId', 'peopleIds', 'expectedBy', 'ignoreBefore']),
         somedayMaybe: new Set(['expectedBy', 'ignoreBefore']),
@@ -383,7 +382,6 @@ describe('assertStatusFieldRules — exhaustive status × field matrix', () => {
                 return 'low';
             case 'time':
                 return 30;
-            case 'focus':
             case 'urgent':
                 return true;
             case 'expectedBy':

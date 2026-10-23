@@ -10,13 +10,18 @@ import {
     clarifyToTrash,
     clarifyToWaitingFor,
     collectItem,
+    nonIncreasingRun,
     recordRoutineInstanceModification,
     removeItem,
+    reorderItem,
     updateItem,
 } from '../db/itemMutations';
 import { generateCalendarItemsToHorizon } from '../db/routineItemHelpers';
 import { createRoutine } from '../db/routineMutations';
 import { waitForPendingFlush } from '../db/syncHelpers';
+import { compareNextActions } from '../lib/compareNextActions';
+import * as itemRank from '../lib/itemRank';
+import { compareRank, isStrictlyIncreasing } from '../lib/itemRank';
 import { getGhostSnapshots, resetGhostStore } from '../lib/listGhosts';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { openTestDB } from './openTestDB';
@@ -64,9 +69,31 @@ describe('collectItem', () => {
         expect(ops[0]?.entityType).toBe('item');
         expect(ops[0]?.entityId).toBe(item._id);
     });
+
+    it('mints each new item a rank above the previous one (the origin first)', async () => {
+        const first = await collectItem(db, USER_ID, { title: 'first' });
+        const second = await collectItem(db, USER_ID, { title: 'second' });
+        expect(first.rank).toBe('a0');
+        expect(second.rank).toBeDefined();
+        expect(compareRank(second.rank ?? '', first.rank ?? '')).toBe(-1);
+    });
 });
 
 describe('clarifyToNextAction', () => {
+    it('mints a FRESH rank when an inbox capture is clarified, keeps it on other transitions, and mints for an unranked item', async () => {
+        const ranked = await collectItem(db, USER_ID, { title: 'ranked' });
+        const fresh = await clarifyToNextAction(db, ranked, {});
+        expect(fresh.rank).toBeDefined();
+        expect(compareRank(fresh.rank ?? '', ranked.rank ?? '')).toBe(-1);
+        const kept = await clarifyToNextAction(db, { ...fresh, status: 'somedayMaybe' }, {});
+        expect(kept.rank).toBe(fresh.rank);
+        const { rank: _r, ...legacy } = await collectItem(db, USER_ID, { title: 'legacy' });
+        await db.put('items', legacy);
+        const minted = await clarifyToNextAction(db, legacy, {});
+        expect(minted.rank).toBeDefined();
+        expect(compareRank(minted.rank ?? '', ranked.rank ?? '')).toBe(-1);
+    });
+
     it('updates status, merges meta, strips calendar/waitingFor fields, queues update op', async () => {
         const item = await collectItem(db, USER_ID, { title: 'Process inbox' });
         // Use a known past updatedTs so we can detect that clarify refreshed it,
@@ -781,6 +808,244 @@ describe('calendar routine — clarifyToTrash', () => {
     });
 });
 
+describe('reorderItem / ensureRunRanked', () => {
+    async function seedSection(ranks: Array<string | undefined>, overrides: Partial<StoredItem>[] = []): Promise<StoredItem[]> {
+        const items = await Promise.all(
+            ranks.map(async (rank, idx) => {
+                const item: StoredItem = {
+                    _id: `row-${idx}`,
+                    userId: USER_ID,
+                    status: 'nextAction',
+                    title: `row ${idx}`,
+                    createdTs: '2026-01-01T00:00:00.000Z',
+                    updatedTs: '2026-01-01T00:00:00.000Z',
+                    ...(rank === undefined ? {} : { rank }),
+                    ...(overrides[idx] ?? {}),
+                };
+                await db.put('items', item);
+                return item;
+            }),
+        );
+        await db.clear('syncOperations');
+        return items;
+    }
+
+    async function storedRank(id: string): Promise<string> {
+        const row = await db.get('items', id);
+        if (row?.rank === undefined) throw new Error(`expected a rank on ${id}`);
+        return row.rank;
+    }
+
+    function four(items: StoredItem[]): [StoredItem, StoredItem, StoredItem, StoredItem] {
+        const [a, b, c, d] = items;
+        if (!a || !b || !c || !d) throw new Error('expected four rows');
+        return [a, b, c, d];
+    }
+
+    it('happy path: writes ONE row with a key between its neighbours and queues ONE update op', async () => {
+        const [a, b, c, d] = four(await seedSection(['a0', 'a1', 'a2', 'a3']));
+        const moved = await reorderItem(db, { sectionItems: [a, b, c, d], itemId: d._id, aboveId: a._id, belowId: b._id });
+        if (!moved) throw new Error('expected a move');
+        expect(compareRank('a0', moved.rank ?? '') < 0 && compareRank(moved.rank ?? '', 'a1') < 0).toBe(true);
+        const ops = await db.getAll('syncOperations');
+        expect(ops).toHaveLength(1);
+        const [op] = ops;
+        if (!op) throw new Error('expected one op');
+        expect(op.entityId).toBe('row-3');
+        expect(op.opType).toBe('update');
+        // Untouched neighbours keep their rows exactly.
+        expect(await db.get('items', 'row-0')).toEqual(a);
+        expect(await db.get('items', 'row-1')).toEqual(b);
+        expect(moved.expectedBy).toBeUndefined();
+    });
+
+    it('a drop at the top / bottom of the section uses an open end', async () => {
+        const items = await seedSection(['a0', 'a1', 'a2']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        const top = await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: undefined, belowId: a._id });
+        if (!top) throw new Error('expected a move');
+        expect(compareRank(top.rank ?? '', 'a0')).toBe(-1);
+        const bottom = await reorderItem(db, { sectionItems: [top, a, b], itemId: a._id, aboveId: b._id, belowId: undefined });
+        if (!bottom) throw new Error('expected a move');
+        expect(compareRank(bottom.rank ?? '', 'a1')).toBe(1);
+    });
+
+    it('is a no-op (null, no write) when the row already sits in the requested slot', async () => {
+        const items = await seedSection(['a0', 'a1', 'a2']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        expect(await reorderItem(db, { sectionItems: items, itemId: b._id, aboveId: a._id, belowId: c._id })).toBeNull();
+        expect(await reorderItem(db, { sectionItems: items, itemId: a._id, aboveId: undefined, belowId: b._id })).toBeNull();
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+    });
+
+    it('equal neighbours (concurrent mints) → only that run is re-keyed, then the move lands between them', async () => {
+        const items = await seedSection(['Zz', 'a0', 'a0', 'a1', 'a2']);
+        const [z, a, b, c, d] = items;
+        if (!z || !a || !b || !c || !d) throw new Error('expected five rows');
+        const spy = vi.spyOn(itemRank, 'rankBetween');
+        const moved = await reorderItem(db, { sectionItems: items, itemId: d._id, aboveId: a._id, belowId: b._id });
+        if (!moved) throw new Error('expected a move');
+        expect(spy).toHaveBeenCalled();
+        for (const [above, below] of spy.mock.calls) {
+            if (above && below) {
+                expect(compareRank(above, below)).toBe(-1);
+            }
+        }
+        spy.mockRestore();
+        const ranks = await Promise.all(['row-0', 'row-1', 'row-4', 'row-2', 'row-3'].map(storedRank));
+        expect(isStrictlyIncreasing(ranks)).toBe(true);
+        // Only ONE of the equal pair (row-1, re-keyed between Zz and a0) and the moved row were written —
+        // row-2's key already fits, and the ordered rows around the run are untouched.
+        const written = (await db.getAll('syncOperations')).map((op) => op.entityId).sort();
+        expect(written).toEqual(['row-1', 'row-4']);
+        expect(await db.get('items', 'row-0')).toEqual(z);
+        expect(await db.get('items', 'row-2')).toEqual(b);
+        expect(await db.get('items', 'row-3')).toEqual(c);
+    });
+
+    // No "inverted neighbours" case: the visible rows come from the comparator, which orders ranked
+    // rows by key, so `above` can never carry a larger key than `below` — only EQUAL keys (two mints
+    // that collided) and unranked rows reach the re-key path.
+
+    it('an unranked neighbour (pre-rollout row) → re-keyed first', async () => {
+        const items = await seedSection([undefined, 'a0', 'a1']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        const moved = await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: a._id, belowId: b._id });
+        if (!moved) throw new Error('expected a move');
+        expect(isStrictlyIncreasing([await storedRank('row-0'), moved.rank ?? '', await storedRank('row-1')])).toBe(true);
+        // Only the unranked row is re-keyed (between the open end and a0) — plus the move itself.
+        const written = (await db.getAll('syncOperations')).map((op) => op.entityId).sort();
+        expect(written).toEqual(['row-0', 'row-2']);
+    });
+
+    it('re-keys the FULL day section: a hidden (filtered-out) row keeps its place relative to the visible ones', async () => {
+        // Display order of the whole section: hidden(unranked, first) → a(a0) → b(a0, equal) → c(a1).
+        const items = await seedSection([undefined, 'a0', 'a0', 'a1'], [{ energy: 'high' }, { energy: 'low' }, { energy: 'low' }, { energy: 'low' }]);
+        const [hidden, a, b, c] = four(items);
+        // The page is filtered to low energy: only a, b, c are visible.
+        const moved = await reorderItem(db, { sectionItems: [a, b, c], itemId: c._id, aboveId: a._id, belowId: b._id });
+        if (!moved) throw new Error('expected a move');
+        const all = (await db.getAll('items')).sort(compareNextActions);
+        expect(all.map((row) => row._id)).toEqual([hidden._id, a._id, c._id, b._id]);
+    });
+
+    it('re-keys across an account whose rows in the day are ALL filtered out (ownerIds), keeping its row in place', async () => {
+        // Display order: A1(a0) · A2(a0, equal) · B(a0V, hidden — every row of account B is filtered out) · A3(a1).
+        const items = await seedSection(['a0', 'a0', 'a0V', 'a1'], [{ userId: 'user-A' }, { userId: 'user-A' }, { userId: 'user-B' }, { userId: 'user-A' }]);
+        const [a1, a2, b, a3] = four(items);
+        const moved = await reorderItem(db, { sectionItems: [a1, a2, a3], itemId: a3._id, aboveId: a1._id, belowId: a2._id, ownerIds: ['user-A', 'user-B'] });
+        if (!moved) throw new Error('expected a move');
+        const all = (await db.getAll('items')).sort(compareNextActions);
+        expect(all.map((row) => row._id)).toEqual([a1._id, a3._id, a2._id, b._id]);
+        expect(await db.get('items', b._id)).toEqual(b);
+    });
+
+    it("writes the moved row AS STORED, never the page's copy (a concurrent edit survives the reorder)", async () => {
+        const items = await seedSection(['a0', 'a1', 'a2']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        // Another tab / a pull changed the row after the page rendered it.
+        await db.put('items', { ...c, notes: 'edited elsewhere', updatedTs: '2026-02-01T00:00:00.000Z' });
+        const moved = await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: a._id, belowId: b._id });
+        if (!moved) throw new Error('expected a move');
+        expect(moved.notes).toBe('edited elsewhere');
+        expect((await db.get('items', c._id))?.notes).toBe('edited elsewhere');
+    });
+
+    it('returns null without writing when the moved row is no longer a live nextAction row', async () => {
+        const items = await seedSection(['a0', 'a1', 'a2']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        await db.put('items', { ...c, status: 'done' });
+        expect(await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: a._id, belowId: b._id })).toBeNull();
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+    });
+
+    it('returns null without writing when the row was re-dated elsewhere mid-gesture (its neighbours belong to another day)', async () => {
+        const items = await seedSection(['a0', 'a1', 'a2']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        await db.put('items', { ...c, expectedBy: '2026-12-01' });
+        expect(await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: a._id, belowId: b._id })).toBeNull();
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+        expect((await db.get('items', c._id))?.rank).toBe('a2');
+    });
+
+    it('returns null without writing when BOTH named neighbours vanished (the slot no longer exists)', async () => {
+        const items = await seedSection(['a0', 'a1', 'a2']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        await db.delete('items', a._id);
+        await db.delete('items', b._id);
+        expect(await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: a._id, belowId: b._id })).toBeNull();
+        expect(await db.getAll('syncOperations')).toHaveLength(0);
+    });
+
+    it('a neighbour that vanished mid-gesture (completed elsewhere) is treated as a section edge', async () => {
+        const items = await seedSection(['a0', 'a1', 'a2']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        await db.delete('items', a._id);
+        const moved = await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: a._id, belowId: b._id });
+        if (!moved) throw new Error('expected a move');
+        expect(compareRank(moved.rank ?? '', 'a1')).toBe(-1);
+    });
+
+    it('a merged two-account section: distinct keys → one op; equal keys across accounts → only the run is re-keyed', async () => {
+        const items = await seedSection(['a0', 'a0', 'a1', 'a1'], [{ userId: 'user-1' }, { userId: 'user-2' }, { userId: 'user-1' }, { userId: 'user-2' }]);
+        const [a, b, c, d] = four(items);
+        // c lands between a and b: that pair ties, so a (re-keyed below b) + the move are written; b and d stay.
+        const moved = await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: a._id, belowId: b._id });
+        if (!moved) throw new Error('expected a move');
+        expect(moved.userId).toBe('user-1');
+        const createOps = await db.getAll('syncOperations');
+        expect(createOps.map((op) => op.entityId).sort()).toEqual(['row-0', 'row-2']);
+        expect(createOps.every((op) => op.userId === 'user-1')).toBe(true);
+        expect(await db.get('items', b._id)).toEqual(b);
+        await db.clear('syncOperations');
+        // Now every key is distinct: moving d to the top is one op.
+        const current = (await db.getAll('items')).sort((x, y) => compareRank(x.rank ?? '', y.rank ?? ''));
+        const top = await reorderItem(db, { sectionItems: current, itemId: d._id, aboveId: undefined, belowId: current[0]?._id });
+        if (!top) throw new Error('expected a move');
+        const topOps = await db.getAll('syncOperations');
+        expect(topOps).toHaveLength(1);
+    });
+
+    it('a minted key that grows too long triggers a section rebalance with the item in its new slot', async () => {
+        const longA = `a0${'V'.repeat(40)}`;
+        const longB = `a0${'V'.repeat(40)}G`;
+        const items = await seedSection([longA, longB, 'a1']);
+        const [a, b, c] = items;
+        if (!a || !b || !c) throw new Error('expected three rows');
+        const moved = await reorderItem(db, { sectionItems: items, itemId: c._id, aboveId: a._id, belowId: b._id });
+        if (!moved) throw new Error('expected a move');
+        const ranks = await Promise.all(['row-0', 'row-1'].map(storedRank));
+        expect([...ranks, moved.rank ?? ''].every((rank) => rank.length <= 40)).toBe(true);
+        expect(isStrictlyIncreasing([ranks[0] ?? '', moved.rank ?? '', ranks[1] ?? ''])).toBe(true);
+    });
+
+    it('nonIncreasingRun grows over unranked / non-increasing boundaries, then trims edge rows whose keys already fit', () => {
+        const row = (id: string, rank?: string): StoredItem => ({
+            _id: id,
+            userId: USER_ID,
+            status: 'nextAction',
+            title: id,
+            createdTs: '',
+            updatedTs: '',
+            ...(rank ? { rank } : {}),
+        });
+        const rows = [row('a', 'Zz'), row('b', 'a0'), row('c', 'a0'), row('d', 'a1'), row('e'), row('f', 'a3')];
+        // The equal pair (b, c): only b needs a key between Zz and c's a0.
+        expect(nonIncreasingRun(rows, 1, 2)).toEqual({ lo: 1, hi: 1 });
+        // Around d: the unranked e is the only row that needs a key (between a1 and a3).
+        expect(nonIncreasingRun(rows, 3, 3)).toEqual({ lo: 4, hi: 4 });
+        expect(nonIncreasingRun(rows, 0, 0)).toEqual({ lo: 0, hi: 0 });
+    });
+});
+
 describe('updateItem', () => {
     it('refreshes updatedTs and queues update op', async () => {
         const item = await collectItem(db, USER_ID, { title: 'Original title' });
@@ -830,7 +1095,7 @@ describe('clarifyToInbox', () => {
             energy: 'high' as const,
             time: 30,
             urgent: true,
-            focus: true,
+            rank: 'a0V',
             expectedBy: '2026-01-01',
             ignoreBefore: '2025-06-01',
             timeStart: '2025-07-01T09:00:00Z',
@@ -851,7 +1116,8 @@ describe('clarifyToInbox', () => {
         expect((back as { energy?: string }).energy).toBeUndefined();
         expect(back.time).toBeUndefined();
         expect(back.urgent).toBeUndefined();
-        expect(back.focus).toBeUndefined();
+        // `rank` is universal — it survives every status transition.
+        expect(back.rank).toBe('a0V');
         expect(back.expectedBy).toBeUndefined();
         expect(back.ignoreBefore).toBeUndefined();
         expect(back.timeStart).toBeUndefined();
@@ -885,7 +1151,7 @@ describe('clarifyToSomedayMaybe', () => {
             energy: 'medium' as const,
             time: 30,
             urgent: true,
-            focus: true,
+            rank: 'a0V',
             expectedBy: '2026-01-01',
             ignoreBefore: '2025-06-01',
             timeStart: '2025-07-01T09:00:00Z',
@@ -907,7 +1173,7 @@ describe('clarifyToSomedayMaybe', () => {
         expect((sm as { energy?: string }).energy).toBeUndefined();
         expect(sm.time).toBeUndefined();
         expect(sm.urgent).toBeUndefined();
-        expect(sm.focus).toBeUndefined();
+        expect(sm.rank).toBe('a0V');
         expect(sm.expectedBy).toBeUndefined();
         expect(sm.ignoreBefore).toBeUndefined();
         expect(sm.timeStart).toBeUndefined();

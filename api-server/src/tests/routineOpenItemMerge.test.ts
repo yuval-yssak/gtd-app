@@ -109,12 +109,11 @@ describe('mergeRoutineEditIntoOpenItem', () => {
         expect(merged?.notes).toBe('check soil first');
     });
 
-    it('adopts focus/urgent toggles on a clean item', () => {
-        const previous = makeRoutine('Water plants', { focus: false, urgent: false });
-        const next = makeRoutine('Water plants', { focus: true, urgent: true });
+    it('adopts the urgent toggle on a clean item', () => {
+        const previous = makeRoutine('Water plants', { urgent: false });
+        const next = makeRoutine('Water plants', { urgent: true });
         const item = makeGeneratedItem(previous);
         const merged = mergeRoutineEditIntoOpenItem(item, { previous, next, now: NOW });
-        expect(merged?.focus).toBe(true);
         expect(merged?.urgent).toBe(true);
     });
 
@@ -126,13 +125,12 @@ describe('mergeRoutineEditIntoOpenItem', () => {
         expect(merged?.time).toBe(0);
     });
 
-    it('deletes focus/urgent when the new template omits them (boolean presence rule)', () => {
-        const previous = makeRoutine('Water plants', { focus: true, urgent: true });
+    it('deletes urgent when the new template omits it (boolean presence rule)', () => {
+        const previous = makeRoutine('Water plants', { urgent: true });
         const next = makeRoutine('Water plants', {});
         const item = makeGeneratedItem(previous);
         const merged = mergeRoutineEditIntoOpenItem(item, { previous, next, now: NOW });
         expect(merged).not.toBeNull();
-        expect(merged && 'focus' in merged).toBe(false);
         expect(merged && 'urgent' in merged).toBe(false);
     });
 

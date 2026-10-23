@@ -104,6 +104,34 @@ describe('POST /v1/operations/batch', () => {
         expect(logged).toHaveLength(3);
     });
 
+    it('rank: not minted on a batch create, round-trips on a batch update, and a malformed key is rejected', async () => {
+        const userId = await login();
+        const token = await tokenWith(userId, ['items.capture', 'items.write']);
+        const post = (ops: unknown[]) =>
+            app.fetch(
+                new Request('http://localhost:4000/v1/operations/batch', {
+                    method: 'POST',
+                    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ops }),
+                }),
+            );
+        const created = await post([{ entityType: 'item', opType: 'create', entityId: 'it-rank', snapshot: itemSnapshot(userId, 'it-rank', 'nextAction') }]);
+        expect(created.status).toBe(200);
+        expect(await itemsDAO.findByOwnerAndId('it-rank', userId)).not.toHaveProperty('rank');
+
+        const updated = await post([
+            { entityType: 'item', opType: 'update', entityId: 'it-rank', snapshot: { ...itemSnapshot(userId, 'it-rank', 'nextAction'), rank: 'a0V' } },
+        ]);
+        expect(updated.status).toBe(200);
+        expect((await itemsDAO.findByOwnerAndId('it-rank', userId))?.rank).toBe('a0V');
+
+        const malformed = await post([
+            { entityType: 'item', opType: 'update', entityId: 'it-rank', snapshot: { ...itemSnapshot(userId, 'it-rank', 'nextAction'), rank: 'A' } },
+        ]);
+        expect(malformed.status).toBe(400);
+        expect((await itemsDAO.findByOwnerAndId('it-rank', userId))?.rank).toBe('a0V');
+    });
+
     it('rejects the whole batch with 403 when any op needs a scope the token lacks (no partial writes)', async () => {
         const userId = await login();
         // capture + workContexts write — but missing people.write

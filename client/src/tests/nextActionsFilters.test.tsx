@@ -2,7 +2,7 @@ import dayjs from 'dayjs';
 import { isValidElement, type ReactElement } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { __resetDayClockForTests, subscribeToDayChange } from '../lib/dayClock';
-import { FocusIndicator, matchesFilters, UnclarifiedWarning } from '../routes/_authenticated/next-actions';
+import { matchesFilters, UnclarifiedWarning } from '../routes/_authenticated/next-actions';
 import type { StoredItem } from '../types/MyDB';
 
 const item = (over: Partial<StoredItem>): StoredItem =>
@@ -86,15 +86,6 @@ const tooltipChild = (el: ReactElement) => {
     const { title, children } = el.props as { title?: string; children?: unknown };
     return { title, child: isValidElement(children) ? children : undefined };
 };
-
-describe('FocusIndicator', () => {
-    it('wraps a primary-colored icon with an "In focus" tooltip and a camelCase testid', () => {
-        const { title, child } = tooltipChild(FocusIndicator());
-        expect(title).toBe('In focus');
-        if (!child) throw new Error('expected an icon child inside the Tooltip');
-        expect(child.props).toMatchObject({ fontSize: 'small', color: 'primary', 'data-testid': 'focusIndicator' });
-    });
-});
 
 describe('UnclarifiedWarning', () => {
     it('lists only the provided missing fields in the tooltip', () => {

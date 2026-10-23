@@ -62,7 +62,6 @@ describe('itemToRoutineForm', () => {
                 peopleIds: ['p-1'],
                 energy: 'high',
                 time: 30,
-                focus: true,
                 urgent: true,
             }),
         );
@@ -70,7 +69,6 @@ describe('itemToRoutineForm', () => {
         expect(form.peopleIds).toEqual(['p-1']);
         expect(form.energy).toBe('high');
         expect(form.time).toBe('30');
-        expect(form.focus).toBe(true);
         expect(form.urgent).toBe(true);
         // Title/notes stay empty — the item editor owns them.
         expect(form.title).toBe('');

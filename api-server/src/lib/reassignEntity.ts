@@ -49,7 +49,6 @@ export interface ReassignItemEditPatch {
     /** Time estimate in minutes — empty string '' clears a previously-set value. */
     time?: number | '';
     urgent?: boolean;
-    focus?: boolean;
     expectedBy?: string;
     ignoreBefore?: string;
     waitingForPersonId?: string;
@@ -353,9 +352,6 @@ export function applyItemEditPatch(item: ItemInterface, patch: ReassignItemEditP
     }
     if (typeof patch.urgent === 'boolean') {
         next.urgent = patch.urgent;
-    }
-    if (typeof patch.focus === 'boolean') {
-        next.focus = patch.focus;
     }
     // Toggling off clears the flag entirely (matches the rest-strip semantics used elsewhere); the
     // accompanying timeStart/timeEnd in the same patch convert from YYYY-MM-DD ↔ ISO datetime.

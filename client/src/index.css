@@ -74,3 +74,11 @@ body {
     text-align: center;
     font-family: Roboto, sans-serif;
 }
+
+/* Set by useNextActionsDrag for the lifetime of a pointer drag: no text selection while the
+   pointer sweeps over rows, and no scroll chaining past the page while auto-scrolling. */
+body.nextActionsDragging {
+    user-select: none;
+    -webkit-user-select: none;
+    overscroll-behavior-y: contain;
+}

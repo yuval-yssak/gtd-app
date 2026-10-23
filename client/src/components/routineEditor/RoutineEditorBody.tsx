@@ -85,7 +85,6 @@ const ROUTINE_FIELD_LABELS: Record<keyof FormState, string> = {
     peopleIds: 'People',
     energy: 'Energy',
     time: 'Time estimate',
-    focus: 'Focus',
     urgent: 'Urgent',
     notes: 'Notes',
     allDay: 'All-day',
@@ -110,7 +109,7 @@ export function buildRoutineEditPatch(args: {
     title: string;
     rrule: string;
     routineType: 'nextAction' | 'calendar';
-    template: { workContextIds?: string[]; peopleIds?: string[]; energy?: EnergyLevel; time?: number; focus?: boolean; urgent?: boolean; notes?: string };
+    template: { workContextIds?: string[]; peopleIds?: string[]; energy?: EnergyLevel; time?: number; urgent?: boolean; notes?: string };
     /** All-day routines carry `{ allDay: true }`; timed routines carry `{ timeOfDay, duration }`. */
     calendarItemTemplate?: { allDay: true } | { timeOfDay: string; duration: number };
     startDate?: string;

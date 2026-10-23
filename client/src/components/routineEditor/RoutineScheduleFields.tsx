@@ -441,10 +441,6 @@ function TemplateFields({ form, workContexts, people, usage, onPatch, onToggleWo
                     control={<Checkbox size="small" checked={form.urgent} onChange={(e) => onPatch({ urgent: e.target.checked })} />}
                     label={<Typography variant="body2">Urgent</Typography>}
                 />
-                <FormControlLabel
-                    control={<Checkbox size="small" checked={form.focus} onChange={(e) => onPatch({ focus: e.target.checked })} />}
-                    label={<Typography variant="body2">In focus</Typography>}
-                />
             </Stack>
         </Stack>
     );

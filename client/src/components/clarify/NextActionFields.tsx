@@ -192,10 +192,6 @@ export function NextActionFields({ value, onChange, workContexts, people, usage 
                     control={<Checkbox size="small" checked={value.urgent} onChange={(e) => onChange({ urgent: e.target.checked })} />}
                     label={<Typography variant="body2">Urgent</Typography>}
                 />
-                <FormControlLabel
-                    control={<Checkbox size="small" checked={value.focus} onChange={(e) => onChange({ focus: e.target.checked })} />}
-                    label={<Typography variant="body2">In focus</Typography>}
-                />
             </Stack>
             <DateField label="Expected by" value={value.expectedBy} onChange={(expectedBy) => onChange({ expectedBy })} />
         </Stack>

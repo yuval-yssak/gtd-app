@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidRank } from '../../lib/itemRank.js';
 import type { ItemInterface } from '../../types/entities.js';
 import {
     energySchema,
@@ -55,8 +56,19 @@ export const ItemSnapshotSchema = z
         routineId: nonEmptyString.optional(),
         energy: energySchema.optional(),
         time: z.number().nonnegative().optional(),
+        // DEPRECATED, accepted and ignored. `focus` was removed from `ItemInterface` (replaced by the
+        // `rank` priority order) but old clients still send it, and a `.strict()` schema narrower
+        // than what a deployed client pushes 400s the whole /sync/push batch and jams its queue —
+        // the same reason `briefStale` is accepted. `stampSnapshot` strips it so neither the row
+        // nor the op log carries it.
         focus: z.boolean().optional(),
         urgent: z.boolean().optional(),
+        // Priority order inside a Next Actions day section (`lib/itemRank.ts`). Universal, not in
+        // the status matrix: it rides along through every status so a done→revive or
+        // calendar→nextAction transition keeps its place. Refined to a well-formed key: a malformed
+        // one planted through /v1/operations/batch or /sync/push would otherwise make every later
+        // mint for that user throw (first-party clients only ever send library-minted keys).
+        rank: nonEmptyString.refine(isValidRank, 'rank must be a valid fractional-indexing key').optional(),
         externalId: nonEmptyString.optional(),
         contentHash: nonEmptyString.optional(),
         // Server-owned brief-sweep marker (`lib/brief/briefStaleMarker.ts`). Accepted here ONLY
@@ -134,7 +146,6 @@ const STATUS_SPECIFIC_FIELDS = [
     'waitingForPersonId',
     'energy',
     'time',
-    'focus',
     'urgent',
     'expectedBy',
     'ignoreBefore',
@@ -157,7 +168,7 @@ const ALL_STATUS_SPECIFIC: ReadonlySet<StatusSpecificField> = new Set(STATUS_SPE
 
 export const STATUS_FIELD_MATRIX: Record<ItemInterface['status'], ReadonlySet<StatusSpecificField>> = {
     inbox: new Set(),
-    nextAction: new Set(['workContextIds', 'peopleIds', 'energy', 'time', 'focus', 'urgent', 'expectedBy', 'ignoreBefore']),
+    nextAction: new Set(['workContextIds', 'peopleIds', 'energy', 'time', 'urgent', 'expectedBy', 'ignoreBefore']),
     calendar: new Set(['timeStart', 'timeEnd', 'allDay', 'calendarEventId', 'calendarIntegrationId', 'calendarInstanceEventId', 'workContextIds', 'peopleIds']),
     waitingFor: new Set(['waitingForPersonId', 'peopleIds', 'expectedBy', 'ignoreBefore']),
     somedayMaybe: new Set(['expectedBy', 'ignoreBefore']),

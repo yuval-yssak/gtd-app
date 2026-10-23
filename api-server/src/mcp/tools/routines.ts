@@ -17,7 +17,8 @@ const routineTemplateSchema = z
         peopleIds: z.array(z.string()).optional(),
         energy: z.enum(['low', 'medium', 'high']).optional(),
         time: z.number().nonnegative().optional(),
-        focus: z.boolean().optional(),
+        // Deprecated and ignored (see gtd_update_item); accepted so older prompts keep working.
+        focus: z.boolean().optional().describe('Deprecated — accepted and ignored.'),
         urgent: z.boolean().optional(),
         notes: notesSchema,
     })

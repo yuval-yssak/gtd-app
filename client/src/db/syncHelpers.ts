@@ -25,6 +25,7 @@ import { hasWebLocks, SYNC_APPLY_LOCK, SYNC_FLUSH_LOCK, withCrossContextLock } f
 import { getOrCreateDeviceId, getSyncCursor, setSyncCursor } from './deviceId';
 import { dispatchOpFlush } from './dispatchOpFlush';
 import { bulkPutItems } from './itemHelpers';
+import { mergeServerOwnedRank } from './rankMerge';
 
 interface BaseSyncOpParams {
     entityType: EntityType;
@@ -715,15 +716,16 @@ async function applyEntityOp<Name extends EntityStoreName>(db: IDBPDatabase<MyDB
     const merged = mergeServerOwnedFieldsIntoNewerRow(storeName, existing, incoming);
     if (merged) {
         await tx.store.put(merged);
-        console.log(`[debug-gcal-sync][client] applyEntityOp merged server-owned calendar fields into newer local row | id=${op.entityId}`);
+        console.log(`[debug-gcal-sync][client] applyEntityOp merged server-owned fields (calendar link / rank) into newer local row | id=${op.entityId}`);
     }
     await tx.done;
 }
 
 /**
- * Store-dispatched wrapper around `mergeServerOwnedCalendarFields`: only the items store has
- * server-owned calendar fields today. The casts narrow the generic store value to `StoredItem`
- * once `storeName` has proven it — the same trust the caller places in the wire snapshot.
+ * Store-dispatched wrapper around the items store's field-level LWW exceptions — the server-owned
+ * calendar fields (`mergeServerOwnedCalendarFields`) and the priority `rank` (`mergeServerOwnedRank`).
+ * The casts narrow the generic store value to `StoredItem` once `storeName` has proven it — the
+ * same trust the caller places in the wire snapshot.
  */
 function mergeServerOwnedFieldsIntoNewerRow<Name extends EntityStoreName>(
     storeName: Name,
@@ -733,6 +735,8 @@ function mergeServerOwnedFieldsIntoNewerRow<Name extends EntityStoreName>(
     if (storeName !== 'items') {
         return null;
     }
-    const merged = mergeServerOwnedCalendarFields(existing as StoredItem, incoming as StoredItem);
-    return merged as MyDB[Name]['value'] | null;
+    const local = existing as StoredItem;
+    const withCalendar = mergeServerOwnedCalendarFields(local, incoming as StoredItem);
+    const withRank = mergeServerOwnedRank(withCalendar ?? local, incoming as StoredItem);
+    return (withRank ?? withCalendar) as MyDB[Name]['value'] | null;
 }

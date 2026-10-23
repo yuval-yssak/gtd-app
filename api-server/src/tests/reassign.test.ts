@@ -1448,7 +1448,7 @@ describe('POST /sync/reassign', () => {
             expect(moved?.notes).toBe('new notes');
         });
 
-        it('applies nextAction patch fields (workContextIds, peopleIds, energy, time, urgent, focus, expectedBy, ignoreBefore)', async () => {
+        it('applies nextAction patch fields (workContextIds, peopleIds, energy, time, urgent, expectedBy, ignoreBefore)', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
             const item = makeItem(alice.userId, { status: 'nextAction' });
@@ -1468,7 +1468,6 @@ describe('POST /sync/reassign', () => {
                     energy: 'high',
                     time: 30,
                     urgent: true,
-                    focus: true,
                     expectedBy: '2026-12-31',
                     ignoreBefore: '2026-12-01',
                 },
@@ -1482,7 +1481,6 @@ describe('POST /sync/reassign', () => {
                 energy: 'high',
                 time: 30,
                 urgent: true,
-                focus: true,
                 expectedBy: '2026-12-31',
                 ignoreBefore: '2026-12-01',
             });
@@ -1950,10 +1948,10 @@ describe('POST /sync/reassign', () => {
             expect(moved?.time).toBe(30);
         });
 
-        it('omitting urgent/focus in the patch leaves the prior boolean values untouched', async () => {
+        it('omitting urgent in the patch leaves the prior boolean value untouched, and the rank rides along on the move', async () => {
             const alice = await seedUserSession('alice@example.com');
             const bob = await seedUserSession('bob@example.com');
-            const item = makeItem(alice.userId, { status: 'nextAction', urgent: true, focus: true });
+            const item = makeItem(alice.userId, { status: 'nextAction', urgent: true, rank: 'a0V' });
             await itemsDAO.insertOne(item);
 
             const cookie = buildMultiSessionCookieHeader(alice, [alice, bob]);
@@ -1968,7 +1966,8 @@ describe('POST /sync/reassign', () => {
             expect(res.status).toBe(200);
             const moved = await itemsDAO.findByOwnerAndId(item._id!, bob.userId);
             expect(moved?.urgent).toBe(true);
-            expect(moved?.focus).toBe(true);
+            // `rank` is universal: the move spreads `{ ...item }`, so the priority key survives the owner change.
+            expect(moved?.rank).toBe('a0V');
         });
 
         it('urgent: false in the patch flips an urgent item to not-urgent', async () => {

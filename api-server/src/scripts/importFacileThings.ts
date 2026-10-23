@@ -37,6 +37,8 @@ import dayjs from 'dayjs';
 import { type BulkWriteResult, MongoBulkWriteError } from 'mongodb';
 import itemsDAO from '../dataAccess/itemsDAO.js';
 import operationsDAO from '../dataAccess/operationsDAO.js';
+import { rankAt, topRanks } from '../lib/itemRank.js';
+import { lowestRankForUser } from '../lib/topRankForUser.js';
 import { closeDataAccess, db, loadDataAccess } from '../loaders/mainLoader.js';
 import type { ItemInterface, ItemStatus, OperationInterface } from '../types/entities.js';
 
@@ -275,7 +277,7 @@ interface RunCounters {
     failed: number;
 }
 
-function buildItemDoc(plan: PlannedImport, userId: string, nowIso: string): ItemInterface & { _id: string } {
+function buildItemDoc(plan: PlannedImport, userId: string, nowIso: string, rank: string): ItemInterface & { _id: string } {
     const doc: ItemInterface & { _id: string } = {
         _id: generateId(32),
         user: userId,
@@ -284,6 +286,7 @@ function buildItemDoc(plan: PlannedImport, userId: string, nowIso: string): Item
         createdTs: nowIso,
         updatedTs: nowIso,
         externalId: plan.externalId,
+        rank,
     };
     if (plan.notes !== undefined) doc.notes = plan.notes;
     const e = plan.extras;
@@ -295,9 +298,10 @@ function buildItemDoc(plan: PlannedImport, userId: string, nowIso: string): Item
     return doc;
 }
 
-function buildItemUpsert(plan: PlannedImport, userId: string, nowIso: string) {
-    const doc = buildItemDoc(plan, userId, nowIso);
-    const { _id, createdTs, ...mutable } = doc;
+function buildItemUpsert(plan: PlannedImport, userId: string, nowIso: string, rank: string) {
+    const doc = buildItemDoc(plan, userId, nowIso, rank);
+    // `rank` is insert-only too: a re-run must not move rows the user has since reordered.
+    const { _id, createdTs, rank: insertRank, ...mutable } = doc;
     return {
         doc,
         op: {
@@ -306,7 +310,7 @@ function buildItemUpsert(plan: PlannedImport, userId: string, nowIso: string) {
                 // `_id` must go in `$setOnInsert` — Mongo rejects `$set` on `_id` for replaces
                 // with ImmutableField (66). `createdTs` also goes there so re-runs preserve
                 // the original import time instead of bumping it to the re-run's `nowIso`.
-                update: { $set: mutable as never, $setOnInsert: { _id, createdTs } as never },
+                update: { $set: mutable as never, $setOnInsert: { _id, createdTs, rank: insertRank } as never },
                 upsert: true,
             },
         },
@@ -327,6 +331,15 @@ function buildOpDoc(persisted: ItemInterface & { _id: string }, userId: string, 
 }
 
 type PreparedRow = { plan: PlannedImport; doc: ItemInterface & { _id: string }; op: ReturnType<typeof buildItemUpsert>['op'] };
+
+/**
+ * One fresh rank per planned row, above everything the user already has and in plan order (file
+ * order = the user's FacileThings order), minted ONCE for the whole run: minting per batch would
+ * put each later batch above the earlier ones. Exported for the unit test.
+ */
+export function mintImportRanks(lowestExisting: string | null, count: number): string[] {
+    return topRanks(lowestExisting, count);
+}
 
 async function runBatchBulkWrite(prepared: PreparedRow[], counters: RunCounters): Promise<BulkWriteResult> {
     try {
@@ -353,11 +366,11 @@ async function runBatchBulkWrite(prepared: PreparedRow[], counters: RunCounters)
     }
 }
 
-async function writeBatch(batch: PlannedImport[], userId: string, nowIso: string, counters: RunCounters) {
+async function writeBatch(batch: PlannedImport[], ranks: readonly string[], userId: string, nowIso: string, counters: RunCounters) {
     if (batch.length === 0) {
         return;
     }
-    const prepared = batch.map((plan) => ({ plan, ...buildItemUpsert(plan, userId, nowIso) }));
+    const prepared = batch.map((plan, i) => ({ plan, ...buildItemUpsert(plan, userId, nowIso, rankAt(ranks, i)) }));
     const bulkRes = await runBatchBulkWrite(prepared, counters);
     // `upsertedIds` is keyed by the index of the op in the input array.
     const upsertedIndexes = new Set(Object.keys(bulkRes.upsertedIds ?? {}).map(Number));
@@ -418,9 +431,10 @@ async function readReplacedRows(userId: string, replacedPlans: PlannedImport[]):
 
 async function importDirect(plans: PlannedImport[], userId: string, counters: RunCounters) {
     const nowIso = dayjs().toISOString();
+    const ranks = mintImportRanks(await lowestRankForUser(userId), plans.length);
     for (let start = 0; start < plans.length; start += BATCH_SIZE) {
         const batch = plans.slice(start, start + BATCH_SIZE);
-        await writeBatch(batch, userId, nowIso, counters);
+        await writeBatch(batch, ranks.slice(start, start + BATCH_SIZE), userId, nowIso, counters);
         console.log(`  upsert: ${Math.min(start + batch.length, plans.length)}/${plans.length}`);
     }
 }
@@ -472,7 +486,22 @@ async function run() {
     await closeDataAccess();
 }
 
-run().catch((err) => {
-    console.error(err);
-    process.exit(1);
-});
+// Only execute when invoked as a script (npx tsx …), not when a test imports `mintImportRanks`.
+// `import.meta.url` matching `process.argv[1]` identifies the entrypoint case under tsx/node ESM.
+const isDirectInvocation = (() => {
+    if (!process.argv[1]) {
+        return false;
+    }
+    try {
+        return import.meta.url === new URL(`file://${process.argv[1]}`).href;
+    } catch {
+        return false;
+    }
+})();
+
+if (isDirectInvocation) {
+    run().catch((err) => {
+        console.error(err);
+        process.exit(1);
+    });
+}

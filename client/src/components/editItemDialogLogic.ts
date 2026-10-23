@@ -92,7 +92,8 @@ export function normalizeTitleAndNotes(item: StoredItem, trimmedTitle: string, t
  * call site terse and makes it obvious which form is consumed.
  */
 export function applyNextActionForm(item: StoredItem, na: NextActionFormState): StoredItem {
-    const { workContextIds: _wc, peopleIds: _pi, energy: _e, time: _t, urgent: _u, focus: _f, expectedBy: _eb, ignoreBefore: _ib, ...rest } = item;
+    // `rank` deliberately stays in `rest`: it is universal and never stripped (StoredItem.rank).
+    const { workContextIds: _wc, peopleIds: _pi, energy: _e, time: _t, urgent: _u, expectedBy: _eb, ignoreBefore: _ib, ...rest } = item;
     return {
         ...rest,
         ...(na.workContextIds.length ? { workContextIds: na.workContextIds } : {}),
@@ -100,7 +101,6 @@ export function applyNextActionForm(item: StoredItem, na: NextActionFormState): 
         ...(na.energy ? { energy: na.energy as EnergyLevel } : {}),
         ...(na.time ? { time: Number(na.time) } : {}),
         ...(na.urgent ? { urgent: true } : {}),
-        ...(na.focus ? { focus: true } : {}),
         ...(na.expectedBy ? { expectedBy: na.expectedBy } : {}),
         ...(na.ignoreBefore ? { ignoreBefore: na.ignoreBefore } : {}),
     };
@@ -365,9 +365,6 @@ function addNextActionPatchFields(patch: ReassignItemEditPatch, item: StoredItem
     }
     if (na.urgent !== Boolean(item.urgent)) {
         patch.urgent = na.urgent;
-    }
-    if (na.focus !== Boolean(item.focus)) {
-        patch.focus = na.focus;
     }
     if (na.expectedBy !== (item.expectedBy ?? '')) {
         patch.expectedBy = na.expectedBy;

@@ -138,7 +138,7 @@ export async function maybePushToGCal(op: OperationInterface, buildProvider: Pro
  * The ops a push recorded on the server's behalf — today the link stamp after a Google create
  * (`stampItemCalendarLink` / the routine equivalent). The caller must fan them out to every
  * device, the originating one included: until it pulls the link, its next edit of the entity
- * ships a snapshot without it (see `hydrateCalendarLinkCarryForward` for the server-side guard).
+ * ships a snapshot without it (see `hydrateItemCarryForwards` for the server-side guard).
  */
 export function recordedOpsOf(outcome: PushOutcome | undefined): OperationInterface[] {
     return [outcome?.recordedOp, outcome?.followUpOp].filter((op): op is OperationInterface => op !== undefined);
@@ -752,7 +752,7 @@ export interface ItemCalendarLink {
  * Writes the Google link onto the item after a successful create and records the op other devices
  * learn it from. The server-stamped `updatedTs` makes the link win last-write-wins on every device
  * that has not edited the item since; a device that HAS keeps its newer row, which is why the apply
- * pipeline carries these fields forward (`hydrateCalendarLinkCarryForward`) and the client merges
+ * pipeline carries these fields forward (`hydrateItemCarryForwards`) and the client merges
  * them into a newer local row. Exported for the dev seam that stands in for a Google create in e2e.
  * Returns the recorded op, or undefined when the item vanished between the create and the stamp.
  */

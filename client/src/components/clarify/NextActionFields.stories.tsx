@@ -45,7 +45,7 @@ export const WithPeopleOnly: Story = {
     render: () => <ControlledNextActionFields initial={{ ...emptyNextActionState, peopleIds: ['person-1'] }} people={samplePeople} />,
 };
 
-/** All metadata fields filled in — energy high, time 45 min, urgent + focus, dates set. */
+/** All metadata fields filled in — energy high, time 45 min, urgent, dates set. */
 export const FullyFilled: Story = {
     render: () => <ControlledNextActionFields initial={filledNextActionState} workContexts={sampleWorkContexts} people={samplePeople} />,
 };

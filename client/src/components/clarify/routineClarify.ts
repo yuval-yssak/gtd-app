@@ -36,7 +36,6 @@ export function itemToRoutineForm(item: StoredItem): FormState {
         peopleIds: item.peopleIds ?? [],
         energy: item.energy ?? '',
         time: item.time?.toString() ?? '',
-        focus: item.focus ?? false,
         urgent: item.urgent ?? false,
     };
 }

@@ -497,7 +497,6 @@ describe('buildEditPatch', () => {
         energy: 'medium',
         time: 15,
         urgent: false,
-        focus: false,
         expectedBy: '2026-12-31',
     };
 
@@ -570,7 +569,6 @@ describe('buildEditPatch', () => {
             energy: 'high' as const,
             time: '30',
             urgent: true,
-            focus: false, // unchanged
             expectedBy: '2026-12-31', // unchanged
         };
         const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', formsWith({ na: naChange }));
@@ -579,7 +577,6 @@ describe('buildEditPatch', () => {
         expect(patch.energy).toBe('high');
         expect(patch.time).toBe(30);
         expect(patch.urgent).toBe(true);
-        expect(patch.focus).toBeUndefined(); // unchanged from false
         expect(patch.expectedBy).toBeUndefined(); // unchanged
     });
 
@@ -591,7 +588,6 @@ describe('buildEditPatch', () => {
             energy: '' as const,
             time: '15',
             urgent: false,
-            focus: false,
             expectedBy: '2026-12-31',
         };
         const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', formsWith({ na: naCleared }));
@@ -606,7 +602,6 @@ describe('buildEditPatch', () => {
             energy: 'medium' as const,
             time: '',
             urgent: false,
-            focus: false,
             expectedBy: '2026-12-31',
         };
         const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', formsWith({ na: naCleared }));
@@ -621,7 +616,6 @@ describe('buildEditPatch', () => {
             energy: 'medium' as const,
             time: '15',
             urgent: false,
-            focus: false,
             expectedBy: '2026-12-31',
         };
         const patch = buildEditPatch(NEXT_ACTION_ITEM, NEXT_ACTION_ITEM.title, '', 'nextAction', formsWith({ na: naCleared }));

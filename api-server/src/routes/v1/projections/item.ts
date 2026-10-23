@@ -26,8 +26,8 @@ export type PublicItem = Pick<
     | 'timeEnd'
     | 'energy'
     | 'time'
-    | 'focus'
     | 'urgent'
+    | 'rank'
     | 'routineId'
     | 'calendarEventId'
     | 'calendarIntegrationId'
@@ -65,8 +65,10 @@ const PUBLIC_FIELDS: ReadonlyArray<Exclude<keyof PublicItem, 'brief'>> = [
     'timeEnd',
     'energy',
     'time',
-    'focus',
     'urgent',
+    // Read-only priority order inside a Next Actions day section. PATCH rejects it as
+    // forbidden_field; `/v1/operations/batch` round-trips it (a get→batch-update echo must keep it).
+    'rank',
     'routineId',
     'calendarEventId',
     'calendarIntegrationId',

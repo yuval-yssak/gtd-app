@@ -19,6 +19,8 @@ const routineItemTemplateSchema = z
         peopleIds: z.array(nonEmptyString).optional(),
         energy: energySchema.optional(),
         time: z.number().nonnegative().optional(),
+        // DEPRECATED, accepted and ignored — see the item schema's `focus` note. Old clients still
+        // send `template.focus`; `stampSnapshot` strips it.
         focus: z.boolean().optional(),
         urgent: z.boolean().optional(),
         notes: z.string().optional(),

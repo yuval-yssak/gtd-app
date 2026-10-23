@@ -1,7 +1,8 @@
-import AdjustIcon from '@mui/icons-material/Adjust';
 import BoltIcon from '@mui/icons-material/Bolt';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import EditIcon from '@mui/icons-material/Edit';
+import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
 import SellOutlinedIcon from '@mui/icons-material/SellOutlined';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
@@ -22,9 +23,10 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import classNames from 'classnames';
 import dayjs from 'dayjs';
-import { useCallback, useMemo, useState } from 'react';
-import { WindowVirtualizer } from 'virtua';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { WindowVirtualizer, type WindowVirtualizerHandle } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
@@ -32,15 +34,17 @@ import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { MoveToSheet } from '../../components/nextActions/MoveToSheet';
 import { CollapsibleChipGroup } from '../../components/pickers/CollapsibleChipGroup';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { useAppData } from '../../contexts/AppDataProvider';
-import { clarifyToDone } from '../../db/itemMutations';
+import { clarifyToDone, reorderItem } from '../../db/itemMutations';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
+import { type ReorderCommit, ROW_ITEM_ATTR, ROW_SECTION_ATTR, useNextActionsDrag } from '../../hooks/useNextActionsDrag';
 import { useTodayIso } from '../../hooks/useTodayIso';
 import { compareNextActions } from '../../lib/compareNextActions';
 import { getTodayIso } from '../../lib/dayClock';
@@ -55,6 +59,7 @@ import {
     sameNameIds,
 } from '../../lib/mergedFilterOptions';
 import { missingClarifications } from '../../lib/missingClarifications';
+import { flatIndexOfSlot, flattenSections, groupIntoSections } from '../../lib/nextActionSections';
 import { type NextActionsUrlState, parseNextActionsSearch, TIME_FILTER_OPTIONS } from '../../lib/nextActionsUrlParams';
 import { isTicklerHidden } from '../../lib/ticklerVisibility';
 import { hasAtLeastOne, type NonEmptyArray } from '../../lib/typeUtils';
@@ -164,15 +169,6 @@ function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activ
     );
 }
 
-// Nirvana-style "current focus shortlist" marker — the same flag the sort uses to float items to the top.
-export function FocusIndicator() {
-    return (
-        <Tooltip title="In focus">
-            <AdjustIcon fontSize="small" color="primary" data-testid="focusIndicator" />
-        </Tooltip>
-    );
-}
-
 // Amber hint that the clarify phase was left incomplete; the tooltip names only the actually-missing fields.
 export function UnclarifiedWarning({ missingLabels }: { missingLabels: NonEmptyArray<string> }) {
     return (
@@ -246,12 +242,24 @@ export function buildRowSecondary(item: StoredItem, { showTags, contextsById, pe
     return <RowTags contextTags={itemContextTags(item, contextsById)} personTags={itemPersonTags(item, peopleById)} dueLabel={dueLabel} />;
 }
 
+/**
+ * ONE predicate for the touch UI (always-visible drag handle + the "Move to…" overflow): the same
+ * media query the CSS module uses for the handle, so the two can never disagree. Deliberately not
+ * `breakpoints.down('md')` — a narrow desktop window has a mouse; a tablet has not.
+ */
+export const TOUCH_UI_MEDIA_QUERY = '(hover: none) and (pointer: coarse)';
+
 function NextActionsPage() {
     useDocumentTitle('Next Actions');
     const { db } = Route.useRouteContext();
     const { items, workContexts, people, allWorkContexts, allPeople, routines, refreshItems, isInitialSyncing } = useAppData();
     const theme = useTheme();
     const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const isTouchUi = useMediaQuery(TOUCH_UI_MEDIA_QUERY);
+    const virtualizerRef = useRef<WindowVirtualizerHandle>(null);
+    const dragHintId = useId();
+    // Stored by id so the sheet always commits against the LIVE section (a pull can change it while the sheet is open).
+    const [moveTarget, setMoveTarget] = useState<{ itemId: string; sectionKey: string } | null>(null);
     const editor = useItemEditor({ db, people, workContexts, refreshItems, isMobile });
     const urlFilters = Route.useSearch();
     const navigate = useNavigate();
@@ -329,6 +337,9 @@ function NextActionsPage() {
         const visible = visibleNextActions.filter((item) => matchesFilters(item, urlFilters, filterGroups));
         return [...filterItemsByQuery(visible, deferredQuery)].sort(compareNextActions);
     }, [visibleNextActions, urlFilters, filterGroups, deferredQuery]);
+    // One section per expected day (+ "No date"); headers roll at local midnight via todayIso.
+    const sections = useMemo(() => groupIntoSections(nextActions, todayIso), [nextActions, todayIso]);
+    const flatRows = useMemo(() => flattenSections(sections), [sections]);
 
     // Facet-style live options: each row offers only chips that still match at least one row under
     // all the OTHER filters (a zero-result chip is noise; its own filter is excluded so switching
@@ -362,6 +373,45 @@ function NextActionsPage() {
         await clarifyToDone(db, item, { onReadOnlyGCal: editor.onFromGmailReadOnly });
         await refreshItems();
     }
+
+    // The one commit every reorder gesture (drag, keyboard, Move to…) runs: the section's LIVE
+    // rows (ghosts are fading leftovers — never a neighbour, never re-keyed) as displayed, plus the
+    // neighbours by id; `reorderItem` reads the full day section itself. D5: this runs under active
+    // filters/search too — the key is minted between the visible neighbours.
+    const sectionsRef = useRef(sections);
+    useLayoutEffect(() => {
+        sectionsRef.current = sections;
+    }, [sections]);
+    // Every account in the merged view, whether or not any of its rows is visible right now: they
+    // share the keyspace, so a re-key must include them.
+    const ownerIds = useMemo(() => [...new Set(visibleNextActions.map((row) => row.userId))], [visibleNextActions]);
+    const commitReorder = useCallback(
+        async ({ sectionKey, itemId, aboveId, belowId }: ReorderCommit) => {
+            const section = sectionsRef.current.find((candidate) => candidate.key === sectionKey);
+            const live = section?.items.filter((row) => !isGhost(row)) ?? [];
+            const moved = await reorderItem(db, { sectionItems: live, itemId, aboveId, belowId, ownerIds });
+            if (moved) {
+                await refreshItems();
+            }
+            return moved !== null;
+        },
+        [db, isGhost, refreshItems, ownerIds],
+    );
+    const scrollSlotIntoView = useCallback(
+        (sectionKey: string, toIndex: number) => virtualizerRef.current?.scrollToIndex(flatIndexOfSlot(flatRows, sectionKey, toIndex), { align: 'nearest' }),
+        [flatRows],
+    );
+    const drag = useNextActionsDrag({ sections, isGhost, onCommit: commitReorder, scrollSlotIntoView });
+    const moveTargetSection = useMemo(() => sections.find((section) => section.key === moveTarget?.sectionKey), [sections, moveTarget]);
+    const moveTargetItem = useMemo(() => moveTargetSection?.items.find((row) => row._id === moveTarget?.itemId) ?? null, [moveTargetSection, moveTarget]);
+    const moveTargetLive = useMemo(() => moveTargetSection?.items.filter((row) => !isGhost(row)) ?? [], [moveTargetSection, isGhost]);
+    // A target that vanished while the sheet was open (completed elsewhere, pulled away) closes the
+    // sheet on its own; forget it too, or an undo bringing the row back would reopen the sheet.
+    useEffect(() => {
+        if (moveTarget && !moveTargetItem) {
+            setMoveTarget(null);
+        }
+    }, [moveTarget, moveTargetItem]);
 
     // Ghosts are fading leftovers, not open work — the header count reflects live rows only.
     const liveNextActionCount = nextActions.filter((item) => !isGhost(item)).length;
@@ -475,16 +525,61 @@ function NextActionsPage() {
                 // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
                 // next-actions list doesn't block the main thread on navigation.
                 <List disablePadding component="div" className={styles.list}>
-                    <WindowVirtualizer>
-                        {nextActions.map((item, idx) => {
+                    <WindowVirtualizer ref={virtualizerRef}>
+                        {flatRows.map((row) => {
+                            if (row.kind === 'header') {
+                                return (
+                                    <Typography
+                                        key={`header-${row.section.key}`}
+                                        component="div"
+                                        // subtitle2, not overline: overline's text-transform would shout "TODAY" and
+                                        // turn the weekday/month casing into noise.
+                                        variant="subtitle2"
+                                        className={classNames(styles.sectionHeader, {
+                                            [styles.sectionHeaderOverdue]: row.section.isOverdue,
+                                            [styles.dimmedSection]: drag.drag !== null && drag.drag.sectionKey !== row.section.key,
+                                        })}
+                                        data-testid="nextActionSectionHeader"
+                                        data-section-key={row.section.key}
+                                    >
+                                        {row.section.label}
+                                    </Typography>
+                                );
+                            }
+                            const { item, section } = row;
                             const missingLabels = missingClarifications(item, hasAtLeastOne(workContexts));
+                            const isDragged = drag.drag?.itemId === item._id;
+                            const isOtherSection = drag.drag !== null && drag.drag.sectionKey !== section.key;
+                            const rowIsGhost = isGhost(item);
                             return (
                                 <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
                                     <ListItem
                                         disablePadding
-                                        className={styles.item}
+                                        className={classNames(styles.item, styles.rowShell, {
+                                            [styles.dragging]: isDragged,
+                                            [styles.shifted]: !isDragged && drag.drag !== null,
+                                            [styles.dimmedSection]: isOtherSection,
+                                        })}
+                                        // The displacement is measured geometry (the dragged row's own height), so it
+                                        // travels as a CSS variable the module's `transform` reads — see the CSS note.
+                                        // The dragged row itself is moved imperatively by the hook (every frame), so React
+                                        // leaves its variable alone. The literal is `DRAG_SHIFT_VAR` (typed through
+                                        // `types/cssCustomProperties.d.ts`); keep the two in step.
+                                        style={isDragged ? undefined : { '--drag-shift': `${drag.shiftFor(item._id)}px` }}
+                                        {...{ [ROW_SECTION_ATTR]: section.key, [ROW_ITEM_ATTR]: item._id }}
                                         secondaryAction={
                                             <Box className={styles.actionButtons}>
+                                                {isTouchUi && !rowIsGhost && (
+                                                    <Tooltip title="Move to…">
+                                                        <IconButton
+                                                            size="small"
+                                                            onClick={() => setMoveTarget({ itemId: item._id, sectionKey: section.key })}
+                                                            data-testid="nextActionMoveToButton"
+                                                        >
+                                                            <MoreVertIcon fontSize="small" />
+                                                        </IconButton>
+                                                    </Tooltip>
+                                                )}
                                                 <CopyIdButton id={item._id} testId="nextActionItemCopyIdButton" />
                                                 <Tooltip title="Edit">
                                                     <IconButton
@@ -503,15 +598,30 @@ function NextActionsPage() {
                                             </Box>
                                         }
                                     >
+                                        {/* A real button beside (not inside) the row button — nested interactive content is
+                                            invalid ARIA, and the row's ripple/click would fire on every drop. A ghost (a row
+                                            fading out of this list) gets none: it is not a valid drag source. */}
+                                        {!rowIsGhost && (
+                                            <IconButton
+                                                size="small"
+                                                className={styles.dragHandle}
+                                                aria-label="Reorder"
+                                                aria-describedby={dragHintId}
+                                                data-testid="nextActionDragHandle"
+                                                {...drag.getHandleProps(item, section)}
+                                            >
+                                                <DragIndicatorIcon fontSize="small" />
+                                            </IconButton>
+                                        )}
                                         <ListItemButton
                                             onClick={(e) => editor.openEditor({ item, event: e })}
+                                            onKeyDown={(e) => drag.onRowKeyDown(item, section, e)}
                                             className={styles.rowButton}
                                             data-testid="nextActionItemRow"
                                         >
                                             <ListItemText
                                                 primary={
                                                     <Box className={styles.titleRow}>
-                                                        {item.focus === true && <FocusIndicator />}
                                                         {item.urgent && <BoltIcon fontSize="small" color="error" />}
                                                         <span>{item.title}</span>
                                                         {item.energy && (
@@ -533,13 +643,34 @@ function NextActionsPage() {
                                         </ListItemButton>
                                     </ListItem>
                                     {editor.renderExpandFor(item._id)}
-                                    {idx < nextActions.length - 1 && <Divider />}
+                                    {!row.isLastInSection && <Divider />}
                                 </ListRowShell>
                             );
                         })}
                     </WindowVirtualizer>
                 </List>
             )}
+            {/* Keyboard affordances for the reorder handle (D6) + the polite announcer for every reorder outcome. */}
+            <span id={dragHintId} className={styles.srOnly}>
+                Press Space to pick up, Arrow Up or Down to move, Space to drop, Escape to cancel. Alt plus Arrow Up or Down moves the row one slot.
+            </span>
+            <div aria-live="polite" className={styles.srOnly} data-testid="nextActionsReorderLive">
+                {drag.liveText}
+            </div>
+            <Snackbar open={drag.error !== null} autoHideDuration={4000} onClose={drag.clearError} message={drag.error ?? ''} />
+            {/* Keyed by the target so a vanished row (the Drawer closes on its own) cannot leak its step/search into the next open. */}
+            <MoveToSheet
+                key={moveTarget?.itemId ?? 'closed'}
+                item={moveTargetItem}
+                sectionItems={moveTargetLive}
+                sectionLabel={moveTargetSection?.label ?? ''}
+                onClose={() => setMoveTarget(null)}
+                onMove={(neighbours) => {
+                    if (moveTarget) {
+                        drag.commit({ sectionKey: moveTarget.sectionKey, itemId: moveTarget.itemId, ...neighbours });
+                    }
+                }}
+            />
             {editor.renderGlobal()}
             <Snackbar open={editor.instantToast.open} autoHideDuration={3000} onClose={editor.closeInstantToast} message={editor.instantToast.message} />
         </Box>

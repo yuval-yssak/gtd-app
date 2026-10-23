@@ -4,7 +4,7 @@
  * `calendarEventId` & co. on apply (whole-snapshot `replaceById`), so the done op matched no
  * pushback branch — no ✓ marker on Google, no SyncIssues row, an orphaned event for good. The fix
  * carries the stored row's server-owned calendar fields into the incoming snapshot before apply
- * (`hydrateCalendarLinkCarryForward`), so the row, the op log and the pushback all see the link.
+ * (`hydrateItemCarryForwards`), so the row, the op log and the pushback all see the link.
  */
 import dayjs from 'dayjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';

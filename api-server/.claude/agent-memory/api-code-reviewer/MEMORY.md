@@ -121,3 +121,6 @@
 - [Synthetic payload vs projection allowlist](pattern_synthetic_payload_vs_projection.md) — MCP decorations tested on fake payloads miss fields the /v1 projection never returns
 - [Set-Cookie assertions must be last-wins](feedback_set_cookie_assertions_last_wins.md) — `.find()` reads the first write; hooks append overwrites after an expiry and the test still passes
 - [Multi-session cookie renewal keys on newSession](project_multisession_cookie_renewal_newsession.md) — never forward the MAIN cookie from ungated routes on pivoting devices; newSession can be stale after revoke
+- [Mongo $set-undefined→null + $exists scan](project_mongo_query_hazards_undefined_and_exists.md) — no ignoreUndefined: $set undefined writes null → strict-schema jam; $exists+sort scans all missing rows, use $type
+- [Unvalidated order key poisons minting](project_unvalidated_order_key_poisons_minting.md) — rank is nonEmptyString only; one malformed lowest key makes topRankForUser throw on every create for that user
+- [Removed-symbol doc grep](feedback_removed_symbol_doc_grep.md) — "references updated" misses README/CLAUDE.md rule text; grep guidance docs for the old name

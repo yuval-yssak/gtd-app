@@ -24,7 +24,6 @@ export interface ReassignItemEditPatch {
     /** Time estimate in minutes — empty string '' clears a previously-set value. */
     time?: number | '';
     urgent?: boolean;
-    focus?: boolean;
     expectedBy?: string;
     ignoreBefore?: string;
     waitingForPersonId?: string;

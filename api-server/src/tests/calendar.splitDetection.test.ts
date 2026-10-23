@@ -25,6 +25,16 @@ useCalendarTestLifecycle();
 
 // ─── POST /calendar/integrations/:id/sync — split detection ──────────────
 
+/**
+ * The ISO instant of `HH:mm` wall-clock time in `zone`, `daysAhead` days from today. Parsed IN the
+ * zone (`dayjs.tz(wallClock, zone)`) rather than set with `.hour()` on a converted instance: dayjs's
+ * timezone plugin applies the pre-transition offset to a setter that lands on a DST-change day, so
+ * `.tz(zone).add(2, 'day').hour(11)` yields 10:00 when day+2 is the autumn transition.
+ */
+function wallClockInZone(zone: string, daysAhead: number, wallClock: string): string {
+    return dayjs.tz(`${dayjs().tz(zone).add(daysAhead, 'day').format('YYYY-MM-DD')} ${wallClock}`, zone).toISOString();
+}
+
 describe('POST /calendar/integrations/:id/sync — split detection', () => {
     beforeEach(() => {
         vi.spyOn(GoogleCalendarProvider.prototype, 'getExceptions').mockResolvedValue([]);
@@ -58,7 +68,7 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         );
 
         const tz = 'Asia/Jerusalem';
-        const successorStart = dayjs().tz(tz).add(1, 'day').hour(11).minute(0).second(0).millisecond(0).toISOString();
+        const successorStart = wallClockInZone(tz, 1, '11:00');
         const successorEnd = dayjs(successorStart).add(30, 'minute').toISOString();
         // Base caps the day before the successor's first occurrence.
         const untilCompact = dayjs(successorStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
@@ -138,7 +148,7 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         );
 
         const tz = 'Asia/Jerusalem';
-        const successorStart = dayjs().tz(tz).add(1, 'day').hour(10).minute(30).second(0).millisecond(0).toISOString();
+        const successorStart = wallClockInZone(tz, 1, '10:30');
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [
                 {
@@ -189,7 +199,7 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         );
 
         const tz = 'Asia/Jerusalem';
-        const successorStart = dayjs().tz(tz).add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const successorStart = wallClockInZone(tz, 1, '09:00');
         const untilCompact = dayjs(successorStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
         const events = [
             {
@@ -369,9 +379,9 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         // Construct in Asia/Jerusalem (the sync config's timezone) so extractLocalTime round-trips
         // to the expected HH:mm regardless of the test runner's local timezone (CI runs in UTC).
         const tz = 'Asia/Jerusalem';
-        const parentStart = dayjs().tz(tz).add(1, 'day').hour(9).minute(0).second(0).millisecond(0).toISOString();
+        const parentStart = wallClockInZone(tz, 1, '09:00');
         const parentEnd = dayjs(parentStart).add(30, 'minute').toISOString();
-        const tailStart = dayjs().tz(tz).add(2, 'day').hour(11).minute(0).second(0).millisecond(0).toISOString();
+        const tailStart = wallClockInZone(tz, 2, '11:00');
         const tailEnd = dayjs(tailStart).add(30, 'minute').toISOString();
         const untilCompact = dayjs(tailStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
 
@@ -464,7 +474,7 @@ describe('POST /calendar/integrations/:id/sync — split detection', () => {
         });
 
         // Sync batch: capped base (past UNTIL) + open successor `<bareId>_R<anchor>`, same 10:00 daily.
-        const successorStart = dayjs().tz(tz).add(1, 'day').hour(10).minute(0).second(0).millisecond(0).toISOString();
+        const successorStart = wallClockInZone(tz, 1, '10:00');
         const untilCompact = dayjs(successorStart).subtract(1, 'second').utc().format('YYYYMMDD[T]HHmmss[Z]');
         vi.spyOn(GoogleCalendarProvider.prototype, 'listEventsFull').mockResolvedValue({
             events: [

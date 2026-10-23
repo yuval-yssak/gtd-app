@@ -81,22 +81,22 @@ test.describe('Next actions — URL-backed filter chips', () => {
 });
 
 test.describe('Next actions — row indicators', () => {
-    test('focus bullseye and under-clarified warning respect the work-context nuance', async ({ browser }) => {
+    test('under-clarified warning respects the work-context nuance', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `na-indicators-${dayjs().valueOf()}@example.com`, async (page) => {
             // No work contexts exist yet — the missing-work-context criterion must not fire.
             await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Fully clarified'), { energy: 'low', time: 5 });
-            await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Bare focused item'), { focus: true });
+            await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Bare item'), {});
 
             await page.goto('/next-actions');
             await page.waitForSelector('text=Fully clarified');
 
             const clarifiedRow = page.getByTestId('nextActionItemRow').filter({ hasText: 'Fully clarified' });
-            const bareRow = page.getByTestId('nextActionItemRow').filter({ hasText: 'Bare focused item' });
+            const bareRow = page.getByTestId('nextActionItemRow').filter({ hasText: 'Bare item' });
 
-            await expect(bareRow.getByTestId('focusIndicator')).toBeVisible();
             await expect(bareRow.getByTestId('unclarifiedWarning')).toBeVisible(); // missing energy + time
-            await expect(clarifiedRow.getByTestId('focusIndicator')).toHaveCount(0);
             await expect(clarifiedRow.getByTestId('unclarifiedWarning')).toHaveCount(0);
+            // The "In focus" bullseye is gone: priority is the drag order, not a flag.
+            await expect(page.getByTestId('focusIndicator')).toHaveCount(0);
 
             // Once the user defines a work context, an item without one counts as under-clarified.
             await gtd.createWorkContext(page, 'Office');

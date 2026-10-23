@@ -1,5 +1,4 @@
-import itemsDAO from '../dataAccess/itemsDAO.js';
-import type { ItemInterface, OperationInterface } from '../types/entities.js';
+import type { ItemInterface } from '../types/entities.js';
 import { CALENDAR_DETACH_STATUSES } from './applyEntityOp.js';
 
 /**
@@ -23,7 +22,8 @@ type CarriedField = (typeof CALENDAR_LINK_FIELDS)[number] | (typeof CALENDAR_SYN
  * lacks them. The whole-snapshot `replaceById` apply otherwise erases them whenever a client edits
  * (or completes, or trashes) a calendar item before its pull delivered the link the server stamped
  * after the Google create — the 2026-09-27 production incident: the ✓ done marker never reached
- * Google and the event was orphaned for good. Pure; exported for unit tests. The client mirrors
+ * Google and the event was orphaned for good. Pure; run by the apply pipeline through
+ * `hydrateItemCarryForwards` (`lib/itemCarryForward.ts`). The client mirrors
  * these rules in `client/src/db/calendarLinkMerge.ts` (field lists pinned by a parity case in
  * both test files) — change both together.
  *
@@ -57,38 +57,4 @@ function namesAnotherEvent(existing: ItemInterface, incoming: ItemInterface): bo
 function pickAbsentFields(existing: ItemInterface, incoming: ItemInterface, fields: readonly CarriedField[]): Partial<ItemInterface> {
     const absent = fields.filter((field) => incoming[field] === undefined && existing[field] !== undefined);
     return Object.fromEntries(absent.map((field) => [field, existing[field]]));
-}
-
-/**
- * Apply-pipeline hydrator: rewrites `op.snapshot` in place with the carried-forward fields so the
- * collection row, the op log (what other devices — and the originating one — pull) and the GCal
- * pushback (which reads `op.snapshot`) all see the merged state. MUST run before `applyEntityOp`
- * overwrites the row. Skips create/update ops that are not items, and detach-status snapshots.
- * Not gated on last-write-wins: a stale op is not applied anyway, and a merged stale snapshot is
- * harmless to replay. The read here and the `replaceById` in `applyEntityOp` are not atomic — a link
- * stamp landing in between is still overwritten; that millisecond window is closed from the other
- * side by `pushStateReachedDuringCreate` in calendarPushback.ts, which re-pushes the row's state
- * after the stamp.
- */
-export async function hydrateCalendarLinkCarryForward(userId: string, ops: OperationInterface[]): Promise<void> {
-    const targets = ops.filter(isCarryForwardCandidate);
-    if (!targets.length) {
-        return;
-    }
-    await Promise.all(targets.map((op) => carryForwardOne(userId, op)));
-}
-
-function isCarryForwardCandidate(op: OperationInterface): boolean {
-    if (op.entityType !== 'item' || (op.opType !== 'create' && op.opType !== 'update') || !op.snapshot) {
-        return false;
-    }
-    return !CALENDAR_DETACH_STATUSES.has((op.snapshot as ItemInterface).status);
-}
-
-async function carryForwardOne(userId: string, op: OperationInterface): Promise<void> {
-    const existing = await itemsDAO.findByOwnerAndId(op.entityId, userId);
-    if (!existing) {
-        return;
-    }
-    op.snapshot = carryForwardCalendarLink(existing, op.snapshot as ItemInterface);
 }

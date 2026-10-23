@@ -24,6 +24,9 @@ class ItemsDAO extends AbstractDAO<ItemInterface> {
             { key: { user: 1, expectedBy: 1 } },
             { key: { user: 1, timeStart: 1 } },
             { key: { user: 1, updatedTs: 1 } }, // used by sync: pull all items changed since last device sync
+            // Priority-order mint: `topRankForUser` reads the user's lowest `rank` (`sort: { rank: 1 }`,
+            // a binary sort — the keys' own order). Non-unique, so it cannot fail boot on existing data.
+            { key: { user: 1, rank: 1 } },
             // Public API dedupe: external integrations may upsert by externalId.
             // Sparse + partial: only items that actually carry an externalId participate; in-app
             // items have no externalId and must not collide with each other.

@@ -96,6 +96,10 @@ interface RawOpBag {
  *   `gtd_get_routine` echo. PATCH still rejects them; the full-snapshot surface accepts them, the
  *   same trust it extends to `/sync/push`. This is a narrower guarantee than the per-entity
  *   routes' closed allowlists — documented in PUBLIC_API.md.
+ * - `rank` (the Next Actions priority key): in the public read projection, so a get→batch-update
+ *   echo must round-trip it, and setting it directly is the same trust `/sync/push` extends.
+ *   Batch CREATES are not minted a rank either — the comparator places an unranked item first in
+ *   its day section, where a fresh item lands.
  */
 const BATCH_FORBIDDEN_SNAPSHOT_FIELDS: Partial<Record<EntityType, readonly string[]>> = {
     item: [

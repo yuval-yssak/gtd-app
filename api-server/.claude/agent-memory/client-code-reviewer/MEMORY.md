@@ -10,3 +10,4 @@
 - [Client mirror drops owner scope](feedback_client_mirror_drops_owner_scope.md) — Client ports of server merge rules lose owner/event-identity scoping; check userId guard + unit-group merge + e2e discrimination.
 - [Cookie call skips session pin](feedback_cookie_call_skips_session_pin.md) — New cookie-authed component fetches (delete/export) skip withActiveAccountSession; drifted cookie hits the wrong account.
 - [Tab-sticky account vs IDB pointer](project_tab_sticky_account_vs_idb_pointer.md) — db-layer wasActive reads IDB; a second tab whose boot account was removed refreshes in place instead of reloading.
+- [In-flight flag over promise chain](feedback_inflight_flag_over_promise_chain.md) — Boolean isCommitting ref reset by the first queued link's finally; use a counter.

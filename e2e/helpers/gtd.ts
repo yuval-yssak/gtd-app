@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import type { NextActionFilters } from '../../client/src/db/itemHelpers';
-import type { CalendarMeta, NextActionMeta, SomedayMaybeMeta, WaitingForMeta } from '../../client/src/db/itemMutations';
+import type { CalendarMeta, NextActionMeta, ReorderRequest, SomedayMaybeMeta, WaitingForMeta } from '../../client/src/db/itemMutations';
 import type {
     StoredDeviceMeta,
     StoredItem,
@@ -157,6 +157,13 @@ const gtdImpl = {
 
     removeItem: (page: Page, itemId: string): Promise<void> =>
         page.evaluate((id) => (window as unknown as { __gtd: { removeItem(id: string): Promise<void> } }).__gtd.removeItem(id), itemId),
+
+    /** Programmatic reorder — the same `reorderItem` commit the drag gesture runs. */
+    reorderItem: (page: Page, request: ReorderRequest): Promise<StoredItem | null> =>
+        page.evaluate(
+            (r) => (window as unknown as { __gtd: { reorderItem(r: ReorderRequest): Promise<StoredItem | null> } }).__gtd.reorderItem(r as ReorderRequest),
+            request,
+        ),
 
     // ── Item briefs ──────────────────────────────────────────────────────────
     getItemBrief: (page: Page, itemId: string): Promise<StoredItemBrief | undefined> =>

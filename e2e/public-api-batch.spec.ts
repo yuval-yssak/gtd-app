@@ -1,6 +1,7 @@
 import { type APIRequestContext, type Browser, type BrowserContext, expect, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { resetServerForEmails, withOneLoggedInDevice } from './helpers/context';
+import { gtd } from './helpers/gtd';
 
 const API_URL = 'http://localhost:4000';
 
@@ -68,6 +69,45 @@ test.describe('public /v1/operations/batch', () => {
                 expect(body.ok).toBe(true);
                 expect(body.count).toBe(4);
             });
+        });
+    });
+
+    test('a nextAction created through the batch (no rank minted) lands ABOVE the ranked rows of its section in the app', async ({ browser }) => {
+        const email = `public-api-batch-rank-${dayjs().valueOf()}@example.com`;
+        await resetServerForEmails([email]);
+
+        await withOneLoggedInDevice(browser, email, async (page) => {
+            const sessionRes = await page.context().request.get(`${API_URL}/auth/get-session`);
+            const { user } = (await sessionRes.json()) as { user: { id: string } };
+            const { plaintext } = await mintBatchToken(page.context().request, ['items.capture', 'items.write', 'items.read']);
+            // Two in-app items, both ranked at creation.
+            await gtd.clarifyToNextAction(page, await gtd.collect(page, 'In-app older'), {});
+            await gtd.clarifyToNextAction(page, await gtd.collect(page, 'In-app newer'), {});
+            await gtd.flush(page);
+
+            await withBearerOnlyContext(browser, async (apiContext) => {
+                const auth = { headers: { Authorization: `Bearer ${plaintext}`, 'Content-Type': 'application/json' } };
+                const id = `it-batch-rank-${dayjs().valueOf()}`;
+                const ops = [
+                    {
+                        entityType: 'item',
+                        opType: 'create',
+                        entityId: id,
+                        snapshot: { _id: id, user: user.id, status: 'nextAction', title: 'Batch created', createdTs: NOW, updatedTs: NOW },
+                    },
+                ];
+                const res = await apiContext.request.post(`${API_URL}/v1/operations/batch`, { ...auth, data: { ops } });
+                expect(res.status()).toBe(200);
+                const read = await apiContext.request.get(`${API_URL}/v1/items/${id}`, { headers: { Authorization: `Bearer ${plaintext}` } });
+                expect((await read.json()) as Record<string, unknown>).not.toHaveProperty('rank');
+            });
+
+            await gtd.pull(page);
+            await page.goto('/next-actions');
+            await page.waitForSelector('text=Batch created');
+            const titles = (await page.getByTestId('nextActionItemRow').allInnerTexts()).map((t) => t.split('\n')[0]?.trim() ?? '');
+            // Unranked first (where a fresh item lands), then the ranked rows newest-first.
+            expect(titles).toEqual(['Batch created', 'In-app newer', 'In-app older']);
         });
     });
 

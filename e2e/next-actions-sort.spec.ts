@@ -3,57 +3,79 @@ import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
 
-// /next-actions sorts into four tiers, with ascending expectedBy as the inner order:
-//   1. focused + has expectedBy   (asc by date)
-//   2. focused + no expectedBy
-//   3. not focused + has expectedBy (asc by date)
-//   4. not focused + no expectedBy
+// /next-actions is sectioned by expected day (ascending, "No date" last) and ordered by the
+// manual `rank` inside each day. A freshly created item is minted a rank ABOVE the user's
+// existing ones, so inside its section the newest item comes first.
 test.describe('Next actions list — sort order', () => {
-    test('focused-with-date asc, focused-no-date, other-with-date asc, other-no-date', async ({ browser }) => {
+    test('dated sections ascending with one header per day, then "No date" newest-first; a new item lands at the top of its section', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `na-sort-${dayjs().valueOf()}@example.com`, async (page) => {
-            const baseDate = '2026-06-01';
+            const earlyDay = '2027-06-01';
+            const lateDay = '2027-07-01';
 
-            // Seed six items spanning all four tiers (two with dates per focus group so we can also
-            // pin the ascending inner order).
-            const earlyFocus = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Early focus'), {
-                expectedBy: dayjs(baseDate).format('YYYY-MM-DD'),
-                focus: true,
-            });
-            const lateFocus = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Late focus'), {
-                expectedBy: dayjs(baseDate).add(30, 'day').format('YYYY-MM-DD'),
-                focus: true,
-            });
-            const noDateFocus = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'No-date focus'), {
-                focus: true,
-            });
-            const earlyPlain = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Early plain'), {
-                expectedBy: dayjs(baseDate).format('YYYY-MM-DD'),
-            });
-            const latePlain = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Late plain'), {
-                expectedBy: dayjs(baseDate).add(30, 'day').format('YYYY-MM-DD'),
-            });
-            const noDatePlain = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'No-date plain'), {});
+            // Seeded oldest-first; the two same-day items prove "newest first" within a section.
+            const lateFirst = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Late first'), { expectedBy: lateDay });
+            const earlyOlder = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Early older'), { expectedBy: earlyDay });
+            const earlyNewer = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Early newer'), { expectedBy: `${earlyDay}T18:00:00+03:00` });
+            const noDateOlder = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'No-date older'), {});
+            const noDateNewer = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'No-date newer'), {});
+            await gtd.flush(page);
 
             await page.goto('/next-actions');
-            await page.waitForSelector('text=Early focus');
+            await page.waitForSelector('text=Late first');
 
-            const visibleTitles = await page.getByTestId('nextActionItemRow').allInnerTexts();
-            const titles = visibleTitles.map((t) => t.split('\n')[0]?.trim() ?? '');
-            expect(titles).toEqual([
-                'Early focus', // tier 1: focused + date, earliest
-                'Late focus', // tier 1: focused + date, later
-                'No-date focus', // tier 2: focused, no date
-                'Early plain', // tier 3: plain + date, earliest
-                'Late plain', // tier 3: plain + date, later
-                'No-date plain', // tier 4: plain, no date
-            ]);
+            const headers = await page.getByTestId('nextActionSectionHeader').allInnerTexts();
+            expect(headers).toEqual([dayjs(earlyDay).format('ddd MMM D'), dayjs(lateDay).format('ddd MMM D'), 'No date']);
 
-            // Sanity: every item was seeded with status nextAction.
+            const titles = (await page.getByTestId('nextActionItemRow').allInnerTexts()).map((t) => t.split('\n')[0]?.trim() ?? '');
+            expect(titles).toEqual(['Early newer', 'Early older', 'Late first', 'No-date newer', 'No-date older']);
+
+            // Every item carries a rank, strictly decreasing in creation order (each mint goes above the last).
             const items = await gtd.listItems(page);
-            for (const seeded of [earlyFocus, lateFocus, noDateFocus, earlyPlain, latePlain, noDatePlain]) {
-                const got = items.find((i) => i._id === seeded._id);
-                expect(got?.status).toBe('nextAction');
+            const ranks = [lateFirst, earlyOlder, earlyNewer, noDateOlder, noDateNewer].map((seeded) => items.find((i) => i._id === seeded._id)?.rank ?? '');
+            expect(ranks.every(Boolean)).toBe(true);
+            for (let idx = 1; idx < ranks.length; idx++) {
+                expect((ranks[idx] ?? '') < (ranks[idx - 1] ?? '')).toBe(true);
             }
+
+            // Geometry, not just text: the "Early" header sits above its rows, which sit above the "Late" header.
+            const earlyHeaderBox = await page.getByTestId('nextActionSectionHeader').nth(0).boundingBox();
+            const earlyNewerBox = await page.getByTestId('nextActionItemRow').filter({ hasText: 'Early newer' }).boundingBox();
+            const lateHeaderBox = await page.getByTestId('nextActionSectionHeader').nth(1).boundingBox();
+            expect(earlyHeaderBox && earlyNewerBox && lateHeaderBox).toBeTruthy();
+            expect((earlyHeaderBox?.y ?? 0) < (earlyNewerBox?.y ?? 0) && (earlyNewerBox?.y ?? 0) < (lateHeaderBox?.y ?? 0)).toBe(true);
+        });
+    });
+
+    test('an unranked item (pre-rollout row, pulled without a rank) sorts above ranked ones in its section', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `na-sort-unranked-${dayjs().valueOf()}@example.com`, async (page) => {
+            const ranked = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Ranked newer'), {});
+            expect(ranked.rank).toBeTruthy();
+            // Strip the rank locally the way a pre-rollout snapshot would arrive — updateItem spreads the row as given.
+            const legacy = await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Legacy unranked'), {});
+            const { rank: _rank, ...withoutRank } = legacy;
+            await gtd.updateItem(page, { ...withoutRank, createdTs: '2020-01-01T00:00:00.000Z' });
+            await gtd.flush(page);
+
+            await page.goto('/next-actions');
+            await page.waitForSelector('text=Legacy unranked');
+            const titles = (await page.getByTestId('nextActionItemRow').allInnerTexts()).map((t) => t.split('\n')[0]?.trim() ?? '');
+            expect(titles).toEqual(['Legacy unranked', 'Ranked newer']);
+        });
+    });
+
+    test('an overdue day is its own section, labelled in the error colour, and "Today" is named', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `na-sort-overdue-${dayjs().valueOf()}@example.com`, async (page) => {
+            const yesterday = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+            const lastWeek = dayjs().subtract(7, 'day').format('YYYY-MM-DD');
+            await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Yesterday item'), { expectedBy: yesterday });
+            await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Last week item'), { expectedBy: lastWeek });
+            await gtd.clarifyToNextAction(page, await gtd.collect(page, 'Today item'), { expectedBy: dayjs().format('YYYY-MM-DD') });
+            await gtd.flush(page);
+
+            await page.goto('/next-actions');
+            await page.waitForSelector('text=Today item');
+            const headers = await page.getByTestId('nextActionSectionHeader').allInnerTexts();
+            expect(headers).toEqual([`Overdue · ${dayjs(lastWeek).format('ddd MMM D')}`, `Overdue · ${dayjs(yesterday).format('ddd MMM D')}`, 'Today']);
         });
     });
 });

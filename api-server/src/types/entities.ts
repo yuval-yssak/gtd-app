@@ -147,7 +147,18 @@ export interface ItemInterface {
     routineId?: string;
     energy?: EnergyLevel; // relevant for `nextAction` items
     time?: number; // estimated duration in minutes — relevant for `nextAction` items
-    focus?: boolean; // on the current-focus shortlist (Nirvana-style Focus list) — floats the item to the top of Next Actions; relevant for `nextAction` items
+    /**
+     * Fractional-indexing key (`lib/itemRank.ts`) — the manual priority order of Next Actions inside
+     * one expected-day section (date is the gate, rank the order within it). UNIVERSAL, like `title`:
+     * minted when the item is created (public API, routine generator, import, the client's collect),
+     * or when it first enters `nextAction`; kept across every status change and NEVER cleared.
+     * Absent therefore always means "not minted yet / not pulled yet" — which is what lets the apply
+     * pipeline carry a stored rank forward over a rank-less snapshot (`lib/rankCarryForward.ts`).
+     * Compared by code unit, never `localeCompare`. Deliberately NOT minted by `/sync/push` or
+     * `/v1/operations/batch` creates (caller-supplied snapshots); the comparator places unranked
+     * items first in their section. `rank` is not status-gated in the op schema.
+     */
+    rank?: string;
     urgent?: boolean; // must be done very soon — relevant for `nextAction` items
     notes?: string; // freeform markdown notes — applies to all statuses
     /**
@@ -211,7 +222,6 @@ export interface RoutineItemTemplate {
     peopleIds?: string[];
     energy?: EnergyLevel;
     time?: number; // estimated minutes
-    focus?: boolean; // generated items start on the current-focus shortlist (floats to the top of Next Actions)
     urgent?: boolean;
     notes?: string;
 }

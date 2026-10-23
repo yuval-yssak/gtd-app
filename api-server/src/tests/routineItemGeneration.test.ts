@@ -132,6 +132,36 @@ async function createRoutineViaApi(token: string, overrides: CreateRoutineOverri
 
 // ── Unit: snapshot shape ────────────────────────────────────────────────────
 
+describe('ensureFirstRoutineItem — rank minting', () => {
+    it("ranks the generated item below the user's lowest existing key", async () => {
+        const userId = await login();
+        await itemsDAO.insertOne({
+            _id: 'existing-ranked',
+            user: userId,
+            status: 'nextAction',
+            title: 'existing',
+            rank: 'a0',
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        });
+        const routine: RoutineInterface = {
+            _id: 'r-rank',
+            user: userId,
+            title: 'Daily rank',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY',
+            template: {},
+            active: true,
+            createdTs: '2026-01-01T00:00:00.000Z',
+            updatedTs: '2026-01-01T00:00:00.000Z',
+        };
+        await routinesDAO.insertOne(routine);
+        await ensureFirstRoutineItem({ userId, deviceId: 'server' }, routine);
+        const generated = await itemsDAO.findOne({ user: userId, routineId: 'r-rank' });
+        expect(generated?.rank).toBe('Zz');
+    });
+});
+
 describe('buildRoutineItemSnapshot', () => {
     it('produces a nextAction item with routineId, tickler ignoreBefore, and template fields', () => {
         const routine: RoutineInterface = {
@@ -140,13 +170,14 @@ describe('buildRoutineItemSnapshot', () => {
             title: 'Daily review',
             routineType: 'nextAction',
             rrule: 'FREQ=DAILY',
-            template: { workContextIds: ['wc1'], energy: 'low', time: 15, focus: true, notes: 'hello' },
+            template: { workContextIds: ['wc1'], energy: 'low', time: 15, urgent: true, notes: 'hello' },
             active: true,
             createdTs: '2026-01-01T00:00:00.000Z',
             updatedTs: '2026-01-01T00:00:00.000Z',
         };
-        const item = buildRoutineItemSnapshot(routine, '2026-05-15', '2026-05-10T00:00:00.000Z');
+        const item = buildRoutineItemSnapshot(routine, '2026-05-15', '2026-05-10T00:00:00.000Z', 'Zz');
         expect(item.status).toBe('nextAction');
+        expect(item.rank).toBe('Zz');
         expect(item.routineId).toBe('r-1');
         expect(item.title).toBe('Daily review');
         expect(item.user).toBe('u-1');
@@ -156,7 +187,7 @@ describe('buildRoutineItemSnapshot', () => {
         expect(item.workContextIds).toEqual(['wc1']);
         expect(item.energy).toBe('low');
         expect(item.time).toBe(15);
-        expect(item.focus).toBe(true);
+        expect(item.urgent).toBe(true);
         expect(item.notes).toBe('hello');
         expect(item.createdTs).toBe('2026-05-10T00:00:00.000Z');
         expect(item.updatedTs).toBe('2026-05-10T00:00:00.000Z');
@@ -174,7 +205,7 @@ describe('buildRoutineItemSnapshot', () => {
             createdTs: '2026-01-01T00:00:00.000Z',
             updatedTs: '2026-01-01T00:00:00.000Z',
         };
-        const item = buildRoutineItemSnapshot(routine, '2026-05-15', '2026-05-10T00:00:00.000Z');
+        const item = buildRoutineItemSnapshot(routine, '2026-05-15', '2026-05-10T00:00:00.000Z', 'a0');
         expect(item.workContextIds).toBeUndefined();
         expect(item.peopleIds).toBeUndefined();
         expect(item.energy).toBeUndefined();

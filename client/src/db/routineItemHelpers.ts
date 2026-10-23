@@ -7,7 +7,7 @@ import { computeFirstOccurrenceDate, mergeRoutineEditIntoOpenItem } from '../lib
 import { computeNextOccurrence, RruleExhaustedError } from '../lib/rruleUtils';
 import type { GCalOwnedRoutineKey, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { GCAL_OWNED_EXCEPTION_KEYS, GCAL_OWNED_ROUTINE_KEYS } from '../types/MyDB';
-import { putItem } from './itemHelpers';
+import { putItem, topRankForUser } from './itemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
 
@@ -45,6 +45,9 @@ async function persistRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routin
         status: 'nextAction' as const,
         title: routine.title,
         routineId: routine._id,
+        // Priority order inside the item's day section — minted above the user's existing keys,
+        // like every other creation path (mirrors the server's `buildRoutineItemSnapshot`).
+        rank: await topRankForUser(db, userId),
         expectedBy,
         // Routine-generated items are hidden until their due date (tickler pattern)
         ignoreBefore: expectedBy,
@@ -52,7 +55,6 @@ async function persistRoutineItem(db: IDBPDatabase<MyDB>, userId: string, routin
         ...(routine.template.peopleIds ? { peopleIds: routine.template.peopleIds } : {}),
         ...(routine.template.energy ? { energy: routine.template.energy } : {}),
         ...(routine.template.time !== undefined ? { time: routine.template.time } : {}),
-        ...(routine.template.focus !== undefined ? { focus: routine.template.focus } : {}),
         ...(routine.template.urgent !== undefined ? { urgent: routine.template.urgent } : {}),
         ...(routine.template.notes ? { notes: routine.template.notes } : {}),
         createdTs: now,

@@ -5,6 +5,7 @@ import itemsDAO from '../dataAccess/itemsDAO.js';
 import type { ItemInterface, RoutineInterface } from '../types/entities.js';
 import { applyAndPublishOperation } from './applyOperation.js';
 import { computeNextOccurrence, RruleExhaustedError } from './rruleHelpers.js';
+import { topRankForUser } from './topRankForUser.js';
 import { localDateInTimezone, resolveUserTimezone, userLocalDate } from './userTimezone.js';
 
 dayjs.extend(utc);
@@ -40,13 +41,16 @@ export interface RoutineItemGenerationContext {
  * `persistRoutineItem` in the client helpers so server- and client-generated items are
  * indistinguishable when they round-trip through sync.
  */
-export function buildRoutineItemSnapshot(routine: RoutineInterface, expectedBy: string, now: string): ItemInterface {
+export function buildRoutineItemSnapshot(routine: RoutineInterface, expectedBy: string, now: string, rank: string): ItemInterface {
     return {
         _id: randomUUID(),
         user: routine.user,
         status: 'nextAction',
         title: routine.title,
         routineId: routine._id,
+        // Priority order inside the item's day section — minted above the user's existing keys
+        // (`topRankForUser`), like every other creation path.
+        rank,
         expectedBy,
         // Routine-generated items are hidden until their due date (tickler pattern).
         ignoreBefore: expectedBy,
@@ -54,7 +58,6 @@ export function buildRoutineItemSnapshot(routine: RoutineInterface, expectedBy: 
         ...(routine.template.peopleIds ? { peopleIds: routine.template.peopleIds } : {}),
         ...(routine.template.energy ? { energy: routine.template.energy } : {}),
         ...(routine.template.time !== undefined ? { time: routine.template.time } : {}),
-        ...(routine.template.focus !== undefined ? { focus: routine.template.focus } : {}),
         ...(routine.template.urgent !== undefined ? { urgent: routine.template.urgent } : {}),
         ...(routine.template.notes ? { notes: routine.template.notes } : {}),
         createdTs: now,
@@ -166,7 +169,7 @@ function computeDisposalAnchor(disposalLocalDate: string, startDate: string | un
  */
 async function publishRoutineItem(ctx: RoutineItemGenerationContext, routine: RoutineInterface, expectedBy: string): Promise<void> {
     const now = dayjs().toISOString();
-    const snapshot = buildRoutineItemSnapshot(routine, expectedBy, now);
+    const snapshot = buildRoutineItemSnapshot(routine, expectedBy, now, await topRankForUser(ctx.userId));
     await applyAndPublishOperation(
         ctx.userId,
         { entityType: 'item', opType: 'create', entityId: snapshot._id ?? '', snapshot },

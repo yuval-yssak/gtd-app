@@ -66,7 +66,7 @@ interface ServerItem {
     energy?: string;
     time?: number;
     urgent?: boolean;
-    focus?: boolean;
+    rank?: string;
     expectedBy?: string;
     calendarEventId?: string;
     calendarIntegrationId?: string;
@@ -142,7 +142,9 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
         });
     });
 
-    test('nextAction item with edits: workContextIds, peopleIds, energy, time, urgent, focus all ride along on the move', async ({ browser }) => {
+    test('nextAction item with edits: workContextIds, peopleIds, energy, time, urgent all ride along on the move (and the rank survives)', async ({
+        browser,
+    }) => {
         const stamp = dayjs().valueOf();
         const emailA = `na-edit-a-${stamp}@example.com`;
         const emailB = `na-edit-b-${stamp}@example.com`;
@@ -154,6 +156,7 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
                 peopleIds: ['p-old'],
                 energy: 'low',
                 time: 5,
+                rank: 'a0V',
             });
             await page.goto(INBOX_URL);
 
@@ -169,7 +172,6 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
                     energy: 'high',
                     time: 30,
                     urgent: true,
-                    focus: true,
                     expectedBy: '2026-12-31',
                 },
             });
@@ -184,7 +186,8 @@ test.describe('EditItemDialog cross-account reassign — atomic edit + move', ()
                 energy: 'high',
                 time: 30,
                 urgent: true,
-                focus: true,
+                // The priority key is universal: the move spreads the whole item, so it rides along.
+                rank: 'a0V',
                 expectedBy: '2026-12-31',
             });
         });

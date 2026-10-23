@@ -5,7 +5,8 @@ import type { EntitySnapshot, EntityType, OperationInterface, OpFailureReason, O
 import { type ApplyEntityOpOutcome, applyEntityOp, hydrateCalendarDetachSnapshots, hydrateDeleteSnapshots } from './applyEntityOp.js';
 import { maybeScheduleInlineBriefs } from './brief/briefInlineHook.js';
 import { buildCalendarProvider } from './buildCalendarProvider.js';
-import { hydrateCalendarLinkCarryForward } from './calendarLinkCarryForward.js';
+import { stripDeprecatedFocus } from './deprecatedFocus.js';
+import { hydrateItemCarryForwards } from './itemCarryForward.js';
 import { type NotifyChangeOptions, notifyChange, notifyChanges } from './notifyChange.js';
 import { allocateOpIdentity } from './opIdentity.js';
 import { maybeCascadeReferenceRemoval } from './referenceCascades.js';
@@ -64,7 +65,7 @@ export interface ApplyOptions {
      */
     serverStampUpdatedTs?: boolean;
     /**
-     * Skip `hydrateCalendarLinkCarryForward`. The carry-forward exists for CLIENT-built snapshots,
+     * Skip the calendar-link half of `hydrateItemCarryForwards`. That carry-forward exists for CLIENT-built snapshots,
      * which lack a server-owned calendar field only because the device has not pulled it yet. A
      * server path that builds its snapshots from the stored rows and omits such a field on purpose —
      * today the routine pause, which frees `calendarInstanceEventId` on the items it trashes so the
@@ -153,7 +154,9 @@ export interface OpStamp {
  * conflict anchor, and the MCP echoes the true original value).
  */
 function stampSnapshot(snapshot: EntitySnapshot, userId: string, stamp: OpStamp): EntitySnapshot {
-    const owned = { ...snapshot, user: userId };
+    // The one place every write path funnels through — so the deprecated `focus` flag dies here
+    // rather than at each of the ~40 call sites (see `lib/deprecatedFocus.ts`).
+    const owned = { ...stripDeprecatedFocus(snapshot), user: userId };
     if (!stamp.serverStampUpdatedTs) {
         return clampUpdatedTs(owned, stamp.now);
     }
@@ -259,13 +262,11 @@ export async function applyAndPublishOperationWithOutcome(userId: string, raw: R
     // Must also run before `applyEntityOp` — afterwards the linkage is gone from the DB too.
     await hydrateCalendarDetachSnapshots(userId, [op]);
 
-    // Step 3c — calendar-link carry-forward. A snapshot that never learned the server-stamped
-    // Google link (the client edited/completed before pulling it) would erase the link on apply;
-    // merge the stored row's server-owned calendar fields into `op.snapshot` first, so the row, the
-    // op log and the GCal pushback all carry it. Must run before `applyEntityOp` for the same reason.
-    if (!opts.skipCalendarLinkCarryForward) {
-        await hydrateCalendarLinkCarryForward(userId, [op]);
-    }
+    // Step 3c — server-owned field carry-forward. A snapshot that never learned the server-stamped
+    // Google link (the client edited/completed before pulling it) or the item's `rank` would erase
+    // them on apply; merge the stored row's server-owned fields into `op.snapshot` first, so the
+    // row, the op log and the GCal pushback all carry them. Must run before `applyEntityOp`.
+    await hydrateItemCarryForwards(userId, [op], { skipCalendarLink: opts.skipCalendarLinkCarryForward });
 
     // Steps 4 + 5 — persist + log. Apply first so a failure in `applyEntityOp` leaves no op in
     // the log; otherwise other devices would replay an op the server's collections never saw.
@@ -444,10 +445,8 @@ export async function applyAndPublishOperations(userId: string, raws: RawOperati
     // the pre-update row must be captured before the Promise.all below overwrites it.
     await hydrateCalendarDetachSnapshots(userId, ops);
 
-    // Calendar-link carry-forward — same before-apply constraint (see the single-op path).
-    if (!opts.skipCalendarLinkCarryForward) {
-        await hydrateCalendarLinkCarryForward(userId, ops);
-    }
+    // Server-owned field carry-forward — same before-apply constraint (see the single-op path).
+    await hydrateItemCarryForwards(userId, ops, { skipCalendarLink: opts.skipCalendarLinkCarryForward });
 
     restampOpIdentities(ops);
     const [, outcomes] = await Promise.all([operationsDAO.insertMany(ops), Promise.all(ops.map((op) => applyEntityOp(userId, op)))]);

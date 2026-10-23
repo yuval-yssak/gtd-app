@@ -98,7 +98,6 @@ describe('createNextRoutineItem', () => {
                 workContextIds: ['ctx-1'],
                 energy: 'high',
                 time: 30,
-                focus: true,
                 urgent: true,
                 notes: 'Test notes',
             },
@@ -113,7 +112,8 @@ describe('createNextRoutineItem', () => {
         expect(generated.workContextIds).toEqual(['ctx-1']);
         expect(generated.energy).toBe('high');
         expect(generated.time).toBe(30);
-        expect(generated.focus).toBe(true);
+        // Minted like every creation path: the origin key for a user with no ranked items yet.
+        expect(generated.rank).toBe('a0');
         expect(generated.urgent).toBe(true);
         expect(generated.notes).toBe('Test notes');
     });

@@ -84,7 +84,7 @@ export const sampleNextActionItem: StoredItem = {
     title: 'Draft the project proposal',
     energy: 'high',
     time: 60,
-    focus: true,
+    rank: 'a0',
     urgent: false,
     workContextIds: ['ctx-1'],
     peopleIds: ['person-1'],
@@ -165,7 +165,6 @@ export const emptyNextActionState: NextActionFormState = {
     energy: '',
     time: '',
     urgent: false,
-    focus: false,
     expectedBy: '',
 };
 
@@ -176,7 +175,6 @@ export const filledNextActionState: NextActionFormState = {
     energy: 'high',
     time: '45',
     urgent: true,
-    focus: true,
     expectedBy: '2024-04-30',
 };
 

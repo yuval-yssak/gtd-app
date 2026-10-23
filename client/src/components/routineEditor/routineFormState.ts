@@ -23,7 +23,6 @@ export interface FormState {
     peopleIds: string[];
     energy: EnergyLevel | '';
     time: string;
-    focus: boolean;
     urgent: boolean;
     notes: string;
     /** When true, generated calendar items are all-day; timeOfDay/duration are ignored on save. */
@@ -92,7 +91,6 @@ export function initFormState(routine?: StoredRoutine): FormState {
         peopleIds: routine?.template.peopleIds ?? [],
         energy: routine?.template.energy ?? '',
         time: routine?.template.time?.toString() ?? '',
-        focus: routine?.template.focus ?? false,
         urgent: routine?.template.urgent ?? false,
         notes: routine?.template.notes ?? '',
         allDay: routine?.calendarItemTemplate?.allDay === true,
@@ -135,7 +133,6 @@ export function buildTemplate(form: FormState) {
         ...(form.peopleIds.length ? { peopleIds: form.peopleIds } : {}),
         ...(form.energy ? { energy: form.energy as EnergyLevel } : {}),
         ...(form.time ? { time: parseInt(form.time, 10) } : {}),
-        ...(form.focus ? { focus: true } : {}),
         ...(form.urgent ? { urgent: true } : {}),
         ...(form.notes.trim() ? { notes: form.notes.trim() } : {}),
     };

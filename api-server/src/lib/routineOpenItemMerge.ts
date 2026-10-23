@@ -14,7 +14,7 @@ dayjs.extend(utc);
  * open-item merge may therefore adopt. `title` is handled separately — it is required on the item,
  * so it can be overwritten but never deleted.
  */
-const OPTIONAL_STAMPED_KEYS = ['notes', 'workContextIds', 'peopleIds', 'energy', 'time', 'focus', 'urgent'] as const;
+const OPTIONAL_STAMPED_KEYS = ['notes', 'workContextIds', 'peopleIds', 'energy', 'time', 'urgent'] as const;
 type OptionalStampedKey = (typeof OPTIONAL_STAMPED_KEYS)[number];
 
 /** The generator-stamped slice of an open item: what `buildRoutineItemSnapshot` writes from the routine. */
@@ -23,7 +23,7 @@ export type StampedItemContent = Pick<ItemInterface, 'title' | OptionalStampedKe
 /**
  * The exact content `buildRoutineItemSnapshot` (server) / `persistRoutineItem` (client) would stamp
  * onto a generated item for this routine. Presence rules mirror those generators key-for-key:
- * truthy checks for workContextIds/peopleIds/energy/notes, `!== undefined` for time/focus/urgent —
+ * truthy checks for workContextIds/peopleIds/energy/notes, `!== undefined` for time/urgent —
  * so the merge's "does the item still match what the old routine stamped?" comparison can never
  * drift from what the generator actually wrote.
  */
@@ -35,7 +35,6 @@ export function stampedItemContent(routine: Pick<RoutineInterface, 'title' | 'te
         ...(template.peopleIds ? { peopleIds: template.peopleIds } : {}),
         ...(template.energy ? { energy: template.energy } : {}),
         ...(template.time !== undefined ? { time: template.time } : {}),
-        ...(template.focus !== undefined ? { focus: template.focus } : {}),
         ...(template.urgent !== undefined ? { urgent: template.urgent } : {}),
         ...(template.notes ? { notes: template.notes } : {}),
     };

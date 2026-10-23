@@ -15,7 +15,7 @@ import { getItemBriefById, getItemBriefsByUser, putItemBrief } from './itemBrief
 import { clearBrief, setUserBrief } from './itemBriefMutations';
 import type { NextActionFilters } from './itemHelpers';
 import { getActiveNextActions, getItemsByUser, getOverdueItems, getUpcomingCalendarItems } from './itemHelpers';
-import type { CalendarMeta, NextActionMeta, SomedayMaybeMeta, WaitingForMeta } from './itemMutations';
+import type { CalendarMeta, NextActionMeta, ReorderRequest, SomedayMaybeMeta, WaitingForMeta } from './itemMutations';
 import {
     clarifyToCalendar,
     clarifyToDone,
@@ -27,6 +27,7 @@ import {
     collectItem,
     recordRoutineInstanceModification,
     removeItem,
+    reorderItem,
     updateItem,
 } from './itemMutations';
 import { syncAllLoggedInUsers } from './multiUserSync';
@@ -109,6 +110,8 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         clarifyToTrash: (item: StoredItem) => clarifyToTrash(db, item),
         updateItem: (item: StoredItem) => updateItem(db, item),
         removeItem: (itemId: string) => removeItem(db, itemId),
+        // Next Actions priority order — the same commit the drag/keyboard/Move-to gestures run.
+        reorderItem: (request: ReorderRequest) => reorderItem(db, request),
         recordRoutineInstanceModification: (
             routineId: string,
             originalDate: string,

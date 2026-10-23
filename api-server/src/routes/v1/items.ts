@@ -11,9 +11,11 @@ import type { ApplyEntityOpOutcome } from '../../lib/applyEntityOp.js';
 import { applyAndPublishOperation, applyAndPublishOperationWithOutcome, OperationValidationError } from '../../lib/applyOperation.js';
 import type { BriefState } from '../../lib/briefSource.js';
 import { clearBrief, loadBrief, loadBriefsByItemId, matchesBriefStateFilter, parseBriefBody, writeAuthoredBrief } from '../../lib/itemBriefs.js';
+import { rankAt, topRanks } from '../../lib/itemRank.js';
 import { isDuplicateKeyError } from '../../lib/mongoErrors.js';
 import { advanceRoutineAfterDisposal } from '../../lib/routineItemGeneration.js';
 import { normalizeMasterEventId } from '../../lib/routineItemRegeneration.js';
+import { lowestRankForUser, topRankForUser } from '../../lib/topRankForUser.js';
 import { hasAtLeastOne } from '../../lib/typeUtils.js';
 import { STATUS_FIELD_MATRIX, STATUS_SPECIFIC_FIELD_LIST } from '../../schemas/operations/item.js';
 import { type ItemBriefInterface, type ItemInterface, ItemStatus } from '../../types/entities.js';
@@ -116,20 +118,26 @@ async function findByExternalId(userId: string, externalId: string): Promise<Ite
  * GCal pushback, webhook). The (user, externalId) sparse-unique index can still raise E11000
  * under concurrent inserts — `resolveCreateItem` catches that and resolves to the race-winner.
  */
-async function persistNewInboxItem(item: ItemInterface, tokenId: string): Promise<ItemInterface> {
-    await itemsDAO.insertOne(item);
+async function persistNewInboxItem(item: ItemInterface, tokenId: string, rank?: string): Promise<ItemInterface> {
+    // Minted here for the single create (above the user's existing ones, `ItemInterface.rank`);
+    // the bulk import pre-mints one distinct key per row and passes it in, because its rows are
+    // inserted in parallel and would otherwise all read the same minimum.
+    const ranked: ItemInterface = { ...item, rank: rank ?? (await topRankForUser(item.user)) };
+    await itemsDAO.insertOne(ranked);
     await applyAndPublishOperation(
         item.user,
-        { entityType: 'item', opType: 'create', entityId: item._id ?? '', snapshot: item },
-        { deviceId: `api:${tokenId}`, now: item.updatedTs },
+        { entityType: 'item', opType: 'create', entityId: ranked._id ?? '', snapshot: ranked },
+        { deviceId: `api:${tokenId}`, now: ranked.updatedTs },
     );
-    return item;
+    return ranked;
 }
 
 interface CreateItemContext {
     userId: string;
     tokenId: string;
     body: ParsedCreateBody;
+    /** Bulk import only: the pre-minted rank for this row (see `persistNewInboxItem`). */
+    rank?: string;
 }
 
 /**
@@ -145,7 +153,7 @@ interface CreateItemContext {
  *     window can therefore produce two rows. Callers wanting strict idempotency must supply
  *     `externalId` — this is documented in PUBLIC_API.md.
  */
-async function resolveCreateItem({ userId, tokenId, body }: CreateItemContext): Promise<{ item: ItemInterface; replayed: boolean }> {
+async function resolveCreateItem({ userId, tokenId, body, rank }: CreateItemContext): Promise<{ item: ItemInterface; replayed: boolean }> {
     if (body.externalId) {
         const existing = await findByExternalId(userId, body.externalId);
         if (existing) {
@@ -172,7 +180,7 @@ async function resolveCreateItem({ userId, tokenId, body }: CreateItemContext): 
         ...(body.externalId ? { externalId: body.externalId } : {}),
     };
     try {
-        const persisted = await persistNewInboxItem(item, tokenId);
+        const persisted = await persistNewInboxItem(item, tokenId, rank);
         return { item: persisted, replayed: false };
     } catch (err) {
         // The only unique constraint that can fire here is (user, externalId) — see itemsDAO.ts.
@@ -258,9 +266,9 @@ function parseBulkItem(raw: BulkItemRequest): { ok: true; value: ParsedCreateBod
 
 /** Processes a single item — pre-validated — and reports its outcome. Failures here are
  * persistence-level (Mongo unavailable, etc.); validation failures never reach this path. */
-async function importOneItem(ctx: { userId: string; tokenId: string; body: ParsedCreateBody & { externalId: string } }): Promise<BulkItemResult> {
+async function importOneItem(ctx: { userId: string; tokenId: string; body: ParsedCreateBody & { externalId: string }; rank: string }): Promise<BulkItemResult> {
     try {
-        const { item, replayed } = await resolveCreateItem({ userId: ctx.userId, tokenId: ctx.tokenId, body: ctx.body });
+        const { item, replayed } = await resolveCreateItem({ userId: ctx.userId, tokenId: ctx.tokenId, body: ctx.body, rank: ctx.rank });
         // resolveCreateItem assigns `_id: randomUUID()` to every persisted item, and pre-existing
         // matches always come from Mongo with `_id` populated, so the optional in ItemInterface._id
         // never applies on this path. Default to '' defensively rather than spreading undefined.
@@ -285,15 +293,19 @@ async function processBulkImport(ctx: BulkContext): Promise<BulkResponse> {
         const parsed = parseBulkItem((row ?? {}) as BulkItemRequest);
         return parsed.ok ? { ok: true, body: parsed.value } : { ok: false, error: parsed.error };
     });
+    // One distinct rank per row, minted up front above the user's existing keys and in request
+    // order: the rows of a chunk are inserted in parallel, so minting inside each insert would
+    // hand every one of them the same key. Replayed/failed rows simply leave a gap.
+    const ranks = topRanks(await lowestRankForUser(ctx.userId), validated.length);
     const results: BulkItemResult[] = [];
     for (let chunkStart = 0; chunkStart < validated.length; chunkStart += ctx.chunkSize) {
         const chunkEnd = Math.min(chunkStart + ctx.chunkSize, validated.length);
         const chunkResults = await Promise.all(
-            validated.slice(chunkStart, chunkEnd).map(async (entry) => {
+            validated.slice(chunkStart, chunkEnd).map(async (entry, offset) => {
                 if (!entry.ok) {
                     return entry.error;
                 }
-                return importOneItem({ userId: ctx.userId, tokenId: ctx.tokenId, body: entry.body });
+                return importOneItem({ userId: ctx.userId, tokenId: ctx.tokenId, body: entry.body, rank: rankAt(ranks, chunkStart + offset) });
             }),
         );
         results.push(...chunkResults);
@@ -615,9 +627,22 @@ const PATCH_WRITABLE_FIELDS = new Set<keyof ItemInterface>([
     'calendarSyncConfigId',
     'energy',
     'time',
-    'focus',
     'urgent',
 ]);
+
+/**
+ * Removed fields that integrations written against the old contract may still send. Accepted and
+ * DROPPED — both as an assignment and as a `null` clear — rather than rejected, because breaking
+ * changes ship as `/v2` (PUBLIC_API.md) and a 400 here would break every caller echoing an old
+ * read. `focus` was replaced by the read-only `rank` priority order; `rank` itself is NOT writable
+ * here (forbidden_field) — reorder in the app, or round-trip it through `/v1/operations/batch`.
+ */
+const PATCH_DEPRECATED_FIELDS: ReadonlySet<string> = new Set(['focus']);
+
+/** The body without the deprecated keys — what the merge below actually applies. */
+function dropDeprecatedPatchFields(raw: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(raw).filter(([key]) => !PATCH_DEPRECATED_FIELDS.has(key)));
+}
 
 // Linkage to a real Google Calendar event is not a plain optional field: dropping it while the
 // item stays `calendar` makes pushback (`handleItemPush`) treat the item as never-pushed and mint
@@ -670,7 +695,7 @@ function rejectPatchBody(raw: Record<string, unknown>, clearedFields: ReadonlyAr
     if (Object.keys(raw).length === 0) {
         return { status: 400, code: 'empty_body', message: 'PATCH body must include at least one field' };
     }
-    const forbidden = Object.keys(raw).find((key) => !PATCH_WRITABLE_FIELDS.has(key as keyof ItemInterface));
+    const forbidden = Object.keys(raw).find((key) => !PATCH_WRITABLE_FIELDS.has(key as keyof ItemInterface) && !PATCH_DEPRECATED_FIELDS.has(key));
     if (forbidden !== undefined) {
         return { status: 400, code: 'forbidden_field', message: `field "${forbidden}" cannot be set via the public API` };
     }
@@ -853,7 +878,9 @@ async function applyPatchSnapshot(ctx: PatchContext, snapshot: ItemInterface): P
  */
 async function patchItem(ctx: PatchContext): Promise<PatchResult> {
     const { userId, tokenId, itemId, raw } = ctx;
-    const { assignments, clearedFields } = partitionPatchBody(raw);
+    // Deprecated keys are dropped BEFORE partitioning, so `focus: null` is a no-op too, not `not_clearable`.
+    const effective = dropDeprecatedPatchFields(raw);
+    const { assignments, clearedFields } = partitionPatchBody(effective);
     const rejection = rejectPatchBody(raw, clearedFields);
     if (rejection) {
         return { ok: false, error: rejection };
@@ -861,6 +888,10 @@ async function patchItem(ctx: PatchContext): Promise<PatchResult> {
     const existing = await itemsDAO.findByOwnerAndId(itemId, userId);
     if (!existing) {
         return { ok: false, error: { status: 404, code: 'not_found', message: 'item not found' } };
+    }
+    // A body made only of deprecated keys changes nothing — answer with the current row, no write.
+    if (Object.keys(effective).length === 0) {
+        return { ok: true, item: existing };
     }
     const linkConflict = await rejectConflictingCalendarLink(existing, assignments);
     if (linkConflict) {
@@ -879,7 +910,7 @@ async function patchItem(ctx: PatchContext): Promise<PatchResult> {
     // (a) `PATCH_WRITABLE_FIELDS` having filtered non-ItemInterface keys, and (b) the apply
     // pipeline's strict-mode Zod check rejecting any remaining shape errors.
     const merged = withClearedFieldsRemoved({ ...existing, ...assignments, updatedTs: now } as ItemInterface, clearedFields);
-    const updated = sanitizeStaleFields(merged, assignments);
+    const updated = await withRankOnEnteringNextAction(existing, sanitizeStaleFields(merged, assignments));
     const applyError = await applyPatchSnapshot(ctx, updated);
     if (applyError) {
         return { ok: false, error: applyError };
@@ -892,6 +923,25 @@ async function patchItem(ctx: PatchContext): Promise<PatchResult> {
         await maybeAdvanceRoutineForItem(existing, { userId, tokenId });
     }
     return { ok: true, item: updated };
+}
+
+/**
+ * An item ENTERING `nextAction` is minted a priority key above the user's existing ones, where a
+ * fresh item lands: always when it comes from `inbox`, otherwise only when it has none (born
+ * before the rollout, or through a `/v1/operations/batch` / `/sync/push` create, which never mint)
+ * — a calendar detach or a revive keeps its place. A plain edit of an unranked row that is already
+ * `nextAction` is left alone: the comparator shows unranked rows first, and minting on a title
+ * edit would move the row.
+ */
+async function withRankOnEnteringNextAction(existing: ItemInterface, snapshot: ItemInterface): Promise<ItemInterface> {
+    const isEntering = snapshot.status === 'nextAction' && existing.status !== 'nextAction';
+    // Clarifying an inbox capture is when it becomes actionable: always a FRESH key at the top of its
+    // section (the create-time key may be weeks old). Mirrors the client's `clarifyToNextAction`.
+    const mintsFresh = isEntering && (existing.status === 'inbox' || snapshot.rank === undefined);
+    if (!mintsFresh) {
+        return snapshot;
+    }
+    return { ...snapshot, rank: await topRankForUser(existing.user) };
 }
 
 /**
