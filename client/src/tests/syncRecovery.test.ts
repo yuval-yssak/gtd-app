@@ -119,6 +119,25 @@ describe('syncOneUser recovery branching (via syncAllLoggedInUsers)', () => {
         warnSpy.mockRestore();
     });
 
+    it('an account never bootstrapped on this device is not "reaped": queued ops flush, then it bootstraps — no probe, no dialog', async () => {
+        await db.delete('syncCursors', 'user-a');
+        await db.add('syncOperations', makeQueuedOp('op-1', 'user-a'));
+        vi.mocked(fetchBootstrap).mockResolvedValueOnce(EMPTY_BOOTSTRAP);
+
+        await syncAllLoggedInUsers(db);
+
+        expect(getSyncRecoveryState()).toEqual({ phase: 'idle' });
+        // The server has no row for it — correctly, it never registered — which a probe would misread as a reap.
+        expect(vi.mocked(fetchDeviceStatus)).not.toHaveBeenCalled();
+        expect(vi.mocked(pushSyncOps)).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(fetchBootstrap)).toHaveBeenCalledTimes(1);
+        // Flush first, so the bootstrap snapshot already carries the pushed captures.
+        const [pushOrder] = vi.mocked(pushSyncOps).mock.invocationCallOrder;
+        const [bootstrapOrder] = vi.mocked(fetchBootstrap).mock.invocationCallOrder;
+        if (pushOrder === undefined || bootstrapOrder === undefined) throw new Error('expected one push and one bootstrap');
+        expect(pushOrder).toBeLessThan(bootstrapOrder);
+    });
+
     it('queued ops + probe says registered → normal flush + pull, no recovery state', async () => {
         await db.add('syncOperations', makeQueuedOp('op-1', 'user-a'));
 

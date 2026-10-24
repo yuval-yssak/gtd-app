@@ -28,7 +28,7 @@ test.describe('Routine editor — chrome modes', () => {
 
             // Status chips from the item editor must NOT appear — routines have a Type toggle, not statuses.
             await expect(dialog.getByRole('button', { name: 'Waiting For' })).toHaveCount(0);
-            await expect(dialog.getByRole('button', { name: 'Done' })).toHaveCount(0);
+            await expect(dialog.getByRole('button', { name: 'Done', exact: true })).toHaveCount(0);
             await expect(dialog.getByRole('button', { name: 'Trash' })).toHaveCount(0);
 
             await dialog.getByRole('button', { name: 'Cancel' }).click();

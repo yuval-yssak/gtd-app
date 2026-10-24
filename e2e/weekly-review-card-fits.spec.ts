@@ -15,6 +15,17 @@ import { gtd } from './helpers/gtd';
 // Four lines of notes at the reported card width, matching the reported item's shape.
 const NOTES = ['- Benjamin', '- Nir', '- Primos', '- Yonatan'].join('\n');
 
+/**
+ * The notes surface, unfolded from behind "Show notes": the e2e API's fake brief model always briefs
+ * these long notes once the review starts, folding them — and the ceiling under test is the expanded one.
+ */
+async function expandedNotesSurface(container: Locator) {
+    await container.getByTestId('showNotesButton').click();
+    const surface = container.locator('[class*="pagePreview"], [class*="cm-scroller"]').first();
+    await expect(surface).toBeVisible();
+    return surface;
+}
+
 /** The full-width wrapper that owns the stage's scroll (a sibling of the pinned action bar). */
 const scrollerOf = (stage: Locator) => stage.getByTestId('stageCardScroller');
 
@@ -76,10 +87,7 @@ test.describe('Weekly review card fits without scrolling', () => {
             await expect(stage.getByRole('textbox', { name: 'Title' })).toHaveValue('test 1');
 
             // The notes surface scrolls internally rather than growing without bound...
-            const notesHeight = await stage
-                .locator('[class*="pagePreview"], [class*="cm-scroller"]')
-                .first()
-                .evaluate((el) => el.clientHeight);
+            const notesHeight = await (await expandedNotesSurface(stage)).evaluate((el) => el.clientHeight);
             const viewportHeight = page.viewportSize()?.height ?? 0;
             expect(notesHeight).toBeLessThanOrEqual(viewportHeight * 0.35);
 
@@ -117,10 +125,7 @@ test.describe('Weekly review card fits without scrolling', () => {
             // be demanding something the review never promised. What the fix guarantees is that
             // revisit uses the review's 30vh ceiling rather than the item page's 60vh — the
             // difference between ~277px of notes and ~555px.
-            const notesHeight = await revisit
-                .locator('[class*="pagePreview"], [class*="cm-scroller"]')
-                .first()
-                .evaluate((el) => el.clientHeight);
+            const notesHeight = await (await expandedNotesSurface(revisit)).evaluate((el) => el.clientHeight);
             expect(notesHeight).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) * 0.35);
         });
     });

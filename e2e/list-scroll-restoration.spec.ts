@@ -1,4 +1,4 @@
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
@@ -15,6 +15,8 @@ async function seedNextActions(page: Page, count: number, prefix: string): Promi
         const inbox = await gtd.collect(page, `${prefix} ${String(i).padStart(2, '0')}`);
         await gtd.clarifyToNextAction(page, inbox, { energy: 'low', time: 5 });
     }
+    // Never navigate mid-flush — it wedges the IDB flush lock (see CLAUDE.md § E2E).
+    await gtd.flush(page);
 }
 
 // The login helper presets clarify mode to 'dialog'; these flows need row clicks to
@@ -32,6 +34,11 @@ async function scrollListToMiddle(page: Page): Promise<number> {
         scroller.scrollTop = (scroller.scrollHeight - scroller.clientHeight) / 2;
         return scroller.scrollTop;
     });
+}
+
+/** A row's top edge relative to the viewport (not the document). */
+async function viewportTopOf(row: Locator): Promise<number> {
+    return row.evaluate((el) => el.getBoundingClientRect().top);
 }
 
 async function readListScrollTop(page: Page): Promise<number> {
@@ -89,7 +96,7 @@ test.describe('List scroll restoration + ghost rows', () => {
             // The detail form starts at the top even though the list was scrolled deep.
             await expect.poll(() => readListScrollTop(page)).toBe(0);
 
-            await page.getByRole('button', { name: 'Done' }).click();
+            await page.getByRole('button', { name: 'Done', exact: true }).click();
             await page.getByRole('button', { name: 'Save changes' }).click();
             await expect(page).toHaveURL(/\/next-actions$/);
 
@@ -165,6 +172,7 @@ test.describe('List scroll restoration + ghost rows', () => {
                     ...(i <= 28 ? { expectedBy: baseDay.add(i, 'day').format('YYYY-MM-DD') } : {}),
                 });
             }
+            await gtd.flush(page);
 
             await page.goto('/next-actions');
             await usePageClarifyMode(page);
@@ -181,6 +189,8 @@ test.describe('List scroll restoration + ghost rows', () => {
             // and below the first row (so unmoved rows exist above the clicked one too).
             expect(Number(clickedTitle.slice(-2))).toBeLessThanOrEqual(28);
             expect(Number(clickedTitle.slice(-2))).toBeGreaterThanOrEqual(2);
+            const neighborRow = page.getByTestId('nextActionItemRow').filter({ hasText: neighborTitle });
+            const neighborViewportTop = await viewportTopOf(neighborRow);
 
             // dispatchEvent instead of click(): see the comment in the first test.
             await page.getByTestId('nextActionItemRow').filter({ hasText: clickedTitle }).dispatchEvent('click');
@@ -192,10 +202,12 @@ test.describe('List scroll restoration + ghost rows', () => {
             await page.getByRole('button', { name: 'Save changes' }).click();
             await expect(page).toHaveURL(/\/next-actions$/);
 
-            // The edited item moved to the no-date tier, but the viewport must NOT follow it:
-            // the surviving neighbors keep the list at (approximately) the saved position.
-            await expect.poll(async () => Math.abs((await readListScrollTop(page)) - savedScrollTop)).toBeLessThan(150);
-            await expect(page.getByTestId('nextActionItemRow').filter({ hasText: neighborTitle })).toBeInViewport();
+            // The edited item moved to the no-date tier, but the viewport must NOT follow it: the
+            // surviving neighbor stays (within about a row) where it was on screen. Compared on screen,
+            // not by scrollTop — the windowed list re-estimates unmeasured rows above after the remount,
+            // so the document offset of the same on-screen position legitimately shifts.
+            await expect.poll(async () => Math.abs((await viewportTopOf(neighborRow)) - neighborViewportTop)).toBeLessThan(150);
+            await expect(neighborRow).toBeInViewport();
             await expect(page.getByTestId('nextActionItemRow').filter({ hasText: clickedTitle })).not.toBeInViewport();
         });
     });
@@ -209,6 +221,7 @@ test.describe('List scroll restoration + ghost rows', () => {
                     timeEnd: dayjs().add(i, 'day').hour(9).minute(30).second(0).millisecond(0).toISOString(),
                 });
             }
+            await gtd.flush(page);
 
             await page.goto('/calendar');
             await expect(page.getByTestId('calendarItemRow').first()).toBeVisible();

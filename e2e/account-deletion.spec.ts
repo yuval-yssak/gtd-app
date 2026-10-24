@@ -135,7 +135,7 @@ test.describe('account deletion', () => {
 
             await adminDeleteUser(email);
 
-            await page.waitForURL(`${CLIENT_URL}/login`, { timeout: 15_000 });
+            await expect(page).toHaveURL(`${CLIENT_URL}/login`, { timeout: 15_000 });
             await expectEvaporated(page, userId);
             const status = await fetchUserStatus(userId);
             expect(status.status).toBe('deleted');
@@ -161,7 +161,7 @@ test.describe('account deletion', () => {
             // device its account was deleted (rather than merely expired) is the tombstone.
             await page.context().setOffline(false);
 
-            await page.waitForURL(`${CLIENT_URL}/login`, { timeout: 20_000 });
+            await expect(page).toHaveURL(`${CLIENT_URL}/login`, { timeout: 20_000 });
             await expectEvaporated(page, userId);
         });
     });
@@ -214,7 +214,7 @@ test.describe('account deletion', () => {
             await expect(confirmButton).toBeEnabled();
             await confirmButton.click();
 
-            await page.waitForURL(`${CLIENT_URL}/login`, { timeout: 15_000 });
+            await expect(page).toHaveURL(`${CLIENT_URL}/login`, { timeout: 15_000 });
             await expectEvaporated(page, userId);
             expect((await fetchUserStatus(userId)).status).toBe('deleted');
         });
@@ -241,8 +241,10 @@ test.describe('account deletion — second tab on the same device', () => {
                 await page.getByTestId('confirmDeleteAccountButton').click();
 
                 // The deleting tab navigates; the OTHER tab must not keep rendering a deleted account.
-                await page.waitForURL(`${CLIENT_URL}/login`, { timeout: 15_000 });
-                await secondTab.waitForURL(`${CLIENT_URL}/login`, { timeout: 15_000 });
+                // Polled, not waitForURL: the deleting tab's own /login navigation can be superseded by
+                // the evaporation reload (SSE / cross-tab), which waitForURL reports as ERR_ABORTED.
+                await expect(page).toHaveURL(`${CLIENT_URL}/login`, { timeout: 15_000 });
+                await expect(secondTab).toHaveURL(`${CLIENT_URL}/login`, { timeout: 15_000 });
                 await expectEvaporated(secondTab, userId);
             } finally {
                 await secondTab.close().catch(() => undefined);
@@ -269,8 +271,8 @@ test.describe('account deletion — two accounts, two tabs', () => {
 
                 // Both tabs pivot to the survivor and boot on an authenticated route — a tab that
                 // reloaded before the survivor's pointer + cookie were written would show / or /login.
-                await page.waitForURL(`${CLIENT_URL}/inbox`, { timeout: 15_000 });
-                await secondTab.waitForURL(`${CLIENT_URL}/inbox`, { timeout: 15_000 });
+                await expect(page).toHaveURL(`${CLIENT_URL}/inbox`, { timeout: 15_000 });
+                await expect(secondTab).toHaveURL(`${CLIENT_URL}/inbox`, { timeout: 15_000 });
                 await expectEvaporated(page, active.userId);
                 await expectEvaporated(secondTab, active.userId);
                 await expect.poll(() => settledActiveAccountId(page), { timeout: 15_000 }).toBe(secondary.userId);

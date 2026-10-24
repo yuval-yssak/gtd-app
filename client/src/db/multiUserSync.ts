@@ -381,9 +381,11 @@ async function syncOneUser(
         // Probe-before-flush: a reaped device (server dropped its deviceSyncState row) with queued
         // offline ops must NOT auto-flush — the recovery dialog's push-vs-discard choice would be
         // moot once the ops are already on the server. The probe is skipped when the queue is empty
-        // (flush is a no-op there; a reap surfaces as the pull's 409 → Case 1 instead).
+        // (flush is a no-op there; a reap surfaces as the pull's 409 → Case 1 instead). Also skipped
+        // for an account with no cursor yet: it never bootstrapped on this device, so the server has
+        // no row for it by design — that is not a reap, and pullOrBootstrap bootstraps it after the flush.
         const queuedOpCount = await countQueuedOpsForUser(db, userId);
-        if (queuedOpCount > 0 && (await isDeviceUnregistered(db))) {
+        if (queuedOpCount > 0 && (await hasSyncCursor(db, userId)) && (await isDeviceUnregistered(db))) {
             console.warn(`[multi-sync] device unregistered server-side with ${queuedOpCount} queued ops for ${userId} — deferring to recovery dialog`);
             enterCase2Recovery(userId, queuedOpCount);
             return 'skipped';
@@ -448,6 +450,10 @@ export function handleDeadSessionGated(db: IDBPDatabase<MyDB>, userId: string): 
     });
 }
 
+async function hasSyncCursor(db: IDBPDatabase<MyDB>, userId: string): Promise<boolean> {
+    return (await db.get('syncCursors', userId)) !== undefined;
+}
+
 /**
  * Bootstraps when this (device, user) pair has never synced (no per-user cursor row); otherwise
  * does an incremental pull. Per-user cursors mean each Better Auth account on this device runs
@@ -455,8 +461,7 @@ export function handleDeadSessionGated(db: IDBPDatabase<MyDB>, userId: string): 
  * even though the device itself has been seen before.
  */
 async function pullOrBootstrap(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
-    const cursor = await db.get('syncCursors', userId);
-    if (!cursor) {
+    if (!(await hasSyncCursor(db, userId))) {
         // Unguarded — `syncAllLoggedInUsers` already holds the session gate. Calling the
         // gated version here would recurse and deadlock (the inner withSessionGate chains on the
         // outer's promise, which can't resolve until the inner completes).

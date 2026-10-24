@@ -125,7 +125,7 @@ test.describe('Calendar list — mark done', () => {
             await expect(page).toHaveURL(new RegExp(`/item/${calItem._id}`));
             await expect(page.getByTestId('itemPageWrapper')).toBeVisible();
 
-            await page.getByRole('button', { name: 'Done' }).click();
+            await page.getByRole('button', { name: 'Done', exact: true }).click();
             await page.getByRole('button', { name: 'Save changes' }).click();
 
             // Source-bucket policy: a calendar item saved as done returns to /calendar.

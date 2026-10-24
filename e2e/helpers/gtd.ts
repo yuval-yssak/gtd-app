@@ -333,6 +333,18 @@ const gtdImpl = {
     getActiveAccountId: (page: Page): Promise<string | null> =>
         page.evaluate(() => (window as unknown as { __gtd: { getActiveAccountId(): Promise<string | null> } }).__gtd.getActiveAccountId()),
 
+    /**
+     * `getActiveAccountId` for an `expect.poll` spanning an account switch: the switch reloads the page,
+     * and an evaluate caught by that reload reads as "not yet" (null) instead of failing the whole poll.
+     */
+    getActiveAccountIdAcrossReload: (page: Page): Promise<string | null> =>
+        gtd.getActiveAccountId(page).catch((err: unknown) => {
+            if (err instanceof Error && /Execution context was destroyed|navigating/.test(err.message)) {
+                return null;
+            }
+            throw err;
+        }),
+
     getPushStatus: (page: Page): Promise<{ registered: boolean }> =>
         page.evaluate(() => (window as unknown as { __gtd: { getPushStatus(): Promise<{ registered: boolean }> } }).__gtd.getPushStatus()),
 

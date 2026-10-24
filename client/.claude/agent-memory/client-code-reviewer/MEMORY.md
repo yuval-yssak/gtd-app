@@ -56,3 +56,4 @@
 - [Drag geometry reads own transform](project_drag_geometry_reads_own_transform.md) — rect anchor = transformed element → shifted rects break wall/drop math; e2e releases mid-transition so it passes. Also TZ-unpinned date fixtures.
 - [URL-before-commit misattributed](project_url_before_commit_misattributed.md) — router 1.170 URL changes before render commits; e2e "transient unmount" flakes get blamed on the browser.
 - [Render-consumed ref vs lazy mount](project_render_consumed_ref_vs_lazy_mount.md) — one-shot ref reset in render is lost before a lazy child's mount-only prop capture; keep it in state.
+- [Routine open-item lock coverage](project_routine_open_item_lock_coverage.md) — lock covers materializer + disposal only; create/split/editor seeds unlocked; per-file locks fakes drop the {signal} form.

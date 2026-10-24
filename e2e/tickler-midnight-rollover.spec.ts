@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import dayjs from 'dayjs';
 import { withOneLoggedInDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
@@ -7,6 +7,15 @@ import { gtd } from './helpers/gtd';
 // reveal that day's tickler items on its own — no reload, no navigation, no sync nudge. The app's
 // single self-rescheduling day-clock timer (client/src/lib/dayClock.ts) fires just past midnight
 // and rolls every ignoreBefore filter to the new local day.
+
+/**
+ * From the page's fake now to a few minutes past the next LOCAL midnight. A fixed 24h jump falls an
+ * hour short across a DST fall-back (a 25h day), leaving the page on the same calendar date.
+ */
+async function msToJustPastNextMidnight(page: Page) {
+    const fakeNow = dayjs(await page.evaluate(() => Date.now()));
+    return fakeNow.add(1, 'day').startOf('day').add(3, 'minute').diff(fakeNow);
+}
 
 test.describe('Tickler midnight rollover', () => {
     test('a next action snoozed until tomorrow appears at local midnight with no reload', async ({ browser }) => {
@@ -131,7 +140,7 @@ test.describe('Tickler midnight rollover', () => {
     test('items snoozed +1/+2/+3 days each appear only on their own day across three midnights', async ({ browser }) => {
         // Soak: the timer must re-arm itself day after day (the self-rescheduling property), and
         // early reveals matter as much as reveals — each later item must stay hidden on the
-        // earlier days. fastForward (not runFor) for the 24h jumps: it fires due timers at most
+        // earlier days. fastForward (not runFor) for the day jumps: it fires due timers at most
         // once, so app polling intervals don't replay a full day of ticks per jump.
         await withOneLoggedInDevice(browser, `tickler-soak-${dayjs().valueOf()}@example.com`, async (page) => {
             const fakeStart = dayjs().hour(23).minute(58).second(0);
@@ -159,11 +168,11 @@ test.describe('Tickler midnight rollover', () => {
             await expect(rowFor('Soak day two')).toHaveCount(0);
             await expect(rowFor('Soak day three')).toHaveCount(0);
 
-            await page.clock.fastForward(24 * 60 * 60 * 1000); // second midnight
+            await page.clock.fastForward(await msToJustPastNextMidnight(page)); // second midnight
             await expect(rowFor('Soak day two')).toBeVisible();
             await expect(rowFor('Soak day three')).toHaveCount(0);
 
-            await page.clock.fastForward(24 * 60 * 60 * 1000); // third midnight
+            await page.clock.fastForward(await msToJustPastNextMidnight(page)); // third midnight
             await expect(rowFor('Soak day three')).toBeVisible();
         });
     });

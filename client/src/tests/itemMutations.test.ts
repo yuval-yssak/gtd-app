@@ -16,7 +16,7 @@ import {
     reorderItem,
     updateItem,
 } from '../db/itemMutations';
-import { generateCalendarItemsToHorizon } from '../db/routineItemHelpers';
+import { generateCalendarItemsToHorizon, materializePendingNextActionRoutines } from '../db/routineItemHelpers';
 import { createRoutine } from '../db/routineMutations';
 import { waitForPendingFlush } from '../db/syncHelpers';
 import { compareNextActions } from '../lib/compareNextActions';
@@ -24,6 +24,7 @@ import * as itemRank from '../lib/itemRank';
 import { compareRank, isStrictlyIncreasing } from '../lib/itemRank';
 import { getGhostSnapshots, resetGhostStore } from '../lib/listGhosts';
 import type { MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
+import { installQueueingLocks, uninstallLocks } from './fakeWebLocks';
 import { openTestDB } from './openTestDB';
 
 // Mock sync API calls so they don't attempt to reach the server during tests
@@ -50,6 +51,17 @@ afterEach(async () => {
     // ghosts from one test can't leak into another's assertions.
     resetGhostStore();
 });
+
+/** Polls IndexedDB until the item row carries `status` — lets a test act in the gap between two writes. */
+async function waitForStoredStatus(itemId: string, status: StoredItem['status']) {
+    for (let poll = 0; poll < 1000; poll++) {
+        // Each read yields to the event loop, so the writer makes progress between polls.
+        if ((await db.get('items', itemId))?.status === status) {
+            return;
+        }
+    }
+    throw new Error(`item ${itemId} never reached status ${status}`);
+}
 
 describe('collectItem', () => {
     it('writes an inbox item and queues a create op', async () => {
@@ -485,6 +497,41 @@ describe('clarifyToTrash', () => {
         expect(trashed.timeStart).toBe('2026-05-09T10:00:00.000Z');
         expect(trashed.timeEnd).toBe('2026-05-09T11:00:00.000Z');
         expect(trashed.calendarEventId).toBe('evt-1');
+    });
+});
+
+describe('routine item disposal vs the materializer', () => {
+    beforeEach(() => {
+        installQueueingLocks();
+    });
+    afterEach(() => {
+        uninstallLocks();
+    });
+
+    it.each(['done', 'trash'] as const)('a materializer pass racing a %s disposal never mints a second open occurrence', async (disposal) => {
+        const routine = await createRoutine(db, {
+            userId: USER_ID,
+            title: 'Take vitamins',
+            routineType: 'nextAction',
+            rrule: 'FREQ=DAILY;INTERVAL=1',
+            template: {},
+            active: true,
+        });
+        const item = await collectItem(db, USER_ID, { title: 'Take vitamins' });
+        const nextActionItem = { ...item, status: 'nextAction' as const, routineId: routine._id };
+
+        const disposing = disposal === 'done' ? clarifyToDone(db, nextActionItem) : clarifyToTrash(db, nextActionItem);
+        // Start the pass in the gap: the disposed row has landed, its successor not yet.
+        await waitForStoredStatus(item._id, disposal);
+        await Promise.all([disposing, materializePendingNextActionRoutines(db, USER_ID)]);
+
+        const allItems = await db.getAllFromIndex('items', 'userId', USER_ID);
+        const open = allItems.filter((i) => i.status === 'nextAction' && i.routineId === routine._id);
+        expect(open).toHaveLength(1);
+        const [successor] = open;
+        if (!successor) throw new Error('expected one open occurrence');
+        // The survivor is the disposal's successor (next occurrence), not a fresh "today" from the materializer.
+        expect(successor.expectedBy).toBe(dayjs().add(1, 'day').format('YYYY-MM-DD'));
     });
 });
 

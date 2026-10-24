@@ -5,6 +5,7 @@ import { compareRank, evenlySpacedRanks, isRankTooLong, rankAt, rankBetween, ran
 import { recordGhostSnapshot } from '../lib/listGhosts';
 import { rankSectionKeyOf } from '../lib/rankSections';
 import type { EnergyLevel, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
+import { ROUTINE_ITEMS_LOCK, withCrossContextLock } from './crossContextLock';
 import { deleteItemById, getItemsAcrossUsers, putItem, topRankForUser } from './itemHelpers';
 import { getRoutineById } from './routineHelpers';
 import { createNextRoutineItem, isCalendarRoutineExhausted, RruleExhaustedError } from './routineItemHelpers';
@@ -243,11 +244,7 @@ export async function clarifyToSomedayMaybe(db: IDBPDatabase<MyDB>, item: Stored
  * regardless — only GCal pushback is skipped server-side; the GTD state still flips to done.
  */
 export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, opts?: { onReadOnlyGCal?: () => void }): Promise<StoredItem> {
-    const updated: StoredItem = { ...item, status: 'done', updatedTs: nowIso() };
-    recordGhostIfLeavingList(item, updated);
-    await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
-    await maybeCreateNextRoutineItem(db, item, 'done');
+    const updated = await disposeItem(db, item, 'done');
     if (item.eventType === 'fromGmail' && item.calendarEventId && opts?.onReadOnlyGCal) {
         opts.onReadOnlyGCal();
     }
@@ -255,11 +252,22 @@ export async function clarifyToDone(db: IDBPDatabase<MyDB>, item: StoredItem, op
 }
 
 export async function clarifyToTrash(db: IDBPDatabase<MyDB>, item: StoredItem): Promise<StoredItem> {
-    const updated: StoredItem = { ...item, status: 'trash', updatedTs: nowIso() };
+    return disposeItem(db, item, 'trash');
+}
+
+/**
+ * Writes a done/trash disposal and, for a routine item, its successor — under the routine-items lock,
+ * so a materializer pass can never observe the gap between the two and mint a second open occurrence.
+ */
+async function disposeItem(db: IDBPDatabase<MyDB>, item: StoredItem, disposalKind: 'done' | 'trash'): Promise<StoredItem> {
+    const updated: StoredItem = { ...item, status: disposalKind, updatedTs: nowIso() };
     recordGhostIfLeavingList(item, updated);
-    await putItem(db, updated);
-    await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
-    await maybeCreateNextRoutineItem(db, item, 'trash');
+    const writeDisposal = async () => {
+        await putItem(db, updated);
+        await queueSyncOp(db, { opType: 'update', entityType: 'item', entityId: updated._id, snapshot: updated, userId: updated.userId });
+        await maybeCreateNextRoutineItem(db, item, disposalKind);
+    };
+    await (item.routineId ? withCrossContextLock(ROUTINE_ITEMS_LOCK, writeDisposal) : writeDisposal());
     return updated;
 }
 

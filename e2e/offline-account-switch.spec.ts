@@ -121,7 +121,7 @@ test.describe('offline account switch', () => {
             await switchAccountViaMenu(page, secondary.userId);
 
             // The switch completed with zero server round-trips: B is the active account…
-            await expect.poll(() => gtd.getActiveAccountId(page), { timeout: 10_000 }).toBe(secondary.userId);
+            await expect.poll(() => gtd.getActiveAccountIdAcrossReload(page), { timeout: 10_000 }).toBe(secondary.userId);
             // …and B's data renders from the IDB cache.
             const items = await gtd.listItems(page);
             expect(items.some((i) => i._id === seededId)).toBe(true);
@@ -170,7 +170,7 @@ test.describe('offline account switch', () => {
 
             // Offline: the switch still lands on B with cached data; the revocation is unknowable
             // without the network, so no dialog yet — never a blocked switch.
-            await expect.poll(() => gtd.getActiveAccountId(page), { timeout: 10_000 }).toBe(secondary.userId);
+            await expect.poll(() => gtd.getActiveAccountIdAcrossReload(page), { timeout: 10_000 }).toBe(secondary.userId);
             await expect(page.getByTestId('accountReauthDialog')).toBeHidden();
 
             // Reconnect: the cookie reconcile finds no live session for B and raises the dialog.

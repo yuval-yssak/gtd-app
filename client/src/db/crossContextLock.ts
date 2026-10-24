@@ -21,6 +21,14 @@ export const SYNC_APPLY_LOCK = 'gtd-sync-apply';
  */
 export const SYNC_FLUSH_LOCK = 'gtd-sync-flush';
 
+/**
+ * Serializes the nextAction-routine materializer (boot + every pull) with a routine item's done/trash
+ * disposal, across tabs and in-tab async paths. Both check-then-write over several IDB transactions;
+ * without the lock a pass landing between the disposal and its successor mints a duplicate open
+ * occurrence. Routine creation, split and editor seeding do not take it yet.
+ */
+export const ROUTINE_ITEMS_LOCK = 'gtd-routine-items';
+
 /** True when this context can serialize through the Web Locks API (all evergreen browsers; absent in node tests). */
 export function hasWebLocks(): boolean {
     return typeof navigator !== 'undefined' && !!navigator.locks;

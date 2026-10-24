@@ -116,7 +116,7 @@ test.describe('account action backdrop', () => {
             // The switch landed on the target account without any error surface (post-switch
             // rendering correctness is covered by account-switch-refresh.spec.ts).
             await page.waitForFunction(() => typeof (window as unknown as { __gtd?: unknown }).__gtd !== 'undefined');
-            await expect.poll(() => gtd.getActiveAccountId(page), { timeout: 10_000 }).toBe(accounts.secondary.userId);
+            await expect.poll(() => gtd.getActiveAccountIdAcrossReload(page), { timeout: 10_000 }).toBe(accounts.secondary.userId);
             await expect(visibleActionError(page)).toBeHidden();
         });
     });

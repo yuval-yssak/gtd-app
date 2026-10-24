@@ -7,6 +7,7 @@ import { computeFirstOccurrenceDate, mergeRoutineEditIntoOpenItem } from '../lib
 import { computeNextOccurrence, RruleExhaustedError } from '../lib/rruleUtils';
 import type { GCalOwnedRoutineKey, MyDB, StoredItem, StoredRoutine } from '../types/MyDB';
 import { GCAL_OWNED_EXCEPTION_KEYS, GCAL_OWNED_ROUTINE_KEYS } from '../types/MyDB';
+import { ROUTINE_ITEMS_LOCK, withCrossContextLock } from './crossContextLock';
 import { putItem, topRankForUser } from './itemHelpers';
 import { updateRoutine } from './routineMutations';
 import { queueSyncOp } from './syncHelpers';
@@ -652,25 +653,28 @@ export async function hardDeletePastItems(db: IDBPDatabase<MyDB>, items: StoredI
  * future-startDate routines and used `startDate - 1 day` with `createNextRoutineItem`
  * (`includeAnchor=false`), which produced wrong dates on weekly rules with mismatched BYDAY.
  *
- * Preserves the "at most one open item" invariant by skipping routines that already have one.
+ * Preserves the "at most one open item" invariant by skipping routines that already have one —
+ * under ROUTINE_ITEMS_LOCK, so a done/trash disposal can't be caught between its two writes.
  */
 export async function materializePendingNextActionRoutines(db: IDBPDatabase<MyDB>, userId: string): Promise<void> {
-    const routines = await db.getAllFromIndex('routines', 'userId', userId);
-    const allItems = await db.getAllFromIndex('items', 'userId', userId);
+    await withCrossContextLock(ROUTINE_ITEMS_LOCK, async () => {
+        const routines = await db.getAllFromIndex('routines', 'userId', userId);
+        const allItems = await db.getAllFromIndex('items', 'userId', userId);
 
-    for (const routine of routines) {
-        if (!routine.active) {
-            continue;
+        for (const routine of routines) {
+            if (!routine.active) {
+                continue;
+            }
+            if (routine.routineType !== 'nextAction') {
+                continue;
+            }
+            const hasOpen = allItems.some((i) => i.routineId === routine._id && i.status !== 'done' && i.status !== 'trash');
+            if (hasOpen) {
+                continue;
+            }
+            await createFirstRoutineItem(db, userId, routine);
         }
-        if (routine.routineType !== 'nextAction') {
-            continue;
-        }
-        const hasOpen = allItems.some((i) => i.routineId === routine._id && i.status !== 'done' && i.status !== 'trash');
-        if (hasOpen) {
-            continue;
-        }
-        await createFirstRoutineItem(db, userId, routine);
-    }
+    });
 }
 
 /**

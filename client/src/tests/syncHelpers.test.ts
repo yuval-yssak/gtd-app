@@ -1,5 +1,6 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installQueueingLocks } from './fakeWebLocks';
 
 // vi.mock is hoisted before imports by Vitest's transformer, so syncHelpers.ts's own
 // import of '#api/syncClient' is also intercepted — no resolve.conditions config needed.
@@ -454,42 +455,6 @@ describe('flushSyncQueue', () => {
 // attempt (the click's dispatch, two sync passes, the SW's own retry) saw "held by other" and
 // silently skipped. Nothing re-triggered a push until the user navigated. On Web Lock browsers a
 // flush now QUEUES behind the holder; the IDB marker remains only as the no-Web-Locks fallback.
-
-type LockCallback = () => Promise<unknown>;
-type LockRequestOptions = { signal?: AbortSignal };
-
-/**
- * A Web Locks stand-in with real queueing semantics: one holder per name, later requests wait in
- * order, and a `signal` that aborts before the grant rejects the request with the signal's reason
- * (the waiter leaves the queue; the holder is untouched) — the behaviour `flushUnderWebLock` relies
- * on. Returns the lock names requested, for wiring assertions.
- */
-function installQueueingLocks(): string[] {
-    const names: string[] = [];
-    const tails = new Map<string, Promise<void>>();
-    const request = vi.fn((name: string, optionsOrCallback: LockRequestOptions | LockCallback, maybeCallback?: LockCallback) => {
-        names.push(name);
-        const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
-        const signal = typeof optionsOrCallback === 'function' ? undefined : optionsOrCallback.signal;
-        if (!callback) {
-            throw new Error('fake locks: callback required');
-        }
-        const previous = tails.get(name) ?? Promise.resolve();
-        return new Promise<unknown>((resolve, reject) => {
-            // Spec: a pre-grant abort rejects with `signal.reason` — the identity `flushUnderWebLock` keys on.
-            const onAbort = () => reject(signal?.reason);
-            signal?.addEventListener('abort', onAbort, { once: true });
-            const tail = previous.then(async () => {
-                if (signal?.aborted) return;
-                signal?.removeEventListener('abort', onAbort);
-                await callback().then(resolve, reject);
-            });
-            tails.set(name, tail);
-        });
-    });
-    Object.defineProperty(navigator, 'locks', { value: { request }, configurable: true });
-    return names;
-}
 
 /** Takes the flush lock as "another context" would; the returned function releases it. */
 function holdFlushLockFromAnotherContext(): () => void {
