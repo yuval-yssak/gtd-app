@@ -2,8 +2,8 @@ import { ROW_ACTION_ATTR } from './rowShortcuts';
 
 /**
  * DOM lookups the Next Actions row hooks share (drag + roving focus). Rows are found through the
- * data attributes every row carries, never through test ids. Not unit-tested (no jsdom here);
- * covered by the reorder and keyboard Playwright specs.
+ * data attributes every row carries, never through test ids. The focus guards are unit-tested under
+ * jsdom (`tests/nextActionsRowDom.test.ts`); the rest by the reorder and keyboard Playwright specs.
  */
 
 /** Attributes every draggable row carries — the hooks read geometry and focus through them. */
@@ -39,6 +39,16 @@ export function rowActionButtonsOf(row: HTMLElement): HTMLElement[] {
 export function isFocusFree(row: HTMLElement): boolean {
     const active = document.activeElement;
     return active === null || active === document.body || row.contains(active);
+}
+
+/**
+ * True when the user has put focus somewhere else since `focusAtRequest` — a deferred row focus
+ * must then stand down, or it yanks the user back (Shift+Tab out of the list while a row is still
+ * mounting). Focus that merely fell to the body (the focused node unmounted) does not count.
+ */
+export function hasFocusMovedSince(focusAtRequest: Element | null): boolean {
+    const active = document.activeElement;
+    return active !== focusAtRequest && active !== null && active !== document.body;
 }
 
 /** The row an event target sits in, or null outside every row. */

@@ -1,12 +1,5 @@
-import Dialog from '@mui/material/Dialog';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import Table from '@mui/material/Table';
-import TableBody from '@mui/material/TableBody';
-import TableCell from '@mui/material/TableCell';
-import TableRow from '@mui/material/TableRow';
-import Typography from '@mui/material/Typography';
 import { Fragment, useSyncExternalStore } from 'react';
+import { Dialog, DialogContent, DialogTitle, Text } from '../designSystem';
 import { STATUS_KEYS } from '../lib/editorShortcuts';
 import { GO_TO_TARGETS } from '../lib/globalShortcuts';
 import { type ChordPart, chordList, isApplePlatform } from '../lib/platformKeys';
@@ -135,39 +128,31 @@ export function KeyboardShortcutsDialog() {
     const open = useSyncExternalStore(subscribeShortcutsDialog, isShortcutsDialogOpen);
     const isApple = isApplePlatform();
     return (
-        <Dialog
-            open={open}
-            onClose={closeShortcutsDialog}
-            fullWidth
-            maxWidth="sm"
-            aria-labelledby="keyboard-shortcuts-title"
-            slotProps={{ paper: { ...{ 'data-testid': 'keyboardShortcutsDialog' } } }}
-        >
-            <DialogTitle id="keyboard-shortcuts-title">Keyboard shortcuts</DialogTitle>
+        <Dialog open={open} onClose={closeShortcutsDialog} fullWidth size="sm" data-testid="keyboardShortcutsDialog">
+            <DialogTitle>Keyboard shortcuts</DialogTitle>
             <DialogContent>
-                <Table size="small">
-                    <TableBody>
+                <table className={styles.table}>
+                    <tbody>
                         {GROUPS.map((group) => (
                             <Fragment key={group.title}>
-                                <TableRow>
-                                    <TableCell colSpan={2}>
-                                        {/* Plain element: a CSS-module rule on the TableCell loses to MUI's emotion styles. */}
-                                        <span className={styles.groupTitle}>{group.title}</span>
-                                    </TableCell>
-                                </TableRow>
+                                <tr>
+                                    <th colSpan={2} scope="colgroup" className={styles.groupTitle}>
+                                        {group.title}
+                                    </th>
+                                </tr>
                                 {group.rows.map((row) => (
-                                    <TableRow key={`${group.title}-${row.does}`}>
-                                        <TableCell className={styles.chord}>{keysOf(row, isApple)}</TableCell>
-                                        <TableCell>{row.does}</TableCell>
-                                    </TableRow>
+                                    <tr key={`${group.title}-${row.does}`}>
+                                        <td className={styles.chord}>{keysOf(row, isApple)}</td>
+                                        <td className={styles.does}>{row.does}</td>
+                                    </tr>
                                 ))}
                             </Fragment>
                         ))}
-                    </TableBody>
-                </Table>
-                <Typography variant="body2" color="text.secondary" className={styles.letters}>
+                    </tbody>
+                </table>
+                <Text variant="bodySm" tone="secondary" className={styles.letters}>
                     Letter shortcuts never fire while you type in a field.
-                </Typography>
+                </Text>
             </DialogContent>
         </Dialog>
     );

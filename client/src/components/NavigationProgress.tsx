@@ -1,5 +1,5 @@
-import LinearProgress from '@mui/material/LinearProgress';
 import { useRouterState } from '@tanstack/react-router';
+import { ProgressBar } from '../designSystem';
 import styles from './NavigationProgress.module.css';
 
 /**
@@ -15,5 +15,5 @@ export function NavigationProgress() {
     if (!isNavigating) {
         return null;
     }
-    return <LinearProgress className={styles.navigationProgress} data-testid="navigationProgress" />;
+    return <ProgressBar value={null} aria-label="Loading page" className={styles.navigationProgress} data-testid="navigationProgress" />;
 }

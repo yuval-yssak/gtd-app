@@ -1,6 +1,5 @@
 declare const styles: {
-    readonly dotOffline: string;
-    readonly dotOnline: string;
+    readonly dot: string;
     readonly root: string;
 };
 export = styles;

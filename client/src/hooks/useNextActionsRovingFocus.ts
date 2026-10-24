@@ -4,7 +4,16 @@ import type { SectionEdge } from '../lib/dragReorder';
 import { isKeyboardEntry, KEYBOARD_REGION_ATTR, skipContainerOnShiftTab } from '../lib/keyboardRegionDom';
 import { type FlatRow, flatIndexOfItem, type NextActionSection } from '../lib/nextActionSections';
 import { type RowKeyAction, resolveRowKey } from '../lib/nextActionsKeys';
-import { ROW_ITEM_ATTR, ROW_WALK_ATTR, rowActionButtonsOf, rowButtonOf, rowElement, rowOfTarget, whenRowMounted } from '../lib/nextActionsRowDom';
+import {
+    hasFocusMovedSince,
+    ROW_ITEM_ATTR,
+    ROW_WALK_ATTR,
+    rowActionButtonsOf,
+    rowButtonOf,
+    rowElement,
+    rowOfTarget,
+    whenRowMounted,
+} from '../lib/nextActionsRowDom';
 import { ROW_ACTION_ATTR } from '../lib/rowShortcuts';
 import type { StoredItem } from '../types/MyDB';
 
@@ -100,9 +109,11 @@ export function useNextActionsRovingFocus({
                 virtualizerRef.current?.scrollToIndex(flatIndex, { align: 'nearest' });
             }
             // Only the LAST requested row may take focus: two quick key presses start two waits, and
-            // the earlier one (its row still mounting) must not win after the later one focused.
+            // the earlier one (its row still mounting) must not win after the later one focused. Nor
+            // may it win after the user tabbed away while the row was mounting.
+            const focusAtRequest = document.activeElement;
             whenRowMounted(itemId, (row) => {
-                if (activeRowId.current === itemId) {
+                if (activeRowId.current === itemId && !hasFocusMovedSince(focusAtRequest)) {
                     rowButtonOf(row)?.focus();
                 }
             });

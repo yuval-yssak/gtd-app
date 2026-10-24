@@ -1,34 +1,25 @@
-import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
-import BoltIcon from '@mui/icons-material/Bolt';
-import BookmarkIcon from '@mui/icons-material/Bookmark';
-import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
-import DoneAllIcon from '@mui/icons-material/DoneAll';
-import EventNoteIcon from '@mui/icons-material/EventNote';
-import GroupIcon from '@mui/icons-material/Group';
-import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
-import InboxIcon from '@mui/icons-material/Inbox';
-import LabelIcon from '@mui/icons-material/Label';
-import LoopIcon from '@mui/icons-material/Loop';
-import MenuIcon from '@mui/icons-material/Menu';
-import SearchIcon from '@mui/icons-material/Search';
-import SettingsIcon from '@mui/icons-material/Settings';
-import Badge from '@mui/material/Badge';
-import BottomNavigation from '@mui/material/BottomNavigation';
-import BottomNavigationAction from '@mui/material/BottomNavigationAction';
-import Box from '@mui/material/Box';
-import Divider from '@mui/material/Divider';
-import Drawer from '@mui/material/Drawer';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import ListItemText from '@mui/material/ListItemText';
-import Paper from '@mui/material/Paper';
-import Toolbar from '@mui/material/Toolbar';
-import Typography from '@mui/material/Typography';
 import { createLink, useLocation } from '@tanstack/react-router';
 import type { IDBPDatabase } from 'idb';
+import {
+    Bookmark,
+    Calendar,
+    CalendarClock,
+    CheckCheck,
+    ClipboardCheck,
+    Hourglass,
+    Inbox,
+    type LucideIcon,
+    Menu,
+    Repeat,
+    Search,
+    Settings,
+    Tag,
+    Trash2,
+    Users,
+    Zap,
+} from 'lucide-react';
+import type { AnchorHTMLAttributes, Ref } from 'react';
+import { Badge, Drawer, Text } from '../designSystem';
 import { type RovingRegionApi, useRovingRegion } from '../hooks/useRovingRegion';
 import { APP_NAME } from '../lib/appName';
 import { useNewTabAwareNavigate } from '../lib/newTabNavigation';
@@ -39,80 +30,73 @@ import styles from './AppNav.module.css';
 import { KeyboardShortcutsButton } from './KeyboardShortcutsButton';
 import { StatusBar } from './StatusBar';
 
-export const DRAWER_WIDTH = 240;
-
 interface NavItemConfig {
     label: string;
-    icon: React.ReactElement;
+    icon: LucideIcon;
     to: FileRouteTypes['to'];
     badgeCount?: number;
 }
 
 const primaryItems: NavItemConfig[] = [
-    { label: 'Inbox', icon: <InboxIcon fontSize="small" />, to: '/inbox' },
-    { label: 'Next Actions', icon: <BoltIcon fontSize="small" />, to: '/next-actions' },
-    { label: 'Calendar', icon: <CalendarTodayIcon fontSize="small" />, to: '/calendar' },
-    { label: 'Waiting For', icon: <HourglassEmptyIcon fontSize="small" />, to: '/waiting-for' },
-    { label: 'Tickler', icon: <EventNoteIcon fontSize="small" />, to: '/tickler' },
-    { label: 'Someday / Maybe', icon: <BookmarkIcon fontSize="small" />, to: '/someday' },
+    { label: 'Inbox', icon: Inbox, to: '/inbox' },
+    { label: 'Next Actions', icon: Zap, to: '/next-actions' },
+    { label: 'Calendar', icon: Calendar, to: '/calendar' },
+    { label: 'Waiting For', icon: Hourglass, to: '/waiting-for' },
+    { label: 'Tickler', icon: CalendarClock, to: '/tickler' },
+    { label: 'Someday / Maybe', icon: Bookmark, to: '/someday' },
 ];
 
 const secondaryItems: NavItemConfig[] = [
-    { label: 'Routines', icon: <LoopIcon fontSize="small" />, to: '/routines' },
-    { label: 'People', icon: <GroupIcon fontSize="small" />, to: '/people' },
-    { label: 'Work Contexts', icon: <LabelIcon fontSize="small" />, to: '/work-contexts' },
+    { label: 'Routines', icon: Repeat, to: '/routines' },
+    { label: 'People', icon: Users, to: '/people' },
+    { label: 'Work Contexts', icon: Tag, to: '/work-contexts' },
 ];
 
 const tertiaryItems: NavItemConfig[] = [
-    { label: 'Search', icon: <SearchIcon fontSize="small" />, to: '/search' },
-    { label: 'Weekly Review', icon: <AssignmentTurnedInIcon fontSize="small" />, to: '/weekly-review' },
-    { label: 'Done', icon: <DoneAllIcon fontSize="small" />, to: '/done' },
-    { label: 'Trash', icon: <DeleteOutlineIcon fontSize="small" />, to: '/trash' },
+    { label: 'Search', icon: Search, to: '/search' },
+    { label: 'Weekly Review', icon: ClipboardCheck, to: '/weekly-review' },
+    { label: 'Done', icon: CheckCheck, to: '/done' },
+    { label: 'Trash', icon: Trash2, to: '/trash' },
 ];
 
-const settingsNavItem: NavItemConfig = { label: 'Settings', icon: <SettingsIcon fontSize="small" />, to: '/settings' };
+const settingsNavItem: NavItemConfig = { label: 'Settings', icon: Settings, to: '/settings' };
+
+const NAV_GROUPS = [primaryItems, secondaryItems, tertiaryItems, [settingsNavItem]];
 
 // Bottom nav shows only the 4 most-used daily-driver sections
 const bottomNavItems = primaryItems.slice(0, 4);
 
-// Render ListItemButton AS an <a>, then let createLink make it a TanStack Link.
-// Real <a href> means middle-click / cmd-click / "Open in new tab" all work; a single DOM element means one tab stop per row.
-// Prop surface is hand-narrowed to what NavListItem passes (selected, dense) plus anchor attrs — widen here if a new call site needs more.
-// MUI v9's `ListItemButtonProps<'a'>` doesn't compose cleanly with React 19's ref-as-prop, so we don't reuse it.
-type ListItemButtonAnchorProps = Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, 'color'> & {
-    selected?: boolean;
-    dense?: boolean;
-    ref?: React.Ref<HTMLAnchorElement>;
-};
-const ListItemButtonAnchor = ({ ref, ...props }: ListItemButtonAnchorProps) => <ListItemButton ref={ref} component="a" {...props} />;
-const NavListItemButton = createLink(ListItemButtonAnchor);
+const NAV_ICON_SIZE = 18;
+
+// A real <a href> fused with TanStack's Link: middle-click / cmd-click / "Open in new tab" work, and
+// each row is a single tab stop. TanStack marks the active link with aria-current="page".
+const NavAnchor = ({ ref, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { ref?: Ref<HTMLAnchorElement> }) => <a ref={ref} {...props} />;
+const NavLink = createLink(NavAnchor);
 
 interface NavListItemProps {
     item: NavItemConfig;
-    isActive: boolean;
     onItemClick: () => void;
     /** The menu region's item props: the links leave the tab order and ↑/↓ walk them. */
     itemProps: RovingRegionApi['itemProps'];
 }
 
-function NavListItem({ item, isActive, onItemClick, itemProps }: NavListItemProps) {
-    const iconNode =
-        item.badgeCount != null ? (
-            <Badge badgeContent={item.badgeCount} color="primary" max={99}>
-                {item.icon}
-            </Badge>
-        ) : (
-            item.icon
-        );
-
+function NavListItem({ item, onItemClick, itemProps }: NavListItemProps) {
+    const Icon = item.icon;
     return (
-        <ListItem disablePadding>
-            {/* createLink fuses ListItemButton + TanStack Link into one element so the row has a single tab stop instead of nested <a> + role=button div */}
-            <NavListItemButton to={item.to} selected={isActive} onClick={onItemClick} dense className={styles.navLink} {...itemProps}>
-                <ListItemIcon className={styles.listItemIcon}>{iconNode}</ListItemIcon>
-                <ListItemText primary={item.label} slotProps={{ primary: { variant: 'body2' } }} />
-            </NavListItemButton>
-        </ListItem>
+        <li>
+            <NavLink to={item.to} onClick={onItemClick} className={styles.navLink} {...itemProps}>
+                <span className={styles.navIcon} aria-hidden="true">
+                    {item.badgeCount === undefined ? (
+                        <Icon size={NAV_ICON_SIZE} />
+                    ) : (
+                        <Badge count={item.badgeCount}>
+                            <Icon size={NAV_ICON_SIZE} />
+                        </Badge>
+                    )}
+                </span>
+                {item.label}
+            </NavLink>
+        </li>
     );
 }
 
@@ -122,53 +106,53 @@ interface DrawerContentProps {
 }
 
 function DrawerContent({ onItemClick, db }: DrawerContentProps) {
-    const { pathname } = useLocation();
     // The whole menu is ONE tab stop entered on the current page's link; ↑/↓/Home/End walk it.
-    // `aria-current="page"` is TanStack Link's own mark for the active link (semantic, not an MUI class name).
+    // `aria-current="page"` is TanStack Link's own mark for the active link.
     const menu = useRovingRegion({ orientation: 'vertical', label: 'Main menu', preferredItemSelector: '[aria-current="page"]', isPreferredSticky: true });
-    const renderItem = (item: NavItemConfig) => (
-        <NavListItem key={item.to} item={item} isActive={pathname === item.to} onItemClick={onItemClick} itemProps={menu.itemProps} />
-    );
 
     return (
-        <Box className={styles.drawerContent}>
-            {/* Logo row — desktop only (mobile has the AppBar) */}
-            <Box className={styles.logoRow}>
-                <Typography
-                    variant="h6"
-                    color="primary"
-                    sx={{
-                        fontWeight: 700,
-                    }}
-                    data-testid="appBrand"
-                >
+        <div className={styles.drawerContent}>
+            <div className={styles.logoRow}>
+                <Text variant="titleSm" as="span" tone="accent" weight="bold" data-testid="appBrand">
                     {APP_NAME}
-                </Typography>
-                <KeyboardShortcutsButton />
-            </Box>
-            {/* Spacer on mobile so nav list starts below the fixed AppBar */}
-            <Box className={styles.toolbarSpacer}>
-                <Toolbar />
-            </Box>
-            <Box component="nav" aria-label="Main" className={styles.navScrollArea}>
-                <List disablePadding data-testid="mainMenu" {...menu.regionProps}>
-                    {primaryItems.map(renderItem)}
-                    <Divider className={styles.divider} />
-                    {secondaryItems.map(renderItem)}
-                    <Divider className={styles.divider} />
-                    {tertiaryItems.map(renderItem)}
-                    <Divider className={styles.divider} />
-                    {renderItem(settingsNavItem)}
-                </List>
-            </Box>
+                </Text>
+                {/* Touch has no shortcuts, so the legend button is desktop-only. */}
+                <span className={styles.desktopOnly}>
+                    <KeyboardShortcutsButton />
+                </span>
+            </div>
+            <nav aria-label="Main" className={styles.navScrollArea}>
+                <ul className={styles.navList} data-testid="mainMenu" {...menu.regionProps}>
+                    {NAV_GROUPS.map((group, groupIndex) => (
+                        <NavGroup
+                            key={group[0]?.to ?? groupIndex}
+                            items={group}
+                            isFirst={groupIndex === 0}
+                            onItemClick={onItemClick}
+                            itemProps={menu.itemProps}
+                        />
+                    ))}
+                </ul>
+            </nav>
             {/* Account + status — pinned to sidebar bottom */}
-            <Box className={styles.drawerFooter}>
-                <Box className={styles.accountRow}>
+            <div className={styles.drawerFooter}>
+                <div className={styles.accountRow}>
                     <AccountSwitcher db={db} />
-                </Box>
+                </div>
                 <StatusBar db={db} />
-            </Box>
-        </Box>
+            </div>
+        </div>
+    );
+}
+
+function NavGroup({ items, isFirst, onItemClick, itemProps }: { items: NavItemConfig[]; isFirst: boolean } & Omit<NavListItemProps, 'item'>) {
+    return (
+        <>
+            {!isFirst && <li aria-hidden="true" className={styles.divider} />}
+            {items.map((item) => (
+                <NavListItem key={item.to} item={item} onItemClick={onItemClick} itemProps={itemProps} />
+            ))}
+        </>
     );
 }
 
@@ -179,47 +163,53 @@ interface AppNavProps {
 }
 
 export function AppNav({ isMobileDrawerOpen, setIsMobileDrawerOpen, db }: AppNavProps) {
-    const { pathname } = useLocation();
-    const navigateOrNewTab = useNewTabAwareNavigate();
-
-    // "More" is highlighted when the current page is outside the 4 bottom-nav items
-    const isBottomNavRoute = bottomNavItems.some((item) => item.to === pathname);
-    const bottomNavValue = isBottomNavRoute ? pathname : 'more';
-
     return (
         <>
             {/* Permanent sidebar — desktop only */}
-            <Drawer variant="permanent" className={styles.permanentDrawer}>
+            <aside className={styles.permanentSidebar}>
                 <DrawerContent onItemClick={() => {}} db={db} />
-            </Drawer>
+            </aside>
 
-            {/* Temporary drawer — mobile only (slides in from left) */}
-            <Drawer
-                variant="temporary"
-                open={isMobileDrawerOpen}
-                onClose={() => setIsMobileDrawerOpen(false)}
-                ModalProps={{ keepMounted: true }}
-                className={styles.temporaryDrawer}
-            >
+            {/* Mobile drawer — unmounted while closed, so its menu region is out of the DOM (keyboard regions rely on that). */}
+            <Drawer open={isMobileDrawerOpen} onClose={() => setIsMobileDrawerOpen(false)} aria-label="Navigation">
                 <DrawerContent onItemClick={() => setIsMobileDrawerOpen(false)} db={db} />
             </Drawer>
 
-            {/* Bottom navigation — mobile only */}
-            <Paper elevation={3} className={styles.bottomNavPaper}>
-                <BottomNavigation value={bottomNavValue} showLabels>
-                    {bottomNavItems.map((item) => (
-                        <BottomNavigationAction
-                            key={item.to}
-                            label={item.label}
-                            value={item.to}
-                            icon={item.icon}
-                            // navigateOrNewTab instead of component=Link to avoid MUI/TanStack type conflicts
-                            onClick={(e) => navigateOrNewTab(e, { to: item.to as never })}
-                        />
-                    ))}
-                    <BottomNavigationAction label="More" value="more" icon={<MenuIcon />} onClick={() => setIsMobileDrawerOpen(true)} />
-                </BottomNavigation>
-            </Paper>
+            <BottomNav onMoreClick={() => setIsMobileDrawerOpen(true)} />
         </>
+    );
+}
+
+/** The phone tab bar: the four daily lists plus "More", which opens the drawer. */
+function BottomNav({ onMoreClick }: { onMoreClick: () => void }) {
+    const { pathname } = useLocation();
+    const navigateOrNewTab = useNewTabAwareNavigate();
+    // "More" is highlighted when the current page is outside the 4 bottom-nav items
+    const isBottomNavRoute = bottomNavItems.some((item) => item.to === pathname);
+
+    return (
+        <nav aria-label="Primary" className={styles.bottomNav}>
+            {bottomNavItems.map((item) => {
+                const Icon = item.icon;
+                return (
+                    <button
+                        key={item.to}
+                        type="button"
+                        className={styles.bottomNavAction}
+                        data-selected={pathname === item.to || undefined}
+                        aria-current={pathname === item.to ? 'page' : undefined}
+                        // navigateOrNewTab keeps cmd/ctrl-click opening a new tab, like the sidebar links.
+                        onClick={(event) => navigateOrNewTab(event, { to: item.to as never })}
+                    >
+                        <Icon size={20} aria-hidden="true" />
+                        <span className={styles.bottomNavLabel}>{item.label}</span>
+                    </button>
+                );
+            })}
+            <button type="button" className={styles.bottomNavAction} data-selected={!isBottomNavRoute || undefined} onClick={onMoreClick}>
+                <Menu size={20} aria-hidden="true" />
+                <span className={styles.bottomNavLabel}>More</span>
+            </button>
+        </nav>
     );
 }

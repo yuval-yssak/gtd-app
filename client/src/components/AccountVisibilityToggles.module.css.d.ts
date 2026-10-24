@@ -1,7 +1,7 @@
 declare const styles: {
-    readonly avatarHidden: string;
     readonly avatarRing: string;
-    readonly hiddenBadgeIcon: string;
+    readonly avatarSlot: string;
+    readonly hiddenMarker: string;
     readonly toggleRow: string;
 };
 export = styles;

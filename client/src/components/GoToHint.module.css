@@ -1,17 +1,22 @@
-/* Bottom-left, clear of the quick-capture FAB (bottom-right) and the snackbars (bottom-centre). */
+/* Top-end: clear of the quick-capture button (bottom-end) and the toasts (bottom-start on desktop). */
 .hint {
     position: fixed;
-    left: 1rem;
-    bottom: 1rem;
-    z-index: var(--mui-zIndex-snackbar, 1400);
-    padding: 0.75rem 1rem;
-    max-width: 18rem;
+    inset-block-start: var(--space-4);
+    inset-inline-end: var(--space-4);
+    z-index: var(--z-toast);
+    max-inline-size: 18rem;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-lg);
+    background-color: var(--color-bg-surface-raised);
+    box-shadow: var(--shadow-popup);
 }
 
 .title {
     display: block;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
+    margin-block-end: var(--space-1);
+    font-size: var(--type-xs-size);
+    font-weight: var(--weight-semibold);
 }
 
 .targets {
@@ -19,15 +24,16 @@
     padding: 0;
     list-style: none;
     columns: 2;
-    column-gap: 1rem;
-    font-size: 0.8125rem;
+    column-gap: var(--space-4);
+    font-size: var(--type-xs-size);
+    line-height: var(--type-xs-line);
 }
 
 .key {
     display: inline-block;
-    min-width: 1.25rem;
+    min-inline-size: 1.25rem;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
     text-align: center;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
-    border-radius: 0.25rem;
 }

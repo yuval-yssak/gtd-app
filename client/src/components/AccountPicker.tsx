@@ -1,8 +1,5 @@
-import FormControl from '@mui/material/FormControl';
-import InputLabel from '@mui/material/InputLabel';
-import MenuItem from '@mui/material/MenuItem';
-import Select from '@mui/material/Select';
 import { useAppData } from '../contexts/AppDataProvider';
+import { Select, Text } from '../designSystem';
 import { useOnline } from '../hooks/useOnline';
 import { getAccountColor } from '../lib/accountColors';
 import styles from './AccountPicker.module.css';
@@ -14,9 +11,9 @@ interface AccountPickerProps {
     value: string;
     onChange: (userId: string) => void;
     /** Disabled while save is in flight, or when the entity can't be reassigned (routine-generated items). */
-    disabled?: boolean;
+    disabled?: boolean | undefined;
     /** Surfaced as an inline error under the picker — e.g. "select a target calendar before saving". */
-    error?: string;
+    error?: string | undefined;
 }
 
 /**
@@ -32,23 +29,37 @@ export function AccountPicker({ value, onChange, disabled, error }: AccountPicke
     if (loggedInAccounts.length <= 1) {
         return null;
     }
+    const options = loggedInAccounts.map((acct) => ({
+        value: acct.id,
+        label: (
+            <span className={styles.option}>
+                {/* The dot colour is the account's runtime palette pick. */}
+                <span className={styles.colorDot} style={{ '--account-color': getAccountColor(acct.id, loggedInAccounts) }} />
+                {acct.email}
+            </span>
+        ),
+    }));
     return (
-        <FormControl size="small" fullWidth error={Boolean(error)}>
-            <InputLabel>Account</InputLabel>
-            <Select label="Account" value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled || !isOnline} data-testid="accountPicker">
-                {loggedInAccounts.map((acct) => (
-                    <MenuItem key={acct.id} value={acct.id}>
-                        <span className={styles.colorDot} style={{ backgroundColor: getAccountColor(acct.id, loggedInAccounts) }} />
-                        {acct.email}
-                    </MenuItem>
-                ))}
-            </Select>
-            {error && <div className={styles.error}>{error}</div>}
-            {!isOnline && !error && (
-                <div className={styles.offlineNote} data-testid="accountPickerOfflineNote">
-                    {OFFLINE_PICKER_NOTE}
-                </div>
+        <div className={styles.root}>
+            <Select
+                label="Account"
+                value={value}
+                onValueChange={onChange}
+                options={options}
+                disabled={disabled || !isOnline}
+                fullWidth
+                data-testid="accountPicker"
+            />
+            {error && (
+                <Text variant="caption" tone="error" as="div">
+                    {error}
+                </Text>
             )}
-        </FormControl>
+            {!isOnline && !error && (
+                <Text variant="caption" tone="secondary" as="div" data-testid="accountPickerOfflineNote">
+                    {OFFLINE_PICKER_NOTE}
+                </Text>
+            )}
+        </div>
     );
 }

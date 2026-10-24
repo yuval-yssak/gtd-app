@@ -1,19 +1,20 @@
 .root {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 0.375rem;
-    padding: 0.25rem 1rem;
-    border-top: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
-    background-color: var(--mui-palette-background-paper, #fff);
+    gap: var(--space-1-5);
+    padding: var(--space-1) var(--space-4);
+    border-block-start: 1px solid var(--color-divider);
+    background-color: var(--color-bg-surface);
 }
 
-/* Each state carries font-size so no class combination is needed for the icon */
-.dotOnline {
-    font-size: 0.625rem;
-    color: var(--mui-palette-success-main, #2e7d32);
-}
+.dot {
+    inline-size: 0.5rem;
+    block-size: 0.5rem;
+    border-radius: var(--radius-full);
+    background-color: var(--color-status-error);
 
-.dotOffline {
-    font-size: 0.625rem;
-    color: var(--mui-palette-error-main, #d32f2f);
+    &[data-online] {
+        background-color: var(--color-status-success);
+    }
 }

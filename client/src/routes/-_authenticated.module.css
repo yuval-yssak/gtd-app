@@ -1,24 +1,29 @@
 .appShell {
     display: flex;
-    min-height: 100vh;
+    min-block-size: 100vh;
 }
 
-/* Hidden on desktop — the permanent sidebar replaces it; shown on mobile as fixed top bar */
+/* Phone/tablet top bar; the permanent sidebar replaces it at the md breakpoint. */
 .mobileAppBar {
+    position: fixed;
+    inset-block-start: 0;
+    inset-inline: 0;
+    z-index: var(--z-app-bar);
     display: flex;
-    z-index: calc(var(--mui-zIndex-drawer, 1200) + 1); /* fallback: MUI cssVariables is off by default; 1200 = MUI drawer default */
+    align-items: center;
+    gap: var(--space-2);
+    min-block-size: 3.5rem;
+    padding: env(safe-area-inset-top, 0) var(--space-4) 0;
+    border-block-end: 1px solid var(--color-border-default);
+    background-color: var(--color-bg-surface);
+    color: var(--color-text-primary);
 }
 
-@media (min-width: 56.25rem) {
-    /* Doubled class raises specificity to (0,2,0), beating MUI's emotion class (0,1,0)
-       which is injected later in the cascade and would otherwise keep the AppBar visible. */
-    .mobileAppBar.mobileAppBar {
+/* MUI's md breakpoint (900px) — see hooks/useIsMobile.ts. */
+@media (width >= 900px) {
+    .mobileAppBar {
         display: none;
     }
-}
-
-.menuButton {
-    margin-right: 0.5rem;
 }
 
 .appBarTitle {
@@ -28,21 +33,19 @@
 .mainContent {
     flex-grow: 1;
     overflow: auto;
-    /* Mobile: push content below fixed AppBar (9×8=4.5rem) and above bottom nav */
-    padding-top: 4.5rem;
-    padding-bottom: 4.5rem;
-    padding-left: 1rem;
-    padding-right: 1rem;
+
+    /* Mobile: clear the fixed app bar (3.5rem + breathing room) and the bottom nav. */
+    padding: 4.5rem var(--space-4);
+
     /* Mirrors this element's vertical padding so viewport-fitted pages (weekly review) can size
        themselves to exactly the visible content area: calc(100dvh - var(--gtd-main-vertical-inset)). */
     --gtd-main-vertical-inset: 9rem;
 }
 
-@media (min-width: 56.25rem) {
-    /* Desktop: the flex layout places mainContent after the 15rem permanentDrawer element;
-       no margin-left needed. Reset padding to desktop value. */
+@media (width >= 900px) {
     .mainContent {
-        padding: 1.5rem;
+        padding: var(--space-6);
+
         --gtd-main-vertical-inset: 3rem;
     }
 }

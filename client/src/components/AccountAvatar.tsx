@@ -1,13 +1,15 @@
-import Avatar from '@mui/material/Avatar';
+import { Avatar } from '@base-ui/react/avatar';
 import type { StoredAccount } from '../types/MyDB';
+import styles from './AccountAvatar.module.css';
 
-/** Round account avatar with an initial-letter fallback. Shared by AccountSwitcher and AccountVisibilityToggles. */
+/** Round account avatar with an initial-letter fallback (shown too when the image fails to load). Shared by AccountSwitcher and AccountVisibilityToggles. */
 export function AccountAvatar({ account, size }: { account: StoredAccount | undefined; size: number }) {
-    // fontSize: MUI Avatar default is 1.25rem on 40px = ~0.375 ratio; scale it with size
-    // Inline style used because width/height/fontSize are dynamic — computed from the size prop at runtime
+    // The diameter is a per-call number; the initial scales with it (MUI's 1.25rem-on-40px ratio).
+    const sizeStyle = { '--avatar-size': `${size / 16}rem` };
     return (
-        <Avatar src={account?.image ?? undefined} alt={account?.name ?? 'Account'} style={{ width: size, height: size, fontSize: size * 0.375 }}>
-            {!account?.image && (account?.name?.[0]?.toUpperCase() ?? '?')}
-        </Avatar>
+        <Avatar.Root className={styles.avatar} style={sizeStyle}>
+            {account?.image && <Avatar.Image src={account.image} alt={account.name ?? 'Account'} className={styles.image} />}
+            <Avatar.Fallback className={styles.fallback}>{account?.name?.[0]?.toUpperCase() ?? '?'}</Avatar.Fallback>
+        </Avatar.Root>
     );
 }

@@ -1,14 +1,27 @@
 .menuButton {
-    margin-left: 0.5rem;
+    margin-inline-start: var(--space-2);
 }
 
 .checkIcon {
-    margin-left: 0.5rem;
-    color: var(--mui-palette-primary-main, #1976d2);
+    color: var(--color-accent);
 }
 
 /* The avatars' keyboard region (one tab stop) — laid out exactly as the bare siblings were. */
 .accountsRegion {
     display: inline-flex;
     align-items: center;
+}
+
+/* Full-screen blocking layer above the drawers while an account action runs. */
+.pendingOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-dialog);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-4);
+    background-color: var(--color-backdrop);
+    color: var(--color-on-swatch);
 }

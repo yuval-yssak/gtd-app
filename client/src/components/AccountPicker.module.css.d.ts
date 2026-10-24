@@ -1,6 +1,6 @@
 declare const styles: {
     readonly colorDot: string;
-    readonly error: string;
-    readonly offlineNote: string;
+    readonly option: string;
+    readonly root: string;
 };
 export = styles;

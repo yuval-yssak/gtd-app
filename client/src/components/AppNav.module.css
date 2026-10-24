@@ -1,112 +1,161 @@
-.drawerContent {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
-}
-
-/* Hidden on mobile — only shown on desktop via block display */
-.permanentDrawer {
+/* Desktop-only permanent sidebar; the md breakpoint (900px) matches hooks/useIsMobile.ts. */
+.permanentSidebar {
     display: none;
-    width: 15rem;
+    position: sticky;
+    inset-block-start: 0;
     flex-shrink: 0;
+    inline-size: var(--sidebar-width);
+    block-size: 100dvh;
+    border-inline-end: 1px solid var(--color-border-default);
+    background-color: var(--color-bg-surface);
 }
 
-/* Targets the MUI internal paper element to set its width and box model */
-.permanentDrawer :global(.MuiDrawer-paper) {
-    width: 15rem;
-    box-sizing: border-box;
-}
-
-@media (min-width: 56.25rem) {
-    .permanentDrawer {
+@media (width >= 900px) {
+    .permanentSidebar {
         display: block;
     }
 }
 
-/* Hidden on desktop — only shown on mobile; slides in as an overlay */
-.temporaryDrawer {
-    display: block;
+.drawerContent {
+    display: flex;
+    flex-direction: column;
+    block-size: 100%;
+    overflow: hidden;
 }
 
-.temporaryDrawer :global(.MuiDrawer-paper) {
-    width: 15rem;
-    box-sizing: border-box;
-}
-
-@media (min-width: 56.25rem) {
-    .temporaryDrawer {
-        display: none;
-    }
-}
-
-/* Fixed bottom navigation bar — mobile only */
-.bottomNavPaper {
-    display: block;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: var(--mui-zIndex-appBar, 1100); /* fallback: MUI cssVariables is off by default; 1100 = MUI appBar default */
-}
-
-@media (min-width: 56.25rem) {
-    .bottomNavPaper {
-        display: none;
-    }
-}
-
-/* Neutralize default <a> underline + blue color now that ListItemButton renders as a TanStack Link */
-.navLink {
-    text-decoration: none;
-    color: inherit;
-}
-
-.listItemIcon {
-    min-width: 2.25rem;
-}
-
-.divider {
-    margin: 0.25rem 0;
-}
-
-/* Desktop: show logo row; hidden on mobile where AppBar takes over */
 .logoRow {
-    display: none;
+    display: flex;
     align-items: center;
-    /* Brand left, the keyboard-shortcuts button right. */
+
+    /* Brand on the start edge, the keyboard-shortcuts button on the end edge. */
     justify-content: space-between;
-    padding: 0.75rem 1rem;
+    min-block-size: 3.5rem;
+    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
 }
 
-@media (min-width: 56.25rem) {
-    .logoRow {
-        display: flex;
-    }
+.desktopOnly {
+    display: none;
 }
 
-/* Mobile: spacer pushes nav list below fixed AppBar; hidden on desktop */
-.toolbarSpacer {
-    display: block;
-}
-
-@media (min-width: 56.25rem) {
-    .toolbarSpacer {
-        display: none;
+@media (width >= 900px) {
+    .desktopOnly {
+        display: inline-flex;
     }
 }
 
 .navScrollArea {
-    overflow-y: auto;
     flex-grow: 1;
+    overflow-y: auto;
+    padding: 0 var(--space-2);
+}
+
+.navList {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    outline: none;
+}
+
+.navLink {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-block-size: 2.25rem;
+    padding: 0 var(--space-3);
+    border-radius: var(--radius-md);
+    color: var(--color-text-secondary);
+    font-size: var(--type-sm-size);
+    line-height: var(--type-sm-line);
+    font-weight: var(--weight-medium);
+    text-decoration: none;
+
+    @media (hover: hover) {
+        &:hover {
+            background-color: var(--color-state-hover);
+            color: var(--color-text-primary);
+        }
+    }
+
+    &:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: calc(var(--focus-ring-width) * -1);
+    }
+
+    &[aria-current="page"] {
+        background-color: var(--color-state-selected);
+        color: var(--color-accent);
+    }
+}
+
+.navIcon {
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
+.divider {
+    block-size: 1px;
+    margin: var(--space-2) var(--space-3);
+    background-color: var(--color-divider);
 }
 
 .drawerFooter {
-    border-top: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
+    border-block-start: 1px solid var(--color-divider);
 }
 
 .accountRow {
     display: flex;
     align-items: center;
-    padding: 0.25rem 0.5rem;
+    padding: var(--space-1) var(--space-2);
+}
+
+/* Fixed bottom tab bar — phones only */
+.bottomNav {
+    position: fixed;
+    inset-block-end: 0;
+    inset-inline: 0;
+    z-index: var(--z-app-bar);
+    display: flex;
+    padding-block-end: env(safe-area-inset-bottom, 0);
+    border-block-start: 1px solid var(--color-border-default);
+    background-color: var(--color-bg-surface);
+}
+
+@media (width >= 900px) {
+    .bottomNav {
+        display: none;
+    }
+}
+
+.bottomNavAction {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-0-5);
+    min-inline-size: 0;
+    min-block-size: 3.5rem;
+    padding: var(--space-1);
+    border: 0;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+
+    &[data-selected] {
+        color: var(--color-accent);
+    }
+
+    &:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: calc(var(--focus-ring-width) * -1);
+    }
+}
+
+.bottomNavLabel {
+    overflow: hidden;
+    max-inline-size: 100%;
+    font-size: var(--type-xs-size);
+    line-height: 1rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }

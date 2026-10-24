@@ -1,5 +1,3 @@
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
 import { GO_TO_TARGETS } from '../lib/globalShortcuts';
 import styles from './GoToHint.module.css';
 
@@ -14,11 +12,8 @@ export function GoToHint({ isOpen }: { isOpen: boolean }) {
         return null;
     }
     return (
-        <Paper elevation={6} className={styles.hint} aria-hidden="true" data-testid="goToHint">
-            {/* Plain element: a CSS-module rule on the Typography itself loses to MUI's emotion styles. */}
-            <Typography variant="caption" component="div">
-                <span className={styles.title}>Go to…</span>
-            </Typography>
+        <div className={styles.hint} aria-hidden="true" data-testid="goToHint">
+            <span className={styles.title}>Go to…</span>
             <ul className={styles.targets}>
                 {GO_TO_TARGETS.map((target) => (
                     <li key={target.key}>
@@ -26,6 +21,6 @@ export function GoToHint({ isOpen }: { isOpen: boolean }) {
                     </li>
                 ))}
             </ul>
-        </Paper>
+        </div>
     );
 }

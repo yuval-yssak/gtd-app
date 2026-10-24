@@ -78,9 +78,14 @@ test.describe('Keyboard regions and global shortcuts', () => {
             await expect.poll(() => page.evaluate(() => document.activeElement?.textContent)).toBe('Medium energy');
             await page.keyboard.press('Space');
             await expect(page).toHaveURL(/energy=medium/);
-            // Space again clears it (no seeded row has medium energy — the list must come back to Tab into).
+            // Wait for the filtered render (no seeded row has medium energy, so the list region goes):
+            // the URL changes before the transition commits, and a second Space inside that window
+            // toggles from the stale state and re-applies the filter.
+            await expect(page.locator('[data-keyboard-region="Next actions"]')).toHaveCount(0);
+            // Space again clears it — and the list must be back before Tab can move into it.
             await page.keyboard.press('Space');
             await expect(page).not.toHaveURL(/energy=/);
+            await expect(page.locator('[data-keyboard-region="Next actions"]')).toBeAttached();
 
             await page.keyboard.press('End');
             await expect.poll(() => focused(page)).toBe('INPUT'); // the "Show tags" switch
@@ -309,8 +314,8 @@ test.describe('Keyboard regions and global shortcuts', () => {
             await page.keyboard.press('Shift+?');
             const legend = page.getByTestId('keyboardShortcutsDialog');
             await expect(legend).toBeVisible();
-            // MUI focuses the dialog's root (outside its paper); F6 must not move focus out of it.
-            const isInDialog = () => page.evaluate(() => document.activeElement?.closest('.MuiDialog-root') !== null);
+            // F6 must not move focus out of the open dialog.
+            const isInDialog = () => page.evaluate(() => document.activeElement?.closest('[role="dialog"]') !== null);
             expect(await isInDialog()).toBe(true);
             await page.keyboard.press('F6');
             await page.waitForTimeout(200);

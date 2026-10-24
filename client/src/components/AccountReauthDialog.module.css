@@ -1,0 +1,9 @@
+.paragraph {
+    margin-block-end: var(--space-4);
+}
+
+.rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}

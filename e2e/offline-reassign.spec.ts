@@ -75,9 +75,8 @@ test.describe('offline account actions — graceful block', () => {
             await page.context().setOffline(true);
             await page.getByTestId('personRowEditButton').first().click();
 
-            // MUI marks both the Select root and its display node with Mui-disabled when disabled.
             const picker = page.getByTestId('accountPicker');
-            await expect(picker).toHaveClass(/Mui-disabled/);
+            await expect(picker).toBeDisabled();
             await expect(page.getByTestId('accountPickerOfflineNote')).toBeVisible();
         });
     });

@@ -1,17 +1,11 @@
-import Alert from '@mui/material/Alert';
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogContentText from '@mui/material/DialogContentText';
-import DialogTitle from '@mui/material/DialogTitle';
-import Stack from '@mui/material/Stack';
 import type { IDBPDatabase } from 'idb';
 import { useSyncExternalStore } from 'react';
 import { acknowledgeAccountReauthDialog, getReauthDialogUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
+import { Button, Callout, Dialog, DialogActions, DialogContent, DialogDescription, DialogTitle, Text } from '../designSystem';
 import { useAccounts } from '../hooks/useAccounts';
 import { useOnline } from '../hooks/useOnline';
 import type { MyDB } from '../types/MyDB';
+import styles from './AccountReauthDialog.module.css';
 
 export const UNKNOWN_ACCOUNT_LABEL = 'Unknown account';
 
@@ -63,24 +57,24 @@ export function AccountReauthDialog({ db }: { db: IDBPDatabase<MyDB> }) {
         <Dialog open onClose={acknowledgeAll} data-testid="accountReauthDialog">
             <DialogTitle>Sync is broken for {staleAccounts.length === 1 ? 'an account' : 'some accounts'}</DialogTitle>
             <DialogContent>
-                <DialogContentText sx={{ mb: 2 }}>
+                <DialogDescription className={styles.paragraph}>
                     The data shown for {staleAccounts.length === 1 ? 'this account' : 'these accounts'} may be stale or incomplete until you log in again —
                     changes are not syncing.
-                </DialogContentText>
+                </DialogDescription>
                 {!isOnline && (
-                    <DialogContentText sx={{ mb: 2 }} data-testid="accountReauthDialogOfflineHint">
+                    <Text variant="body" tone="secondary" className={styles.paragraph} data-testid="accountReauthDialogOfflineHint">
                         You're offline — re-login needs a connection. You can keep working with the cached data shown.
-                    </DialogContentText>
+                    </Text>
                 )}
-                <Stack spacing={1}>
+                <div className={styles.rows}>
                     {staleAccounts.map((account) => (
-                        <Alert
+                        <Callout
                             key={account.id}
-                            severity="warning"
+                            tone="warning"
                             action={
                                 <Button
-                                    color="inherit"
-                                    size="small"
+                                    tone="warning"
+                                    size="sm"
                                     disabled={!isOnline}
                                     onClick={() => reauthForUserId(account.id)}
                                     data-testid="accountReauthDialogRelogin"
@@ -90,9 +84,9 @@ export function AccountReauthDialog({ db }: { db: IDBPDatabase<MyDB> }) {
                             }
                         >
                             {account.email ?? UNKNOWN_ACCOUNT_LABEL}
-                        </Alert>
+                        </Callout>
                     ))}
-                </Stack>
+                </div>
             </DialogContent>
             <DialogActions>
                 <Button onClick={acknowledgeAll} data-testid="accountReauthDialogNotNow">

@@ -1,16 +1,30 @@
-/* On a span inside the TableCell (MUI's emotion styles win over a module rule on the cell itself). */
+.table {
+    inline-size: 100%;
+    border-collapse: collapse;
+    font-size: var(--type-sm-size);
+    line-height: var(--type-sm-line);
+}
+
 .groupTitle {
-    display: block;
-    padding-top: 0.75rem;
-    font-weight: 600;
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    padding: var(--space-3) 0 var(--space-1);
+    border-block-end: 1px solid var(--color-divider);
+    color: var(--color-text-secondary);
+    font-weight: var(--weight-semibold);
+    text-align: start;
+}
+
+.chord,
+.does {
+    padding: var(--space-1-5) var(--space-3) var(--space-1-5) 0;
+    border-block-end: 1px solid var(--color-divider);
+    vertical-align: top;
 }
 
 .chord {
+    font-family: var(--font-mono);
     white-space: nowrap;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .letters {
-    margin-top: 0.75rem;
+    margin-block-start: var(--space-3);
 }

@@ -1,0 +1,25 @@
+.avatar {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    inline-size: var(--avatar-size);
+    block-size: var(--avatar-size);
+    border-radius: var(--radius-full);
+    background-color: var(--color-fill-muted);
+    color: var(--color-text-secondary);
+    user-select: none;
+}
+
+.image {
+    inline-size: 100%;
+    block-size: 100%;
+    object-fit: cover;
+}
+
+.fallback {
+    /* MUI's ratio: a 1.25rem initial on a 2.5rem avatar. */
+    font-size: calc(var(--avatar-size) * 0.375);
+    font-weight: var(--weight-medium);
+}

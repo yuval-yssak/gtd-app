@@ -1,10 +1,7 @@
-import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
-import Badge from '@mui/material/Badge';
-import IconButton from '@mui/material/IconButton';
-import Tooltip from '@mui/material/Tooltip';
-import classNames from 'classnames';
+import { EyeOff } from 'lucide-react';
 import { useSyncExternalStore } from 'react';
 import { ensureHiddenAccountsCrossTabBridge, getHiddenAccountIds, subscribeHiddenAccounts, toggleAccountHidden } from '../contexts/hiddenAccounts';
+import { IconButton, Tooltip } from '../designSystem';
 import type { RovingRegionApi } from '../hooks/useRovingRegion';
 import { getAccountColor } from '../lib/accountColors';
 import type { StoredAccount } from '../types/MyDB';
@@ -25,7 +22,7 @@ interface Props {
  * One-click visibility toggles — one ringed avatar per signed-in account. Clicking an avatar
  * hides/shows that account's data across the whole app (display-only: sync keeps running and
  * mutations still write under the active account). Hidden accounts render dimmed with an eye-off
- * badge. Self-suppresses on single-account devices, mirroring AccountChip.
+ * marker. Self-suppresses on single-account devices, mirroring AccountChip.
  */
 export function AccountVisibilityToggles({ accounts, itemProps }: Props) {
     const hiddenUserIds = useSyncExternalStore(subscribeHiddenAccounts, getHiddenAccountIds);
@@ -38,10 +35,12 @@ export function AccountVisibilityToggles({ accounts, itemProps }: Props) {
             {accounts.map((account) => {
                 const isHidden = hiddenUserIds.includes(account.id);
                 const label = isHidden ? `Show ${account.email}'s items` : `Hide ${account.email}'s items`;
+                // The ring colour is the account's runtime palette pick.
+                const ringStyle = { '--account-color': getAccountColor(account.id, accounts) };
                 return (
                     <Tooltip key={account.id} title={label}>
                         <IconButton
-                            size="small"
+                            size="sm"
                             onClick={() => toggleAccountHidden(account.id)}
                             aria-label={label}
                             aria-pressed={isHidden}
@@ -49,20 +48,16 @@ export function AccountVisibilityToggles({ accounts, itemProps }: Props) {
                             data-account-hidden={isHidden}
                             {...itemProps}
                         >
-                            <Badge
-                                overlap="circular"
-                                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-                                badgeContent={<VisibilityOffIcon className={styles.hiddenBadgeIcon} />}
-                                invisible={!isHidden}
-                            >
-                                {/* Inline style: ring colour is per-account, computed from the shared palette at runtime */}
-                                <span
-                                    className={classNames(styles.avatarRing, isHidden && styles.avatarHidden)}
-                                    style={{ borderColor: getAccountColor(account.id, accounts) }}
-                                >
+                            <span className={styles.avatarSlot}>
+                                <span className={styles.avatarRing} data-hidden={isHidden || undefined} style={ringStyle}>
                                     <AccountAvatar account={account} size={22} />
                                 </span>
-                            </Badge>
+                                {isHidden && (
+                                    <span className={styles.hiddenMarker} aria-hidden="true">
+                                        <EyeOff size={12} />
+                                    </span>
+                                )}
+                            </span>
                         </IconButton>
                     </Tooltip>
                 );

@@ -1,12 +1,11 @@
-import Alert from '@mui/material/Alert';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
 import type { IDBPDatabase } from 'idb';
 import { useSyncExternalStore } from 'react';
 import { dismissAccountReauth, getReauthFlaggedUserIds, subscribeAccountReauth } from '../contexts/accountReauthEvents';
+import { Button, Callout } from '../designSystem';
 import { useAccounts } from '../hooks/useAccounts';
 import { useOnline } from '../hooks/useOnline';
 import type { MyDB } from '../types/MyDB';
+import styles from './AccountReauthBanner.module.css';
 import { staleAccountRows } from './AccountReauthDialog';
 
 /**
@@ -16,9 +15,9 @@ import { staleAccountRows } from './AccountReauthDialog';
  * banner is the persistent reminder that remains after the dialog is acknowledged.
  *
  * State lives in the shared `accountReauthEvents` store (flagged + dismissed userId sets), not in
- * component state, because AppNav double-mounts this banner (permanent + keepMounted temporary
- * drawer). A single shared store keeps the de-dupe and the per-session dismiss durable across both
- * instances and across breakpoint changes — per-instance state would diverge. Dismissals survive the
+ * component state, because AppNav mounts this banner twice while the phone drawer is open (sidebar
+ * + drawer) and the drawer remounts it on every open. A single shared store keeps the de-dupe and
+ * the per-session dismiss durable across instances and remounts — per-instance state would diverge. Dismissals survive the
  * orchestrator's re-dispatch every sync cycle. Each row offers a Re-login button that drives
  * `reauthForUserId`'s OAuth redirect.
  *
@@ -40,22 +39,22 @@ export function AccountReauthBanner({ db }: { db: IDBPDatabase<MyDB> }) {
     }
 
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, width: '100%' }}>
+        <div className={styles.banners}>
             {visibleAccounts.map((account) => (
-                <Alert
+                <Callout
                     key={account.id}
-                    severity="warning"
+                    tone="warning"
                     onClose={() => dismissAccountReauth(account.id)}
                     action={
-                        <Button color="inherit" size="small" disabled={!isOnline} onClick={() => reauthForUserId(account.id)}>
+                        <Button tone="warning" size="sm" disabled={!isOnline} onClick={() => reauthForUserId(account.id)}>
                             Re-login
                         </Button>
                     }
                 >
                     {account.email === null ? 'An account needs re-login to sync.' : `Your account ${account.email} needs re-login to sync.`}
                     {!isOnline ? " You're offline — re-login needs a connection." : ''}
-                </Alert>
+                </Callout>
             ))}
-        </Box>
+        </div>
     );
 }

@@ -1,5 +1,4 @@
-import Chip from '@mui/material/Chip';
-import CircularProgress from '@mui/material/CircularProgress';
+import { Chip, Spinner } from '../designSystem';
 
 interface SyncingChipProps {
     /** Label shown next to the spinner, e.g. "Syncing calendar…". */
@@ -12,14 +11,5 @@ interface SyncingChipProps {
  * — the data is already on screen, this only signals a background refresh is underway.
  */
 export function SyncingChip({ label }: SyncingChipProps) {
-    return (
-        <Chip
-            size="small"
-            variant="outlined"
-            data-testid="syncingChip"
-            icon={<CircularProgress size={12} thickness={5} sx={{ ml: 0.75 }} />}
-            label={label}
-            sx={{ color: 'text.secondary', borderColor: 'divider' }}
-        />
-    );
+    return <Chip variant="outline" data-testid="syncingChip" icon={<Spinner size={12} tone="inherit" label="" aria-hidden="true" />} label={label} />;
 }

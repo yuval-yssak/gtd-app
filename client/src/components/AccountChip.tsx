@@ -1,5 +1,5 @@
-import Chip from '@mui/material/Chip';
 import { useAppData } from '../contexts/AppDataProvider';
+import { Chip } from '../designSystem';
 import { getAccountColor } from '../lib/accountColors';
 import styles from './AccountChip.module.css';
 
@@ -25,8 +25,7 @@ export function AccountChip({ userId }: AccountChipProps) {
     // generic label rather than rendering nothing — a missing chip would silently hide that
     // an entity belongs to an account no longer in the device's session list.
     const label = account?.email ?? 'unknown account';
-    const backgroundColor = getAccountColor(userId, loggedInAccounts);
-    // sx is reserved for the dynamic background colour (which CSS Modules can't carry); other
-    // visual rules live in the module file per the project's CSS-Modules-only convention.
-    return <Chip className={styles.chip} sx={{ backgroundColor }} size="small" label={label} data-testid="accountChip" />;
+    // The fill is per account (a runtime palette pick), so it is handed to the module as a custom property.
+    const accountStyle = { '--account-color': getAccountColor(userId, loggedInAccounts) };
+    return <Chip className={styles.chip} style={accountStyle} label={label} data-testid="accountChip" />;
 }
