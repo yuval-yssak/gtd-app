@@ -1,15 +1,15 @@
-import Box from '@mui/material/Box';
-import TextField from '@mui/material/TextField';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { updatePerson } from '../../db/personMutations';
 import { attemptReassign, reassignEntity } from '../../db/reassignMutations';
+import { TextField } from '../../designSystem';
 import { useAutosave } from '../../hooks/useAutosave';
 import { mergeCleanStringFields, stringFieldsEqual } from '../../lib/liveMerge';
 import { offerUndo } from '../../lib/undoStore';
 import type { MyDB, StoredPerson } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
+import styles from './PersonEditorBody.module.css';
 
 /** The short "Add/Edit person" dialog, or the full person page. */
 export type PersonEditorChrome = 'dialog' | 'page';
@@ -184,7 +184,7 @@ export function PersonEditorBody({ db, person, showAccountPicker = false, chrome
     const showPicker = showAccountPicker && loggedInAccounts.length > 1;
 
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+        <div className={styles.fields}>
             <TextField
                 label="Name"
                 value={form.name}
@@ -233,6 +233,6 @@ export function PersonEditorBody({ db, person, showAccountPicker = false, chrome
                     {...(ownerError ? { error: ownerError } : {})}
                 />
             )}
-        </Box>
+        </div>
     );
 }

@@ -1,34 +1,17 @@
-import AddIcon from '@mui/icons-material/Add';
-import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
-import EditIcon from '@mui/icons-material/Edit';
-import UnarchiveOutlinedIcon from '@mui/icons-material/UnarchiveOutlined';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemText from '@mui/material/ListItemText';
-import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
+import { Archive, ArchiveRestore, Pencil, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useMemo, useState } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountPicker } from '../../components/AccountPicker';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { PersonEditDialog } from '../../components/people/PersonEditDialog';
 import { RowActionButton } from '../../components/RowActionButton';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson, removePerson, updatePerson } from '../../db/personMutations';
+import { Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Text, TextField, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -64,7 +47,7 @@ function notesFirstLine(notes: string | undefined): string | null {
 }
 
 /** Row second line: "email · phone" plus a one-line notes snippet. undefined when both are empty
- *  so ListItemText skips the secondary slot entirely (no empty element). */
+ *  so the row skips the secondary slot entirely (no empty element). */
 function personRowSecondary(person: StoredPerson) {
     const contact = [person.email, person.phone].filter(Boolean).join(' · ');
     const snippet = notesFirstLine(person.notes);
@@ -142,27 +125,76 @@ function PeoplePage() {
     const { deferredQuery } = search;
     const orderedPeople = useMemo(() => orderPeople(people, deferredQuery), [people, deferredQuery]);
 
+    function renderPersonRow(person: StoredPerson, isDivided: boolean) {
+        return (
+            <ListRow
+                {...SHORTCUT_ROW_PROPS}
+                isDivided={isDivided}
+                actions={
+                    <>
+                        <RowActionButton rowAction="edit" label="Edit" icon={<Pencil />} onClick={() => setEditing(person)} data-testid="personRowEditButton" />
+                        <Tooltip title={person.archived ? 'Unarchive' : 'Archive — hide from pickers, keep on items'}>
+                            <IconButton
+                                size="sm"
+                                aria-label={person.archived ? 'Unarchive' : 'Archive'}
+                                onClick={() => void onToggleArchived(person)}
+                                data-testid="personRowArchiveButton"
+                            >
+                                {person.archived ? <ArchiveRestore /> : <Archive />}
+                            </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Delete">
+                            <IconButton size="sm" tone="danger" aria-label="Delete" onClick={() => void onDelete(person)}>
+                                <Trash2 />
+                            </IconButton>
+                        </Tooltip>
+                    </>
+                }
+            >
+                {/* Row body opens the full /person page (deep-linkable, matching the other list
+                    pages); the pencil keeps the quick edit dialog. */}
+                <ListRowButton
+                    onActivate={(e) => navigateOrNewTab(e, { to: '/person/$personId', params: { personId: person._id } })}
+                    data-testid="personRowText"
+                >
+                    <ListRowText
+                        primary={
+                            <span className={styles.primary} data-archived={person.archived || undefined}>
+                                <span>{person.name}</span>
+                                <AccountChip userId={person.userId} />
+                                {person.archived && <Chip label="Archived" variant="outline" data-testid="personArchivedChip" />}
+                                {/* A native title, not the DS Tooltip: the Tooltip would copy the hint into an
+                                    aria-label inside the row button, renaming the whole row after it. */}
+                                {!person.archived && !usage.people.has(person._id) && (
+                                    <span title="No item references this person — consider archiving them">
+                                        <Chip label="Unused" variant="outline" tone="warning" data-testid="personUnusedChip" />
+                                    </span>
+                                )}
+                            </span>
+                        }
+                        secondary={personRowSecondary(person)}
+                    />
+                </ListRowButton>
+            </ListRow>
+        );
+    }
+
     return (
-        <Box>
-            <Box className={styles.pageHeader}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography
-                        variant="h5"
-                        sx={{
-                            fontWeight: 600,
-                        }}
-                    >
+        <div>
+            <div className={styles.pageHeader}>
+                <div className={styles.titleGroup}>
+                    <Text variant="title">
                         People
-                        {people.length > 0 && <Chip label={people.length} size="small" className={styles.countChip} />}
-                    </Typography>
+                        {people.length > 0 && <Chip label={people.length} className={styles.countChip} />}
+                    </Text>
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                     <AccountSyncChip />
                     {people.length > 0 && <ListSearchButton onToggle={search.toggleSearch} testId="peopleSearchButton" />}
-                </Box>
-                <Button startIcon={<AddIcon />} variant="contained" size="small" onClick={openCreate}>
+                </div>
+                <Button startIcon={<Plus />} variant="solid" size="sm" onClick={openCreate}>
                     Add person
                 </Button>
-            </Box>
+            </div>
             {people.length > 0 && search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}
@@ -177,94 +209,31 @@ function PeoplePage() {
                 isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Typography
-                        sx={{
-                            color: 'text.secondary',
-                            textAlign: 'center',
-                            mt: 6,
-                        }}
-                    >
+                    <Text tone="secondary" className={styles.emptyState}>
                         No people yet. Add contacts to reference in Waiting For and items.
-                    </Typography>
+                    </Text>
                 )
             ) : orderedPeople.length === 0 ? (
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                    data-testid="peopleSearchEmpty"
-                >
+                <Text tone="secondary" className={styles.emptyState} data-testid="peopleSearchEmpty">
                     No people match your search.
-                </Typography>
+                </Text>
             ) : (
-                <List disablePadding className={styles.list}>
+                <ul className={styles.list}>
                     {orderedPeople.map((person, idx) => (
                         // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
-                        <Box key={person._id} data-list-item-id={person._id}>
-                            <ListItem
-                                {...SHORTCUT_ROW_PROPS}
-                                disablePadding
-                                className={styles.item}
-                                secondaryAction={
-                                    <Box className={styles.actionButtons}>
-                                        <RowActionButton
-                                            rowAction="edit"
-                                            label="Edit"
-                                            icon={<EditIcon fontSize="small" />}
-                                            onClick={() => setEditing(person)}
-                                            data-testid="personRowEditButton"
-                                        />
-                                        <Tooltip title={person.archived ? 'Unarchive' : 'Archive — hide from pickers, keep on items'}>
-                                            <IconButton size="small" onClick={() => void onToggleArchived(person)} data-testid="personRowArchiveButton">
-                                                {person.archived ? <UnarchiveOutlinedIcon fontSize="small" /> : <ArchiveOutlinedIcon fontSize="small" />}
-                                            </IconButton>
-                                        </Tooltip>
-                                        <Tooltip title="Delete">
-                                            <IconButton size="small" color="error" onClick={() => void onDelete(person)}>
-                                                <DeleteOutlineIcon fontSize="small" />
-                                            </IconButton>
-                                        </Tooltip>
-                                    </Box>
-                                }
-                            >
-                                <ListItemText
-                                    // Row body opens the full /person page (deep-linkable, matching the other
-                                    // list pages); the pencil in secondaryAction keeps the quick edit dialog.
-                                    onClick={(e) => navigateOrNewTab(e, { to: '/person/$personId', params: { personId: person._id } })}
-                                    data-testid="personRowText"
-                                    primary={
-                                        <Box
-                                            sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}
-                                            className={person.archived ? styles.archivedName : undefined}
-                                        >
-                                            <span>{person.name}</span>
-                                            <AccountChip userId={person.userId} />
-                                            {person.archived && <Chip label="Archived" size="small" variant="outlined" data-testid="personArchivedChip" />}
-                                            {!person.archived && !usage.people.has(person._id) && (
-                                                <Tooltip title="No item references this person — consider archiving them">
-                                                    <Chip label="Unused" size="small" variant="outlined" color="warning" data-testid="personUnusedChip" />
-                                                </Tooltip>
-                                            )}
-                                        </Box>
-                                    }
-                                    secondary={personRowSecondary(person)}
-                                    className={styles.listItemText}
-                                />
-                            </ListItem>
-                            {idx < orderedPeople.length - 1 && <Divider />}
-                        </Box>
+                        <li key={person._id} data-list-item-id={person._id}>
+                            {renderPersonRow(person, idx < orderedPeople.length - 1)}
+                        </li>
                     ))}
-                </List>
+                </ul>
             )}
             {/* Edit dialog reuses the shared PersonEditDialog component (also used by MeetingDetails).
                 Mount-on-open so the form re-initializes per person — see PersonEditDialog comment. */}
             {editing && <PersonEditDialog db={db} person={editing} showAccountPicker onClose={() => setEditing(null)} />}
-            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} maxWidth="xs" fullWidth>
+            <Dialog open={createOpen} onClose={() => setCreateOpen(false)} size="xs" fullWidth>
                 <DialogTitle>Add person</DialogTitle>
                 <DialogContent>
-                    <Box className={styles.personForm}>
+                    <div className={styles.personForm}>
                         <TextField
                             label="Name"
                             value={createForm.name}
@@ -293,15 +262,15 @@ function PeoplePage() {
                         />
                         {/* AccountPicker auto-hides on single-account devices */}
                         {loggedInAccounts.length > 1 && <AccountPicker value={createOwnerUserId} onChange={setCreateOwnerUserId} />}
-                    </Box>
+                    </div>
                 </DialogContent>
                 <DialogActions>
                     <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-                    <Button onClick={() => void saveCreate()} variant="contained" disabled={!createForm.name.trim()}>
+                    <Button onClick={() => void saveCreate()} variant="solid" disabled={!createForm.name.trim()}>
                         Add
                     </Button>
                 </DialogActions>
             </Dialog>
-        </Box>
+        </div>
     );
 }

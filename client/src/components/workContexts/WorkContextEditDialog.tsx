@@ -1,18 +1,14 @@
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import TextField from '@mui/material/TextField';
 import type { IDBPDatabase } from 'idb';
 import { useEffect, useRef, useState } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { attemptReassign, reassignEntity } from '../../db/reassignMutations';
 import { updateWorkContext } from '../../db/workContextMutations';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField } from '../../designSystem';
 import { useAutosave } from '../../hooks/useAutosave';
 import { offerUndo } from '../../lib/undoStore';
 import type { MyDB, StoredWorkContext } from '../../types/MyDB';
 import { AccountPicker } from '../AccountPicker';
+import styles from './WorkContextEditDialog.module.css';
 
 interface WorkContextEditDialogProps {
     db: IDBPDatabase<MyDB>;
@@ -118,9 +114,9 @@ export function WorkContextEditDialog({ db, workContext, onClose }: WorkContextE
     }
 
     return (
-        <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
+        <Dialog open onClose={onClose} size="xs" fullWidth>
             <DialogTitle>Rename context</DialogTitle>
-            <DialogContent>
+            <DialogContent className={styles.content}>
                 <TextField
                     label="Name"
                     placeholder="e.g. @office, @phone"
@@ -139,7 +135,6 @@ export function WorkContextEditDialog({ db, workContext, onClose }: WorkContextE
                     autoFocus
                     error={!name.trim()}
                     helperText={name.trim() ? undefined : 'Name is required — changes are not saved while empty.'}
-                    sx={{ mt: 1 }}
                     data-testid="workContextEditName"
                 />
                 {loggedInAccounts.length > 1 && (

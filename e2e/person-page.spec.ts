@@ -27,6 +27,22 @@ test.describe('Person editor — page mode', () => {
         });
     });
 
+    // The row body is a real button now (it was a click-only text block): keyboard users open the
+    // person page with Enter, like every other list row.
+    test('a people row opens the person page from the keyboard', async ({ browser }) => {
+        await withOneLoggedInDevice(browser, `person-page-keyboard-${uniqueStamp()}@example.com`, async (page) => {
+            const person = await gtd.createPerson(page, { name: 'Keyboard Kim' });
+            await gtd.flush(page);
+
+            await page.goto('/people');
+            await page.getByTestId('personRowText').filter({ hasText: 'Keyboard Kim' }).focus();
+            await page.keyboard.press('Enter');
+
+            await expect(page).toHaveURL(new RegExp(`/person/${person._id}$`));
+            await expect(page.getByTestId('personEditName').locator('input')).toHaveValue('Keyboard Kim');
+        });
+    });
+
     test('the back arrow leaves the page to the people list', async ({ browser }) => {
         await withOneLoggedInDevice(browser, `person-page-back-${uniqueStamp()}@example.com`, async (page) => {
             const person = await gtd.createPerson(page, { name: 'Backer' });

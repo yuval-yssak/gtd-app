@@ -1,15 +1,10 @@
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
-import TextField from '@mui/material/TextField';
 import type { IDBPDatabase } from 'idb';
 import { useState, useTransition } from 'react';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { createPerson } from '../../db/personMutations';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle, TextField } from '../../designSystem';
 import type { MyDB, StoredPerson } from '../../types/MyDB';
+import styles from './QuickCreatePersonDialog.module.css';
 
 interface QuickCreatePersonDialogProps {
     prefilledEmail: string;
@@ -45,10 +40,10 @@ export function QuickCreatePersonDialog({ prefilledEmail, db, ownerUserId, onCre
     }
 
     return (
-        <Dialog open onClose={onCancel} maxWidth="xs" fullWidth data-testid="quickCreatePersonDialog">
+        <Dialog open onClose={onCancel} size="xs" fullWidth data-testid="quickCreatePersonDialog">
             <DialogTitle>Save as person</DialogTitle>
             <DialogContent>
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, pt: 1 }}>
+                <div className={styles.fields}>
                     <TextField
                         label="Name"
                         value={name}
@@ -66,13 +61,13 @@ export function QuickCreatePersonDialog({ prefilledEmail, db, ownerUserId, onCre
                         type="email"
                         data-testid="quickCreatePersonEmail"
                     />
-                </Box>
+                </div>
             </DialogContent>
             <DialogActions>
                 <Button onClick={onCancel} disabled={isSaving}>
                     Cancel
                 </Button>
-                <Button onClick={onSave} variant="contained" disabled={!name.trim() || isSaving} data-testid="quickCreatePersonSave">
+                <Button onClick={onSave} variant="solid" disabled={!name.trim() || isSaving} data-testid="quickCreatePersonSave">
                     Save
                 </Button>
             </DialogActions>

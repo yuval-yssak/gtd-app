@@ -1,9 +1,5 @@
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
 import type { IDBPDatabase } from 'idb';
+import { Button, Dialog, DialogActions, DialogContent, DialogTitle } from '../../designSystem';
 import type { MyDB, StoredPerson } from '../../types/MyDB';
 import { PersonEditorBody } from './PersonEditorBody';
 
@@ -22,7 +18,7 @@ interface PersonEditDialogProps {
  */
 export function PersonEditDialog({ db, person, showAccountPicker = false, onClose }: PersonEditDialogProps) {
     return (
-        <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
+        <Dialog open onClose={onClose} size="xs" fullWidth>
             <DialogTitle>Edit person</DialogTitle>
             <DialogContent>
                 <PersonEditorBody db={db} person={person} showAccountPicker={showAccountPicker} onClose={onClose} />

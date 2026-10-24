@@ -1,11 +1,11 @@
 declare const styles: {
-    readonly actionButtons: string;
-    readonly archivedName: string;
     readonly countChip: string;
-    readonly item: string;
+    readonly createContent: string;
+    readonly emptyState: string;
     readonly list: string;
-    readonly listItemText: string;
-    readonly nameField: string;
     readonly pageHeader: string;
+    readonly primary: string;
+    readonly rowBody: string;
+    readonly titleGroup: string;
 };
 export = styles;
