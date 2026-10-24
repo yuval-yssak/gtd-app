@@ -87,7 +87,7 @@ This file is self-contained. Nothing below depends on the conversation that prod
   path), `lib/routineItemGeneration.ts` (`buildRoutineItemSnapshot` → `publishRoutineItem`),
   `lib/routineItemRegeneration.ts` (`insertFreshOccurrence`, calendar items), `routes/calendar.ts`
   (three inbound GCal inserts, calendar items), `/v1/operations/batch` creates (caller-supplied full
-  snapshots), `/sync/push` creates, `scripts/importFacileThings.ts`. Client: `db/itemMutations.ts`
+  snapshots), `/sync/push` creates, `scripts/importFacileThings.ts` (since removed). Client: `db/itemMutations.ts`
   (`collectItem`), `db/routineItemHelpers.ts` (three creates + `restoreTrashedRoutineItem`).
 - E2E drives the client through `window.__gtd` (`client/src/db/devTools.ts`, mounted in dev) via
   `e2e/helpers/gtd.ts` (`queuedOps`, `flush`, `listItems`, `clarifyToNextAction`…);
@@ -256,7 +256,7 @@ Server:
    Indexes. Test: returns `Zz` when `a0` also exists (binary order).
 5. Mint on: `persistNewInboxItem` (v1 POST, covers MCP capture), `buildRoutineItemSnapshot` (pass the
    rank in; `ensureFirstRoutineItem` / `advanceRoutineAfterDisposal` resolve it),
-   `scripts/importFacileThings.ts`. Calendar-status inserts (`insertFreshOccurrence`, the three in
+   `scripts/importFacileThings.ts` (since removed). Calendar-status inserts (`insertFreshOccurrence`, the three in
    `routes/calendar.ts`) stay unranked. `/v1/operations/batch` and `/sync/push` creates are
    **deliberately un-minted** (caller-supplied snapshots; rule 2 places them on top) — say so in the
    code comment and `PUBLIC_API.md` (review #12).

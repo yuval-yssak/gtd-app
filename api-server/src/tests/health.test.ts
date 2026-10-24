@@ -45,6 +45,9 @@ async function startStallableProxy() {
         stall: () => {
             relay.stalled = true;
         },
+        resume: () => {
+            relay.stalled = false;
+        },
         close: async () => {
             for (const socket of sockets) socket.destroy();
             await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -95,9 +98,11 @@ describe('createPingProbe', () => {
             await expect(probe()).rejects.toBeInstanceOf(MongoOperationTimeoutError);
             expect(dayjs().diff(started)).toBeLessThan(STALL_PROBE_TIMEOUT_MS * 4);
         } finally {
-            // Proxy first: `client.close()` waits on the stalled socket otherwise (measured: >3 s).
-            await proxy.close();
+            // Relay again before closing: since mongodb 7.2 `client.close()` never settles once the
+            // proxy is gone, and on a still-stalled proxy it waits on the dead socket (measured: >3 s).
+            proxy.resume();
             await client.close(true);
+            await proxy.close();
         }
     });
 });

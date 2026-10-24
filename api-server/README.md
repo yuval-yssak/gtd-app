@@ -528,39 +528,6 @@ One-off rollout step for `ItemInterface.rank` (docs/plans/next-actions-rank.md),
 
 It also ranks the **open lists** that gained a manual order (Inbox, Someday / Maybe, Waiting For): rows with no `rank` (captured before the rollout) are keyed **after** every ranked row of their status, in their old order (Inbox and Someday newest first; Waiting For by expected date, undated first), so an untouched list looks as before and a fresh capture, minted at the top, stays on top. Ranked rows are never re-keyed, so this pass runs on every user (no `--force`) and a rerun finds nothing to do. Until it has run, a pre-rollout unranked row shows at the TOP of its list (unranked sorts first). Like the next-action pass it publishes one `update` op per row — so one webhook delivery per op for a subscribed user, and an imported Someday list can mean hundreds (accepted for a one-off). If an op insert fails, the open rows of that batch and every later one get their new key taken back (guarded on still holding it), so a rerun plans and publishes them again; a malformed stored key in an open list is re-keyed too.
 
-### Import from FacileThings (`importFacileThings.ts`)
-
-Imports a FacileThings XML export directly into MongoDB for a single user. Writes nothing through the API — connects via `loadDataAccess()` and upserts items by `(user, externalId)` so re-runs replace rows in place rather than duplicating.
-
-```bash
-cd api-server
-npx tsx --env-file=.env src/scripts/importFacileThings.ts \
-  --email <user-email> \
-  --file /path/to/facilethings_export.xml \
-  [--dry-run]
-```
-
-**What gets imported.** Items only. Routines, people, and work contexts are skipped — the script doesn't try to reconstruct them. Hashtags and `@mentions` stay inline in titles.
-
-**Bucket → status mapping.**
-
-| FacileThings list | App status |
-|---|---|
-| Inbox | `inbox` |
-| Next Actions | `nextAction` |
-| Tickler File | `nextAction` with `ignoreBefore = reminder` |
-| Waiting For | `waitingFor` |
-| Calendar / Someday/Maybe / Reference Material | `somedayMaybe` |
-| Done | `done` |
-
-**Caveats.**
-- Only Done items completed in the last 18 months are kept (older ones are dropped).
-- Calendar items lose their `timeStart` and collapse into `somedayMaybe`; the original reminder is preserved in the notes footer. The script never creates GCal-linked items.
-- Every imported item's `createdTs` is the import time. Original FacileThings dates (reminder, doneAt, list, project, area, goal, priority, energy, time) are appended to notes under `— Imported from FacileThings —`.
-- Idempotent: re-running with the same XML upserts on `externalId = "ft:<index>"` rather than duplicating.
-
-**Use `--dry-run`** to print the planned counts (items per status, skipped older Done items) without writing.
-
 ## Gotchas
 
 - **SSE is single-process:** The connection registry is in-memory. Scaling to multiple instances requires a shared pub/sub layer (e.g. Redis).

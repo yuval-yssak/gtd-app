@@ -57,18 +57,13 @@ describe('carryForwardRank (pure)', () => {
         expect(carryForwardRank(unranked, incoming)).toBe(incoming);
     });
 
-    it.each([
-        'inbox',
-        'nextAction',
-        'calendar',
-        'waitingFor',
-        'somedayMaybe',
-        'done',
-        'trash',
-    ] as const)('carries across a %s snapshot (status-independent)', (status) => {
-        const { rank: _r, ...rankless } = stored();
-        expect(carryForwardRank(stored(), { ...rankless, status, updatedTs: T1 }).rank).toBe('a0V');
-    });
+    it.each(['inbox', 'nextAction', 'calendar', 'waitingFor', 'somedayMaybe', 'done', 'trash'] as const)(
+        'carries across a %s snapshot (status-independent)',
+        (status) => {
+            const { rank: _r, ...rankless } = stored();
+            expect(carryForwardRank(stored(), { ...rankless, status, updatedTs: T1 }).rank).toBe('a0V');
+        },
+    );
 
     it('parity pin — the SAME literals live in client/src/tests/rankMerge.test.ts; change both together', () => {
         expect(RANK_CARRIED_FIELDS).toEqual(['rank']);

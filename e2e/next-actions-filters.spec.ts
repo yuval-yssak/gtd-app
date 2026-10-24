@@ -47,19 +47,19 @@ test.describe('Next actions — URL-backed filter chips', () => {
             // Work-context chip → ?context=<id> and the list narrows.
             await page.getByTestId('nextActionsContextFilterChip').filter({ hasText: 'Phone' }).click();
             await expect(page).toHaveURL(new RegExp(`context=${phone._id}`));
-            expect(await rowTitles(page)).toEqual(['Call landlord']);
+            await expect.poll(() => rowTitles(page)).toEqual(['Call landlord']);
 
             // Person chip stacks on top → ?person=<id> as well.
             await page.getByTestId('nextActionsPersonFilterChip').filter({ hasText: 'Alice' }).click();
             await expect(page).toHaveURL(new RegExp(`person=${alice._id}`));
-            expect(await rowTitles(page)).toEqual(['Call landlord']);
+            await expect.poll(() => rowTitles(page)).toEqual(['Call landlord']);
 
             // Clicking the active chips again clears each filter and drops its URL param.
             await page.getByTestId('nextActionsContextFilterChip').filter({ hasText: 'Phone' }).click();
             await expect(page).not.toHaveURL(/context=/);
             await page.getByTestId('nextActionsPersonFilterChip').filter({ hasText: 'Alice' }).click();
             await expect(page).not.toHaveURL(/person=/);
-            expect((await rowTitles(page)).sort()).toEqual(['Buy stamps', 'Call landlord']);
+            await expect.poll(async () => (await rowTitles(page)).sort()).toEqual(['Buy stamps', 'Call landlord']);
         });
     });
 
@@ -70,12 +70,12 @@ test.describe('Next actions — URL-backed filter chips', () => {
             // energy + time arrive from the URL and immediately filter the list.
             await page.goto('/next-actions?energy=low&time=5');
             await page.waitForSelector('text=Call landlord');
-            expect(await rowTitles(page)).toEqual(['Call landlord']);
+            await expect.poll(() => rowTitles(page)).toEqual(['Call landlord']);
 
             // Junk params are stripped by validateSearch — the page renders unfiltered instead of crashing.
             await page.goto('/next-actions?energy=bogus&time=7&context=&person=');
             await page.waitForSelector('text=Call landlord');
-            expect((await rowTitles(page)).sort()).toEqual(['Buy stamps', 'Call landlord']);
+            await expect.poll(async () => (await rowTitles(page)).sort()).toEqual(['Buy stamps', 'Call landlord']);
         });
     });
 });

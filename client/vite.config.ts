@@ -3,7 +3,7 @@ import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
-import { APP_NAME } from './src/lib/appName';
+import { APP_NAME } from './src/lib/appName.ts';
 
 const commitHash = (() => {
     try {

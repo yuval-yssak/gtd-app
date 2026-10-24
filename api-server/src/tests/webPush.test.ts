@@ -219,7 +219,10 @@ describe('Push fan-out via deviceUsers join', () => {
         await notifyViaWebPush(TEST_USER, 'dev-source', [makeOp()], dayjs().toISOString());
 
         expect(mockSendNotification).toHaveBeenCalledTimes(1);
-        const endpoint = (mockSendNotification.mock.calls[0]?.[0] as { endpoint: string }).endpoint;
-        expect(endpoint).toBe('https://push.example.com/dev-target');
+        const [call] = mockSendNotification.mock.calls;
+        if (!call) {
+            throw new Error('expected one sendNotification call');
+        }
+        expect(call[0].endpoint).toBe('https://push.example.com/dev-target');
     });
 });

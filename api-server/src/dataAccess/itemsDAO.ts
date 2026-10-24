@@ -115,8 +115,8 @@ class ItemsDAO extends AbstractDAO<ItemInterface> {
 
     /**
      * `bulkWrite` carries its own per-operation update payloads, so it bypasses the `updateOne` /
-     * `updateMany` overrides entirely. Marking each operation keeps the one production caller
-     * (`scripts/importFacileThings.ts`, which upserts title + notes) honest, and any future one.
+     * `updateMany` overrides entirely. Marking each operation keeps any caller that upserts
+     * title + notes through it honest.
      */
     override async bulkWrite(operations: ItemBulkOperation[], options?: Parameters<Collection<ItemInterface>['bulkWrite']>[1]) {
         return super.bulkWrite(operations.map(markBriefStaleOnBulkOperation), options);

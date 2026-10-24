@@ -96,31 +96,29 @@ function detachedSnapshot(status: ItemStatus, overrides: Partial<ItemInterface> 
 }
 
 describe('calendar → active-status transition cascades to GCal event removal', () => {
-    it.each([
-        'nextAction',
-        'somedayMaybe',
-        'waitingFor',
-        'inbox',
-    ] as const)('hydrates detachedCalendar and deletes the GCal event on calendar → %s', async (status) => {
-        await seedCalendarIntegration();
-        await itemsDAO.insertOne(calendarItem());
-        const deleteEvent = vi.fn().mockResolvedValue(undefined);
-        const buildProvider = () => fakeProviderWithDelete(deleteEvent);
+    it.each(['nextAction', 'somedayMaybe', 'waitingFor', 'inbox'] as const)(
+        'hydrates detachedCalendar and deletes the GCal event on calendar → %s',
+        async (status) => {
+            await seedCalendarIntegration();
+            await itemsDAO.insertOne(calendarItem());
+            const deleteEvent = vi.fn().mockResolvedValue(undefined);
+            const buildProvider = () => fakeProviderWithDelete(deleteEvent);
 
-        const op = await applyAndPublishOperation(
-            userId,
-            { entityType: 'item', opType: 'update', entityId: 'item-cal-1', snapshot: detachedSnapshot(status) },
-            { deviceId: 'api:tok-1' },
-        );
+            const op = await applyAndPublishOperation(
+                userId,
+                { entityType: 'item', opType: 'update', entityId: 'item-cal-1', snapshot: detachedSnapshot(status) },
+                { deviceId: 'api:tok-1' },
+            );
 
-        expect(op.detachedCalendar).toMatchObject({ _id: 'item-cal-1', status: 'calendar', calendarEventId: 'gcal-evt-detach' });
-        await calendarPushback.maybePushToGCal(op, buildProvider);
-        expect(deleteEvent).toHaveBeenCalledWith('cal-1', 'gcal-evt-detach');
+            expect(op.detachedCalendar).toMatchObject({ _id: 'item-cal-1', status: 'calendar', calendarEventId: 'gcal-evt-detach' });
+            await calendarPushback.maybePushToGCal(op, buildProvider);
+            expect(deleteEvent).toHaveBeenCalledWith('cal-1', 'gcal-evt-detach');
 
-        // The item row itself was still updated to the new status.
-        const row = await itemsDAO.findByOwnerAndId('item-cal-1', userId);
-        expect(row?.status).toBe(status);
-    });
+            // The item row itself was still updated to the new status.
+            const row = await itemsDAO.findByOwnerAndId('item-cal-1', userId);
+            expect(row?.status).toBe(status);
+        },
+    );
 
     it('does NOT delete the GCal event on calendar → done (done keeps the event with a ✓ marker)', async () => {
         await seedCalendarIntegration();

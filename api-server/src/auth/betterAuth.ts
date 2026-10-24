@@ -52,7 +52,7 @@ export function createAuth(db: Db) {
         account: {
             // Sign-in tokens Google/GitHub issue (`accessToken` + `refreshToken` on the `account`
             // collection) are encrypted at rest with `secret` (BETTER_AUTH_SECRET), as the privacy
-            // policy states. Better Auth 1.5.6 leaves `idToken` (the signed OpenID profile JWT) in
+            // policy states. Better Auth (as of 1.7.12) leaves `idToken` (the signed OpenID profile JWT) in
             // plaintext — it grants no API access, but it is PII, so revisit when the library covers it.
             // Better Auth reads mixed rows: a value that does not look like ciphertext is returned
             // verbatim, so rows written before this flag stay valid until

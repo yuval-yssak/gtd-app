@@ -371,6 +371,10 @@ test.describe('Next actions — reorder (desktop)', () => {
                 await expect(live).toHaveText('Reorder cancelled');
                 // The page is not stuck: a fresh pointer drag works.
                 await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
+                // The cancelled grab hands focus back once virtua remounts the row, and its scrollIntoView
+                // can nudge the page a pixel (always, in Chromium ≥156) — let it land, then reset.
+                await expect(handleOf(page, newest._id)).toBeFocused();
+                await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
                 await waitForScrollRest(page);
                 expect(await page.evaluate(() => window.scrollY)).toBe(0);
                 await page.waitForSelector('text=Row 13');

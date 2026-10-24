@@ -353,10 +353,20 @@ test.describe('Item editor — page mode UX', () => {
             await expect(preview).toBeVisible();
             await expect(notesEditor).toHaveCount(0);
 
-            // cmd+click: same outcome — the modifier gesture must not leak into an edit-mode switch either.
-            const modifierClickTab = page.context().waitForEvent('page');
+            // The plain click's tab took the foreground; Chromium ≥156 never settles a click's actionability
+            // checks on a hidden page, so return to the app tab as the user would.
+            await page.bringToFront();
+
+            // cmd+click: the modifier gesture must not leak into an edit-mode switch either. The background
+            // tab it opens is the browser's own, and headless Chromium ≥156 only reports it to Playwright
+            // at teardown, so only the app-side contract is asserted here.
+            // A bubble-phase window listener runs after React's root-delegated handlers, so it sees the final verdict.
+            await link.evaluate((anchor) => {
+                window.addEventListener('click', (event) => anchor.setAttribute('data-default-prevented', String(event.defaultPrevented)), { once: true });
+            });
             await link.click({ modifiers: ['Meta'] });
-            await expect(await modifierClickTab).toHaveURL(/example\.com\/docs/);
+            // The browser's open-in-tab default must survive the app's handlers.
+            await expect(link).toHaveAttribute('data-default-prevented', 'false');
             await expect(preview).toBeVisible();
             await expect(notesEditor).toHaveCount(0);
 

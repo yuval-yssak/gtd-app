@@ -19,12 +19,13 @@
         "gtd-mcp": "./dist/index.js"
     },
     "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.0.4",
-        "zod": "^4.4.3",
-        "zod-to-json-schema": "^3.24.1"
+        "@modelcontextprotocol/sdk": "^1.32.2",
+        "zod": "^4.6.7",
+        "zod-to-json-schema": "^3.25.2"
     },
     "devDependencies": {
-        "@types/node": "^25.5.0",
+        "@biomejs/biome": "2.6.2",
+        "@types/node": "^26.6.5",
         "tsx": "latest",
         "typescript": "latest",
         "vitest": "latest"

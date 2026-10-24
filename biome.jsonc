@@ -1,5 +1,5 @@
 {
-    "$schema": "https://biomejs.dev/schemas/2.4.8/schema.json",
+    "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
     "files": {
         "includes": [
             "**",
@@ -13,8 +13,18 @@
     "assist": { "actions": { "source": { "organizeImports": "on" } } },
     "linter": {
         "enabled": true,
-        "rules": { "recommended": true }
+        "rules": {
+            // Flags ternary max/min over ISO timestamps, Dates and ids too, where Math.max/min would yield NaN or numbers.
+            "complexity": { "useMathMinMax": "off" }
+        }
     },
+    "overrides": [
+        {
+            // Playwright's locator.innerText() is not DOM Node.innerText; its textContent() drops layout line breaks.
+            "includes": ["e2e/**"],
+            "linter": { "rules": { "performance": { "useDomNodeTextContent": "off" } } }
+        }
+    ],
     "formatter": {
         "enabled": true,
         "indentStyle": "space",
@@ -27,6 +37,9 @@
             "trailingCommas": "all"
         }
     },
+    // Biome 2.6 started formatting Markdown and YAML by default; docs and workflows are hand-formatted.
+    "markdown": { "formatter": { "enabled": false } },
+    "yaml": { "formatter": { "enabled": false } },
     "css": {
         "parser": {
             "cssModules": true

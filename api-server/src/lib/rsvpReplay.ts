@@ -42,7 +42,7 @@ export async function replayRsvpOp(userId: string, op: OperationInterface, build
     // Routine-instance items carry calendarInstanceEventId in place of calendarEventId — the op's
     // own rsvp.calendarEventId snapshot already pins whichever id the issuing client saw, so the
     // pre-flight just needs the item to be calendar-status with a live integration id.
-    if (!item || item.status !== 'calendar' || !item.calendarIntegrationId) {
+    if (item?.status !== 'calendar' || !item.calendarIntegrationId) {
         await markOpFailed(op._id, 'terminal', 'item missing or no longer calendar');
         return;
     }

@@ -17,7 +17,10 @@ export default function setup() {
         }
 
         const runMarker = `_p${process.pid}_w`;
-        const client = new MongoClient(url);
+        // Polling monitor: the default streaming one cancels an in-flight hello on close, and since
+        // mongodb 7.2 the resulting error formats its stack eagerly — after vitest tore down the module
+        // runner whose prepareStackTrace hook then throws, crashing the run with exit 1.
+        const client = new MongoClient(url, { serverMonitoringMode: 'poll' });
         try {
             await client.connect();
             const { databases } = await client.db().admin().listDatabases({ nameOnly: true });

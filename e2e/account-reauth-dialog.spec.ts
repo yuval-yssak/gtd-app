@@ -31,8 +31,12 @@ test.describe('account reauth dialog', () => {
         const email = `reauth-dialog-${dayjs().valueOf()}@example.com`;
 
         await withOneLoggedInDevice(browser, email, async (page) => {
+            // A sync pass that succeeds clears any flag raised before it started (the stale-flag self-heal),
+            // and the page can render before its first pass begins — so flag only once that pass is under way.
+            const initialPull = page.waitForRequest(/\/sync\/pull/);
             await page.goto(`${CLIENT_URL}/inbox`);
             await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+            await initialPull;
 
             const userId = await activeAccountId(page);
             await flagAccountNeedsReauth(page, userId);

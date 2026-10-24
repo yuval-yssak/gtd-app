@@ -546,7 +546,7 @@ async function maybeAdvanceRoutineForItem(item: ItemInterface, ctx: { userId: st
         return;
     }
     const routine = await routinesDAO.findByOwnerAndId(item.routineId, ctx.userId);
-    if (!routine || !routine.active) {
+    if (!routine?.active) {
         return;
     }
     await advanceRoutineAfterDisposal({ userId: ctx.userId, deviceId: `api:${ctx.tokenId}` }, routine, dayjs().toDate());

@@ -37,16 +37,12 @@ describe('fromGCalExclusive', () => {
 describe('toGCalExclusive / fromGCalExclusive round-trip', () => {
     // Round-trip on a sampling that crosses month/year/leap-day boundaries — any rounding/tz drift
     // here would silently corrupt all-day event timing on save, so the test pins the inverse property.
-    it.each([
-        '2026-01-01',
-        '2026-02-28',
-        '2024-02-29',
-        '2026-05-27',
-        '2026-12-31',
-        '2027-01-01',
-    ])('round-trips %s through toGCalExclusive → fromGCalExclusive', (date) => {
-        expect(fromGCalExclusive(toGCalExclusive(date))).toBe(date);
-    });
+    it.each(['2026-01-01', '2026-02-28', '2024-02-29', '2026-05-27', '2026-12-31', '2027-01-01'])(
+        'round-trips %s through toGCalExclusive → fromGCalExclusive',
+        (date) => {
+            expect(fromGCalExclusive(toGCalExclusive(date))).toBe(date);
+        },
+    );
 
     it.each(['2026-01-02', '2026-03-01', '2024-03-01', '2026-05-28', '2027-01-01'])('round-trips %s through fromGCalExclusive → toGCalExclusive', (date) => {
         expect(toGCalExclusive(fromGCalExclusive(date))).toBe(date);

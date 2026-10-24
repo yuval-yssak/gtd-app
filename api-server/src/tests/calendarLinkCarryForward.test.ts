@@ -166,16 +166,14 @@ describe('carryForwardCalendarLink (pure)', () => {
         expect(carryForwardCalendarLink(existing, clientSnapshot({ status: 'trash', updatedTs: T1 })).calendarEventId).toBe('evt-1');
     });
 
-    it.each([
-        'inbox',
-        'nextAction',
-        'waitingFor',
-        'somedayMaybe',
-    ] as const)('never carries into a detach status (%s) — the client stripped the link on purpose', (status) => {
-        const merged = carryForwardCalendarLink(existing, clientSnapshot({ status, updatedTs: T1 }));
-        expect(merged.calendarEventId).toBeUndefined();
-        expect(merged.lastPushedToGCalTs).toBeUndefined();
-    });
+    it.each(['inbox', 'nextAction', 'waitingFor', 'somedayMaybe'] as const)(
+        'never carries into a detach status (%s) — the client stripped the link on purpose',
+        (status) => {
+            const merged = carryForwardCalendarLink(existing, clientSnapshot({ status, updatedTs: T1 }));
+            expect(merged.calendarEventId).toBeUndefined();
+            expect(merged.lastPushedToGCalTs).toBeUndefined();
+        },
+    );
 
     it('does not overwrite a field the snapshot already carries', () => {
         const merged = carryForwardCalendarLink(existing, clientSnapshot({ calendarEventId: 'evt-1', htmlLink: 'https://g/client-copy', updatedTs: T1 }));

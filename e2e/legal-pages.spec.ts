@@ -92,7 +92,7 @@ test.describe('product name', () => {
         try {
             const page = await ctx.newPage();
             await page.goto(`${CLIENT_URL}/login`);
-            await expect(page).toHaveTitle('Done');
+            await expect(page).toHaveTitle('Sign in · Done');
             await expect(page.getByRole('heading', { name: 'Done', exact: true })).toBeVisible();
             await expect(page.getByRole('heading', { name: 'Getting Things Done' })).toHaveCount(0);
             await page.getByTestId('loginTermsLink').click();

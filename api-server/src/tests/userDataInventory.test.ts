@@ -99,20 +99,21 @@ describe('inventory completeness', () => {
 });
 
 describe('owner filters', () => {
-    it.each(
-        [...USER_DATA_COLLECTIONS, USER_ROW_SPEC].map((spec) => [spec.collection, spec] as const),
-    )('%s matches exactly the owner’s rows', async (_name, spec) => {
-        await seedBoth(spec);
-        const matched = await db.collection(spec.collection).find(spec.filter(ALICE)).toArray();
-        expect(matched).toHaveLength(1);
-        const [row] = matched;
-        if (!row) {
-            throw new Error('expected one matched row');
-        }
-        // Whatever the owner field is, the matched row is Alice's and never Bob's.
-        expect(JSON.stringify(row)).toContain(ALICE.userId);
-        expect(JSON.stringify(row)).not.toContain(BOB.userId);
-    });
+    it.each([...USER_DATA_COLLECTIONS, USER_ROW_SPEC].map((spec) => [spec.collection, spec] as const))(
+        '%s matches exactly the owner’s rows',
+        async (_name, spec) => {
+            await seedBoth(spec);
+            const matched = await db.collection(spec.collection).find(spec.filter(ALICE)).toArray();
+            expect(matched).toHaveLength(1);
+            const [row] = matched;
+            if (!row) {
+                throw new Error('expected one matched row');
+            }
+            // Whatever the owner field is, the matched row is Alice's and never Bob's.
+            expect(JSON.stringify(row)).toContain(ALICE.userId);
+            expect(JSON.stringify(row)).not.toContain(BOB.userId);
+        },
+    );
 
     it('matches Better Auth rows whose ids are stored as ObjectId', async () => {
         const oid = new ObjectId();

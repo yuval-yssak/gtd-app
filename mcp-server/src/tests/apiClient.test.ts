@@ -18,6 +18,13 @@ const config = {
     ]),
 };
 
+/** The RequestInit of the first fetch call; throws instead of letting an absent call read as `undefined`. */
+function firstFetchInit(fetchMock: ReturnType<typeof vi.mocked<typeof fetch>>): RequestInit {
+    const [call] = fetchMock.mock.calls;
+    if (!call?.[1]) throw new Error('expected a fetch call with init');
+    return call[1];
+}
+
 describe('apiClient', () => {
     beforeEach(() => {
         vi.stubGlobal('fetch', vi.fn());
@@ -32,8 +39,8 @@ describe('apiClient', () => {
         const api = createApiClient(config);
         await api.request('GET', '/v1/items');
         expect(fetchMock).toHaveBeenCalledOnce();
-        const [, init] = fetchMock.mock.calls[0] ?? [];
-        expect((init?.headers as { Authorization?: string }).Authorization).toBe('Bearer gtd_default_token');
+        const init = firstFetchInit(fetchMock);
+        expect((init.headers as { Authorization?: string }).Authorization).toBe('Bearer gtd_default_token');
     });
 
     it('selects the requested non-default account when `opts.account` is provided', async () => {
@@ -41,8 +48,8 @@ describe('apiClient', () => {
         fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
         const api = createApiClient(config);
         await api.request('GET', '/v1/items', undefined, undefined, { account: 'work' });
-        const [, init] = fetchMock.mock.calls[0] ?? [];
-        expect((init?.headers as { Authorization?: string }).Authorization).toBe('Bearer gtd_work_token');
+        const init = firstFetchInit(fetchMock);
+        expect((init.headers as { Authorization?: string }).Authorization).toBe('Bearer gtd_work_token');
     });
 
     it('lowercases the account label so config keys and call-site labels can mix case', async () => {
@@ -50,8 +57,8 @@ describe('apiClient', () => {
         fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
         const api = createApiClient(config);
         await api.request('GET', '/v1/items', undefined, undefined, { account: 'WORK' });
-        const [, init] = fetchMock.mock.calls[0] ?? [];
-        expect((init?.headers as { Authorization?: string }).Authorization).toBe('Bearer gtd_work_token');
+        const init = firstFetchInit(fetchMock);
+        expect((init.headers as { Authorization?: string }).Authorization).toBe('Bearer gtd_work_token');
     });
 
     it('throws GtdApiError(400, unknown_account) when the account label has no configured token', async () => {
@@ -68,8 +75,8 @@ describe('apiClient', () => {
         fetchMock.mockResolvedValueOnce(new Response('{}', { status: 200 }));
         const api = createApiClient(config);
         await api.request('POST', '/v1/reassign', { entityType: 'item' }, undefined, { account: 'default', recipientAccount: 'work' });
-        const [, init] = fetchMock.mock.calls[0] ?? [];
-        const headers = init?.headers as { Authorization?: string; 'X-Reassign-Recipient-Token'?: string };
+        const init = firstFetchInit(fetchMock);
+        const headers = init.headers as { Authorization?: string; 'X-Reassign-Recipient-Token'?: string };
         expect(headers.Authorization).toBe('Bearer gtd_default_token');
         expect(headers['X-Reassign-Recipient-Token']).toBe('gtd_work_token');
     });
@@ -79,10 +86,10 @@ describe('apiClient', () => {
         fetchMock.mockResolvedValueOnce(new Response('{"_id":"abc"}', { status: 201 }));
         const api = createApiClient(config);
         await api.request('POST', '/v1/items', { title: 'hi' });
-        const [, init] = fetchMock.mock.calls[0] ?? [];
-        expect(init?.method).toBe('POST');
-        expect(init?.body).toBe(JSON.stringify({ title: 'hi' }));
-        expect((init?.headers as { 'Content-Type'?: string })['Content-Type']).toBe('application/json');
+        const init = firstFetchInit(fetchMock);
+        expect(init.method).toBe('POST');
+        expect(init.body).toBe(JSON.stringify({ title: 'hi' }));
+        expect((init.headers as { 'Content-Type'?: string })['Content-Type']).toBe('application/json');
     });
 
     it('encodes query params and skips undefined / empty', async () => {

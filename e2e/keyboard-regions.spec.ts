@@ -319,10 +319,12 @@ test.describe('Keyboard regions and global shortcuts', () => {
             await page.keyboard.press('Escape');
 
             // Mouse first, then the keyboard: the region still forwards into an item.
-            // Clicked twice: the filter goes on and off again, so the list keeps its row; focus ends on the chip by mouse.
+            // Clicked twice: the filter goes on (filtering energy-less Alpha out) and off again; focus ends on the chip by mouse.
             await page.getByTestId('nextActionsEnergyFilterChip').first().click();
             await page.getByTestId('nextActionsEnergyFilterChip').first().click();
             await expect(page).not.toHaveURL(/energy=/);
+            // The first click left the empty state (no list region); the URL clears before the second click's render commits.
+            await expect(page.locator('[data-keyboard-region][aria-label="Next actions"]')).toBeAttached();
             await page.keyboard.press('F6');
             await expect.poll(() => focusedRegion(page)).toBe('Next actions');
             await expect.poll(() => focused(page)).toBe('nextActionItemRow');

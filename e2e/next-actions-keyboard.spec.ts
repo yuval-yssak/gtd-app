@@ -436,6 +436,9 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
             await page.keyboard.press('Shift+Tab');
             // Straight into the filter bar (the region before the list), entered on its first chip.
             await expect.poll(() => focusedTestId(page)).toBe('nextActionsEnergyFilterChip');
+            // Shift+Tab drops the list out of the tab order until a setTimeout puts it back; Chromium ≥156 can
+            // run that timer after the focus move lands, so a machine-speed Tab would skip the list.
+            await expect(page.locator('[data-keyboard-region][aria-label="Next actions"]')).toHaveAttribute('tabindex', '0');
             await page.keyboard.press('Tab');
             await expect.poll(() => focusedRowTitle(page)).toBe('Bravo');
             await page.keyboard.press('End');

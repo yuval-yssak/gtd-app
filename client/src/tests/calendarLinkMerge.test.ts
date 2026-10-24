@@ -41,14 +41,12 @@ describe('mergeServerOwnedCalendarFields', () => {
         expect(mergeServerOwnedCalendarFields({ ...base, status: 'trash' }, linkStamp)?.calendarEventId).toBe('gtd-evt-1');
     });
 
-    it.each([
-        'inbox',
-        'nextAction',
-        'waitingFor',
-        'somedayMaybe',
-    ] as const)('refuses to re-link a local %s row — the detach stripped the link on purpose', (status) => {
-        expect(mergeServerOwnedCalendarFields({ ...base, status }, linkStamp)).toBeNull();
-    });
+    it.each(['inbox', 'nextAction', 'waitingFor', 'somedayMaybe'] as const)(
+        'refuses to re-link a local %s row — the detach stripped the link on purpose',
+        (status) => {
+            expect(mergeServerOwnedCalendarFields({ ...base, status }, linkStamp)).toBeNull();
+        },
+    );
 
     it('refuses to merge across owners — a reassigned row must not inherit the source account’s link', () => {
         expect(mergeServerOwnedCalendarFields({ ...base, userId: 'user-target' }, linkStamp)).toBeNull();

@@ -2,7 +2,7 @@ import { symmetricDecrypt, symmetricEncrypt } from 'better-auth/crypto';
 
 /**
  * Better Auth encrypts the sign-in tokens it stores on `account` rows (`accessToken` and
- * `refreshToken`; `idToken` stays plaintext in 1.5.6) with `BETTER_AUTH_SECRET` once `account.encryptOAuthTokens` is on
+ * `refreshToken`; `idToken` stays plaintext as of 1.7.12) with `BETTER_AUTH_SECRET` once `account.encryptOAuthTokens` is on
  * (see `auth/betterAuth.ts`). It reads mixed rows fine — a value that does not look encrypted is
  * returned as-is — so rows written before the flag stay readable until they are re-encrypted by
  * `scripts/encryptBetterAuthTokens.ts` or the next sign-in. These helpers mirror Better Auth's

@@ -82,10 +82,12 @@ describe('createToken', () => {
         expect(result.label).toBe('iOS Shortcut');
         const [call] = fetchCalls;
         if (!call) throw new Error('expected one fetch call');
-        expect(call.init?.method).toBe('POST');
-        expect(call.init?.credentials).toBe('include');
-        expect((call.init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
-        expect(JSON.parse(call.init?.body as string)).toEqual({ label: 'iOS Shortcut' });
+        const { init } = call;
+        if (!init) throw new Error('expected fetch init');
+        expect(init.method).toBe('POST');
+        expect(init.credentials).toBe('include');
+        expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+        expect(JSON.parse(init.body as string)).toEqual({ label: 'iOS Shortcut' });
     });
 
     it('passes scopes through when provided so callers can mint capability-restricted tokens', async () => {

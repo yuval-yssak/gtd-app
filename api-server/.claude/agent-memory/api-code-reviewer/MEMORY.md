@@ -126,3 +126,4 @@
 - [Removed-symbol doc grep](feedback_removed_symbol_doc_grep.md) — "references updated" misses README/CLAUDE.md rule text; grep guidance docs for the old name
 - [Backfill write-then-publish unrecoverable](project_backfill_write_then_publish_unrecoverable.md) — 'field present → skip' idempotency + separate op publish = publish failure never repaired on rerun; ask for rollback/republish.
 - [Rank backfill per-user vs merged keyspace](project_rank_backfill_per_user_vs_merged_keyspace.md) — server mints ranks per user; client merges accounts into one ranked list, so keys interleave. Non-blocking so far.
+- [Dep-bump review method](project_dep_bump_review_method.md) — diff old vs new node_modules; Anthropic 1.0 wire change + Better Auth 1.7 requireLocalEmailVerified slip past mocked tests

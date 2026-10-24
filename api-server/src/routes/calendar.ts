@@ -4038,7 +4038,7 @@ function clearRetirementMarker(routine: RoutineInterface): RoutineInterface {
 }
 
 async function deactivateRoutineFromGCal(existing: RoutineInterface | undefined, ctx: SyncContext, opts?: { capRruleFrom?: string }): Promise<void> {
-    if (!existing || !existing.active) {
+    if (!existing?.active) {
         return;
     }
 

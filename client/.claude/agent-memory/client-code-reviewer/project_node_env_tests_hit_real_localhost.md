@@ -24,3 +24,9 @@ tests in the same file.
 run the file with `--reporter=verbose` and look for any test an order of magnitude slower
 than its neighbours. Also note `console.log` is suppressed in this suite's default reporter;
 force diagnostics through an assertion failure message instead.
+
+**Related trap (verified 2026-10-24 on vitest 4.1.5 and 5.0.5):** `resolve.conditions: ['test']`
+in `vitest.config.ts` does NOT take effect — a bare `import { pushSyncOps } from '#api/syncClient'`
+resolves to the REAL module (`vi.isMockFunction` → false). The `*.mock.ts` companions only load
+because each test file calls `vi.mock('#api/syncClient', async () => await import('../api/syncClient.mock.ts'))`.
+So a new test importing `#api/*` without that line talks to the real API client. Flag it.

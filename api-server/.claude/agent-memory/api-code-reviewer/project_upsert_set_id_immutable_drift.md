@@ -25,7 +25,7 @@ update: { $set: mutable, $setOnInsert: { _id } }
 **How to apply:** On any review that touches an `updateOne`/`updateMany`/`bulkWrite` with `$set` + `upsert:true`, check whether the value object includes `_id`. If yes — flag it. The correct pattern is `$setOnInsert: { _id }` + `$set: <rest>`. Also flag any inline comment claiming "$set leaves existing _id intact on replace" — that's the load-bearing wrong mental model.
 
 Seen in:
-- `src/scripts/importFacileThings.ts` (pre-batched and batched-bulk versions both)
+- `src/scripts/importFacileThings.ts` (pre-batched and batched-bulk versions both; script since removed)
 - Likely candidates: any "import from external source" script written after the calendarIntegrations pattern was established.
 
 Related: [[replaceById-tenant-bypass]] — different bug, same family (developers mis-modeling MongoDB's upsert-by-not-_id semantics).

@@ -15,10 +15,11 @@ const config: StorybookConfig = {
     viteFinal: (config) => {
         // Remove the TanStack Router code-gen plugin and VitePWA: both require the full
         // app build environment (file-based routing, service worker) that Storybook doesn't need.
-        config.plugins = (config.plugins ?? []).filter((plugin) => {
-            if (!plugin || typeof plugin !== 'object' || Array.isArray(plugin)) return true;
+        // Flattened first: VitePWA() returns a nested plugin array, which the filter would otherwise keep whole.
+        config.plugins = (config.plugins ?? []).flat(Number.POSITIVE_INFINITY).filter((plugin) => {
+            if (!plugin || typeof plugin !== 'object') return true;
             const name = (plugin as { name?: string }).name ?? '';
-            return !name.includes('tanstack-router') && !name.includes('vite-plugin-pwa');
+            return !name.startsWith('tanstack') && !name.startsWith('vite-plugin-pwa');
         });
 
         // Storybook 10 enables Vitest Browser Mode internally, which causes Vite to apply

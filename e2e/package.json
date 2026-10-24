@@ -9,10 +9,10 @@
         "cleanup-e2e-seeds": "set -a && . ../api-server/.env && set +a && mongosh \"$MONGO_DB_URL/$MONGO_DB_NAME\" --quiet --file scripts/cleanupE2ECalendarSeeds.js"
     },
     "devDependencies": {
-        "@biomejs/biome": "2.4.8",
-        "@playwright/test": "^1.58.2"
+        "@biomejs/biome": "2.6.2",
+        "@playwright/test": "^1.64.1"
     },
     "dependencies": {
-        "dayjs": "^1.11.20"
+        "dayjs": "^1.11.23"
     }
 }

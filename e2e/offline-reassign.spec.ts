@@ -119,8 +119,12 @@ test.describe('offline account actions — graceful block', () => {
         const emailB = `off-switch-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page, { active, secondary }) => {
+            // useAccounts copies the server's device sessions into the IDB account cache after load;
+            // going offline before that list answers leaves the switcher without the secondary row.
+            const deviceSessions = page.waitForResponse(/\/auth\/multi-session\/list-device-sessions/);
             await page.goto('/inbox');
             await expect(page.getByRole('heading', { name: 'Inbox' })).toBeVisible();
+            await deviceSessions;
 
             await page.context().setOffline(true);
             const trigger = page.getByTestId('accountSwitcherTrigger').locator('visible=true').first();

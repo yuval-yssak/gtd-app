@@ -8,6 +8,7 @@ import Tab from '@mui/material/Tab';
 import Tabs from '@mui/material/Tabs';
 import Typography from '@mui/material/Typography';
 import { useEffect, useId, useRef, useState } from 'react';
+import { enterNotesEdit, exitNotesEdit, initialNotesEditMode } from '../../lib/notesEditMode';
 import { type ItemEditorChrome, notesAreEmpty } from '../editItemDialogLogic';
 import { MarkdownNotesEditor, NOTES_EDITOR_LABEL, NOTES_PLACEHOLDER } from '../markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../markdown/MarkdownPreview';
@@ -54,12 +55,9 @@ export function NotesSection({ notes, onNotesChange, chrome, collapsible = false
 
 function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChange: (n: string) => void }) {
     // Empty notes start in the editor so the user sees a clear writing surface; non-empty notes
-    // start in preview so the page reads like a document.
-    const [editing, setEditing] = useState(() => notesAreEmpty(notes));
-    // Auto-focus must only fire on the user's preview→edit transition, not the initial mount.
-    // Otherwise a freshly opened item with empty notes would yank focus to the editor — the
-    // exact pattern we removed from the title input. The flag persists across re-renders via ref.
-    const focusOnNextEditMount = useRef(false);
+    // start in preview so the page reads like a document. Only the pencil asks for editor focus —
+    // a freshly opened item with empty notes must not yank focus (see notesEditMode).
+    const [{ isEditing: editing, focusEditorOnMount }, setEditMode] = useState(() => initialNotesEditMode(notes));
     // Per-instance id for the section label's aria-labelledby — useId guarantees uniqueness if
     // the section ever renders more than once in a tree (split pane, side-by-side comparison).
     const labelId = useId();
@@ -77,16 +75,13 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
             editButtonRef.current?.focus();
         }
     }, [editing]);
-    const enterEdit = () => {
-        focusOnNextEditMount.current = true;
-        setEditing(true);
-    };
+    const enterEdit = () => setEditMode(enterNotesEdit());
     // Empty notes have nothing to preview — the editor stays the resting state.
     const exitEditIfNotesExist = () => {
         if (notesAreEmpty(notesRef.current)) {
             return false;
         }
-        setEditing(false);
+        setEditMode(exitNotesEdit());
         return true;
     };
     const exitEditExplicitly = () => {
@@ -96,10 +91,6 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
     };
 
     if (editing) {
-        // autoFocus prop is captured at mount; reset the flag synchronously after read so the next
-        // `editing` cycle (e.g. after blur→preview→pencil again) decides for itself.
-        const shouldFocus = focusOnNextEditMount.current;
-        focusOnNextEditMount.current = false;
         return (
             <Box>
                 <Box className={styles.notesHeader}>
@@ -125,7 +116,7 @@ function PageNotesSection({ notes, onNotesChange }: { notes: string; onNotesChan
                     value={notes}
                     onValueChange={onNotesChange}
                     placeholder={NOTES_PLACEHOLDER}
-                    autoFocus={shouldFocus}
+                    autoFocus={focusEditorOnMount}
                     onBlurOutside={exitEditIfNotesExist}
                     // First ESC steps out to the preview; claiming the key (return true) makes
                     // CodeMirror preventDefault so the page-level ESC listener doesn't also navigate

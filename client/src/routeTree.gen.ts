@@ -9,39 +9,38 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as TermsRouteImport } from './routes/terms'
-import { Route as PrivacyRouteImport } from './routes/privacy'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
-import { Route as AuthenticatedWorkContextsRouteImport } from './routes/_authenticated/work-contexts'
-import { Route as AuthenticatedWeeklyReviewRouteImport } from './routes/_authenticated/weekly-review'
-import { Route as AuthenticatedWaitingForRouteImport } from './routes/_authenticated/waiting-for'
-import { Route as AuthenticatedTrashRouteImport } from './routes/_authenticated/trash'
-import { Route as AuthenticatedTicklerRouteImport } from './routes/_authenticated/tickler'
-import { Route as AuthenticatedSomedayRouteImport } from './routes/_authenticated/someday'
-import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
-import { Route as AuthenticatedSearchRouteImport } from './routes/_authenticated/search'
-import { Route as AuthenticatedRoutinesRouteImport } from './routes/_authenticated/routines'
-import { Route as AuthenticatedProcessInboxRouteImport } from './routes/_authenticated/process-inbox'
-import { Route as AuthenticatedPeopleRouteImport } from './routes/_authenticated/people'
-import { Route as AuthenticatedNextActionsRouteImport } from './routes/_authenticated/next-actions'
-import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated/inbox'
-import { Route as AuthenticatedDoneRouteImport } from './routes/_authenticated/done'
+import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as TermsRouteImport } from './routes/terms'
 import { Route as AuthenticatedCalendarRouteImport } from './routes/_authenticated/calendar'
-import { Route as AuthenticatedRoutineRoutineIdRouteImport } from './routes/_authenticated/routine.$routineId'
-import { Route as AuthenticatedPersonPersonIdRouteImport } from './routes/_authenticated/person.$personId'
+import { Route as AuthenticatedDoneRouteImport } from './routes/_authenticated/done'
+import { Route as AuthenticatedInboxRouteImport } from './routes/_authenticated/inbox'
+import { Route as AuthenticatedNextActionsRouteImport } from './routes/_authenticated/next-actions'
+import { Route as AuthenticatedPeopleRouteImport } from './routes/_authenticated/people'
+import { Route as AuthenticatedProcessInboxRouteImport } from './routes/_authenticated/process-inbox'
+import { Route as AuthenticatedRoutinesRouteImport } from './routes/_authenticated/routines'
+import { Route as AuthenticatedSearchRouteImport } from './routes/_authenticated/search'
+import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as AuthenticatedSomedayRouteImport } from './routes/_authenticated/someday'
+import { Route as AuthenticatedTicklerRouteImport } from './routes/_authenticated/tickler'
+import { Route as AuthenticatedTrashRouteImport } from './routes/_authenticated/trash'
+import { Route as AuthenticatedWaitingForRouteImport } from './routes/_authenticated/waiting-for'
+import { Route as AuthenticatedWeeklyReviewRouteImport } from './routes/_authenticated/weekly-review'
+import { Route as AuthenticatedWorkContextsRouteImport } from './routes/_authenticated/work-contexts'
+import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
 import { Route as AuthenticatedItemItemIdRouteImport } from './routes/_authenticated/item.$itemId'
+import { Route as AuthenticatedPersonPersonIdRouteImport } from './routes/_authenticated/person.$personId'
+import { Route as AuthenticatedRoutineRoutineIdRouteImport } from './routes/_authenticated/routine.$routineId'
 
-const TermsRoute = TermsRouteImport.update({
-  id: '/terms',
-  path: '/terms',
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PrivacyRoute = PrivacyRouteImport.update({
-  id: '/privacy',
-  path: '/privacy',
+const AuthenticatedRoute = AuthenticatedRouteImport.update({
+  id: '/_authenticated',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -49,76 +48,29 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedRoute = AuthenticatedRouteImport.update({
-  id: '/_authenticated',
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexRoute = IndexRouteImport.update({
-  id: '/',
-  path: '/',
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthCallbackRoute = AuthCallbackRouteImport.update({
-  id: '/auth/callback',
-  path: '/auth/callback',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthenticatedWorkContextsRoute =
-  AuthenticatedWorkContextsRouteImport.update({
-    id: '/work-contexts',
-    path: '/work-contexts',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedWeeklyReviewRoute =
-  AuthenticatedWeeklyReviewRouteImport.update({
-    id: '/weekly-review',
-    path: '/weekly-review',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedWaitingForRoute = AuthenticatedWaitingForRouteImport.update({
-  id: '/waiting-for',
-  path: '/waiting-for',
+const AuthenticatedCalendarRoute = AuthenticatedCalendarRouteImport.update({
+  id: '/calendar',
+  path: '/calendar',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const AuthenticatedTrashRoute = AuthenticatedTrashRouteImport.update({
-  id: '/trash',
-  path: '/trash',
+const AuthenticatedDoneRoute = AuthenticatedDoneRouteImport.update({
+  id: '/done',
+  path: '/done',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const AuthenticatedTicklerRoute = AuthenticatedTicklerRouteImport.update({
-  id: '/tickler',
-  path: '/tickler',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedSomedayRoute = AuthenticatedSomedayRouteImport.update({
-  id: '/someday',
-  path: '/someday',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedSearchRoute = AuthenticatedSearchRouteImport.update({
-  id: '/search',
-  path: '/search',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedRoutinesRoute = AuthenticatedRoutinesRouteImport.update({
-  id: '/routines',
-  path: '/routines',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedProcessInboxRoute =
-  AuthenticatedProcessInboxRouteImport.update({
-    id: '/process-inbox',
-    path: '/process-inbox',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedPeopleRoute = AuthenticatedPeopleRouteImport.update({
-  id: '/people',
-  path: '/people',
+const AuthenticatedInboxRoute = AuthenticatedInboxRouteImport.update({
+  id: '/inbox',
+  path: '/inbox',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
 const AuthenticatedNextActionsRoute =
@@ -127,38 +79,86 @@ const AuthenticatedNextActionsRoute =
     path: '/next-actions',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedInboxRoute = AuthenticatedInboxRouteImport.update({
-  id: '/inbox',
-  path: '/inbox',
+const AuthenticatedPeopleRoute = AuthenticatedPeopleRouteImport.update({
+  id: '/people',
+  path: '/people',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
-const AuthenticatedDoneRoute = AuthenticatedDoneRouteImport.update({
-  id: '/done',
-  path: '/done',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedCalendarRoute = AuthenticatedCalendarRouteImport.update({
-  id: '/calendar',
-  path: '/calendar',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
-const AuthenticatedRoutineRoutineIdRoute =
-  AuthenticatedRoutineRoutineIdRouteImport.update({
-    id: '/routine/$routineId',
-    path: '/routine/$routineId',
+const AuthenticatedProcessInboxRoute =
+  AuthenticatedProcessInboxRouteImport.update({
+    id: '/process-inbox',
+    path: '/process-inbox',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedRoutinesRoute = AuthenticatedRoutinesRouteImport.update({
+  id: '/routines',
+  path: '/routines',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedSearchRoute = AuthenticatedSearchRouteImport.update({
+  id: '/search',
+  path: '/search',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedSomedayRoute = AuthenticatedSomedayRouteImport.update({
+  id: '/someday',
+  path: '/someday',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedTicklerRoute = AuthenticatedTicklerRouteImport.update({
+  id: '/tickler',
+  path: '/tickler',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedTrashRoute = AuthenticatedTrashRouteImport.update({
+  id: '/trash',
+  path: '/trash',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedWaitingForRoute = AuthenticatedWaitingForRouteImport.update({
+  id: '/waiting-for',
+  path: '/waiting-for',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedWeeklyReviewRoute =
+  AuthenticatedWeeklyReviewRouteImport.update({
+    id: '/weekly-review',
+    path: '/weekly-review',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedWorkContextsRoute =
+  AuthenticatedWorkContextsRouteImport.update({
+    id: '/work-contexts',
+    path: '/work-contexts',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthCallbackRoute = AuthCallbackRouteImport.update({
+  id: '/auth/callback',
+  path: '/auth/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthenticatedItemItemIdRoute = AuthenticatedItemItemIdRouteImport.update({
+  id: '/item/$itemId',
+  path: '/item/$itemId',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedPersonPersonIdRoute =
   AuthenticatedPersonPersonIdRouteImport.update({
     id: '/person/$personId',
     path: '/person/$personId',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
-const AuthenticatedItemItemIdRoute = AuthenticatedItemItemIdRouteImport.update({
-  id: '/item/$itemId',
-  path: '/item/$itemId',
-  getParentRoute: () => AuthenticatedRoute,
-} as any)
+const AuthenticatedRoutineRoutineIdRoute =
+  AuthenticatedRoutineRoutineIdRouteImport.update({
+    id: '/routine/$routineId',
+    path: '/routine/$routineId',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -327,25 +327,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/terms': {
-      id: '/terms'
-      path: '/terms'
-      fullPath: '/terms'
-      preLoaderRoute: typeof TermsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/privacy': {
-      id: '/privacy'
-      path: '/privacy'
-      fullPath: '/privacy'
-      preLoaderRoute: typeof PrivacyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated': {
@@ -355,109 +341,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/auth/callback': {
-      id: '/auth/callback'
-      path: '/auth/callback'
-      fullPath: '/auth/callback'
-      preLoaderRoute: typeof AuthCallbackRouteImport
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/work-contexts': {
-      id: '/_authenticated/work-contexts'
-      path: '/work-contexts'
-      fullPath: '/work-contexts'
-      preLoaderRoute: typeof AuthenticatedWorkContextsRouteImport
-      parentRoute: typeof AuthenticatedRoute
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/weekly-review': {
-      id: '/_authenticated/weekly-review'
-      path: '/weekly-review'
-      fullPath: '/weekly-review'
-      preLoaderRoute: typeof AuthenticatedWeeklyReviewRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/waiting-for': {
-      id: '/_authenticated/waiting-for'
-      path: '/waiting-for'
-      fullPath: '/waiting-for'
-      preLoaderRoute: typeof AuthenticatedWaitingForRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/trash': {
-      id: '/_authenticated/trash'
-      path: '/trash'
-      fullPath: '/trash'
-      preLoaderRoute: typeof AuthenticatedTrashRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/tickler': {
-      id: '/_authenticated/tickler'
-      path: '/tickler'
-      fullPath: '/tickler'
-      preLoaderRoute: typeof AuthenticatedTicklerRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/someday': {
-      id: '/_authenticated/someday'
-      path: '/someday'
-      fullPath: '/someday'
-      preLoaderRoute: typeof AuthenticatedSomedayRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/settings': {
-      id: '/_authenticated/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/search': {
-      id: '/_authenticated/search'
-      path: '/search'
-      fullPath: '/search'
-      preLoaderRoute: typeof AuthenticatedSearchRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/routines': {
-      id: '/_authenticated/routines'
-      path: '/routines'
-      fullPath: '/routines'
-      preLoaderRoute: typeof AuthenticatedRoutinesRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/process-inbox': {
-      id: '/_authenticated/process-inbox'
-      path: '/process-inbox'
-      fullPath: '/process-inbox'
-      preLoaderRoute: typeof AuthenticatedProcessInboxRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/people': {
-      id: '/_authenticated/people'
-      path: '/people'
-      fullPath: '/people'
-      preLoaderRoute: typeof AuthenticatedPeopleRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/next-actions': {
-      id: '/_authenticated/next-actions'
-      path: '/next-actions'
-      fullPath: '/next-actions'
-      preLoaderRoute: typeof AuthenticatedNextActionsRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/inbox': {
-      id: '/_authenticated/inbox'
-      path: '/inbox'
-      fullPath: '/inbox'
-      preLoaderRoute: typeof AuthenticatedInboxRouteImport
+    '/_authenticated/calendar': {
+      id: '/_authenticated/calendar'
+      path: '/calendar'
+      fullPath: '/calendar'
+      preLoaderRoute: typeof AuthenticatedCalendarRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/done': {
@@ -467,18 +376,109 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDoneRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/calendar': {
-      id: '/_authenticated/calendar'
-      path: '/calendar'
-      fullPath: '/calendar'
-      preLoaderRoute: typeof AuthenticatedCalendarRouteImport
+    '/_authenticated/inbox': {
+      id: '/_authenticated/inbox'
+      path: '/inbox'
+      fullPath: '/inbox'
+      preLoaderRoute: typeof AuthenticatedInboxRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/routine/$routineId': {
-      id: '/_authenticated/routine/$routineId'
-      path: '/routine/$routineId'
-      fullPath: '/routine/$routineId'
-      preLoaderRoute: typeof AuthenticatedRoutineRoutineIdRouteImport
+    '/_authenticated/next-actions': {
+      id: '/_authenticated/next-actions'
+      path: '/next-actions'
+      fullPath: '/next-actions'
+      preLoaderRoute: typeof AuthenticatedNextActionsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/people': {
+      id: '/_authenticated/people'
+      path: '/people'
+      fullPath: '/people'
+      preLoaderRoute: typeof AuthenticatedPeopleRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/process-inbox': {
+      id: '/_authenticated/process-inbox'
+      path: '/process-inbox'
+      fullPath: '/process-inbox'
+      preLoaderRoute: typeof AuthenticatedProcessInboxRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/routines': {
+      id: '/_authenticated/routines'
+      path: '/routines'
+      fullPath: '/routines'
+      preLoaderRoute: typeof AuthenticatedRoutinesRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/search': {
+      id: '/_authenticated/search'
+      path: '/search'
+      fullPath: '/search'
+      preLoaderRoute: typeof AuthenticatedSearchRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/settings': {
+      id: '/_authenticated/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AuthenticatedSettingsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/someday': {
+      id: '/_authenticated/someday'
+      path: '/someday'
+      fullPath: '/someday'
+      preLoaderRoute: typeof AuthenticatedSomedayRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/tickler': {
+      id: '/_authenticated/tickler'
+      path: '/tickler'
+      fullPath: '/tickler'
+      preLoaderRoute: typeof AuthenticatedTicklerRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/trash': {
+      id: '/_authenticated/trash'
+      path: '/trash'
+      fullPath: '/trash'
+      preLoaderRoute: typeof AuthenticatedTrashRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/waiting-for': {
+      id: '/_authenticated/waiting-for'
+      path: '/waiting-for'
+      fullPath: '/waiting-for'
+      preLoaderRoute: typeof AuthenticatedWaitingForRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/weekly-review': {
+      id: '/_authenticated/weekly-review'
+      path: '/weekly-review'
+      fullPath: '/weekly-review'
+      preLoaderRoute: typeof AuthenticatedWeeklyReviewRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/work-contexts': {
+      id: '/_authenticated/work-contexts'
+      path: '/work-contexts'
+      fullPath: '/work-contexts'
+      preLoaderRoute: typeof AuthenticatedWorkContextsRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/auth/callback': {
+      id: '/auth/callback'
+      path: '/auth/callback'
+      fullPath: '/auth/callback'
+      preLoaderRoute: typeof AuthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_authenticated/item/$itemId': {
+      id: '/_authenticated/item/$itemId'
+      path: '/item/$itemId'
+      fullPath: '/item/$itemId'
+      preLoaderRoute: typeof AuthenticatedItemItemIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/person/$personId': {
@@ -488,11 +488,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedPersonPersonIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
-    '/_authenticated/item/$itemId': {
-      id: '/_authenticated/item/$itemId'
-      path: '/item/$itemId'
-      fullPath: '/item/$itemId'
-      preLoaderRoute: typeof AuthenticatedItemItemIdRouteImport
+    '/_authenticated/routine/$routineId': {
+      id: '/_authenticated/routine/$routineId'
+      path: '/routine/$routineId'
+      fullPath: '/routine/$routineId'
+      preLoaderRoute: typeof AuthenticatedRoutineRoutineIdRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
   }
