@@ -1,19 +1,11 @@
-import GridViewIcon from '@mui/icons-material/GridView';
-import TableRowsIcon from '@mui/icons-material/TableRows';
-import ViewListIcon from '@mui/icons-material/ViewList';
-import ViewModuleIcon from '@mui/icons-material/ViewModule';
-import Box from '@mui/material/Box';
-import Chip from '@mui/material/Chip';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
-import { useCallback, useMemo, useState } from 'react';
+import { LayoutGrid, LayoutList, Rows3, Table2 } from 'lucide-react';
+import { type ReactNode, useCallback, useMemo, useState } from 'react';
 import { SearchFilters } from '../../components/search/SearchFilters';
 import { SearchResultsList } from '../../components/search/SearchResultsList';
 import { SearchResultsTable } from '../../components/search/SearchResultsTable';
 import { useAppData } from '../../contexts/AppDataProvider';
+import { Chip, Text, ToggleGroup, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -30,11 +22,22 @@ export const Route = createFileRoute('/_authenticated/search')({
     component: SearchPage,
 });
 
-const VIEW_OPTIONS: Array<{ value: SearchView; icon: React.ReactElement; label: string }> = [
-    { value: 'grouped', icon: <ViewModuleIcon fontSize="small" />, label: 'Grouped by status' },
-    { value: 'flatChip', icon: <ViewListIcon fontSize="small" />, label: 'Flat list with status chips' },
-    { value: 'flatMinimal', icon: <GridViewIcon fontSize="small" />, label: 'Flat minimal' },
-    { value: 'table', icon: <TableRowsIcon fontSize="small" />, label: 'Table' },
+/** An icon segment: named by aria-label, its tooltip teaching what the icon means. */
+const viewOption = (value: SearchView, icon: ReactNode, label: string) => ({
+    value,
+    'aria-label': label,
+    label: (
+        <Tooltip title={label}>
+            <span className={styles.viewIcon}>{icon}</span>
+        </Tooltip>
+    ),
+});
+
+const VIEW_OPTIONS = [
+    viewOption('grouped', <LayoutGrid size={18} />, 'Grouped by status'),
+    viewOption('flatChip', <LayoutList size={18} />, 'Flat list with status chips'),
+    viewOption('flatMinimal', <Rows3 size={18} />, 'Flat minimal'),
+    viewOption('table', <Table2 size={18} />, 'Table'),
 ];
 
 function SearchPage() {
@@ -115,17 +118,11 @@ function SearchPage() {
         urlState.dateTo === null;
 
     return (
-        <Box>
-            <Typography
-                variant="h5"
-                sx={{
-                    fontWeight: 600,
-                    mb: 3,
-                }}
-            >
+        <div>
+            <Text variant="title" className={styles.title}>
                 Search
-                {filtered.length > 0 && <Chip label={filtered.length} size="small" color="primary" className={styles.countChip} />}
-            </Typography>
+                {filtered.length > 0 && <Chip label={filtered.length} tone="accent" className={styles.countChip} />}
+            </Text>
             <SearchFilters
                 urlState={urlState}
                 queryInput={queryInput}
@@ -139,30 +136,13 @@ function SearchPage() {
                 usage={usage}
                 activeStatuses={activeStatuses}
             />
-            <Box className={styles.viewRow}>
-                <ToggleButtonGroup
-                    size="small"
-                    value={urlState.view}
-                    exclusive
-                    onChange={(_, value: SearchView | null) => value && updateUrlState({ view: value })}
-                >
-                    {VIEW_OPTIONS.map((opt) => (
-                        <ToggleButton key={opt.value} value={opt.value} aria-label={opt.label}>
-                            <Tooltip title={opt.label}>{opt.icon}</Tooltip>
-                        </ToggleButton>
-                    ))}
-                </ToggleButtonGroup>
-            </Box>
+            <div className={styles.viewRow}>
+                <ToggleGroup value={urlState.view} onValueChange={(view) => updateUrlState({ view })} options={VIEW_OPTIONS} aria-label="Results view" />
+            </div>
             {filtered.length === 0 ? (
-                <Typography
-                    sx={{
-                        color: 'text.secondary',
-                        textAlign: 'center',
-                        mt: 6,
-                    }}
-                >
+                <Text tone="secondary" className={styles.emptyMessage}>
                     {hasNoInputs ? 'Type to search or use the filters above.' : 'No items match your filters.'}
-                </Typography>
+                </Text>
             ) : urlState.view === 'table' ? (
                 <SearchResultsTable
                     items={filtered}
@@ -176,6 +156,6 @@ function SearchPage() {
             ) : (
                 <SearchResultsList items={filtered} view={urlState.view} />
             )}
-        </Box>
+        </div>
     );
 }

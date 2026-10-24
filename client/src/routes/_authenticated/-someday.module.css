@@ -1,40 +1,51 @@
-.emptyCard {
-    padding: 2rem;
-    text-align: center;
-    max-width: 30rem;
-}
-
-.icon {
-    font-size: 3rem;
-    color: var(--mui-palette-text-disabled, rgba(0, 0, 0, 0.38));
-    margin-bottom: 1rem;
-}
-
-.list {
-    /* Match the visual density of other list views (inbox, next-actions). */
-    margin-top: 0.5rem;
-}
-
-.item {
-    padding: 0;
-}
-
-.rowButton {
-    padding: 0.625rem 1rem;
-    /* Room for the move-to + copy-id + edit buttons in secondaryAction. */
-    padding-right: 10rem;
-}
-
-.rowButton :global(.MuiListItemText-root) {
-    padding-right: 0.5rem;
+/* Title row: the count, sync and search affordances stay vertically centred on the title. */
+.header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-end: var(--space-6);
 }
 
 .countChip {
-    margin-left: 0.75rem;
+    margin-inline-start: var(--space-3);
     vertical-align: middle;
 }
 
-.actionButtons {
+.emptyCard {
+    max-inline-size: 30rem;
+    padding: var(--space-8);
+    text-align: center;
+}
+
+.icon {
     display: flex;
-    gap: 0.25rem;
+    justify-content: center;
+    margin-block-end: var(--space-4);
+    color: var(--color-text-disabled);
+
+    & > * {
+        inline-size: 3rem;
+        block-size: 3rem;
+    }
+}
+
+.emptyTitle {
+    margin-block-end: var(--space-2);
+}
+
+.noMatches {
+    margin-block-start: var(--space-12);
+    text-align: center;
+}
+
+/* Matches the density of the other list views (inbox, next actions). */
+.list {
+    margin-block-start: var(--space-2);
+}
+
+/* virtua renders the <ul>; it takes no className. */
+.list > ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
 }

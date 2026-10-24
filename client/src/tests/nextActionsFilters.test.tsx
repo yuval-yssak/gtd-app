@@ -92,6 +92,6 @@ describe('UnclarifiedWarning', () => {
         const { title, child } = tooltipChild(UnclarifiedWarning({ missingLabels: ['energy', 'work context'] }));
         expect(title).toBe('Not fully clarified — missing: energy, work context');
         if (!child) throw new Error('expected an icon child inside the Tooltip');
-        expect(child.props).toMatchObject({ fontSize: 'small', color: 'warning', 'data-testid': 'unclarifiedWarning' });
+        expect(child.props).toMatchObject({ 'data-testid': 'unclarifiedWarning' });
     });
 });

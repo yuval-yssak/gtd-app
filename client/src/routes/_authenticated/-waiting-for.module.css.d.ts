@@ -1,9 +1,10 @@
 declare const styles: {
-    readonly actionButtons: string;
     readonly countChip: string;
-    readonly item: string;
+    readonly emptyMessage: string;
+    readonly group: string;
+    readonly groupHeading: string;
+    readonly header: string;
     readonly list: string;
-    readonly listItemText: string;
-    readonly rowButton: string;
+    readonly sortRow: string;
 };
 export = styles;

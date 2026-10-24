@@ -1,38 +1,48 @@
-.list {
-    border: 0.0625rem solid var(--mui-palette-divider);
-    border-radius: 0.25rem;
-}
-
-.item {
+/* Title row: the syncing, sync and search affordances stay vertically centred on the title. */
+.header {
     display: flex;
     align-items: center;
-    padding: 0;
+    gap: var(--space-2);
+    margin-block-end: var(--space-6);
 }
 
-.rowButton {
-    display: flex;
-    align-items: center;
-    padding: 0.625rem 1rem;
-    gap: 1rem;
+.emptyMessage {
+    margin-block-start: var(--space-12);
+    text-align: center;
 }
 
-.timeCol {
-    min-width: 7.5rem;
-    flex-shrink: 0;
+.day {
+    padding-block-end: var(--space-6);
 }
 
 .dateHeader {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
+    gap: var(--space-2);
+    margin-block-end: var(--space-2);
 }
 
-.listItemText {
-    padding-right: 5.5rem;
+.list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-sm);
 }
 
-.actionButtons {
+/* The time column leads the row, so the row button spaces its children wider than a plain row. */
+.rowButton {
+    gap: var(--space-4);
+}
+
+.timeCol {
+    flex-shrink: 0;
+    min-inline-size: 7.5rem;
+}
+
+.allDay {
     display: flex;
-    gap: 0.25rem;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-0-5);
 }

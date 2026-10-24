@@ -1,0 +1,68 @@
+/* The MUI ListItem/ListItemButton/ListItemText geometry these rows replace, kept density-neutral:
+ * a 10px block padding on the button plus the text's 4px margin. */
+
+.row {
+    display: flex;
+    align-items: center;
+    min-inline-size: 0;
+
+    &[data-divided] {
+        border-block-end: 1px solid var(--color-divider);
+    }
+}
+
+.rowButton {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    gap: var(--space-2);
+    min-inline-size: 0;
+    padding: calc(var(--space-3) - var(--space-0-5)) var(--space-4);
+    cursor: pointer;
+    outline: none;
+    text-align: start;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+
+    @media (hover: hover) {
+        &:hover {
+            background-color: var(--color-state-hover);
+        }
+    }
+
+    &:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: calc(var(--focus-ring-width) * -1);
+    }
+}
+
+.actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-1);
+    padding-inline-end: var(--space-2);
+}
+
+.text {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-inline-size: 0;
+    margin-block: var(--space-1);
+}
+
+.primary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+    min-inline-size: 0;
+    font-size: var(--type-md-size);
+    line-height: var(--type-md-line);
+    overflow-wrap: anywhere;
+}
+
+.secondary {
+    display: block;
+}

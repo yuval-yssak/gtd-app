@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Cross-account reassign and active-account switching are the two mutations that can't join the
 // offline sync queue (both need server round-trips that can't be replayed later). These tests lock
@@ -10,7 +10,7 @@ import { gtd } from './helpers/gtd';
 
 test.describe('offline account actions — graceful block', () => {
     test('item editor: owner change picked online but saved offline shows the offline notice and moves nothing', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `off-reassign-a-${ts}@example.com`;
         const emailB = `off-reassign-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -57,7 +57,7 @@ test.describe('offline account actions — graceful block', () => {
     });
 
     test('person edit dialog: account picker is disabled offline with an explanation', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `off-person-a-${ts}@example.com`;
         const emailB = `off-person-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -81,7 +81,7 @@ test.describe('offline account actions — graceful block', () => {
     });
 
     test('person edit dialog: a server-rejected move keeps the dialog open with an inline error and no false success', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `rej-person-a-${ts}@example.com`;
         const emailB = `rej-person-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -112,7 +112,7 @@ test.describe('offline account actions — graceful block', () => {
     });
 
     test('account switcher offline: switching stays enabled (local-first); add-account and sign-out are blocked with an explanation', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `off-switch-a-${ts}@example.com`;
         const emailB = `off-switch-b-${ts}@example.com`;
         await resetServerForEmails([emailA, emailB]);

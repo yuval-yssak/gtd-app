@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withTwoAccountsOnOneDevice } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 test.describe('account switch from menu', () => {
     test('switching active account on settings reloads page and shows new account', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `switch-a-${ts}@example.com`;
         const emailB = `switch-b-${ts}@example.com`;
 

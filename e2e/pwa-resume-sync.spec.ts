@@ -66,6 +66,11 @@ test.describe('PWA resume sync', () => {
     test('a resume while offline opens no channels — the online transition owns that', async ({ browser }) => {
         const email = `resume-offline-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (_page1, page2) => {
+            // A freeze hits a settled app: let the boot open its channel first, or that late open
+            // would land after the simulated teardown below.
+            await expect
+                .poll(() => page2.evaluate(() => (window as unknown as { __gtd: { sseConnectedUserIds(): string[] } }).__gtd.sseConnectedUserIds().length))
+                .toBeGreaterThan(0);
             await page2.evaluate(() => {
                 const harness = (window as unknown as { __gtd: { closeSse?: () => void } }).__gtd;
                 harness.closeSse?.();
@@ -84,6 +89,11 @@ test.describe('PWA resume sync', () => {
     test('resume rebuilds the SSE channels a freeze tore down', async ({ browser }) => {
         const email = `resume-sse-${uniqueStamp()}@example.com`;
         await withTwoLoggedInDevices(browser, email, async (_page1, page2) => {
+            // A freeze hits a settled app: let the boot open its channel first, or that late open
+            // would land after the simulated teardown below.
+            await expect
+                .poll(() => page2.evaluate(() => (window as unknown as { __gtd: { sseConnectedUserIds(): string[] } }).__gtd.sseConnectedUserIds().length))
+                .toBeGreaterThan(0);
             await page2.evaluate(() => {
                 const harness = (window as unknown as { __gtd: { closeSse?: () => void } }).__gtd;
                 harness.closeSse?.();

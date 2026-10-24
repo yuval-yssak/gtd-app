@@ -19,6 +19,18 @@ function collapseWrapperOf(text: string) {
 }
 
 describe('ListRowShell', () => {
+    it('can be the list item of a real <ul>, so the list keeps its list semantics', () => {
+        render(
+            <ul>
+                <ListRowShell as="li" itemId="a">
+                    Alpha
+                </ListRowShell>
+            </ul>,
+        );
+        expect(screen.getAllByRole('listitem')).toHaveLength(1);
+        expect(collapseWrapperOf('Alpha').tagName).toBe('LI');
+    });
+
     it('marks the scroll-restoration anchor on a live row and never consumes it', () => {
         const onGhostExited = vi.fn();
         render(

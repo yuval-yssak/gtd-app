@@ -1,8 +1,7 @@
 declare const styles: {
+    readonly group: string;
     readonly groupHeader: string;
     readonly list: string;
-    readonly rowButton: string;
     readonly rowLink: string;
-    readonly titleRow: string;
 };
 export = styles;

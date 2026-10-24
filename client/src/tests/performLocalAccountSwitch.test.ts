@@ -1,5 +1,7 @@
 import type { IDBPDatabase } from 'idb';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setActiveAccount } from '../db/accountHelpers';
+import { withSessionGate } from '../db/syncHelpers';
 import { performLocalAccountSwitch } from '../hooks/useAccounts';
 import { readFreshListScrollEntry, resetListScrollMemory, saveListScrollEntry } from '../lib/listScrollMemory';
 import type { MyDB } from '../types/MyDB';
@@ -10,6 +12,16 @@ import { openTestDB } from './openTestDB';
 // and surface the "Couldn't switch" error. Swallowing it would strand the user behind the backdrop.
 
 let db: IDBPDatabase<MyDB>;
+
+/** A promise the test settles by hand, to hold a gated task at a chosen point. */
+function deferred() {
+    // let: the executor is the only place the resolver is handed out (Promise.withResolvers is ES2024).
+    let resolve!: () => void;
+    const promise = new Promise<void>((settle) => {
+        resolve = settle;
+    });
+    return { promise, resolve };
+}
 
 beforeEach(async () => {
     db = await openTestDB();
@@ -35,6 +47,27 @@ describe('performLocalAccountSwitch', () => {
         await performLocalAccountSwitch(db, 'user-b', { pathname: '/next-actions', search: '' });
 
         expect(readFreshListScrollEntry('/next-actions', 1_000)).toBeNull();
+    });
+
+    // A sync pass pivots the active pointer to each account it syncs and, in its finally, restores
+    // the account that was active when it STARTED. A switch landing mid-pass must win over that restore.
+    it('a switch made while a sync pass is in flight survives the pass restoring its starting account', async () => {
+        await setActiveAccount('user-a', db);
+        const passReachedPivot = deferred();
+        const releasePass = deferred();
+        const pass = withSessionGate(async () => {
+            await setActiveAccount('user-b', db); // the pass pivots to sync B…
+            passReachedPivot.resolve();
+            await releasePass.promise;
+            await setActiveAccount('user-a', db); // …and restores A, the account it started on.
+        });
+        await passReachedPivot.promise;
+
+        const switched = performLocalAccountSwitch(db, 'user-c', { pathname: '/inbox', search: '' });
+        releasePass.resolve();
+        await Promise.all([pass, switched]);
+
+        expect((await db.get('activeAccount', 'active'))?.userId).toBe('user-c');
     });
 
     it('propagates an IDB write failure so withPending can clear the backdrop and surface the error', async () => {

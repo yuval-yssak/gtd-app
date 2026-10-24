@@ -11,6 +11,8 @@ export const GHOST_ROW_ATTR = 'data-ghost-row';
 
 interface ListRowShellProps {
     itemId: string;
+    /** `li` inside a real `<ul>`; the default `div` suits virtualised lists, whose measuring wrapper a <ul> cannot hold. */
+    as?: 'div' | 'li' | undefined;
     isGhost?: boolean | undefined;
     /** Fired after the ghost's collapse animation finishes — consume the ghost here. */
     onGhostExited?: ((itemId: string) => void) | undefined;
@@ -26,14 +28,14 @@ interface ListRowShellProps {
  * The collapsing wrapper surrounds every row (not just ghosts) so an in-list removal transitions
  * the existing row to its ghost state without remounting the subtree.
  */
-export function ListRowShell({ itemId, isGhost = false, onGhostExited, children }: ListRowShellProps) {
+export function ListRowShell({ itemId, as: Element = 'div', isGhost = false, onGhostExited, children }: ListRowShellProps) {
     const isCollapsing = useGhostCollapse(isGhost, () => onGhostExited?.(itemId));
     return (
-        <div className={styles.collapse} data-collapsing={isCollapsing || undefined}>
+        <Element className={styles.collapse} data-collapsing={isCollapsing || undefined}>
             <div data-list-item-id={itemId} className={styles.row} {...(isGhost ? { 'data-testid': 'ghostListRow', [GHOST_ROW_ATTR]: '' } : {})}>
                 {children}
             </div>
-        </div>
+        </Element>
     );
 }
 

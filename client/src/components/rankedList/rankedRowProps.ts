@@ -1,4 +1,4 @@
-import classNames from 'classnames';
+import { clsx } from 'clsx';
 import type { RankedListApi } from '../../hooks/useRankedList';
 import type { FlatRow, NextActionSection } from '../../lib/nextActionSections';
 import { ROW_BUTTON_ATTR, ROW_ITEM_ATTR, ROW_SECTION_ATTR } from '../../lib/nextActionsRowDom';
@@ -22,7 +22,7 @@ export function rankedRowProps(ranked: RankedListApi, row: ItemRow, className?: 
     const isDragged = drag.drag?.itemId === item._id;
     const isPointerDragged = isDragged && !drag.drag?.isKeyboard;
     return {
-        className: classNames(className, styles.rowShell, {
+        className: clsx(className, styles.rowShell, {
             [styles.dragging]: isDragged,
             [styles.shifted]: !isDragged && drag.drag !== null,
             [styles.dimmedSection]: drag.drag !== null && drag.drag.sectionKey !== section.key,
@@ -41,7 +41,7 @@ export function rankedRowButtonProps(ranked: RankedListApi) {
 /** Props for a section header row: flagged when overdue, dimmed while a drag is live in another section. */
 export function rankedHeaderClassName(ranked: RankedListApi, section: NextActionSection<StoredItem>) {
     const { drag } = ranked;
-    return classNames(styles.sectionHeader, {
+    return clsx(styles.sectionHeader, {
         [styles.sectionHeaderOverdue]: section.isOverdue,
         [styles.dimmedSection]: drag.drag !== null && drag.drag.sectionKey !== section.key,
     });

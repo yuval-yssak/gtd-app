@@ -1,5 +1,4 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { CLIENT_URL } from './helpers/env';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -48,7 +47,7 @@ function visibleToggleFor(page: Page, userId: string) {
 
 test.describe('account visibility toggles', () => {
     test('hiding an account removes its items from the unified view and persists across reload', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `vistoggle-a-${stamp}@example.com`;
         const emailB = `vistoggle-b-${stamp}@example.com`;
 
@@ -79,7 +78,7 @@ test.describe('account visibility toggles', () => {
     });
 
     test('a deep link to a hidden account item still resolves (by-id lookups stay unfiltered)', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `vistoggle-deep-a-${stamp}@example.com`;
         const emailB = `vistoggle-deep-b-${stamp}@example.com`;
 
@@ -99,7 +98,7 @@ test.describe('account visibility toggles', () => {
     });
 
     test('the toggle row is suppressed on a single-account device', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `vistoggle-single-${stamp}@example.com`;
 
         await withOneLoggedInDevice(browser, email, async (page) => {
@@ -111,7 +110,7 @@ test.describe('account visibility toggles', () => {
     });
 
     test('capturing while the active account is hidden warns and offers to show it', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `vistoggle-capture-a-${stamp}@example.com`;
         const emailB = `vistoggle-capture-b-${stamp}@example.com`;
 
@@ -139,7 +138,7 @@ test.describe('account visibility toggles', () => {
     });
 
     test('"Show account" is a no-op if the account was already un-hidden via the avatar toggle', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `vistoggle-capture-idempotent-a-${stamp}@example.com`;
         const emailB = `vistoggle-capture-idempotent-b-${stamp}@example.com`;
 

@@ -46,7 +46,7 @@ test.describe('public /v1/operations/batch', () => {
 
             await withBearerOnlyContext(browser, async (apiContext) => {
                 const auth = { headers: { Authorization: `Bearer ${plaintext}`, 'Content-Type': 'application/json' } };
-                const stamp = dayjs().valueOf();
+                const stamp = uniqueStamp();
                 const wcId = `wc-batch-${stamp}`;
                 const itemIds = ['a', 'b', 'c'].map((suffix) => `it-${suffix}-${stamp}`);
                 const ops = [

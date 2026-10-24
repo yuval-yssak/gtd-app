@@ -14,18 +14,32 @@ type SwitchProps = {
     /** Put the switch after the text (settings rows). */
     placement?: 'start' | 'end' | undefined;
     'aria-label'?: string | undefined;
+    /** Lands on the focusable switch itself — e.g. a keyboard region's `tabIndex: -1` and item marker. */
+    controlProps?: ({ tabIndex?: number | undefined } & Record<`data-${string}`, string>) | undefined;
     className?: string | undefined;
     'data-testid'?: string | undefined;
 };
 
 /** On/off toggle with `role="switch"`. */
-export function Switch({ checked, onCheckedChange, label, description, disabled, placement, className, 'data-testid': testId, ...rest }: SwitchProps) {
+export function Switch({
+    checked,
+    onCheckedChange,
+    label,
+    description,
+    disabled,
+    placement,
+    controlProps,
+    className,
+    'data-testid': testId,
+    ...rest
+}: SwitchProps) {
     const control = (
         <BaseSwitch.Root
             checked={checked}
             onCheckedChange={(next) => onCheckedChange(next)}
             disabled={disabled ?? false}
             {...rest}
+            {...controlProps}
             {...(label === undefined ? { 'data-testid': testId } : {})}
             className={clsx(styles.track, label === undefined && className)}
         >

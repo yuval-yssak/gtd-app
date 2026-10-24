@@ -1,5 +1,4 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { uniqueStamp } from './helpers/uniqueStamp';
@@ -47,7 +46,7 @@ test.describe('calendar connect — active-account flow', () => {
     });
 
     test('scope-notice banner appears only when more than one account is signed in', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `connect-banner-a-${stamp}@example.com`;
         const emailB = `connect-banner-b-${stamp}@example.com`;
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page) => {

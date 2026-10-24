@@ -376,7 +376,8 @@ test.describe('Ranked lists: keyboard grab downwards keeps focus; Waiting For by
 
 test.describe('Inbox on a phone: long-press drag', () => {
     // The title is the first span of each row's primary text (the rest is the relative time and chips).
-    const inboxTitles = (page: Page) => page.locator('[data-testid="inboxList"] [data-item-id] .MuiListItemText-primary span:first-child').allInnerTexts();
+    const inboxTitles = (page: Page) =>
+        page.locator('[data-testid="inboxList"] [data-item-id] [data-testid="listRowPrimary"] span:first-child').allInnerTexts();
     const handleOf = (page: Page, itemId: string) => page.locator(`[data-item-id="${itemId}"]`).getByTestId('inboxDragHandle');
 
     async function seedInbox(page: Page) {
@@ -430,7 +431,7 @@ test.describe('Inbox on a phone: long-press drag', () => {
                 await touch(cdp, 'touchStart', [bodyStart]);
                 await glide(page, cdp, bodyStart, { x: bodyStart.x + 40, y: bodyStart.y }, 4);
                 await touch(cdp, 'touchEnd', []);
-                const slideOf = () => row.locator('.MuiListItem-root').evaluate((el) => (el as HTMLElement).style.transform);
+                const slideOf = () => row.getByTestId('inboxSwipeRow').evaluate((el) => (el as HTMLElement).style.transform);
                 await expect.poll(slideOf).toBe('translateX(0px)'); // snapped back: the short swipe committed nothing
 
                 // Then the handle: hold, drag up a little, and check the row did not slide mid-drag.

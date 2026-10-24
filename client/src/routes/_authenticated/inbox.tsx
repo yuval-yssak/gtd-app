@@ -1,37 +1,8 @@
-import AddIcon from '@mui/icons-material/Add';
-import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import CalendarTodayIcon from '@mui/icons-material/CalendarToday';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
-import EditIcon from '@mui/icons-material/Edit';
-import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
-import NoteAddIcon from '@mui/icons-material/NoteAdd';
-import PlaylistAddCheckIcon from '@mui/icons-material/PlaylistAddCheck';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
-import InputAdornment from '@mui/material/InputAdornment';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import ListItemText from '@mui/material/ListItemText';
-import Paper from '@mui/material/Paper';
-import Snackbar from '@mui/material/Snackbar';
-import SwipeableDrawer from '@mui/material/SwipeableDrawer';
-import { useTheme } from '@mui/material/styles';
-import Tab from '@mui/material/Tab';
-import Tabs from '@mui/material/Tabs';
-import TextField from '@mui/material/TextField';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
-import useMediaQuery from '@mui/material/useMediaQuery';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ArrowRight, Calendar, EllipsisVertical, Hourglass, ListChecks, NotebookPen, Pencil, Plus, Trash2 } from 'lucide-react';
+import { type KeyboardEvent, type MouseEvent, type ReactNode, type TouchEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
@@ -41,6 +12,7 @@ import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { MarkdownNotesEditor, NOTES_PLACEHOLDER } from '../../components/markdown/MarkdownNotesEditor';
 import { MarkdownPreview } from '../../components/markdown/MarkdownPreview';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
@@ -51,11 +23,13 @@ import { type ItemRow, rankedRowButtonProps, rankedRowProps } from '../../compon
 import { useAppData } from '../../contexts/AppDataProvider';
 import { deleteInboxCaptureDraft, getInboxCaptureDraft, saveInboxCaptureDraft } from '../../db/draftHelpers';
 import { clarifyToDone, clarifyToTrash, collectItem } from '../../db/itemMutations';
+import { Button, Card, Chip, Drawer, IconButton, Tabs, Text, TextField, Toast, Tooltip } from '../../designSystem';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { useAutosave } from '../../hooks/useAutosave';
 import { useCaptureNotesPanel } from '../../hooks/useCaptureNotesPanel';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useHiddenAccountCaptureNotice } from '../../hooks/useHiddenAccountCaptureNotice';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
 import { useListSearch } from '../../hooks/useListSearch';
@@ -64,6 +38,7 @@ import { useSwipeGesture } from '../../hooks/useSwipeGesture';
 import { inboxItemsInOrder } from '../../lib/inboxOrder';
 import { parseListQuerySearch } from '../../lib/listQueryUrlParams';
 import { flatSection, itemRows } from '../../lib/nextActionSections';
+import { ROW_HANDLE_ATTR } from '../../lib/nextActionsRowDom';
 import { ownerIdsOfStatus } from '../../lib/rankSections';
 import { RANKED_LIST_ROW_ACTIONS } from '../../lib/rowShortcuts';
 import type { StoredItem } from '../../types/MyDB';
@@ -76,17 +51,22 @@ export const Route = createFileRoute('/_authenticated/inbox')({
     component: InboxPage,
 });
 
+const NOTES_TABS = [
+    { value: 0, label: 'Edit' },
+    { value: 1, label: 'Preview' },
+] as const;
+
 // --- Mobile swipe row ---
 
-const stopPropagation = (e: { stopPropagation: () => void }) => e.stopPropagation();
-/** The reorder handle's whole touch gesture (and its tap) stays its own: none of it may reach the row's swipe or tap. */
-const KEEP_GESTURE_TO_HANDLE = {
-    onTouchStart: stopPropagation,
-    onTouchMove: stopPropagation,
-    onTouchEnd: stopPropagation,
-    onTouchCancel: stopPropagation,
-    onClick: stopPropagation,
-};
+/** The reorder handle's touch gesture stays its own: a touch that starts on it must not also swipe the row. */
+const startsOnHandle = (e: TouchEvent) => e.target instanceof Element && e.target.closest(`[${ROW_HANDLE_ATTR}]`) !== null;
+
+/** Wraps a swipe handler so it ignores touches that began on the reorder handle. */
+function unlessOnHandle(handler: (e: TouchEvent) => void) {
+    return (e: TouchEvent) => {
+        if (!startsOnHandle(e)) handler(e);
+    };
+}
 
 interface InboxSwipeItemProps {
     item: StoredItem;
@@ -108,93 +88,67 @@ function InboxSwipeItem({ item, routineTitle, onTap, onMore, onSwipeNextAction, 
         onSwipeLeft: () => onSwipeTrash(item),
     });
 
-    function handleClick() {
+    function onActivated() {
         // wasDragRef is a ref (not state), so it always holds the current value when
-        // onClick fires synchronously after touchEnd — no stale-closure risk.
+        // the click fires synchronously after touchEnd — no stale-closure risk.
         if (wasDragRef.current) return;
         onTap(item);
     }
     const showRight = translateX > 0;
     const showLeft = translateX < 0;
 
-    const { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel } = touchHandlers;
-
     return (
         // The ranked-row props go on the wrapper: the drag moves and shifts the whole row (reveal panes included).
-        <Box {...rankedRowProps(ranked, row, styles.swipeWrapper)}>
+        <div {...rankedRowProps(ranked, row, styles.swipeWrapper)}>
             {showRight && (
-                <Box className={styles.revealRight}>
-                    <ArrowForwardIcon fontSize="small" />
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            ml: 1,
-                        }}
-                    >
+                <div className={styles.revealRight}>
+                    <ArrowRight size={20} />
+                    <Text as="span" variant="bodySm" tone="inherit">
                         Next Action
-                    </Typography>
-                </Box>
+                    </Text>
+                </div>
             )}
             {showLeft && (
-                <Box className={styles.revealLeft}>
-                    <Typography
-                        variant="body2"
-                        sx={{
-                            mr: 1,
-                        }}
-                    >
+                <div className={styles.revealLeft}>
+                    <Text as="span" variant="bodySm" tone="inherit">
                         Trash
-                    </Typography>
-                    <DeleteOutlineIcon fontSize="small" />
-                </Box>
+                    </Text>
+                    <Trash2 size={20} />
+                </div>
             )}
-            <ListItem
-                disablePadding
+            <ListRow
                 className={styles.swipeItem}
-                style={{
-                    transform: `translateX(${translateX}px)`,
-                    transition: translateX === 0 ? 'transform 0.2s ease' : 'none',
-                }}
-                onTouchStart={onTouchStart}
-                onTouchMove={onTouchMove}
-                onTouchEnd={onTouchEnd}
-                onTouchCancel={onTouchCancel}
-                onClick={handleClick}
-                secondaryAction={
+                data-testid="inboxSwipeRow"
+                // The finger's live offset — measured geometry, so an inline value.
+                style={{ transform: `translateX(${translateX}px)`, transition: translateX === 0 ? 'transform 0.2s ease' : 'none' }}
+                onTouchStart={unlessOnHandle(touchHandlers.onTouchStart)}
+                onTouchMove={unlessOnHandle(touchHandlers.onTouchMove)}
+                onTouchEnd={unlessOnHandle(touchHandlers.onTouchEnd)}
+                onTouchCancel={unlessOnHandle(touchHandlers.onTouchCancel)}
+                actions={
                     <Tooltip title="More actions">
-                        {/* onClick stops propagation so the More tap never also opens the editor (the row's own onClick). */}
-                        <IconButton
-                            size="small"
-                            onClick={(e) => {
-                                e.stopPropagation();
-                                onMore(item);
-                            }}
-                            data-testid="inboxItemMoreButton"
-                        >
-                            <MoreVertIcon fontSize="small" />
+                        <IconButton size="sm" aria-label="More actions" onClick={() => onMore(item)} data-testid="inboxItemMoreButton">
+                            <EllipsisVertical />
                         </IconButton>
                     </Tooltip>
                 }
             >
-                {/* Long press drags (as on every ranked list). Its touches must not also start the row's
-                    horizontal swipe, nor its tap open the editor. A ghost is not a drag source. */}
-                {!isGhost && (
-                    <Box className={styles.swipeHandle} {...KEEP_GESTURE_TO_HANDLE}>
-                        <RankedRowHandle ranked={ranked} item={item} section={row.section} testId="inboxDragHandle" />
-                    </Box>
-                )}
-                <ListItemText
-                    primary={
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                            <span>{item.title}</span>
-                            {item.routineId && <RoutineIndicator routineId={item.routineId} routineTitle={routineTitle} />}
-                            <AccountChip userId={item.userId} />
-                        </Box>
-                    }
-                    secondary={dayjs(item.createdTs).fromNow()}
-                />
-            </ListItem>
-        </Box>
+                {/* Long press drags (as on every ranked list); its touches never swipe the row. A ghost is not a drag source. */}
+                {!isGhost && <RankedRowHandle ranked={ranked} item={item} section={row.section} testId="inboxDragHandle" />}
+                <ListRowButton onActivate={onActivated} className={styles.swipeBody}>
+                    <ListRowText
+                        primary={
+                            <>
+                                <span>{item.title}</span>
+                                {item.routineId && <RoutineIndicator routineId={item.routineId} routineTitle={routineTitle} />}
+                                <AccountChip userId={item.userId} />
+                            </>
+                        }
+                        secondary={dayjs(item.createdTs).fromNow()}
+                    />
+                </ListRowButton>
+            </ListRow>
+        </div>
     );
 }
 
@@ -214,7 +168,9 @@ interface InboxBottomSheetProps {
 }
 
 function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalendar, onWaitingFor, onTrash, onMoveTo }: InboxBottomSheetProps) {
-    if (!item) return null;
+    if (!item) {
+        return null;
+    }
 
     const resolvedItem = item;
 
@@ -224,69 +180,39 @@ function InboxBottomSheet({ item, onClose, onEdit, onDone, onNextAction, onCalen
     }
 
     return (
-        <SwipeableDrawer anchor="bottom" open={Boolean(item)} onClose={onClose} onOpen={() => {}}>
-            <Box className={styles.sheetHandle} />
-            <Typography
-                variant="subtitle1"
-                sx={{
-                    fontWeight: 600,
-                    px: 2,
-                    pb: 1,
-                }}
-            >
-                {item.title}
-            </Typography>
-            <Divider />
-            <List disablePadding>
-                <ListItemButton onClick={() => action(onEdit)}>
-                    <ListItemIcon>
-                        <EditIcon />
-                    </ListItemIcon>
-                    <ListItemText primary="Edit" />
-                </ListItemButton>
-                <ListItemButton onClick={() => action(onMoveTo)} data-testid="inboxSheetMoveTo">
-                    <ListItemIcon>
-                        <MoreVertIcon />
-                    </ListItemIcon>
-                    <ListItemText primary="Move to…" />
-                </ListItemButton>
-                <ListItemButton onClick={() => action(onDone)}>
-                    <ListItemIcon>
-                        <PlaylistAddCheckIcon />
-                    </ListItemIcon>
-                    <ListItemText primary="Done (< 2 min)" />
-                </ListItemButton>
-                <ListItemButton onClick={() => action(onNextAction)}>
-                    <ListItemIcon>
-                        <ArrowForwardIcon />
-                    </ListItemIcon>
-                    <ListItemText primary="Next Action" />
-                </ListItemButton>
-                <ListItemButton onClick={() => action(onCalendar)}>
-                    <ListItemIcon>
-                        <CalendarTodayIcon />
-                    </ListItemIcon>
-                    <ListItemText primary="Calendar" />
-                </ListItemButton>
-                <ListItemButton onClick={() => action(onWaitingFor)}>
-                    <ListItemIcon>
-                        <HourglassEmptyIcon />
-                    </ListItemIcon>
-                    <ListItemText primary="Waiting For" />
-                </ListItemButton>
-                <ListItemButton onClick={() => action(onTrash)}>
-                    <ListItemIcon>
-                        <DeleteOutlineIcon color="error" />
-                    </ListItemIcon>
-                    <ListItemText primary="Trash" slotProps={{ primary: { color: 'error' } }} />
-                </ListItemButton>
-            </List>
-            <Box
-                sx={{
-                    pb: 2,
-                }}
-            />
-        </SwipeableDrawer>
+        // The title names the sheet (Base UI wires it as the dialog's label).
+        <Drawer side="bottom" open={Boolean(item)} onClose={onClose} title={item.title}>
+            <ul className={styles.sheetActions}>
+                <SheetAction icon={<Pencil />} label="Edit" onSelected={() => action(onEdit)} />
+                <SheetAction icon={<EllipsisVertical />} label="Move to…" onSelected={() => action(onMoveTo)} testId="inboxSheetMoveTo" />
+                <SheetAction icon={<ListChecks />} label="Done (< 2 min)" onSelected={() => action(onDone)} />
+                <SheetAction icon={<ArrowRight />} label="Next Action" onSelected={() => action(onNextAction)} />
+                <SheetAction icon={<Calendar />} label="Calendar" onSelected={() => action(onCalendar)} />
+                <SheetAction icon={<Hourglass />} label="Waiting For" onSelected={() => action(onWaitingFor)} />
+                <SheetAction icon={<Trash2 />} label="Trash" onSelected={() => action(onTrash)} isDestructive />
+            </ul>
+        </Drawer>
+    );
+}
+
+interface SheetActionProps {
+    icon: ReactNode;
+    label: string;
+    onSelected: () => void;
+    isDestructive?: boolean | undefined;
+    testId?: string | undefined;
+}
+
+function SheetAction({ icon, label, onSelected, isDestructive = false, testId }: SheetActionProps) {
+    return (
+        <li>
+            <button type="button" className={styles.sheetAction} data-destructive={isDestructive || undefined} onClick={onSelected} data-testid={testId}>
+                <span className={styles.sheetActionIcon} aria-hidden="true">
+                    {icon}
+                </span>
+                {label}
+            </button>
+        </li>
     );
 }
 
@@ -298,8 +224,7 @@ function InboxPage() {
     const { q } = Route.useSearch();
     const { account, items, routines, refreshItems, isInitialSyncing } = useAppData();
     const navigate = useNavigate();
-    const theme = useTheme();
-    const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+    const isMobile = useIsMobile();
     const captureFieldRef = useAutoFocus();
 
     const editor = useItemEditor();
@@ -399,7 +324,7 @@ function InboxPage() {
         noticeCaptureIfHidden(account.id);
     }
 
-    async function onKeyDown(e: React.KeyboardEvent) {
+    async function onKeyDown(e: KeyboardEvent) {
         if (e.key === 'Enter') await onCapture();
     }
 
@@ -418,7 +343,7 @@ function InboxPage() {
         handOff();
     }
 
-    function openWithStatus(item: StoredItem, status: EditableStatus, clickEvent?: React.MouseEvent<HTMLElement>) {
+    function openWithStatus(item: StoredItem, status: EditableStatus, clickEvent?: MouseEvent<HTMLElement>) {
         editor.openEditor({ item, initialStatus: status, event: clickEvent });
     }
 
@@ -432,26 +357,21 @@ function InboxPage() {
     }
 
     return (
-        <Box>
-            <Box className={styles.pageHeader}>
+        <div>
+            <div className={styles.pageHeader}>
                 {/* Title + sync chip grouped so the chip stays beside the title; pageHeader's space-between keeps the button right. */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography
-                        variant="h5"
-                        sx={{
-                            fontWeight: 600,
-                        }}
-                    >
+                <div className={styles.titleGroup}>
+                    <Text variant="title">
                         Inbox
-                        {liveInboxItems.length > 0 && <Chip label={liveInboxItems.length} size="small" color="primary" className={styles.countChip} />}
-                    </Typography>
+                        {liveInboxItems.length > 0 && <Chip label={liveInboxItems.length} tone="accent" className={styles.countChip} />}
+                    </Text>
                     <AccountSyncChip />
                     <ListSearchButton onToggle={search.toggleSearch} testId="inboxSearchButton" />
-                </Box>
-                <Button variant="outlined" size="small" disabled={liveInboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
+                </div>
+                <Button variant="outline" size="sm" disabled={liveInboxItems.length === 0} onClick={startProcessInbox} data-testid="processInboxButton">
                     Process Inbox ({liveInboxItems.length})
                 </Button>
-            </Box>
+            </div>
             {search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}
@@ -461,43 +381,37 @@ function InboxPage() {
                     testId="inboxSearchInput"
                 />
             )}
-            <Paper variant="outlined" className={styles.captureCard}>
+            <div className={styles.capture}>
                 <TextField
                     fullWidth
                     placeholder="What's on your mind?"
+                    aria-label="Capture to inbox"
                     value={draft}
                     onChange={(e) => onCaptureFieldsChange(e.target.value, notes)}
                     onKeyDown={onKeyDown}
-                    slotProps={{
-                        htmlInput: { ref: captureFieldRef },
-                        input: {
-                            endAdornment: (
-                                <InputAdornment position="end">
-                                    <Tooltip title={notesPanel.isOpen ? 'Hide note' : 'Add note'}>
-                                        {/* color="primary" when notes have content so user knows a note is attached */}
-                                        <IconButton
-                                            onClick={notesPanel.toggleByUser}
-                                            color={notes.trim() ? 'primary' : 'default'}
-                                            data-testid="inboxAddNoteButton"
-                                        >
-                                            <NoteAddIcon />
-                                        </IconButton>
-                                    </Tooltip>
-                                    <IconButton onClick={onCapture} disabled={!draft.trim()} edge="end">
-                                        <AddIcon />
-                                    </IconButton>
-                                </InputAdornment>
-                            ),
-                        },
-                    }}
-                    className={styles.captureField}
+                    inputRef={captureFieldRef}
+                    endAdornment={
+                        <>
+                            <Tooltip title={notesPanel.isOpen ? 'Hide note' : 'Add note'}>
+                                {/* Accent while the note has content, so the user knows a note is attached. */}
+                                <IconButton
+                                    aria-label={notesPanel.isOpen ? 'Hide note' : 'Add note'}
+                                    tone={notes.trim() ? 'accent' : 'neutral'}
+                                    onClick={notesPanel.toggleByUser}
+                                    data-testid="inboxAddNoteButton"
+                                >
+                                    <NotebookPen />
+                                </IconButton>
+                            </Tooltip>
+                            <IconButton aria-label="Capture" onClick={() => void onCapture()} disabled={!draft.trim()} edge="end">
+                                <Plus />
+                            </IconButton>
+                        </>
+                    }
                 />
                 {notesPanel.isOpen && (
-                    <Box className={styles.captureNotes}>
-                        <Tabs value={notesPanel.tab} onChange={(_, tab: 0 | 1) => notesPanel.selectTab(tab)} className={styles.tabs}>
-                            <Tab label="Edit" value={0} />
-                            <Tab label="Preview" value={1} />
-                        </Tabs>
+                    <Card padding="none" className={styles.captureNotes}>
+                        <Tabs value={notesPanel.tab} onValueChange={notesPanel.selectTab} tabs={NOTES_TABS} aria-label="Note" className={styles.tabs} />
                         {notesPanel.tab === 0 ? (
                             <MarkdownNotesEditor
                                 value={notes}
@@ -510,34 +424,25 @@ function InboxPage() {
                                 {notes.trim() ? <MarkdownPreview markdown={notes} /> : <span className={styles.notesEmpty}>Nothing to preview.</span>}
                             </div>
                         )}
-                    </Box>
+                    </Card>
                 )}
-            </Paper>
+            </div>
             {inboxItems.length === 0 ? (
                 // Skeleton during first-launch bootstrap; the "inbox zero" copy is only truthful once loaded.
                 isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Typography
-                        sx={{
-                            color: 'text.secondary',
-                            textAlign: 'center',
-                            mt: 6,
-                        }}
-                    >
+                    <Text tone="secondary" className={styles.emptyMessage}>
                         {/* An active search that matches nothing is "no results", not inbox zero. */}
                         {deferredQuery.trim() ? 'No inbox items match your search.' : 'Inbox zero — well done.'}
-                    </Typography>
+                    </Text>
                 )
             ) : (
-                // component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
-                // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
-                // inbox doesn't block the main thread on navigation.
-                // One tab stop for the whole list on desktop (see useNextActionsRovingFocus); phones use the swipe rows, each with a long-press reorder handle.
-                <List
-                    disablePadding
-                    component="div"
-                    role="list"
+                // Windowed rendering — only rows near the viewport mount, so a large inbox doesn't block
+                // the main thread on navigation; virtua renders the <ul>/<li> itself. The named section
+                // is the list's one tab stop on desktop (see useNextActionsRovingFocus); phones use the
+                // swipe rows, each with a long-press reorder handle.
+                <section
                     className={styles.list}
                     aria-label="Inbox"
                     // The reorder key hint describes keyboard reordering, which phones (swipe rows) do not have.
@@ -545,35 +450,37 @@ function InboxPage() {
                     data-testid="inboxList"
                     {...(isMobile ? {} : ranked.roving.listProps)}
                 >
-                    <WindowVirtualizer ref={ranked.virtualizerRef}>
+                    <WindowVirtualizer ref={ranked.virtualizerRef} as="ul" item="li">
                         {itemRows(ranked.flatRows).map((row) => {
                             const { item, section, isLastInSection } = row;
                             return (
                                 <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
                                     {isMobile ? (
-                                        <InboxSwipeItem
-                                            item={item}
-                                            routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
-                                            onTap={(i) => editor.openEditor({ item: i })}
-                                            onMore={setBottomSheetItem}
-                                            onSwipeNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
-                                            onSwipeTrash={(i) => void onTrash(i)}
-                                            ranked={ranked}
-                                            row={row}
-                                            isGhost={isGhost(item)}
-                                        />
+                                        <div className={styles.mobileRow} data-divided={!isLastInSection || undefined}>
+                                            <InboxSwipeItem
+                                                item={item}
+                                                routineTitle={item.routineId ? routineTitleById.get(item.routineId) : undefined}
+                                                onTap={(i) => editor.openEditor({ item: i })}
+                                                onMore={setBottomSheetItem}
+                                                onSwipeNextAction={(i) => editor.openEditor({ item: i, initialStatus: 'nextAction' })}
+                                                onSwipeTrash={(i) => void onTrash(i)}
+                                                ranked={ranked}
+                                                row={row}
+                                                isGhost={isGhost(item)}
+                                            />
+                                        </div>
                                     ) : (
-                                        <ListItem
-                                            disablePadding
-                                            {...rankedRowProps(ranked, row, styles.item)}
-                                            secondaryAction={
-                                                <Box className={styles.actionButtons}>
+                                        <ListRow
+                                            {...rankedRowProps(ranked, row)}
+                                            isDivided={!isLastInSection}
+                                            actions={
+                                                <>
                                                     {/* Everything but Copy id is hidden on a ghost: pressing Done or Trash on its stale snapshot (even by keyboard) would act twice. */}
                                                     {!isGhost(item) && (
                                                         <RowActionButton
                                                             rowAction="moveTo"
                                                             label="Move to…"
-                                                            icon={<MoreVertIcon fontSize="small" />}
+                                                            icon={<EllipsisVertical />}
                                                             onClick={() => ranked.openMoveTo(item, section)}
                                                             data-testid="inboxItemMoveToButton"
                                                             {...ranked.roving.actionButtonProps}
@@ -590,71 +497,56 @@ function InboxPage() {
                                                             <RowActionButton
                                                                 rowAction="edit"
                                                                 label="Edit"
-                                                                icon={<EditIcon fontSize="small" />}
+                                                                icon={<Pencil />}
                                                                 onClick={(e) => editor.openEditor({ item, event: e })}
                                                                 data-testid="inboxItemEditButton"
                                                                 {...ranked.roving.actionButtonProps}
                                                             />
-                                                            <Tooltip title="Done (< 2 min)">
-                                                                <IconButton
-                                                                    size="small"
-                                                                    onClick={() => void onQuickDone(item)}
-                                                                    {...ranked.roving.actionButtonProps}
-                                                                >
-                                                                    <PlaylistAddCheckIcon fontSize="small" />
-                                                                </IconButton>
-                                                            </Tooltip>
-                                                            <Tooltip title="Next Action">
-                                                                <IconButton
-                                                                    size="small"
-                                                                    onClick={(e) => openWithStatus(item, 'nextAction', e)}
-                                                                    {...ranked.roving.actionButtonProps}
-                                                                >
-                                                                    <ArrowForwardIcon fontSize="small" />
-                                                                </IconButton>
-                                                            </Tooltip>
-                                                            <Tooltip title="Calendar">
-                                                                <IconButton
-                                                                    size="small"
-                                                                    onClick={(e) => openWithStatus(item, 'calendar', e)}
-                                                                    {...ranked.roving.actionButtonProps}
-                                                                >
-                                                                    <CalendarTodayIcon fontSize="small" />
-                                                                </IconButton>
-                                                            </Tooltip>
-                                                            <Tooltip title="Waiting For">
-                                                                <IconButton
-                                                                    size="small"
-                                                                    onClick={(e) => openWithStatus(item, 'waitingFor', e)}
-                                                                    {...ranked.roving.actionButtonProps}
-                                                                >
-                                                                    <HourglassEmptyIcon fontSize="small" />
-                                                                </IconButton>
-                                                            </Tooltip>
-                                                            <Tooltip title="Trash">
-                                                                <IconButton
-                                                                    size="small"
-                                                                    color="error"
-                                                                    onClick={() => void onTrash(item)}
-                                                                    {...ranked.roving.actionButtonProps}
-                                                                >
-                                                                    <DeleteOutlineIcon fontSize="small" />
-                                                                </IconButton>
-                                                            </Tooltip>
+                                                            <QuickActionButton
+                                                                label="Done (< 2 min)"
+                                                                icon={<ListChecks />}
+                                                                onClick={() => void onQuickDone(item)}
+                                                                buttonProps={ranked.roving.actionButtonProps}
+                                                            />
+                                                            <QuickActionButton
+                                                                label="Next Action"
+                                                                icon={<ArrowRight />}
+                                                                onClick={(e) => openWithStatus(item, 'nextAction', e)}
+                                                                buttonProps={ranked.roving.actionButtonProps}
+                                                            />
+                                                            <QuickActionButton
+                                                                label="Calendar"
+                                                                icon={<Calendar />}
+                                                                onClick={(e) => openWithStatus(item, 'calendar', e)}
+                                                                buttonProps={ranked.roving.actionButtonProps}
+                                                            />
+                                                            <QuickActionButton
+                                                                label="Waiting For"
+                                                                icon={<Hourglass />}
+                                                                onClick={(e) => openWithStatus(item, 'waitingFor', e)}
+                                                                buttonProps={ranked.roving.actionButtonProps}
+                                                            />
+                                                            <QuickActionButton
+                                                                label="Trash"
+                                                                icon={<Trash2 />}
+                                                                tone="danger"
+                                                                onClick={() => void onTrash(item)}
+                                                                buttonProps={ranked.roving.actionButtonProps}
+                                                            />
                                                         </>
                                                     )}
-                                                </Box>
+                                                </>
                                             }
                                         >
                                             {!isGhost(item) && <RankedRowHandle ranked={ranked} item={item} section={section} testId="inboxDragHandle" />}
-                                            <ListItemButton
-                                                onClick={(e) => editor.openEditor({ item, event: e })}
+                                            <ListRowButton
+                                                onActivate={(e) => editor.openEditor({ item, event: e })}
                                                 {...rankedRowButtonProps(ranked)}
                                                 data-testid="inboxItemRow"
                                             >
-                                                <ListItemText
+                                                <ListRowText
                                                     primary={
-                                                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                        <>
                                                             <span>{item.title}</span>
                                                             {item.routineId && (
                                                                 <RoutineIndicator
@@ -663,24 +555,21 @@ function InboxPage() {
                                                                 />
                                                             )}
                                                             <AccountChip userId={item.userId} />
-                                                        </Box>
+                                                        </>
                                                     }
                                                     secondary={dayjs(item.createdTs).fromNow()}
-                                                    className={styles.listItemText}
                                                 />
-                                            </ListItemButton>
-                                        </ListItem>
+                                            </ListRowButton>
+                                        </ListRow>
                                     )}
-
-                                    {!isLastInSection && <Divider />}
                                 </ListRowShell>
                             );
                         })}
                     </WindowVirtualizer>
-                </List>
+                </section>
             )}
 
-            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
             {hiddenAccountNotice}
 
             {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet. */}
@@ -701,6 +590,26 @@ function InboxPage() {
                 onWaitingFor={(i) => editor.openEditor({ item: i, initialStatus: 'waitingFor' })}
                 onTrash={(i) => void onTrash(i)}
             />
-        </Box>
+        </div>
+    );
+}
+
+interface QuickActionButtonProps {
+    label: string;
+    icon: ReactNode;
+    onClick: (event: MouseEvent<HTMLButtonElement>) => void;
+    tone?: 'danger' | undefined;
+    /** The list's roving wiring: out of the tab order, walked by the row's arrows. */
+    buttonProps: RankedListApi['roving']['actionButtonProps'];
+}
+
+/** One of the desktop row's clarify shortcuts: an icon button named and hinted by its label. */
+function QuickActionButton({ label, icon, onClick, tone, buttonProps }: QuickActionButtonProps) {
+    return (
+        <Tooltip title={label}>
+            <IconButton size="sm" aria-label={label} tone={tone} onClick={onClick} {...buttonProps}>
+                {icon}
+            </IconButton>
+        </Tooltip>
     );
 }

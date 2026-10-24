@@ -4,6 +4,7 @@ import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E for the ACTIVE relink sweep (`relinkStrandedMarkers`): after a disconnect-with-keep +
 // reconnect, entities whose `lastKnown*` marker events never arrive through a sync window (past or
@@ -100,7 +101,7 @@ async function seedLinkedItem(
 
 test.describe('active relink sweep for stranded lastKnown* markers', () => {
     test('stranded local reschedule: sweep relinks the item and pushes the new time to GCal', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `sweep-relink-${stamp}@example.com`;
         const configId = `cfg-sweep-${stamp}`;
         const eventId = `evt-sweep-${stamp}`;
@@ -210,7 +211,7 @@ test.describe('active relink sweep for stranded lastKnown* markers', () => {
     });
 
     test('event deleted on GCal while disconnected: sweep trashes the stranded item with the cancelled badge', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `sweep-trash-${stamp}@example.com`;
         const configId = `cfg-sweeptrash-${stamp}`;
         const eventId = `evt-sweeptrash-${stamp}`;
@@ -277,7 +278,7 @@ test.describe('active relink sweep for stranded lastKnown* markers', () => {
     });
 
     test('stranded split-successor routine: sweep relinks it through its rebased _R master', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `sweep-successor-${stamp}@example.com`;
         const configId = `cfg-sweepsucc-${stamp}`;
         const bareId = `evt-sweepsucc-${stamp}`;

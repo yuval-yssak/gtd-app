@@ -1,8 +1,8 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E coverage for Step 3 of the multi-account calendar plan: the unified view that pulls
 // items from every signed-in account, AccountChip rendering, and the multi-account calendar
@@ -62,7 +62,7 @@ async function seedServerCalendarIntegration(req: SeedCalendarRequest): Promise<
 
 test.describe('unified view — items + AccountChips', () => {
     test('inbox shows items from both signed-in accounts with AccountChips visible', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `unified-a-${stamp}@example.com`;
         const emailB = `unified-b-${stamp}@example.com`;
 
@@ -85,7 +85,7 @@ test.describe('unified view — items + AccountChips', () => {
     });
 
     test('signing one account out hides its items and removes its AccountChips', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `signout-a-${stamp}@example.com`;
         const emailB = `signout-b-${stamp}@example.com`;
 
@@ -131,7 +131,7 @@ test.describe('unified view — items + AccountChips', () => {
 
 test.describe('unified view — multi-account calendar picker', () => {
     test('all-sync-configs returns one bundle per signed-in account, each with its calendars', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `calpicker-a-${stamp}@example.com`;
         const emailB = `calpicker-b-${stamp}@example.com`;
 
@@ -169,7 +169,7 @@ test.describe('unified view — multi-account calendar picker', () => {
     });
 
     test('calendar picker dropdown groups calendars by owning account', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `dropdown-a-${stamp}@example.com`;
         const emailB = `dropdown-b-${stamp}@example.com`;
 

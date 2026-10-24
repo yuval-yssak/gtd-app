@@ -1,10 +1,23 @@
+.title {
+    margin-block-end: var(--space-6);
+}
+
 .countChip {
-    margin-left: 0.75rem;
+    margin-inline-start: var(--space-3);
     vertical-align: middle;
 }
 
 .viewRow {
     display: flex;
     justify-content: flex-end;
-    margin-bottom: 1rem;
+    margin-block-end: var(--space-4);
+}
+
+.viewIcon {
+    display: flex;
+}
+
+.emptyMessage {
+    margin-block-start: var(--space-12);
+    text-align: center;
 }

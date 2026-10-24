@@ -1,21 +1,6 @@
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
-import EditIcon from '@mui/icons-material/Edit';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
-import Box from '@mui/material/Box';
-import Chip from '@mui/material/Chip';
-import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import Snackbar from '@mui/material/Snackbar';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
+import { CircleCheck, EllipsisVertical, Pencil } from 'lucide-react';
 import { useMemo } from 'react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
@@ -23,6 +8,7 @@ import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
 import { RankedListChrome } from '../../components/rankedList/RankedListChrome';
@@ -30,6 +16,7 @@ import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
 import { rankedHeaderClassName, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { Chip, IconButton, Text, Toast, ToggleGroup, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -50,6 +37,11 @@ import {
 import { parseWaitingForSearch } from '../../lib/waitingForUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import styles from './-waiting-for.module.css';
+
+const SORT_OPTIONS = [
+    { value: 'person', label: 'Person', 'aria-label': 'Sort by person', 'data-testid': 'waitingForSortByPerson' },
+    { value: 'date', label: 'Date', 'aria-label': 'Sort by date', 'data-testid': 'waitingForSortByDate' },
+] as const;
 
 export const Route = createFileRoute('/_authenticated/waiting-for')({
     component: WaitingForPage,
@@ -89,8 +81,7 @@ function WaitingForPage() {
     const groups = groupByWaitingForPerson(waitingItems);
     const sortedGroupEntries = sortGroupEntriesByPersonName(groups, personMap);
 
-    function onSortByChanged(value: 'person' | 'date' | null) {
-        if (!value) return;
+    function onSortByChanged(value: 'person' | 'date') {
         void navigate({ to: '/waiting-for', search: { sortBy: value === 'person' ? undefined : value }, replace: true });
     }
 
@@ -113,22 +104,21 @@ function WaitingForPage() {
 
     /** One row; `section` makes it a ranked row of the "By date" list (drag handle, roving focus, Move to). */
     function renderRow(item: StoredItem, isLast: boolean, section?: NextActionSection<StoredItem>) {
-        const rowProps = section
-            ? rankedRowProps(ranked, { kind: 'item', item, section, isLastInSection: isLast }, styles.item)
-            : { ...SHORTCUT_ROW_PROPS, className: styles.item };
+        const rowProps = section ? rankedRowProps(ranked, { kind: 'item', item, section, isLastInSection: isLast }) : SHORTCUT_ROW_PROPS;
         const buttonProps = section ? ranked.roving.actionButtonProps : {};
         return (
-            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
-                <ListItem
-                    disablePadding
+            // A list item of the "By person" <ul>; the "By date" list is a flat run of headers and rows.
+            <ListRowShell as={section ? 'div' : 'li'} key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
+                <ListRow
                     {...rowProps}
-                    secondaryAction={
-                        <Box className={styles.actionButtons}>
+                    isDivided={!isLast}
+                    actions={
+                        <>
                             {section && !isGhost(item) && (
                                 <RowActionButton
                                     rowAction="moveTo"
                                     label="Move to…"
-                                    icon={<MoreVertIcon fontSize="small" />}
+                                    icon={<EllipsisVertical />}
                                     onClick={() => ranked.openMoveTo(item, section)}
                                     data-testid="waitingForItemMoveToButton"
                                     {...buttonProps}
@@ -141,31 +131,30 @@ function WaitingForPage() {
                                     <RowActionButton
                                         rowAction="edit"
                                         label="Edit"
-                                        icon={<EditIcon fontSize="small" />}
+                                        icon={<Pencil />}
                                         onClick={(e) => editor.openEditor({ item, event: e })}
                                         data-testid="waitingForItemEditButton"
                                         {...buttonProps}
                                     />
                                     <Tooltip title="Received">
-                                        <IconButton size="small" color="success" onClick={() => void onReceived(item)} {...buttonProps}>
-                                            <CheckCircleOutlineIcon />
+                                        <IconButton size="sm" tone="success" aria-label="Received" onClick={() => void onReceived(item)} {...buttonProps}>
+                                            <CircleCheck />
                                         </IconButton>
                                     </Tooltip>
                                 </>
                             )}
-                        </Box>
+                        </>
                     }
                 >
                     {section && !isGhost(item) && <RankedRowHandle ranked={ranked} item={item} section={section} testId="waitingForDragHandle" />}
-                    <ListItemButton
-                        onClick={(e) => editor.openEditor({ item, event: e })}
-                        className={styles.rowButton}
+                    <ListRowButton
+                        onActivate={(e) => editor.openEditor({ item, event: e })}
                         data-testid="waitingForItemRow"
                         {...(section ? rankedRowButtonProps(ranked) : {})}
                     >
-                        <ListItemText
+                        <ListRowText
                             primary={
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                <>
                                     <span>{item.title}</span>
                                     {item.routineId && (
                                         <RoutineIndicator routineId={item.routineId} routineTitle={routines.find((r) => r._id === item.routineId)?.title} />
@@ -173,28 +162,25 @@ function WaitingForPage() {
                                     {/* By-date view flattens the person groups, so surface who's owed on each row. */}
                                     {sortBy === 'date' && item.waitingForPersonId && (
                                         <Chip
-                                            size="small"
-                                            variant="outlined"
+                                            variant="outline"
                                             label={resolvePersonName(personMap, item.waitingForPersonId)}
                                             data-testid="waitingForPersonChip"
                                         />
                                     )}
                                     <AccountChip userId={item.userId} />
-                                </Box>
+                                </>
                             }
                             secondary={
                                 item.expectedBy ? (
-                                    <Typography component="span" variant="caption" color={isOverdue(item) ? 'error' : 'text.secondary'}>
+                                    <Text as="span" variant="caption" tone={isOverdue(item) ? 'error' : 'secondary'}>
                                         Expected by {dayjs(item.expectedBy).format('MMM D')}
                                         {isOverdue(item) && ' — overdue'}
-                                    </Typography>
+                                    </Text>
                                 ) : undefined
                             }
-                            className={styles.listItemText}
                         />
-                    </ListItemButton>
-                </ListItem>
-                {!isLast && <Divider />}
+                    </ListRowButton>
+                </ListRow>
             </ListRowShell>
         );
     }
@@ -202,10 +188,9 @@ function WaitingForPage() {
     /** The "By date" view: day sections with headers, one tab stop (see useNextActionsRovingFocus). */
     function renderDateList() {
         return (
-            <List
-                disablePadding
-                component="div"
-                role="list"
+            // Day headers interleave with the rows, so this is a named section of headers and rows rather
+            // than a <ul>; it is the list's one tab stop.
+            <section
                 className={styles.list}
                 aria-label="Waiting for, by date"
                 aria-describedby={ranked.hintIds.list}
@@ -214,116 +199,73 @@ function WaitingForPage() {
             >
                 {ranked.flatRows.map((row) =>
                     row.kind === 'header' ? (
-                        <Typography
+                        <Text
                             key={`header-${row.section.key}`}
-                            component="div"
-                            variant="subtitle2"
+                            as="div"
+                            variant="subtitleSm"
                             className={rankedHeaderClassName(ranked, row.section)}
                             data-testid="waitingForSectionHeader"
                         >
                             {row.section.label}
-                        </Typography>
+                        </Text>
                     ) : (
                         renderRow(row.item, row.isLastInSection, row.section)
                     ),
                 )}
-            </List>
+            </section>
         );
     }
 
     function renderItemList(rowItems: StoredItem[]) {
-        return (
-            <List disablePadding className={styles.list}>
-                {rowItems.map((item, idx) => renderRow(item, idx === rowItems.length - 1))}
-            </List>
-        );
+        return <ul className={styles.list}>{rowItems.map((item, idx) => renderRow(item, idx === rowItems.length - 1))}</ul>;
     }
 
     if (waitingItems.length === 0) {
         return (
-            <Box>
-                {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-                    <Typography
-                        variant="h5"
-                        sx={{
-                            fontWeight: 600,
-                        }}
-                    >
-                        Waiting For
-                    </Typography>
+            <div>
+                <div className={styles.header}>
+                    <Text variant="title">Waiting For</Text>
                     {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                     <AccountSyncChip />
-                </Box>
+                </div>
                 {/* First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading. */}
                 {isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Typography
-                        sx={{
-                            color: 'text.secondary',
-                            textAlign: 'center',
-                            mt: 6,
-                        }}
-                    >
+                    <Text tone="secondary" className={styles.emptyMessage}>
                         Nothing pending.
-                    </Typography>
+                    </Text>
                 )}
-            </Box>
+            </div>
         );
     }
 
     return (
-        <Box>
-            {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
+        <div>
+            <div className={styles.header}>
+                <Text variant="title">
                     Waiting For
-                    {liveWaitingCount > 0 && <Chip label={liveWaitingCount} size="small" color="primary" className={styles.countChip} />}
-                </Typography>
+                    {liveWaitingCount > 0 && <Chip label={liveWaitingCount} tone="accent" className={styles.countChip} />}
+                </Text>
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
-            </Box>
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-                <ToggleButtonGroup size="small" value={sortBy} exclusive onChange={(_, value: 'person' | 'date' | null) => onSortByChanged(value)}>
-                    <ToggleButton value="person" aria-label="Sort by person" data-testid="waitingForSortByPerson">
-                        Person
-                    </ToggleButton>
-                    <ToggleButton value="date" aria-label="Sort by date" data-testid="waitingForSortByDate">
-                        Date
-                    </ToggleButton>
-                </ToggleButtonGroup>
-            </Box>
+            </div>
+            <div className={styles.sortRow}>
+                <ToggleGroup value={sortBy} onValueChange={onSortByChanged} aria-label="Sort waiting-for items" options={SORT_OPTIONS} />
+            </div>
             {sortBy === 'date'
                 ? renderDateList()
                 : sortedGroupEntries.map(([personId, groupItems]) => (
-                      <Box
-                          key={personId}
-                          sx={{
-                              mb: 3,
-                          }}
-                      >
-                          <Typography
-                              variant="subtitle2"
-                              sx={{
-                                  color: 'text.secondary',
-                                  fontWeight: 600,
-                                  mb: 1,
-                              }}
-                          >
+                      <section key={personId} className={styles.group}>
+                          <Text variant="subtitleSm" tone="secondary" className={styles.groupHeading}>
                               {personId === UNASSIGNED_GROUP_KEY ? 'Unassigned' : resolvePersonName(personMap, personId)}
-                          </Typography>
+                          </Text>
                           {renderItemList(groupItems)}
-                      </Box>
+                      </section>
                   ))}
             {/* Keyboard hints, the reorder announcer, the failure toast and the Move to sheet ("By date"). */}
             <RankedListChrome ranked={ranked} actions={RANKED_LIST_ROW_ACTIONS} sectionNoun="day" liveTestId="waitingForReorderLive" />
-            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
-        </Box>
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+        </div>
     );
 }

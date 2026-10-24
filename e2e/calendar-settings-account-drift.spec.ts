@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { fetchDevMultiSessionCookies, resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression test for the settings-page account drift: the calendar rows used to be fetched under
 // the AMBIENT cookie session while the "Managing calendars for …" banner (and every pinned
@@ -28,7 +28,7 @@ async function seedIntegrationWithCalendar(userId: string, integrationId: string
 }
 
 test('settings shows the app-active account calendars even when the ambient cookie session drifted to another account', async ({ browser }) => {
-    const stamp = dayjs().valueOf();
+    const stamp = uniqueStamp();
     const emailA = `drift-active-${stamp}@example.com`;
     const emailB = `drift-ambient-${stamp}@example.com`;
     await resetServerForEmails([emailA, emailB]);

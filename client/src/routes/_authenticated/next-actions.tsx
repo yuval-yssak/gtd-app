@@ -1,26 +1,7 @@
-import BoltIcon from '@mui/icons-material/Bolt';
-import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutlineOutlined';
-import EditIcon from '@mui/icons-material/Edit';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
-import SellOutlinedIcon from '@mui/icons-material/SellOutlined';
-import WarningAmberIcon from '@mui/icons-material/WarningAmber';
-import Box from '@mui/material/Box';
-import Chip from '@mui/material/Chip';
-import Divider from '@mui/material/Divider';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import Snackbar from '@mui/material/Snackbar';
-import Stack from '@mui/material/Stack';
-import Switch from '@mui/material/Switch';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { CircleCheck, EllipsisVertical, Pencil, Tag, TriangleAlert, UserRound, Zap } from 'lucide-react';
+import { type ReactElement, useCallback, useMemo, useRef, useState } from 'react';
 import { WindowVirtualizer } from 'virtua';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
@@ -29,6 +10,7 @@ import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSearchButton, ListSearchField } from '../../components/ListSearch';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { CollapsibleChipGroup } from '../../components/pickers/CollapsibleChipGroup';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
@@ -37,6 +19,7 @@ import { RankedRowHandle } from '../../components/rankedList/RankedRowHandle';
 import { rankedHeaderClassName, rankedRowButtonProps, rankedRowProps } from '../../components/rankedList/rankedRowProps';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { clarifyToDone } from '../../db/itemMutations';
+import { Chip, type ChipTone, Switch, Text, Toast, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useEntityUsage } from '../../hooks/useEntityUsage';
 import { useListGhosts } from '../../hooks/useListGhosts';
@@ -73,7 +56,7 @@ export const Route = createFileRoute('/_authenticated/next-actions')({
 });
 
 const energyLabels: Record<EnergyLevel, string> = { low: 'Low', medium: 'Medium', high: 'High' };
-const energyColors: Record<EnergyLevel, 'default' | 'success' | 'warning' | 'error'> = {
+const energyTones: Record<EnergyLevel, ChipTone> = {
     low: 'success',
     medium: 'warning',
     high: 'error',
@@ -130,8 +113,8 @@ interface MergedFilterChipRowProps {
     /** The resolved active selection for this row — undefined when the row's filter is unset. */
     selected: SelectedFilterOption | undefined;
     onToggle: (option: MergedFilterOption) => void;
-    activeColor: 'primary' | 'info';
-    icon?: React.ReactElement;
+    activeTone: ChipTone;
+    icon?: ReactElement | undefined;
     testId: string;
     /** The filter bar's keyboard-region item props (out of the tab order, walked by arrows). */
     itemProps: RovingRegionApi['itemProps'];
@@ -141,7 +124,7 @@ interface MergedFilterChipRowProps {
 // selection — the same source matchesFilters uses — so an applied filter always lights its chip,
 // even when the URL holds a hidden account's twin id. Long rows collapse to the most-used chips
 // behind a "+N more" expander (see CollapsibleChipGroup).
-function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activeColor, icon, testId, itemProps }: MergedFilterChipRowProps) {
+function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activeTone, icon, testId, itemProps }: MergedFilterChipRowProps) {
     if (options.length === 0) {
         return null;
     }
@@ -159,11 +142,11 @@ function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activ
                 const isActive = option.canonicalId === selected?.option?.canonicalId;
                 return (
                     <Chip
-                        {...(icon ? { icon } : {})}
+                        icon={icon}
                         label={option.name}
-                        size="small"
-                        variant={isActive ? 'filled' : 'outlined'}
-                        color={isActive ? activeColor : 'default'}
+                        variant="outline"
+                        tone={isActive ? activeTone : 'neutral'}
+                        selected={isActive}
                         onClick={() => onToggle(option)}
                         data-testid={testId}
                         {...itemProps}
@@ -178,7 +161,7 @@ function MergedFilterChipRow({ options, rankedOptions, selected, onToggle, activ
 export function UnclarifiedWarning({ missingLabels }: { missingLabels: NonEmptyArray<string> }) {
     return (
         <Tooltip title={`Not fully clarified — missing: ${missingLabels.join(', ')}`}>
-            <WarningAmberIcon fontSize="small" color="warning" data-testid="unclarifiedWarning" />
+            <TriangleAlert size={20} className={styles.warningIcon} data-testid="unclarifiedWarning" />
         </Tooltip>
     );
 }
@@ -200,34 +183,26 @@ export function RowTags({ contextTags, personTags, dueLabel }: RowTagsProps) {
         return null;
     }
     return (
-        <Box component="span" className={styles.tagRow} data-testid="nextActionRowTags">
+        <span className={styles.tagRow} data-testid="nextActionRowTags">
             {contextTags.map((tag) => (
-                <Chip
-                    key={`ctx-${tag.id}`}
-                    icon={<SellOutlinedIcon />}
-                    label={tag.name}
-                    size="small"
-                    variant="outlined"
-                    className={tag.archived ? styles.archivedTag : undefined}
-                />
+                <Chip key={`ctx-${tag.id}`} icon={<Tag />} label={tag.name} variant="outline" className={tag.archived ? styles.archivedTag : undefined} />
             ))}
             {personTags.map((tag) => (
                 <Chip
                     key={`person-${tag.id}`}
-                    icon={<PersonOutlineIcon />}
+                    icon={<UserRound />}
                     label={tag.name}
-                    size="small"
-                    color="info"
-                    variant="outlined"
+                    tone="info"
+                    variant="outline"
                     className={tag.archived ? styles.archivedTag : undefined}
                 />
             ))}
             {dueLabel && (
-                <Typography component="span" variant="caption" color="text.secondary" className={styles.dueText}>
+                <Text as="span" variant="caption" tone="secondary" className={styles.dueText}>
                     {dueLabel}
-                </Typography>
+                </Text>
             )}
-        </Box>
+        </span>
     );
 }
 
@@ -406,22 +381,16 @@ function NextActionsPage() {
     const liveNextActionCount = nextActions.filter((item) => !isGhost(item)).length;
 
     return (
-        <Box>
-            {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
+        <div>
+            <div className={styles.header}>
+                <Text variant="title">
                     Next Actions
-                    {liveNextActionCount > 0 && <Chip label={liveNextActionCount} size="small" color="primary" className={styles.countChip} />}
-                </Typography>
+                    {liveNextActionCount > 0 && <Chip label={liveNextActionCount} tone="accent" className={styles.countChip} />}
+                </Text>
                 {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
                 <AccountSyncChip />
                 <ListSearchButton onToggle={search.toggleSearch} testId="nextActionsSearchButton" />
-            </Box>
+            </div>
             {search.isOpen && (
                 <ListSearchField
                     value={search.queryInput}
@@ -432,19 +401,13 @@ function NextActionsPage() {
                 />
             )}
             {/* Filter bar — one keyboard region (role="toolbar": arrows walk it, Tab leaves it). */}
-            <Box
-                role="toolbar"
-                sx={{
-                    mb: 2,
-                }}
-                {...filterRegion.regionProps}
-            >
+            <div role="toolbar" className={styles.filterBar} {...filterRegion.regionProps}>
                 <MergedFilterChipRow
                     options={liveContextOptions}
                     rankedOptions={rankedContextOptions}
                     selected={selectedContext}
                     onToggle={(option) => toggleMergedFilter('context', option)}
-                    activeColor="primary"
+                    activeTone="accent"
                     testId="nextActionsContextFilterChip"
                     itemProps={filterRegion.itemProps}
                 />
@@ -453,25 +416,19 @@ function NextActionsPage() {
                     rankedOptions={rankedPersonOptions}
                     selected={selectedPerson}
                     onToggle={(option) => toggleMergedFilter('person', option)}
-                    activeColor="info"
-                    icon={<PersonOutlineIcon />}
+                    activeTone="info"
+                    icon={<UserRound />}
                     testId="nextActionsPersonFilterChip"
                     itemProps={filterRegion.itemProps}
                 />
-                <Stack
-                    direction="row"
-                    sx={{
-                        flexWrap: 'wrap',
-                        gap: 0.75,
-                    }}
-                >
+                <div className={styles.facetChips}>
                     {(['low', 'medium', 'high'] as EnergyLevel[]).map((e) => (
                         <Chip
                             key={e}
                             label={`${energyLabels[e]} energy`}
-                            size="small"
-                            variant={urlFilters.energy === e ? 'filled' : 'outlined'}
-                            color={urlFilters.energy === e ? energyColors[e] : 'default'}
+                            variant="outline"
+                            tone={urlFilters.energy === e ? energyTones[e] : 'neutral'}
+                            selected={urlFilters.energy === e}
                             onClick={() => toggleFilter('energy', e)}
                             data-testid="nextActionsEnergyFilterChip"
                             {...filterRegion.itemProps}
@@ -481,56 +438,41 @@ function NextActionsPage() {
                         <Chip
                             key={t}
                             label={`≤ ${t} min`}
-                            size="small"
-                            variant={urlFilters.time === t ? 'filled' : 'outlined'}
-                            color={urlFilters.time === t ? 'primary' : 'default'}
+                            variant="outline"
+                            selected={urlFilters.time === t}
                             onClick={() => toggleFilter('time', t)}
                             data-testid="nextActionsTimeFilterChip"
                             {...filterRegion.itemProps}
                         />
                     ))}
-                </Stack>
-                <FormControlLabel
-                    sx={{ mt: 0.5 }}
-                    control={
-                        <Switch
-                            size="small"
-                            checked={showTags}
-                            onChange={(e) => onShowTagsToggled(e.target.checked)}
-                            data-testid="nextActionsShowTagsToggle"
-                            slotProps={{ input: filterRegion.itemProps }}
-                        />
-                    }
-                    label={<Typography variant="body2">Show tags</Typography>}
+                </div>
+                <Switch
+                    checked={showTags}
+                    onCheckedChange={onShowTagsToggled}
+                    label="Show tags"
+                    className={styles.showTags}
+                    data-testid="nextActionsShowTagsToggle"
+                    controlProps={filterRegion.itemProps}
                 />
-            </Box>
+            </div>
             {nextActions.length === 0 ? (
                 // isInitialSyncing is only true during first-launch bootstrap, when IDB is empty —
                 // so an empty result then is "not loaded", not "filtered out". Show the skeleton.
                 isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Typography
-                        sx={{
-                            color: 'text.secondary',
-                            textAlign: 'center',
-                            mt: 6,
-                        }}
-                    >
+                    <Text tone="secondary" className={styles.emptyMessage}>
                         {/* Distinguish an unmatched search from unmatched filter chips — same convention as inbox/calendar. */}
                         {deferredQuery.trim() ? 'No next actions match your search.' : 'No next actions match the current filters.'}
-                    </Typography>
+                    </Text>
                 )
             ) : (
-                // component="div": WindowVirtualizer renders a measuring <div> wrapper, invalid inside
-                // the default <ul>. Windowed rendering — only rows near the viewport mount, so a large
-                // next-actions list doesn't block the main thread on navigation.
-                // One tab stop for the whole list (see useNextActionsRovingFocus): the container
-                // forwards focus to the remembered row, the rows and their buttons are tabIndex -1.
-                <List
-                    disablePadding
-                    component="div"
-                    role="list"
+                // Windowed rendering — only rows near the viewport mount, so a large next-actions list
+                // doesn't block the main thread on navigation. Day headers interleave with the rows, so
+                // this is a named section of headers and rows rather than a <ul>. One tab stop for the
+                // whole list (see useNextActionsRovingFocus): the section forwards focus to the
+                // remembered row, the rows and their buttons are tabIndex -1.
+                <section
                     className={styles.list}
                     aria-label="Next actions"
                     aria-describedby={ranked.hintIds.list}
@@ -541,18 +483,18 @@ function NextActionsPage() {
                         {flatRows.map((row) => {
                             if (row.kind === 'header') {
                                 return (
-                                    <Typography
+                                    <Text
                                         key={`header-${row.section.key}`}
-                                        component="div"
-                                        // subtitle2, not overline: overline's text-transform would shout "TODAY" and
+                                        as="div"
+                                        // subtitleSm, not overline: overline's text-transform would shout "TODAY" and
                                         // turn the weekday/month casing into noise.
-                                        variant="subtitle2"
+                                        variant="subtitleSm"
                                         className={rankedHeaderClassName(ranked, row.section)}
                                         data-testid="nextActionSectionHeader"
                                         data-section-key={row.section.key}
                                     >
                                         {row.section.label}
-                                    </Typography>
+                                    </Text>
                                 );
                             }
                             const { item, section } = row;
@@ -560,17 +502,17 @@ function NextActionsPage() {
                             const rowIsGhost = isGhost(item);
                             return (
                                 <ListRowShell key={item._id} itemId={item._id} isGhost={rowIsGhost} onGhostExited={onGhostExited}>
-                                    <ListItem
-                                        disablePadding
-                                        {...rankedRowProps(ranked, row, styles.item)}
-                                        secondaryAction={
-                                            <Box className={styles.actionButtons}>
+                                    <ListRow
+                                        {...rankedRowProps(ranked, row)}
+                                        isDivided={!row.isLastInSection}
+                                        actions={
+                                            <>
                                                 {/* A ghost is a stale snapshot of a row that already left the list: only its id may still be copied. */}
                                                 {!rowIsGhost && (
                                                     <RowActionButton
                                                         rowAction="moveTo"
                                                         label="Move to…"
-                                                        icon={<MoreVertIcon fontSize="small" />}
+                                                        icon={<EllipsisVertical />}
                                                         onClick={() => openMoveTo(item, section)}
                                                         data-testid="nextActionMoveToButton"
                                                         {...roving.actionButtonProps}
@@ -586,7 +528,7 @@ function NextActionsPage() {
                                                     <RowActionButton
                                                         rowAction="edit"
                                                         label="Edit"
-                                                        icon={<EditIcon fontSize="small" />}
+                                                        icon={<Pencil />}
                                                         onClick={(e) => editor.openEditor({ item, event: e })}
                                                         data-testid="nextActionItemEditButton"
                                                         {...roving.actionButtonProps}
@@ -596,60 +538,53 @@ function NextActionsPage() {
                                                     <RowActionButton
                                                         rowAction="done"
                                                         label="Mark done"
-                                                        icon={<CheckCircleOutlineIcon />}
-                                                        color="success"
+                                                        icon={<CircleCheck />}
+                                                        tone="success"
                                                         onClick={() => void onDone(item)}
                                                         data-testid="nextActionItemDoneButton"
                                                         {...roving.actionButtonProps}
                                                     />
                                                 )}
-                                            </Box>
+                                            </>
                                         }
                                     >
                                         {/* A real button beside (not inside) the row button — nested interactive content is
                                             invalid ARIA, and the row's ripple/click would fire on every drop. A ghost (a row
                                             fading out of this list) gets none: it is not a valid drag source. */}
                                         {!rowIsGhost && <RankedRowHandle ranked={ranked} item={item} section={section} testId="nextActionDragHandle" />}
-                                        <ListItemButton
-                                            onClick={(e) => editor.openEditor({ item, event: e })}
-                                            className={styles.rowButton}
+                                        <ListRowButton
+                                            onActivate={(e) => editor.openEditor({ item, event: e })}
                                             data-testid="nextActionItemRow"
                                             // Short, per row (screen readers re-read it on every row focus); the full key list sits on the list and the handle.
                                             {...rankedRowButtonProps(ranked)}
                                         >
-                                            <ListItemText
+                                            <ListRowText
                                                 primary={
-                                                    <Box className={styles.titleRow}>
-                                                        {item.urgent && <BoltIcon fontSize="small" color="error" />}
+                                                    <span className={styles.titleRow}>
+                                                        {item.urgent && <Zap size={20} className={styles.urgentIcon} aria-label="Urgent" />}
                                                         <span>{item.title}</span>
-                                                        {item.energy && (
-                                                            <Chip label={energyLabels[item.energy]} size="small" color={energyColors[item.energy]} />
-                                                        )}
-                                                        {item.time !== undefined && <Chip label={`${item.time} min`} size="small" variant="outlined" />}
+                                                        {item.energy && <Chip label={energyLabels[item.energy]} tone={energyTones[item.energy]} />}
+                                                        {item.time !== undefined && <Chip label={`${item.time} min`} variant="outline" />}
                                                         {hasAtLeastOne(missingLabels) && <UnclarifiedWarning missingLabels={missingLabels} />}
                                                         {item.routineId && (
                                                             <RoutineIndicator routineId={item.routineId} routineTitle={routineTitleById.get(item.routineId)} />
                                                         )}
                                                         <AccountChip userId={item.userId} />
-                                                    </Box>
+                                                    </span>
                                                 }
-                                                // secondary slot rendered as 'div' so chips (block content) can nest — the default <p> would be invalid DOM.
-                                                slotProps={{ secondary: { component: 'div' } }}
                                                 secondary={buildRowSecondary(item, { showTags, contextsById, peopleById })}
-                                                className={styles.listItemText}
                                             />
-                                        </ListItemButton>
-                                    </ListItem>
-                                    {!row.isLastInSection && <Divider />}
+                                        </ListRowButton>
+                                    </ListRow>
                                 </ListRowShell>
                             );
                         })}
                     </WindowVirtualizer>
-                </List>
+                </section>
             )}
             {/* Keyboard hints, the polite announcer for every reorder outcome, the failure toast and the Move to sheet. */}
             <RankedListChrome ranked={ranked} actions={NEXT_ACTIONS_ROW_ACTIONS} sectionNoun="day" liveTestId="nextActionsReorderLive" />
-            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
-        </Box>
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+        </div>
     );
 }

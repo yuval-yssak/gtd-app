@@ -31,7 +31,7 @@ import {
     reorderItem,
     updateItem,
 } from './itemMutations';
-import { syncAllLoggedInUsers } from './multiUserSync';
+import { syncAllLoggedInUsers, withAccountSession } from './multiUserSync';
 import { getPeopleByUser } from './personHelpers';
 import type { NewPersonFields } from './personMutations';
 import { createPerson } from './personMutations';
@@ -43,12 +43,21 @@ import { deleteAndRegenerateFutureItems, generateCalendarItemsToHorizon, materia
 import type { NewRoutineFields } from './routineMutations';
 import { createRoutine, pauseRoutine, removeRoutine, updateRoutine } from './routineMutations';
 import { closeSseConnections, getConnectedSseUserIds, getOpenSseUserIds } from './sseClient';
-import { flushSyncQueue, pullFromServer, waitForPendingFlush } from './syncHelpers';
+import { flushSyncQueue, pullFromServer, waitForPendingFlush, withSessionGate } from './syncHelpers';
 import { getWorkContextsByUser } from './workContextHelpers';
 import { createWorkContext } from './workContextMutations';
 
+/**
+ * The user-selected active account. Read inside the session gate: a sync pass pivots IDB's active
+ * pointer to each account it syncs and restores it before releasing the gate, so a bare read
+ * mid-pass returns whichever account is being synced — a harness write would land under it.
+ */
+function readSettledActiveAccount(db: IDBPDatabase<MyDB>) {
+    return withSessionGate(() => getActiveAccount(db));
+}
+
 async function resolveUserId(db: IDBPDatabase<MyDB>): Promise<string> {
-    const account = await getActiveAccount(db);
+    const account = await readSettledActiveAccount(db);
     if (!account) throw new Error('[GTD] No active account — log in first');
     return account.id;
 }
@@ -178,9 +187,15 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // ── Sync controls ────────────────────────────────────────────────────
         // Wait for any fire-and-forget flush that queueSyncOp kicked off, then flush any
         // remaining ops. This guarantees ALL mutations are on the server when flush resolves.
+        // Per owner, under that owner's session (inside the session gate): on a multi-account device
+        // an unscoped flush can push while a sync pass has the cookie pivoted to the other account,
+        // and the server's misroute guard rejects the batch. Single-account devices run it as-is.
         flush: async () => {
             await waitForPendingFlush();
-            await flushSyncQueue(db);
+            const ownerIds = [...new Set((await db.getAll('syncOperations')).map((op) => op.userId))];
+            for (const userId of ownerIds) {
+                await withAccountSession(db, userId, () => flushSyncQueue(db, { userIdFilter: userId }));
+            }
         },
         // Pulls for every logged-in account on this device. Uses the orchestrator so each pass
         // pivots the active session before its pull — without that, only the active account gets
@@ -202,7 +217,7 @@ export function mountDevTools(db: IDBPDatabase<MyDB>): void {
         // Active account ID (Better Auth user id) — distinct from getActiveAccount which returns
         // the full StoredAccount. Convenient when the test only needs the user id.
         getActiveAccountId: async () => {
-            const account = await getActiveAccount(db);
+            const account = await readSettledActiveAccount(db);
             return account?.id ?? null;
         },
         // Server-side push registration status for this device — wraps /push/status.

@@ -4,6 +4,7 @@ import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Repro investigation: "another person organizes a meeting with me, it syncs into the app,
 // I accept it, then the organizer moves it forward in time — IndexedDB never picks up the
@@ -92,7 +93,7 @@ async function readActiveUserId(page: Page): Promise<string> {
 
 test.describe('calendar — invited meeting moved by organizer', () => {
     test('move WITHOUT prior RSVP propagates to IDB (control)', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `invited-move-plain-${stamp}@example.com`;
         const cfgId = `cfg-invmove-plain-${stamp}`;
         const eventId = `evt-invmove-plain-${stamp}`;
@@ -157,7 +158,7 @@ test.describe('calendar — invited meeting moved by organizer', () => {
     });
 
     test('accept in-app, then organizer moves the meeting — IDB must track the new time', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `invited-move-rsvp-${stamp}@example.com`;
         const cfgId = `cfg-invmove-rsvp-${stamp}`;
         const eventId = `evt-invmove-rsvp-${stamp}`;
@@ -248,7 +249,7 @@ test.describe('calendar — invited meeting moved by organizer', () => {
     // _id)` from the wall clock at write time (lib/opIdentity.ts), so the backdated `nowOverride`
     // below still yields a deliverable op and IDB converges on the moved time.
     test('op recorded by a stale-clocked sync run still reaches a device whose cursor has advanced', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `invited-move-stale-${stamp}@example.com`;
         const cfgId = `cfg-invmove-stale-${stamp}`;
         const eventId = `evt-invmove-stale-${stamp}`;

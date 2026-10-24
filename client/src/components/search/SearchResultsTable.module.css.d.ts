@@ -1,8 +1,9 @@
 declare const styles: {
-    readonly checkbox: string;
-    readonly columnsButton: string;
     readonly row: string;
+    readonly table: string;
+    readonly tableFrame: string;
     readonly titleCell: string;
+    readonly titleLink: string;
     readonly toolbar: string;
 };
 export = styles;

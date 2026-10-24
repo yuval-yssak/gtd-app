@@ -104,7 +104,7 @@ test.describe('collapsible usage-ranked pickers', () => {
             // Clicking the active chip again clears the filter (the URL keeps a contextId=null
             // param — same serialization the old dropdown produced — so assert on state, not URL).
             await page.getByTestId('searchContextFilterChip').filter({ hasText: 'Ctx C' }).click();
-            await expect(page.getByTestId('searchContextFilterChip').filter({ hasText: 'Ctx C' })).not.toHaveClass(/MuiChip-filled/);
+            await expect(page.getByTestId('searchContextFilterChip').filter({ hasText: 'Ctx C' })).toHaveAttribute('aria-pressed', 'false');
             await expect(page.getByText('Untagged item')).toBeVisible();
         });
     });

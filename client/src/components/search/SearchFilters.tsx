@@ -1,15 +1,6 @@
-import ClearIcon from '@mui/icons-material/Clear';
-import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
-import SearchIcon from '@mui/icons-material/Search';
-import Box from '@mui/material/Box';
-import Chip from '@mui/material/Chip';
-import IconButton from '@mui/material/IconButton';
-import InputAdornment from '@mui/material/InputAdornment';
-import MenuItem from '@mui/material/MenuItem';
-import Stack from '@mui/material/Stack';
-import TextField from '@mui/material/TextField';
-import Typography from '@mui/material/Typography';
-import { useMemo } from 'react';
+import { Search, UserRound, X } from 'lucide-react';
+import { type ReactElement, useMemo } from 'react';
+import { Chip, type ChipTone, IconButton, Select, Text, TextField } from '../../designSystem';
 import { useAutoFocus } from '../../hooks/useAutoFocus';
 import { type EntityUsage, rankMergedOptionsByUsage, type UsageIndex } from '../../lib/entityUsage';
 import { ALL_STATUSES, STATUS_LABELS } from '../../lib/itemSearch';
@@ -47,31 +38,25 @@ interface EntityFilterChipRowProps {
     selected: SelectedFilterOption | undefined;
     /** Receives the clicked option's canonicalId, or null when the active chip is clicked again. */
     onSelect: (id: string | null) => void;
-    activeColor: 'primary' | 'info';
-    icon?: React.ReactElement;
+    activeTone: ChipTone;
+    icon?: ReactElement | undefined;
     testId: string;
 }
 
 // Single-select chip row replacing the old Person / Work context dropdowns: the most-used options
 // are visible at a glance (collapsed, usage-ranked); "+N more" expands to the full A→Z list.
 // Same-named multi-account twins render as one chip (mirrors the next-actions filter rows).
-function EntityFilterChipRow({ label, options, usageMap, selected, onSelect, activeColor, icon, testId }: EntityFilterChipRowProps) {
+function EntityFilterChipRow({ label, options, usageMap, selected, onSelect, activeTone, icon, testId }: EntityFilterChipRowProps) {
     const ranked = useMemo(() => rankMergedOptionsByUsage(options, usageMap), [options, usageMap]);
     const selectedIds = useMemo(() => new Set(selected?.option ? [selected.option.canonicalId] : []), [selected]);
     if (options.length === 0) {
         return null;
     }
     return (
-        <Box className={styles.row}>
-            <Typography
-                variant="caption"
-                className={styles.rowLabel}
-                sx={{
-                    color: 'text.secondary',
-                }}
-            >
+        <div className={styles.row}>
+            <Text as="span" variant="caption" tone="secondary" className={styles.rowLabel}>
                 {label}
-            </Typography>
+            </Text>
             <CollapsibleChipGroup
                 ranked={ranked}
                 alphabetical={options}
@@ -82,20 +67,25 @@ function EntityFilterChipRow({ label, options, usageMap, selected, onSelect, act
                     const isActive = option.canonicalId === selected?.option?.canonicalId;
                     return (
                         <Chip
-                            {...(icon ? { icon } : {})}
+                            icon={icon}
                             label={option.name}
-                            size="small"
-                            variant={isActive ? 'filled' : 'outlined'}
-                            color={isActive ? activeColor : 'default'}
+                            variant="outline"
+                            tone={isActive ? activeTone : 'neutral'}
+                            selected={isActive}
                             onClick={() => onSelect(isActive ? null : option.canonicalId)}
                             data-testid={testId}
                         />
                     );
                 }}
             />
-        </Box>
+        </div>
     );
 }
+
+const DATE_FIELD_OPTIONS = [
+    { value: 'updatedTs', label: 'Updated' },
+    { value: 'createdTs', label: 'Created' },
+];
 
 const isFilterActive = (state: SearchUrlState) => {
     return (
@@ -137,71 +127,42 @@ export function SearchFilters({
     };
 
     return (
-        <Box className={styles.filters}>
+        <div className={styles.filters}>
             <TextField
                 fullWidth
+                size="sm"
                 placeholder="Search title and notes…"
+                aria-label="Search title and notes"
                 value={queryInput}
                 onChange={(e) => onQueryInputChange(e.target.value)}
-                size="small"
-                slotProps={{
-                    htmlInput: { ref: queryFieldRef },
-                    input: {
-                        startAdornment: (
-                            <InputAdornment position="start">
-                                <SearchIcon fontSize="small" />
-                            </InputAdornment>
-                        ),
-                        endAdornment: queryInput ? (
-                            <InputAdornment position="end">
-                                <IconButton size="small" onClick={() => onQueryInputChange('')} aria-label="Clear search">
-                                    <ClearIcon fontSize="small" />
-                                </IconButton>
-                            </InputAdornment>
-                        ) : null,
-                    },
-                }}
+                inputRef={queryFieldRef}
+                startAdornment={<Search size={20} aria-hidden="true" />}
+                endAdornment={
+                    queryInput ? (
+                        <IconButton size="sm" onClick={() => onQueryInputChange('')} aria-label="Clear search">
+                            <X />
+                        </IconButton>
+                    ) : undefined
+                }
             />
-            <Box className={styles.row}>
-                <Typography
-                    variant="caption"
-                    className={styles.rowLabel}
-                    sx={{
-                        color: 'text.secondary',
-                    }}
-                >
+            <div className={styles.row}>
+                <Text as="span" variant="caption" tone="secondary" className={styles.rowLabel}>
                     Status
-                </Typography>
-                <Stack
-                    direction="row"
-                    spacing={1}
-                    useFlexGap
-                    sx={{
-                        flexWrap: 'wrap',
-                    }}
-                >
+                </Text>
+                <div className={styles.chips}>
                     {ALL_STATUSES.map((status) => {
                         const isOn = activeStatuses.has(status);
-                        return (
-                            <Chip
-                                key={status}
-                                label={STATUS_LABELS[status]}
-                                size="small"
-                                color={isOn ? 'primary' : 'default'}
-                                variant={isOn ? 'filled' : 'outlined'}
-                                onClick={() => toggleStatus(status)}
-                            />
-                        );
+                        return <Chip key={status} label={STATUS_LABELS[status]} variant="outline" selected={isOn} onClick={() => toggleStatus(status)} />;
                     })}
-                </Stack>
-            </Box>
+                </div>
+            </div>
             <EntityFilterChipRow
                 label="Work context"
                 options={contextOptions}
                 usageMap={usage.contexts}
                 selected={selectedContext}
                 onSelect={(contextId) => onUrlStateChange({ contextId })}
-                activeColor="primary"
+                activeTone="accent"
                 testId="searchContextFilterChip"
             />
             <EntityFilterChipRow
@@ -210,22 +171,19 @@ export function SearchFilters({
                 usageMap={usage.people}
                 selected={selectedPerson}
                 onSelect={(personId) => onUrlStateChange({ personId })}
-                activeColor="info"
-                icon={<PersonOutlineIcon />}
+                activeTone="info"
+                icon={<UserRound />}
                 testId="searchPersonFilterChip"
             />
-            <Box className={styles.row}>
-                <TextField
-                    select
-                    size="small"
+            <div className={styles.row}>
+                <Select
+                    size="sm"
                     label="Date field"
                     value={urlState.dateField}
-                    onChange={(e) => isDateField(e.target.value) && onUrlStateChange({ dateField: e.target.value })}
+                    onValueChange={(dateField) => isDateField(dateField) && onUrlStateChange({ dateField })}
+                    options={DATE_FIELD_OPTIONS}
                     className={styles.dropdown}
-                >
-                    <MenuItem value="updatedTs">Updated</MenuItem>
-                    <MenuItem value="createdTs">Created</MenuItem>
-                </TextField>
+                />
                 <DateField
                     label="From"
                     value={urlState.dateFrom ?? ''}
@@ -238,8 +196,8 @@ export function SearchFilters({
                     onChange={(dateTo) => onUrlStateChange({ dateTo: dateTo || null })}
                     className={styles.dateField}
                 />
-                {isFilterActive(urlState) && <Chip label="Reset filters" size="small" variant="outlined" onClick={onReset} className={styles.resetChip} />}
-            </Box>
-        </Box>
+                {isFilterActive(urlState) && <Chip label="Reset filters" variant="outline" onClick={onReset} className={styles.resetChip} />}
+            </div>
+        </div>
     );
 }

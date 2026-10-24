@@ -1,27 +1,39 @@
-.actionButtons {
+/* Title row: the count and sync chips stay vertically centred on the title. */
+.header {
     display: flex;
-    gap: 0.25rem; /* gap: 0.5 in MUI sx = 0.5 × 0.5rem */
-}
-
-.list {
-    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
-    border-radius: 0.25rem;
-}
-
-.item {
-    padding: 0;
-}
-
-.rowButton {
-    padding: 0.625rem 1rem;
+    align-items: center;
+    gap: var(--space-2);
+    margin-block-end: var(--space-6);
 }
 
 .countChip {
-    margin-left: 0.75rem;
+    margin-inline-start: var(--space-3);
     vertical-align: middle;
 }
 
-/* pr widened to accommodate move-to ("By date") + copy-id + edit + received buttons in secondaryAction */
-.listItemText {
-    padding-right: 10.5rem;
+.emptyMessage {
+    margin-block-start: var(--space-12);
+    text-align: center;
+}
+
+.sortRow {
+    display: flex;
+    justify-content: flex-end;
+    margin-block-end: var(--space-4);
+}
+
+.group {
+    margin-block-end: var(--space-6);
+}
+
+.groupHeading {
+    margin-block-end: var(--space-2);
+}
+
+.list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-sm);
 }

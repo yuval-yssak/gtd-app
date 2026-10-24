@@ -4,6 +4,7 @@ import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the "duplicate standalone calendar item" bug: two concurrent inbound syncs (a manual
 // `POST /integrations/:id/sync` racing a webhook delivery) both saw `findCalendarItemByEventId` miss and
@@ -61,7 +62,7 @@ async function liveItemsForEvent(page: Page, calendarEventId: string) {
 
 test.describe('calendar — duplicate-event create guard', () => {
     test('two inbound deliveries of the same new event produce exactly one calendar item', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `dup-guard-${stamp}@example.com`;
         const cfgId = `cfg-dup-${stamp}`;
         const eventId = `evt-dup-${stamp}`;

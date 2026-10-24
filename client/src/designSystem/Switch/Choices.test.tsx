@@ -19,6 +19,15 @@ describe('Switch', () => {
         expect(onCheckedChange).toHaveBeenCalledWith(true);
     });
 
+    it('puts controlProps on the focusable switch itself (a keyboard region walks it by arrows)', () => {
+        render(
+            <Switch checked={false} onCheckedChange={vi.fn()} label="Show tags" controlProps={{ tabIndex: -1, 'data-roving-item': '' }} data-testid="toggle" />,
+        );
+        const control = screen.getByRole('switch', { name: 'Show tags' });
+        expect(control.tabIndex).toBe(-1);
+        expect(control.hasAttribute('data-roving-item')).toBe(true);
+    });
+
     it('can be named by aria-label alone', () => {
         render(<Switch checked onCheckedChange={vi.fn()} aria-label="Visible" />);
         expect(screen.getByRole('switch', { name: 'Visible' }).getAttribute('aria-checked')).toBe('true');

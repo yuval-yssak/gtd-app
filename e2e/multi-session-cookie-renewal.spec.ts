@@ -32,7 +32,7 @@ async function moveSessionsIntoRefreshWindow(email: string) {
 
 test.describe('multi-session cookie renewal', () => {
     test('a sync pass renews a secondary account cookie that was about to expire', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emails: [string, string] = [`renew-a-${stamp}@example.com`, `renew-b-${stamp}@example.com`];
 
         await withTwoAccountsOnOneDevice(browser, emails, async (page, { secondary }) => {

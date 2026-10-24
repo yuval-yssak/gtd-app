@@ -54,7 +54,8 @@ test.describe('waiting-for sorting', () => {
 
             await page.goto(`${CLIENT_URL}/waiting-for`);
 
-            const groupHeaders = page.locator('.MuiTypography-subtitle2');
+            // The person groups are headed sections (h6, under the page's h5 title).
+            const groupHeaders = page.getByRole('heading', { level: 6 });
             await expect(groupHeaders).toHaveText(['Alice', 'Zoe', 'Unassigned']);
 
             // Person chips only render in the by-date view — grouping already names the person here.

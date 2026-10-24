@@ -1,17 +1,8 @@
-import ViewColumnIcon from '@mui/icons-material/ViewColumn';
-import Button from '@mui/material/Button';
-import Checkbox from '@mui/material/Checkbox';
-import Menu from '@mui/material/Menu';
-import MenuItem from '@mui/material/MenuItem';
-import Paper from '@mui/material/Paper';
-import Table from '@mui/material/Table';
-import TableBody from '@mui/material/TableBody';
-import TableCell from '@mui/material/TableCell';
-import TableContainer from '@mui/material/TableContainer';
-import TableHead from '@mui/material/TableHead';
-import TableRow from '@mui/material/TableRow';
+import { Link } from '@tanstack/react-router';
 import dayjs from 'dayjs';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { Columns3 } from 'lucide-react';
+import { type MouseEvent, memo, type ReactNode, useCallback, useMemo } from 'react';
+import { Button, MenuCheckboxItem, MenuPopup, MenuRoot, MenuTrigger } from '../../designSystem';
 import { itemContextNames, itemPersonNames } from '../../lib/itemSearch';
 import { useNewTabAwareNavigate } from '../../lib/newTabNavigation';
 import { SEARCH_TABLE_COLUMNS, type SearchTableColumnId } from '../../lib/searchTableColumns';
@@ -31,8 +22,6 @@ interface Props {
 const formatDate = (iso: string | undefined) => (iso ? dayjs(iso).format('MMM D, YYYY') : '—');
 
 function ColumnPicker({ visibleColumns, onChange }: { visibleColumns: ReadonlySet<SearchTableColumnId>; onChange: (next: Set<SearchTableColumnId>) => void }) {
-    const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
-
     const toggleColumn = (id: SearchTableColumnId) => {
         const next = new Set(visibleColumns);
         if (next.has(id)) {
@@ -44,89 +33,92 @@ function ColumnPicker({ visibleColumns, onChange }: { visibleColumns: ReadonlySe
     };
 
     return (
-        <>
-            <Button
-                size="small"
-                startIcon={<ViewColumnIcon />}
-                variant="outlined"
-                onClick={(e) => setAnchorEl(e.currentTarget)}
-                className={styles.columnsButton}
-            >
-                Columns
-            </Button>
-            <Menu anchorEl={anchorEl} open={anchorEl !== null} onClose={() => setAnchorEl(null)}>
+        <MenuRoot>
+            <MenuTrigger
+                render={
+                    <Button size="sm" variant="outline" startIcon={<Columns3 />} data-testid="searchColumnsButton">
+                        Columns
+                    </Button>
+                }
+            />
+            <MenuPopup align="end">
                 {SEARCH_TABLE_COLUMNS.map((col) => (
-                    // The MenuItem owns the click; the Checkbox is a passive visual indicator.
-                    // A single click target avoids the twice-fired toggle that an onChange-bearing Checkbox would cause.
-                    <MenuItem key={col.id} onClick={() => !col.fixed && toggleColumn(col.id)} disabled={col.fixed === true}>
-                        <Checkbox size="small" checked={visibleColumns.has(col.id)} disabled={col.fixed === true} className={styles.checkbox} />
+                    // Stays open per toggle, so several columns can be changed in one visit.
+                    <MenuCheckboxItem
+                        key={col.id}
+                        checked={visibleColumns.has(col.id)}
+                        onCheckedChange={() => toggleColumn(col.id)}
+                        disabled={col.fixed === true}
+                        closeOnClick={false}
+                    >
                         {col.label}
-                    </MenuItem>
+                    </MenuCheckboxItem>
                 ))}
-            </Menu>
-        </>
+            </MenuPopup>
+        </MenuRoot>
     );
 }
 
-function ResultCell({
-    column,
-    item,
-    peopleById,
-    contextsById,
-}: {
-    column: SearchTableColumnId;
+/** What a cell renderer reads: the row's item and the id → name lookups. */
+interface CellSource {
     item: StoredItem;
     peopleById: Map<string, StoredPerson>;
     contextsById: Map<string, StoredWorkContext>;
-}) {
-    if (column === 'title') {
-        // AccountChip is hidden when only one account is logged in, so single-account users see no change.
-        return (
-            <span className={styles.titleCell}>
-                {item.title}
-                <AccountChip userId={item.userId} />
-            </span>
-        );
-    }
-    if (column === 'status') return <StatusChip status={item.status} />;
-    if (column === 'updated') return <span>{formatDate(item.updatedTs)}</span>;
-    if (column === 'created') return <span>{formatDate(item.createdTs)}</span>;
-    if (column === 'expectedBy') return <span>{formatDate(item.expectedBy)}</span>;
-    if (column === 'people') {
-        const names = itemPersonNames(item, peopleById);
-        return <span>{names.length > 0 ? names.join(', ') : '—'}</span>;
-    }
-    // contexts
-    const names = itemContextNames(item, contextsById);
-    return <span>{names.length > 0 ? names.join(', ') : '—'}</span>;
 }
+
+const namesOrDash = (names: string[]) => (names.length > 0 ? names.join(', ') : '—');
+
+/** The title is the row's link — the keyboard way in (the row click is the pointer convenience). AccountChip hides with one account. */
+function TitleCell({ item }: { item: StoredItem }) {
+    return (
+        <span className={styles.titleCell}>
+            <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.titleLink} data-testid="searchTableTitleLink">
+                {item.title}
+            </Link>
+            <AccountChip userId={item.userId} />
+        </span>
+    );
+}
+
+/** One renderer per column — the table shows whichever subset the picker leaves visible. */
+const CELL_RENDERERS: Record<SearchTableColumnId, (source: CellSource) => ReactNode> = {
+    title: ({ item }) => <TitleCell item={item} />,
+    status: ({ item }) => <StatusChip status={item.status} />,
+    updated: ({ item }) => formatDate(item.updatedTs),
+    created: ({ item }) => formatDate(item.createdTs),
+    expectedBy: ({ item }) => formatDate(item.expectedBy),
+    people: ({ item, peopleById }) => namesOrDash(itemPersonNames(item, peopleById)),
+    contexts: ({ item, contextsById }) => namesOrDash(itemContextNames(item, contextsById)),
+};
 
 interface ResultTableRowProps {
     item: StoredItem;
     orderedColumns: typeof SEARCH_TABLE_COLUMNS;
     peopleById: Map<string, StoredPerson>;
     contextsById: Map<string, StoredWorkContext>;
-    onItemOpened: (event: React.MouseEvent, itemId: string) => void;
+    onItemOpened: (event: MouseEvent, itemId: string) => void;
 }
 
 // memo: item identity is stable across filter re-renders (rows come straight from the IDB
 // snapshot), so re-filtering only pays for rows that actually entered/left the result set.
 const ResultTableRow = memo(function ResultTableRow({ item, orderedColumns, peopleById, contextsById, onItemOpened }: ResultTableRowProps) {
     return (
-        <TableRow
-            hover
-            onClick={(e) => onItemOpened(e, item._id)}
+        <tr
+            // A click anywhere on the row opens the item, as the title link does; a click on the link
+            // itself is the link's (so cmd/ctrl+click works there natively).
+            onClick={(e) => {
+                if (!(e.target instanceof Element && e.target.closest('a'))) onItemOpened(e, item._id);
+            }}
             className={styles.row}
             // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration);
             // set directly on the <tr> — wrapping table rows in a div would break table semantics.
             data-list-item-id={item._id}
+            data-testid="searchTableRow"
         >
             {orderedColumns.map((col) => (
-                <TableCell key={col.id}>
-                    <ResultCell column={col.id} item={item} peopleById={peopleById} contextsById={contextsById} />
-                </TableCell>
+                <td key={col.id}>{CELL_RENDERERS[col.id]({ item, peopleById, contextsById })}</td>
             ))}
-        </TableRow>
+        </tr>
     );
 });
 
@@ -138,7 +130,7 @@ export const SearchResultsTable = memo(function SearchResultsTable({ items, visi
     const contextsById = useMemo(() => new Map(workContexts.map((c) => [c._id, c])), [workContexts]);
     const orderedColumns = useMemo(() => SEARCH_TABLE_COLUMNS.filter((c) => visibleColumns.has(c.id)), [visibleColumns]);
     const onItemOpened = useCallback(
-        (event: React.MouseEvent, itemId: string) => navigateOrNewTab(event, { to: '/item/$itemId', params: { itemId }, search: { status: null } }),
+        (event: MouseEvent, itemId: string) => navigateOrNewTab(event, { to: '/item/$itemId', params: { itemId }, search: { status: null } }),
         [navigateOrNewTab],
     );
 
@@ -147,16 +139,18 @@ export const SearchResultsTable = memo(function SearchResultsTable({ items, visi
             <div className={styles.toolbar}>
                 <ColumnPicker visibleColumns={visibleColumns} onChange={onVisibleColumnsChange} />
             </div>
-            <TableContainer component={Paper} variant="outlined">
-                <Table size="small">
-                    <TableHead>
-                        <TableRow>
+            <div className={styles.tableFrame}>
+                <table className={styles.table}>
+                    <thead>
+                        <tr>
                             {orderedColumns.map((col) => (
-                                <TableCell key={col.id}>{col.label}</TableCell>
+                                <th key={col.id} scope="col">
+                                    {col.label}
+                                </th>
                             ))}
-                        </TableRow>
-                    </TableHead>
-                    <TableBody>
+                        </tr>
+                    </thead>
+                    <tbody>
                         {items.map((item) => (
                             <ResultTableRow
                                 key={item._id}
@@ -167,9 +161,9 @@ export const SearchResultsTable = memo(function SearchResultsTable({ items, visi
                                 onItemOpened={onItemOpened}
                             />
                         ))}
-                    </TableBody>
-                </Table>
-            </TableContainer>
+                    </tbody>
+                </table>
+            </div>
         </>
     );
 });

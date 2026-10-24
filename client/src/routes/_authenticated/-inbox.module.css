@@ -1,25 +1,42 @@
-.list {
-    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.12));
-    border-radius: 0.25rem;
+.pageHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-block-end: var(--space-6);
 }
 
-.item {
-    padding: 0.5rem 1rem;
-    /* Room for the 8 icon buttons in secondaryAction (move-to + copy-id + 6 actions). */
-    padding-right: 18.75rem;
+.titleGroup {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
 }
 
-/* Removes the default outlined border so the capture field blends into its Paper container */
-.captureField :global(.MuiOutlinedInput-notchedOutline) {
-    border: none;
+.countChip {
+    margin-inline-start: var(--space-3);
+    vertical-align: middle;
+}
+
+.capture {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-block-end: var(--space-6);
+}
+
+.captureNotes {
+    padding: var(--space-3);
+}
+
+.tabs {
+    margin-block-end: var(--space-2);
 }
 
 .notesPreview {
-    min-height: 7.5rem;
-    padding: 0.75rem 0.875rem;
-    border: 0.0625rem solid var(--mui-palette-divider, rgba(0, 0, 0, 0.23));
-    border-radius: 0.25rem;
-    font-size: 0.875rem;
+    min-block-size: 7.5rem;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    font-size: var(--type-sm-size);
     line-height: 1.6;
     overflow-y: auto;
 }
@@ -27,89 +44,115 @@
 /* Markdown content styling lives in MarkdownPreview.module.css — .notesPreview is the shell. */
 
 .notesEmpty {
-    color: var(--mui-palette-text-secondary, rgba(0, 0, 0, 0.6));
+    color: var(--color-text-secondary);
     font-style: italic;
 }
 
-.actionButtons {
-    display: flex;
-    gap: 0.25rem;
+.emptyMessage {
+    margin-block-start: var(--space-12);
+    text-align: center;
 }
 
-.pageHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1.5rem;
+.list {
+    border: 1px solid var(--color-divider);
+    border-radius: var(--radius-sm);
 }
 
-.captureCard {
-    margin-bottom: 1.5rem;
+/* virtua renders the <ul>; it takes no className. */
+.list > ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
 }
 
-.countChip {
-    margin-left: 0.75rem;
-    vertical-align: middle;
+/* The phone row's divider sits on its static frame, so it stays put while the row slides. */
+.mobileRow[data-divided] {
+    border-block-end: 1px solid var(--color-divider);
 }
 
-.captureNotes {
-    padding: 0.75rem 0.75rem 0.75rem;
-}
-
-.tabs {
-    margin-bottom: 0.5rem;
-}
-
-.listItemText {
-    /* pr leaves enough room for 8 icon buttons in secondaryAction (move-to + copy-id + 6 actions) */
-    padding-right: 18.75rem;
-}
-
-/* Swipe row wrapper — clips the row as it slides to reveal the action background */
+/* Swipe row wrapper — clips the row as it slides to reveal the action background. */
 .swipeWrapper {
     position: relative;
     overflow: hidden;
 }
 
-/* The phone row has a single trailing button (More), not the desktop row's eight. */
+/* The sliding row is opaque so the reveal panes behind it show only as it moves. */
 .swipeItem {
-    padding: 0.5rem 3rem 0.5rem 0;
+    position: relative;
+    background-color: var(--color-bg-surface);
+    touch-action: pan-y;
 }
 
-/* Keeps the handle's touches out of the swipe gesture (the handler sits on this box). */
-.swipeHandle {
-    display: flex;
-    align-items: center;
+/* The phone row is compact: the handle already leads it. */
+.swipeBody {
+    padding-inline-start: var(--space-1);
 }
 
-/* Green background revealed on right-swipe (Next Action) */
+/* Revealed on right-swipe (Next Action). */
 .revealRight {
     position: absolute;
     inset: 0;
     display: flex;
     align-items: center;
-    padding-left: 1rem;
-    background: var(--mui-palette-success-main, #2e7d32);
-    color: #fff;
+    gap: var(--space-2);
+    padding-inline-start: var(--space-4);
+    background: var(--color-status-success);
+    color: var(--color-on-accent);
 }
 
-/* Red background revealed on left-swipe (Trash) */
+/* Revealed on left-swipe (Trash). */
 .revealLeft {
     position: absolute;
     inset: 0;
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    padding-right: 1rem;
-    background: var(--mui-palette-error-main, #d32f2f);
-    color: #fff;
+    gap: var(--space-2);
+    padding-inline-end: var(--space-4);
+    background: var(--color-status-error);
+    color: var(--color-on-accent);
 }
 
-/* Bottom sheet drag handle pill */
-.sheetHandle {
-    width: 2rem;
-    height: 0.25rem;
-    border-radius: 0.125rem;
-    background: var(--color-sheet-handle);
-    margin: 0.5rem auto 0.75rem;
+.sheetActions {
+    margin: 0;
+    padding: 0 0 var(--space-4);
+    list-style: none;
+}
+
+.sheetAction {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    inline-size: 100%;
+    padding: var(--space-3) var(--space-4);
+    border: none;
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+
+    @media (hover: hover) {
+        &:hover {
+            background-color: var(--color-state-hover);
+        }
+    }
+
+    &:focus-visible {
+        outline: var(--focus-ring-width) solid var(--focus-ring-color);
+        outline-offset: calc(var(--focus-ring-width) * -1);
+    }
+
+    &[data-destructive] {
+        color: var(--color-status-error);
+    }
+}
+
+.sheetActionIcon {
+    display: flex;
+    color: var(--color-text-secondary);
+
+    .sheetAction[data-destructive] & {
+        color: inherit;
+    }
 }

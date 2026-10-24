@@ -1,6 +1,5 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { closeContextQuietly, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL } from './helpers/env';
@@ -72,7 +71,7 @@ test.describe('multi-account sync', () => {
     });
 
     test('cross-device SSE delivers updates per account on a multi-account device', async ({ browser }) => {
-        const ts = dayjs().valueOf();
+        const ts = uniqueStamp();
         const emailA = `cross-a-${ts}@example.com`;
         const emailB = `cross-b-${ts}@example.com`;
         await withTwoAccountsOnOneDevice(browser, [emailA, emailB], async (page1, accounts) => {

@@ -1,21 +1,16 @@
-import Box from '@mui/material/Box';
-import Divider from '@mui/material/Divider';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import Typography from '@mui/material/Typography';
 import { Link } from '@tanstack/react-router';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { memo } from 'react';
 import { WindowVirtualizer } from 'virtua';
+import { Text } from '../../designSystem';
 import { groupByStatus, STATUS_LABELS } from '../../lib/itemSearch';
 import { SHORTCUT_ROW_PROPS } from '../../lib/rowShortcuts';
 import type { SearchView } from '../../lib/searchUrlParams';
 import type { StoredItem } from '../../types/MyDB';
 import { AccountChip } from '../AccountChip';
 import { CopyIdButton } from '../itemEditor/CopyIdButton';
+import { ListRow, ListRowText } from '../listRow/ListRow';
 import styles from './SearchResultsList.module.css';
 import { StatusChip } from './StatusChip';
 
@@ -31,81 +26,62 @@ const renderItemSecondary = (item: StoredItem) => `Updated ${dayjs(item.updatedT
 // memo: rows are the dominant render cost on large result sets. Item objects come straight from
 // the IDB snapshot, so their identity is stable across keystrokes/filter re-renders — memo turns
 // a full-list reconcile into a prop comparison per row.
-const ResultRow = memo(function ResultRow({ item, showStatusChip }: { item: StoredItem; showStatusChip: boolean }) {
+const ResultRow = memo(function ResultRow({ item, showStatusChip, isDivided }: { item: StoredItem; showStatusChip: boolean; isDivided: boolean }) {
     return (
-        <ListItem {...SHORTCUT_ROW_PROPS} disablePadding secondaryAction={<CopyIdButton isRowAction id={item._id} testId="searchResultCopyIdButton" />}>
+        <ListRow {...SHORTCUT_ROW_PROPS} isDivided={isDivided} actions={<CopyIdButton isRowAction id={item._id} testId="searchResultCopyIdButton" />}>
+            {/* The whole row body is the link to the item page. */}
             <Link to="/item/$itemId" params={{ itemId: item._id }} search={{ status: null }} className={styles.rowLink}>
-                <ListItemButton dense className={styles.rowButton}>
-                    <ListItemText
-                        primary={
-                            <Box className={styles.titleRow}>
-                                <span>{item.title}</span>
-                                {showStatusChip && <StatusChip status={item.status} />}
-                                <AccountChip userId={item.userId} />
-                            </Box>
-                        }
-                        secondary={renderItemSecondary(item)}
-                    />
-                </ListItemButton>
+                <ListRowText
+                    primary={
+                        <>
+                            <span>{item.title}</span>
+                            {showStatusChip && <StatusChip status={item.status} />}
+                            <AccountChip userId={item.userId} />
+                        </>
+                    }
+                    secondary={renderItemSecondary(item)}
+                />
             </Link>
-        </ListItem>
+        </ListRow>
     );
 });
 
 function FlatList({ items, showStatusChip }: { items: readonly StoredItem[]; showStatusChip: boolean }) {
     return (
-        // component="div": WindowVirtualizer renders a measuring <div> wrapper, which is invalid
-        // inside the default <ul>.
-        <List disablePadding component="div" className={styles.list}>
+        <div className={styles.list}>
             {/* Windowed rendering — only rows near the viewport mount, so a thousands-row result
-                set doesn't block the main thread on mount or filter changes. */}
-            <WindowVirtualizer>
+                set doesn't block the main thread on mount or filter changes. virtua renders the <ul>/<li>. */}
+            <WindowVirtualizer as="ul" item="li">
                 {items.map((item, idx) => (
                     // data-list-item-id: scroll-restoration anchor (see useListScrollRestoration)
-                    <Box key={item._id} data-list-item-id={item._id}>
-                        <ResultRow item={item} showStatusChip={showStatusChip} />
-                        {idx < items.length - 1 && <Divider />}
-                    </Box>
+                    <div key={item._id} data-list-item-id={item._id}>
+                        <ResultRow item={item} showStatusChip={showStatusChip} isDivided={idx < items.length - 1} />
+                    </div>
                 ))}
             </WindowVirtualizer>
-        </List>
+        </div>
     );
 }
 
 function GroupedList({ items }: { items: readonly StoredItem[] }) {
     const groups = groupByStatus(items);
     return (
-        <Box>
+        <div>
             {groups.map((group) => (
-                <Box
-                    key={group.status}
-                    sx={{
-                        mb: 3,
-                    }}
-                >
-                    <Box className={styles.groupHeader}>
-                        <Typography
-                            variant="subtitle2"
-                            sx={{
-                                color: 'text.secondary',
-                                fontWeight: 600,
-                            }}
-                        >
+                // Named by its heading, so each status group is a navigable region.
+                <section key={group.status} className={styles.group} aria-labelledby={`search-group-${group.status}`}>
+                    <div className={styles.groupHeader}>
+                        <Text variant="subtitleSm" tone="secondary" id={`search-group-${group.status}`}>
                             {STATUS_LABELS[group.status]}
-                        </Typography>
-                        <Typography
-                            variant="caption"
-                            sx={{
-                                color: 'text.secondary',
-                            }}
-                        >
+                        </Text>
+                        <Text as="span" variant="caption" tone="secondary">
                             {group.items.length}
-                        </Typography>
-                    </Box>
+                        </Text>
+                    </div>
                     <FlatList items={group.items} showStatusChip={false} />
-                </Box>
+                </section>
             ))}
-        </Box>
+        </div>
     );
 }
 

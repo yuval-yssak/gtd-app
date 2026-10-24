@@ -1,7 +1,7 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withTwoAccountsOnOneDevice } from './helpers/context';
 import { seedNextActionForUser, seedWorkContextForUser } from './helpers/seed';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // With two signed-in accounts each owning its own copy of common contexts ("agenda", "computer"),
 // the /next-actions filter rows used to render one chip per entity — indistinguishable duplicates.
@@ -21,7 +21,7 @@ function visibleToggleFor(page: Page, userId: string) {
 
 test.describe('next actions — merged multi-account filter chips', () => {
     test('same-named contexts render one chip that filters across both accounts', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `merged-chip-a-${stamp}@example.com`;
         const emailB = `merged-chip-b-${stamp}@example.com`;
 
@@ -42,8 +42,9 @@ test.describe('next actions — merged multi-account filter chips', () => {
             // Clicking the merged chip filters items tagged with EITHER account's twin.
             await page.getByTestId('nextActionsContextFilterChip').filter({ hasText: 'agenda' }).click();
             await expect(page).toHaveURL(/context=seed-ctx-/);
-            await expect.poll(() => rowTitles(page)).toEqual(expect.arrayContaining(['A agenda item', 'B agenda item']));
-            expect(await rowTitles(page)).toHaveLength(2);
+            // Exactly these two, polled as one condition: the filter commits in a transition, so the
+            // unmatched row can still be on screen the instant both matches are.
+            await expect.poll(async () => (await rowTitles(page)).sort()).toEqual(['A agenda item', 'B agenda item']);
 
             // Second click clears the filter.
             await page.getByTestId('nextActionsContextFilterChip').filter({ hasText: 'agenda' }).click();
@@ -53,7 +54,7 @@ test.describe('next actions — merged multi-account filter chips', () => {
     });
 
     test('a deep link carrying the other twin id still selects the merged chip and matches both accounts', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `merged-deep-a-${stamp}@example.com`;
         const emailB = `merged-deep-b-${stamp}@example.com`;
 
@@ -70,14 +71,15 @@ test.describe('next actions — merged multi-account filter chips', () => {
             await page.waitForSelector('text=agenda item');
 
             const agendaChip = page.getByTestId('nextActionsContextFilterChip').filter({ hasText: 'agenda' });
-            await expect(agendaChip).toHaveClass(/MuiChip-filled/);
-            await expect.poll(() => rowTitles(page)).toEqual(expect.arrayContaining(['A agenda item', 'B agenda item']));
-            expect(await rowTitles(page)).toHaveLength(2);
+            await expect(agendaChip).toHaveAttribute('aria-pressed', 'true');
+            // Exactly these two, polled as one condition: the filter commits in a transition, so the
+            // unmatched row can still be on screen the instant both matches are.
+            await expect.poll(async () => (await rowTitles(page)).sort()).toEqual(['A agenda item', 'B agenda item']);
         });
     });
 
     test('hiding the account owning the URL-held twin id keeps the chip active and the list coherent', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `merged-hidden-a-${stamp}@example.com`;
         const emailB = `merged-hidden-b-${stamp}@example.com`;
 
@@ -96,7 +98,7 @@ test.describe('next actions — merged multi-account filter chips', () => {
             await visibleToggleFor(page, secondary.userId).click();
 
             const agendaChip = page.getByTestId('nextActionsContextFilterChip').filter({ hasText: 'agenda' });
-            await expect(agendaChip).toHaveClass(/MuiChip-filled/);
+            await expect(agendaChip).toHaveAttribute('aria-pressed', 'true');
             await expect.poll(() => rowTitles(page)).toEqual(['A agenda item']);
         });
     });

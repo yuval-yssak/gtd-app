@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { withTwoAccountsOnOneDevice } from './helpers/context';
 import { seedNextActionForUser, seedPersonForUser, seedRoutineForUser, seedWaitingForForUser, seedWorkContextForUser } from './helpers/seed';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // The item-editor work-context/people pickers must offer only the OWNING account's entities.
 // In the merged multi-account view each account owns its own "anywhere" context, and before the
@@ -11,7 +11,7 @@ import { seedNextActionForUser, seedPersonForUser, seedRoutineForUser, seedWaiti
 
 test.describe('editor picker owner scoping', () => {
     test('item-page picker shows only the owner account\'s contexts when both accounts have an "anywhere"', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `picker-scope-a-${stamp}@example.com`;
         const emailB = `picker-scope-b-${stamp}@example.com`;
 
@@ -30,7 +30,7 @@ test.describe('editor picker owner scoping', () => {
     });
 
     test('a pre-existing cross-account tag still renders while unassigned foreign contexts stay hidden', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `picker-stray-a-${stamp}@example.com`;
         const emailB = `picker-stray-b-${stamp}@example.com`;
 
@@ -52,7 +52,7 @@ test.describe('editor picker owner scoping', () => {
     });
 
     test("routine-page template picker is scoped to the routine's owning account", async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `picker-routine-a-${stamp}@example.com`;
         const emailB = `picker-routine-b-${stamp}@example.com`;
 
@@ -70,7 +70,7 @@ test.describe('editor picker owner scoping', () => {
     });
 
     test("a waitingFor item blocked on a cross-account person still shows that person's name", async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `picker-wf-a-${stamp}@example.com`;
         const emailB = `picker-wf-b-${stamp}@example.com`;
 

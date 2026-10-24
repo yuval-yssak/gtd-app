@@ -1,10 +1,13 @@
+import dayjs from 'dayjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ACCOUNT_EVAPORATED_STORAGE_KEY, parseEvaporationBroadcast, subscribeToEvaporationBroadcast } from '../contexts/accountEvaporatedEvents';
 import {
+    __resetLocalAccountActionForTests,
     type EvaporationRefreshDeps,
     refreshAfterAccountEvaporation,
     reloadDestination,
     reloadIfTabAccountGone,
+    runLocalAccountAction,
     shouldReloadForMissingAccount,
     shouldReloadOnEvaporation,
 } from '../contexts/accountEvaporatedRecovery';
@@ -43,6 +46,8 @@ describe('reloadDestination', () => {
 });
 
 describe('reloadIfTabAccountGone', () => {
+    afterEach(__resetLocalAccountActionForTests);
+
     function deps(tabAccountId: string | null, remaining: string[], onlyWhenNoneRemain?: boolean) {
         const navigate = vi.fn();
         return {
@@ -67,6 +72,45 @@ describe('reloadIfTabAccountGone', () => {
         const { navigate, args } = deps('user-a', []);
         expect(await reloadIfTabAccountGone(args)).toBe('/login');
         expect(navigate).toHaveBeenCalledExactlyOnceWith('/login');
+    });
+
+    // Sign-out removes the account from IDB before its server call; a sync pass ending in that window
+    // must not navigate away — that would cancel the sign-out request and leave the user signed in.
+    it('stands down while this tab runs its own account action, which navigates by itself', async () => {
+        const { navigate, args } = deps('user-a', []);
+        await runLocalAccountAction(async () => {
+            expect(await reloadIfTabAccountGone(args)).toBeNull();
+        });
+        expect(navigate).not.toHaveBeenCalled();
+    });
+
+    // A "successful" action whose navigation never happened — a fire-and-forget re-auth that failed,
+    // or a beforeunload prompt the user answered with Stay — must not disable the check for good.
+    it('expires the hold of a successful action that never navigated', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+            const { navigate, args } = deps('user-a', []);
+            await runLocalAccountAction(async () => {});
+            expect(await reloadIfTabAccountGone(args)).toBeNull();
+
+            vi.setSystemTime(dayjs().add(1, 'minute').valueOf());
+
+            expect(await reloadIfTabAccountGone(args)).toBe('/login');
+            expect(navigate).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('resumes once a failed account action gives the tab back', async () => {
+        const { navigate, args } = deps('user-a', []);
+        await expect(
+            runLocalAccountAction(async () => {
+                throw new Error('sign-out failed');
+            }),
+        ).rejects.toThrow('sign-out failed');
+        expect(await reloadIfTabAccountGone(args)).toBe('/login');
+        expect(navigate).toHaveBeenCalledOnce();
     });
 
     it('onlyWhenNoneRemain: a missing account with survivors is another tab mid-evaporation — stay and let its broadcast route us', async () => {

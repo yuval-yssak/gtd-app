@@ -2,6 +2,7 @@
  * Decisions a tab makes when it hears `gtd:account-evaporated` (see `accountEvaporatedEvents.ts`),
  * kept free of React so they are unit-testable without rendering AppDataProvider.
  */
+import dayjs from 'dayjs';
 import { hasAtLeastOne } from '../lib/typeUtils';
 
 /**
@@ -53,11 +54,48 @@ export interface TabAccountGoneDeps {
 }
 
 /**
+ * Set while this tab runs its own account action (sign-out, switch). Such an action removes the
+ * account from IDB before its server call and ends in its own navigation; a sync pass finishing in
+ * between would otherwise see the account gone and navigate first — cancelling the sign-out
+ * request and leaving the user signed in. Bounded in time: a "successful" action whose navigation
+ * never happened (a fire-and-forget re-auth that failed, a beforeunload prompt answered with Stay)
+ * must not switch the check off for the rest of the tab's life. 30s outlasts a stalled sign-out.
+ */
+const LOCAL_ACCOUNT_ACTION_HOLD_MS = 30_000;
+const localAccountAction: { heldSinceMs: number | null } = { heldSinceMs: null };
+
+function isLocalAccountActionHeld(): boolean {
+    return localAccountAction.heldSinceMs !== null && dayjs().valueOf() - localAccountAction.heldSinceMs < LOCAL_ACCOUNT_ACTION_HOLD_MS;
+}
+
+/**
+ * Runs an account action that owns the tab's next navigation. Success leaves the hold in place on
+ * purpose (the action navigates away); a failure hands the tab back to the "account gone" check.
+ */
+export async function runLocalAccountAction<T>(action: () => Promise<T>): Promise<T> {
+    localAccountAction.heldSinceMs = dayjs().valueOf();
+    try {
+        return await action();
+    } catch (err) {
+        localAccountAction.heldSinceMs = null;
+        throw err;
+    }
+}
+
+/** Test-only: release the hold a successful action leaves behind. */
+export function __resetLocalAccountActionForTests(): void {
+    localAccountAction.heldSinceMs = null;
+}
+
+/**
  * The one reload decision every "my account vanished" path shares: read the surviving accounts,
  * leave if this tab's account is still among them, otherwise navigate to `reloadDestination`.
  * Returns the destination taken, or null when the tab stays.
  */
 export async function reloadIfTabAccountGone(deps: TabAccountGoneDeps): Promise<ReloadDestination | null> {
+    if (isLocalAccountActionHeld()) {
+        return null;
+    }
     const remaining = await deps.readLoggedInUserIds();
     if (!shouldReloadForMissingAccount(deps.tabAccountId, remaining)) {
         return null;

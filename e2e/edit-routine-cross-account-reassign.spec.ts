@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2e for cross-account "edit + move" of a routine. The server's reassignRoutine path applies the
 // editRoutinePatch (title/rrule/template/etc.) to the persisted routine snapshot. Generated items
@@ -103,7 +104,7 @@ test.describe('Routine editor cross-account reassign — atomic edit + move', ()
     // Each test scopes its /dev/reset to its unique stamped emails so concurrent specs in
     // other workers keep their session/user data.
     test('routine moves + title/rrule edits ride along; source-side generated items stay under fromUser', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `routine-edit-a-${stamp}@example.com`;
         const emailB = `routine-edit-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -148,7 +149,7 @@ test.describe('Routine editor cross-account reassign — atomic edit + move', ()
     });
 
     test('paused routine: editRoutinePatch.active=true resumes it on the target account', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `routine-resume-a-${stamp}@example.com`;
         const emailB = `routine-resume-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -172,7 +173,7 @@ test.describe('Routine editor cross-account reassign — atomic edit + move', ()
     });
 
     test('moved nextAction routine seeds its first item under the target account', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `routine-seed-a-${stamp}@example.com`;
         const emailB = `routine-seed-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);
@@ -198,7 +199,7 @@ test.describe('Routine editor cross-account reassign — atomic edit + move', ()
     });
 
     test('moved calendar routine seeds horizon items under the target account', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `routine-calseed-a-${stamp}@example.com`;
         const emailB = `routine-calseed-b-${stamp}@example.com`;
         await resetServerForEmails([emailA, emailB]);

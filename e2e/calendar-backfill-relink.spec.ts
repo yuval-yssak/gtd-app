@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { API_URL } from './helpers/env';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression for the duplicate-`gtd*`-master bug: on connect/reconnect, the outbound backfill could
 // push a brand-new app-owned `gtd*` recurring event for a naked routine that ALREADY has a real
@@ -73,7 +74,7 @@ async function findRoutine(routineId: string): Promise<{ calendarEventId?: strin
 
 test.describe('calendar — idempotent backfill relink', () => {
     test('a naked routine relinks onto its real GCal master instead of minting a gtd* clone', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `backfill-relink-${stamp}@example.com`;
         const cfgId = `cfg-relink-${stamp}`;
         const routineId = `routine-relink-${stamp}`;

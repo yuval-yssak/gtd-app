@@ -5,6 +5,7 @@ import type { StoredItem } from '../client/src/types/MyDB';
 import { resetServerForEmails, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // Regression: editing an item owned by a non-active Better Auth account through the regular
 // inline-edit path (not the cross-account reassign flow) used to fail with `POST /sync/push 400`
@@ -85,7 +86,7 @@ async function waitForBothSseChannels(page: Page, userIdA: string, userIdB: stri
 
 test.describe('Cross-account inline edit dispatches through syncSingleUser', () => {
     test('editing a non-active account’s item routes the flush through the session pivot — push returns 200, server reflects the edit', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const aliceEmail = `inline-edit-alice-${stamp}@example.com`;
         const bobEmail = `inline-edit-bob-${stamp}@example.com`;
         await resetServerForEmails([aliceEmail, bobEmail]);

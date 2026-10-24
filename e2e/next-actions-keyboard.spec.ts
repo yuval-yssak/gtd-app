@@ -71,7 +71,7 @@ test.describe('Next actions — keyboard (one tab stop, jumps, preview order)', 
 
             // From the last control above the list (the "Show tags" switch), ONE Tab lands on the first
             // row — not on a handle, not on a copy button.
-            await page.getByTestId('nextActionsShowTagsToggle').locator('input').focus();
+            await page.getByRole('switch', { name: 'Show tags' }).focus();
             await page.keyboard.press('Tab');
             await expect.poll(() => focusedRowTitle(page)).toBe('Delta');
             expect(await focusedTestId(page)).toBe('nextActionItemRow');

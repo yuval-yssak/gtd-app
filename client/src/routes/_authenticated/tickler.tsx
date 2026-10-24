@@ -1,27 +1,17 @@
-import EditIcon from '@mui/icons-material/Edit';
-import EventAvailableIcon from '@mui/icons-material/EventAvailable';
-import Box from '@mui/material/Box';
-import Chip from '@mui/material/Chip';
-import Divider from '@mui/material/Divider';
-import IconButton from '@mui/material/IconButton';
-import List from '@mui/material/List';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemText from '@mui/material/ListItemText';
-import Snackbar from '@mui/material/Snackbar';
-import Tooltip from '@mui/material/Tooltip';
-import Typography from '@mui/material/Typography';
 import { createFileRoute } from '@tanstack/react-router';
+import { CalendarCheck, Pencil } from 'lucide-react';
 import { AccountChip } from '../../components/AccountChip';
 import { AccountSyncChip } from '../../components/AccountSyncChip';
 import { CopyIdButton } from '../../components/itemEditor/CopyIdButton';
 import { useItemEditor } from '../../components/itemEditor/useItemEditor';
 import { ListRowShell } from '../../components/ListRowShell';
 import { ListSkeleton } from '../../components/ListSkeleton';
+import { ListRow, ListRowButton, ListRowText } from '../../components/listRow/ListRow';
 import { RoutineIndicator } from '../../components/RoutineIndicator';
 import { RowActionButton } from '../../components/RowActionButton';
 import { useAppData } from '../../contexts/AppDataProvider';
 import { releaseFromTickler } from '../../db/itemMutations';
+import { Chip, IconButton, Text, Toast, Tooltip } from '../../designSystem';
 import { useDocumentTitle } from '../../hooks/useDocumentTitle';
 import { useListGhosts } from '../../hooks/useListGhosts';
 import { useListScrollRestoration } from '../../hooks/useListScrollRestoration';
@@ -67,106 +57,69 @@ function TicklerPage() {
         await refreshItems();
     }
 
+    const header = (
+        <div className={styles.header}>
+            <Text variant="title">
+                Tickler
+                {liveTicklerCount > 0 && <Chip label={liveTicklerCount} className={styles.countChip} />}
+            </Text>
+            {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
+            <AccountSyncChip />
+        </div>
+    );
+
     if (ticklerItems.length === 0) {
         return (
-            <Box>
-                {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-                    <Typography
-                        variant="h5"
-                        sx={{
-                            fontWeight: 600,
-                        }}
-                    >
-                        Tickler
-                    </Typography>
-                    {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
-                    <AccountSyncChip />
-                </Box>
+            <div>
+                {header}
                 {/* First-launch bootstrap: show skeleton, not the "empty" copy, while IDB is still loading. */}
                 {isInitialSyncing ? (
                     <ListSkeleton />
                 ) : (
-                    <Typography
-                        sx={{
-                            color: 'text.secondary',
-                            textAlign: 'center',
-                            mt: 6,
-                        }}
-                    >
+                    <Text tone="secondary" className={styles.emptyMessage}>
                         No items are snoozed. Items hidden with "ignore before" will appear here.
-                    </Typography>
+                    </Text>
                 )}
-            </Box>
+            </div>
         );
     }
 
     return (
-        <Box>
-            {/* mb on the wrapper (not the Typography) so the chip stays vertically centered with the title. */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 3 }}>
-                <Typography
-                    variant="h5"
-                    sx={{
-                        fontWeight: 600,
-                    }}
-                >
-                    Tickler
-                    {liveTicklerCount > 0 && <Chip label={liveTicklerCount} size="small" className={styles.countChip} />}
-                </Typography>
-                {/* "Syncing account…" while a newly-added account bootstraps; surfaces even when the list already has items. */}
-                <AccountSyncChip />
-            </Box>
+        <div>
+            {header}
             {Object.entries(groups).map(([dateKey, groupItems]) => (
-                <Box
-                    key={dateKey}
-                    sx={{
-                        mb: 3,
-                    }}
-                >
-                    <Typography
-                        variant="subtitle2"
-                        sx={{
-                            color: 'text.secondary',
-                            fontWeight: 600,
-                            mb: 1,
-                        }}
-                    >
+                <section key={dateKey} className={styles.group}>
+                    <Text variant="subtitleSm" tone="secondary" className={styles.groupHeading}>
                         {ticklerDayLabel(dateKey)}
-                    </Typography>
-                    <List disablePadding className={styles.list}>
+                    </Text>
+                    <ul className={styles.list}>
                         {groupItems.map((item, idx) => (
-                            <ListRowShell key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
-                                <ListItem
+                            <ListRowShell as="li" key={item._id} itemId={item._id} isGhost={isGhost(item)} onGhostExited={onGhostExited}>
+                                <ListRow
                                     {...SHORTCUT_ROW_PROPS}
-                                    disablePadding
-                                    className={styles.item}
-                                    secondaryAction={
-                                        <Box className={styles.actionButtons}>
+                                    isDivided={idx < groupItems.length - 1}
+                                    actions={
+                                        <>
                                             <CopyIdButton isRowAction id={item._id} testId="ticklerItemCopyIdButton" />
                                             <RowActionButton
                                                 rowAction="edit"
                                                 label="Edit"
-                                                icon={<EditIcon fontSize="small" />}
+                                                icon={<Pencil />}
                                                 onClick={(e) => editor.openEditor({ item, event: e })}
                                                 data-testid="ticklerItemEditButton"
                                             />
                                             <Tooltip title="Release now">
-                                                <IconButton size="small" onClick={() => void onRelease(item)}>
-                                                    <EventAvailableIcon fontSize="small" />
+                                                <IconButton size="sm" aria-label="Release now" onClick={() => void onRelease(item)}>
+                                                    <CalendarCheck />
                                                 </IconButton>
                                             </Tooltip>
-                                        </Box>
+                                        </>
                                     }
                                 >
-                                    <ListItemButton
-                                        onClick={(e) => editor.openEditor({ item, event: e })}
-                                        className={styles.rowButton}
-                                        data-testid="ticklerItemRow"
-                                    >
-                                        <ListItemText
+                                    <ListRowButton onActivate={(e) => editor.openEditor({ item, event: e })} data-testid="ticklerItemRow">
+                                        <ListRowText
                                             primary={
-                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                                                <>
                                                     <span>{item.title}</span>
                                                     {item.routineId && (
                                                         <RoutineIndicator
@@ -175,20 +128,18 @@ function TicklerPage() {
                                                         />
                                                     )}
                                                     <AccountChip userId={item.userId} />
-                                                </Box>
+                                                </>
                                             }
                                             secondary={`Status: ${item.status}`}
-                                            className={styles.listItemText}
                                         />
-                                    </ListItemButton>
-                                </ListItem>
-                                {idx < groupItems.length - 1 && <Divider />}
+                                    </ListRowButton>
+                                </ListRow>
                             </ListRowShell>
                         ))}
-                    </List>
-                </Box>
+                    </ul>
+                </section>
             ))}
-            <Snackbar open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
-        </Box>
+            <Toast open={editor.toast.open} autoHideDuration={3000} onClose={editor.closeToast} message={editor.toast.message} />
+        </div>
     );
 }

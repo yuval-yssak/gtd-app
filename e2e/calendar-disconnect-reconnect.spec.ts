@@ -4,6 +4,7 @@ import { closeContextQuietly, resetServerForEmails } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
 import { loginAs } from './helpers/login';
+import { uniqueStamp } from './helpers/uniqueStamp';
 
 // E2E for the GCal disconnect/reconnect idempotency fix. Two regressions covered:
 //  1. After `keepLinkedEntities` + reconnect, the same GCal event must relink the existing
@@ -87,7 +88,7 @@ async function clickDisconnectInSettings(page: Page, removeLinkedEntities: boole
 
 test.describe('calendar disconnect/reconnect idempotency', () => {
     test('keepLinkedEntities + reconnect relinks the same event without creating a duplicate', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `dr-keep-${stamp}@example.com`;
         const cfgId = `cfg-keep-${stamp}`;
         const eventId = `evt-keep-${stamp}`;
@@ -167,7 +168,7 @@ test.describe('calendar disconnect/reconnect idempotency', () => {
     });
 
     test('removeLinkedEntities preserves done items and reconnect does not resurrect them', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const email = `dr-remove-done-${stamp}@example.com`;
         const cfgId = `cfg-remove-${stamp}`;
         const eventId = `evt-remove-${stamp}`;

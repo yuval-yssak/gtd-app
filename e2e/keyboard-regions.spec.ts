@@ -1,5 +1,4 @@
 import { expect, type Page, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import type { StoredItem } from '../client/src/types/MyDB';
 import { withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { gtd } from './helpers/gtd';
@@ -89,18 +88,18 @@ test.describe('Keyboard regions and global shortcuts', () => {
             await expect(page.locator('[data-keyboard-region="Next actions"]')).toBeAttached();
 
             await page.keyboard.press('End');
-            await expect.poll(() => focused(page)).toBe('INPUT'); // the "Show tags" switch
+            await expect(page.getByRole('switch', { name: 'Show tags' })).toBeFocused();
             await page.keyboard.press('Tab');
             await expect.poll(() => focusedRegion(page)).toBe('Next actions');
 
-            // Back into the filters: the chip used last, not the first one.
+            // Back into the filters: the control used last (the switch), not the first chip.
             await page.keyboard.press('Shift+Tab');
-            await expect.poll(() => focused(page)).toBe('INPUT');
+            await expect(page.getByRole('switch', { name: 'Show tags' })).toBeFocused();
         });
     });
 
     test('the account avatars are one tab stop: ←/→ walk the visibility toggles and the switcher; Enter opens its menu', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         await withTwoAccountsOnOneDevice(browser, [`kb-acc-a-${stamp}@example.com`, `kb-acc-b-${stamp}@example.com`], async (page, { active, secondary }) => {
             await page.goto('/next-actions');
             const region = page.getByTestId('accountsRegion').locator('visible=true');
@@ -341,7 +340,7 @@ test.describe('Keyboard regions and global shortcuts', () => {
         await withOneLoggedInDevice(browser, `kb-switch-${uniqueStamp()}@example.com`, async (page) => {
             await page.goto('/next-actions');
             await page.waitForSelector('[data-testid="mainMenu"]');
-            await page.getByTestId('nextActionsShowTagsToggle').locator('input').focus();
+            await page.getByRole('switch', { name: 'Show tags' }).focus();
             await page.keyboard.press('g');
             await page.keyboard.press('t');
             await expect(page).toHaveURL(/\/tickler$/);

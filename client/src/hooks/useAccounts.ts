@@ -2,8 +2,10 @@ import dayjs from 'dayjs';
 import type { IDBPDatabase } from 'idb';
 import { useCallback, useEffect, useState } from 'react';
 import { signOutDevice } from '../api/pushApi';
+import { runLocalAccountAction } from '../contexts/accountEvaporatedRecovery';
 import { clearAllAccounts, getActiveAccount, getAllAccounts, removeAccount, setActiveAccount, wipeUserData } from '../db/accountHelpers';
 import { getOrCreateDeviceId } from '../db/deviceId';
+import { withSessionGate } from '../db/syncHelpers';
 import { authClient } from '../lib/authClient';
 import { clearPersistedListScrollMemory } from '../lib/listScrollMemory';
 import type { MyDB, OAuthProvider, StoredAccount } from '../types/MyDB';
@@ -42,7 +44,9 @@ export interface AccountsState {
  * would strand the user behind the backdrop.
  */
 export async function performLocalAccountSwitch(db: IDBPDatabase<MyDB>, userId: string, currentUrl: { pathname: string; search: string }): Promise<string> {
-    await setActiveAccount(userId, db);
+    // Inside the session gate: a sync pass in flight restores the account it started on when it
+    // ends, which would silently undo a switch written mid-pass.
+    await withSessionGate(() => setActiveAccount(userId, db));
     // Scroll positions are per-account (anchors are item _ids) and the switch hard-reloads
     // the SAME url — without this the previous account's offset would restore onto the next
     // account's completely different list.
@@ -81,7 +85,8 @@ export function useAccounts(db: IDBPDatabase<MyDB>): AccountsState {
         setActionError(null);
         setPendingAction(action);
         try {
-            return await fn();
+            // The action owns the tab's next navigation: a sync pass must not reload it away mid-action.
+            return await runLocalAccountAction(fn);
         } catch (err) {
             console.error(`Account action "${action}" failed`, err);
             setPendingAction(null);

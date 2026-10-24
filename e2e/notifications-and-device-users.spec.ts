@@ -1,6 +1,5 @@
 import type { Page } from '@playwright/test';
 import { expect, test } from '@playwright/test';
-import dayjs from 'dayjs';
 import { closeContextQuietly, withOneLoggedInDevice, withTwoAccountsOnOneDevice } from './helpers/context';
 import { API_URL, CLIENT_URL } from './helpers/env';
 import { gtd } from './helpers/gtd';
@@ -126,7 +125,7 @@ test.describe('deviceUsers join — single account', () => {
 
 test.describe('deviceUsers join — multi-account', () => {
     test('two accounts on one device produce two rows; signing one out leaves the other', async ({ browser }) => {
-        const stamp = dayjs().valueOf();
+        const stamp = uniqueStamp();
         const emailA = `multi-a-${stamp}@example.com`;
         const emailB = `multi-b-${stamp}@example.com`;
 
